@@ -113,6 +113,7 @@ func newTaskTable(hostname string, ctx context.Context) *TaskTable {
 
 // Task is the reporter handed to a running task body.
 type Task struct {
+	mu    sync.Mutex // guards rec (Notice/Progress/Record run on parallel workers)
 	rec   *TaskRecord
 	table *TaskTable
 	ctx   context.Context
@@ -124,7 +125,23 @@ type Task struct {
 func (t *Task) Ctx() context.Context { return t.ctx }
 
 // Record returns the live record (callers copy).
-func (t *Task) Record() TaskRecord { return *t.rec }
+func (t *Task) Record() TaskRecord {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return *t.rec
+}
+
+// Notice publishes a notice packet and appends to the record's log tail (60).
+func (t *Task) Notice(text string) {
+	t.mu.Lock()
+	t.rec.LogTail = append(t.rec.LogTail, text)
+	if len(t.rec.LogTail) > 60 {
+		t.rec.LogTail = t.rec.LogTail[len(t.rec.LogTail)-60:]
+	}
+	t.mu.Unlock()
+	t.bcast.Send(Packet{Kind: "notice", Text: text})
+	t.table.publishRecord(t)
+}
 
 // Errorf records a formatted error line in the task's narration (test and
 // reporter convenience; failures are still returned by the task body).
@@ -132,17 +149,9 @@ func (t *Task) Errorf(format string, args ...any) {
 	t.Notice("ERROR " + fmt.Sprintf(format, args...))
 }
 
-// Notice publishes a notice packet and appends to the record's log tail (60).
-func (t *Task) Notice(text string) {
-	t.rec.LogTail = append(t.rec.LogTail, text)
-	if len(t.rec.LogTail) > 60 {
-		t.rec.LogTail = t.rec.LogTail[len(t.rec.LogTail)-60:]
-	}
-	t.bcast.Send(Packet{Kind: "notice", Text: text})
-	t.table.publishRecord(t)
-}
-
 // Progress publishes a progress bar (latest bar per label wins at the SSE layer).
+// Called from parallel download workers: the record mutation is guarded by t.mu;
+// the broadcast fan-out is lag-tolerant by design (13_concurrency.md).
 func (t *Task) Progress(label string, done, total uint64, unit string) {
 	p := Packet{Kind: "progress", Label: label, Done: done, Unit: unit}
 	if total > 0 {
@@ -150,10 +159,13 @@ func (t *Task) Progress(label string, done, total uint64, unit string) {
 		pct := float64(done) / float64(total) * 100
 		p.Percent = &pct
 	}
+	t.mu.Lock()
 	if p.Total != nil { // the record's snapshot keeps the latest bar with a total
 		t.rec.Progress = &p
 	}
+	t.mu.Unlock()
 	t.bcast.Send(p)
+
 }
 
 // publishRecord mirrors the record into the repo broadcast (task packet).
