@@ -301,9 +301,12 @@ func buildAndPublish(ctx context.Context, d *Deps, tr Reporter, repo string, s *
 	default:
 		// Full: `git bundle create <tmpfile> --stdin` (§8.9.3).
 		tmp.Close()
+		// `git bundle create --stdin` runs rev-list over the fed lines: one
+		// revision per line. An "<oid> <name>" pair is rejected ("bad revision"),
+		// so feed the ref NAMES (bundle list-heads records them verbatim).
 		refLines := make([]string, 0, len(tips))
 		for _, r := range tips {
-			refLines = append(refLines, r.Oid+" "+r.Name)
+			refLines = append(refLines, r.Name)
 		}
 		size, _, err = d.Prim.BundleCreate(ctx, d.RepoDir, tmpPath, refLines)
 		if err != nil {
