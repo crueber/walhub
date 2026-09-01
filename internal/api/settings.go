@@ -82,6 +82,10 @@ func (h *handlers) settingsDelete(w http.ResponseWriter, r *http.Request) {
 	if !h.env.gate(w, r, AuthAdmin) {
 		return
 	}
+	if h.env.Repo == nil { // pending surface: a nil engine leaves Repo unwired
+		writePlain(w, http.StatusServiceUnavailable, "repo view not configured")
+		return
+	}
 	p := h.env.PrincipalOf(r)
 	rev, err := h.env.Repo.PublishSettings(r.Context(), RepoOf(r), nil, "", p.Name)
 	if err != nil {
@@ -289,6 +293,7 @@ func (h *handlers) settingsValidate(w http.ResponseWriter, r *http.Request) {
 			if eff, err = rs.Merge(h.env.Cfg); err != nil {
 				ok = false
 				errs = append(errs, err.Error())
+				eff = h.env.Cfg // keep the shape renderable on the host config
 			}
 		}
 	} else {
@@ -299,6 +304,7 @@ func (h *handlers) settingsValidate(w http.ResponseWriter, r *http.Request) {
 			if eff, err = h.env.effectiveWith(h.env.Cfg, []byte(d.TOML)); err != nil {
 				ok = false
 				errs = append(errs, err.Error())
+				eff = h.env.Cfg // keep the shape renderable on the host config
 			}
 		}
 	}

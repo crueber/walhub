@@ -200,8 +200,8 @@ func newID() string {
 	hex.Encode(h, b[:4])
 	h[8] = '-'
 	hex.Encode(h[9:], b[4:6])
-	h[14] = '-'
-	hex.Encode(h[15:], b[6:8])
+	h[13] = '-'
+	hex.Encode(h[14:], b[6:8])
 	h[18] = '-'
 	hex.Encode(h[19:], b[8:10])
 	h[23] = '-'

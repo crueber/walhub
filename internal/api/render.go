@@ -245,9 +245,12 @@ func parseNumstatPatch(b []byte) ([]Stat, string) {
 		if strings.HasPrefix(s[i:], "diff --git ") {
 			break
 		}
-		// Counts record: "<add>\t<del>\t\0" (TAB-separated counts, NUL
-		// terminates the counts segment — verified byte-for-byte against
-		// real git show --numstat -z output).
+		// Counts record, two shapes (verified byte-for-byte against real
+		// git show/diff-tree --numstat -z): a RENAME record is
+		// "<add>\t<del>\t\0<src>\0<dst>\0" — the NUL terminates the counts
+		// segment and the path fields follow, each NUL-terminated. A plain
+		// record is "<add>\t<del>\t<path>\0" — one NUL terminates the whole
+		// record and the path rides in the counts segment.
 		j := strings.IndexByte(s[i:], '\x00')
 		if j < 0 {
 			break
@@ -257,18 +260,23 @@ func parseNumstatPatch(b []byte) ([]Stat, string) {
 		if len(counts) < 2 || !isNumField(counts[0]) || !isNumField(counts[1]) {
 			break
 		}
-		// Path fields are NUL-terminated; a rename record carries src then dst.
-		j = strings.IndexByte(s[i:], '\x00')
-		if j < 0 {
-			break
-		}
-		path := s[i : i+j]
-		i += j + 1
-		if i < len(s) && !isNumStart(s[i]) && !strings.HasPrefix(s[i:], "diff --git ") && s[i] != '\n' {
-			k := strings.IndexByte(s[i:], '\x00')
-			if k >= 0 {
-				path = s[i : i+k] // rename: emit dst, once
-				i += k + 1
+		path := ""
+		if len(counts) >= 3 && counts[2] != "" {
+			path = counts[2] // plain record: path already consumed
+		} else {
+			// Rename shape: path fields are NUL-terminated; src then dst.
+			j = strings.IndexByte(s[i:], '\x00')
+			if j < 0 {
+				break
+			}
+			path = s[i : i+j]
+			i += j + 1
+			if i < len(s) && !isNumStart(s[i]) && !strings.HasPrefix(s[i:], "diff --git ") && s[i] != '\n' {
+				k := strings.IndexByte(s[i:], '\x00')
+				if k >= 0 {
+					path = s[i : i+k] // rename: emit dst, once
+					i += k + 1
+				}
 			}
 		}
 		stats = append(stats, Stat{Path: path, Additions: numOrNeg1(counts[0]), Deletions: numOrNeg1(counts[1])})

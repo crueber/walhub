@@ -376,7 +376,7 @@ func (v *walView) Commit(ctx context.Context, id git.RepoId, sha string) (Commit
 		return CommitDetail{}, fmt.Errorf("%w: commit %s malformed", ErrNotFound, sha)
 	}
 	detail := CommitDetail{Commit: commit}
-	if statOut, serr := v.gitCmd(ctx, repo, "diff-tree", "--numstat", "-z", "-r", "--root", "--no-renames", sha); serr == nil {
+	if statOut, serr := v.gitCmd(ctx, repo, "diff-tree", "--no-commit-id", "--numstat", "-z", "-r", "--root", "--no-renames", sha); serr == nil {
 		detail.Stats, _ = parseNumstatPatch(statOut)
 	}
 	if patchOut, perr := v.gitCmd(ctx, repo, "show", "--format=", "--no-renames", sha); perr == nil {
