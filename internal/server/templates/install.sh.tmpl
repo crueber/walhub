@@ -1,0 +1,91 @@
+#!/bin/sh
+# walhub install script ({{.Host}})
+set -eu
+
+HOST="{{.Host}}"
+BASE="{{.Base}}"
+SLUG="{{.Slug}}"
+AUTH_NONE={{if .AuthNone}}1{{else}}0{{end}}
+REPO="{{.Repo}}"
+TOKEN_URL="{{.TokenURL}}"
+
+# 1. Requires git >= 2.46 + curl; exit 1 otherwise.
+GIT_MAJOR=$(git version | sed 's/git version \([0-9]*\)\.\([0-9]*\).*/\1 \2/' | awk '{print $1}')
+GIT_MINOR=$(git version | sed 's/git version \([0-9]*\)\.\([0-9]*\).*/\1 \2/' | awk '{print $2}')
+[ "$GIT_MAJOR" -gt 2 ] || { [ "$GIT_MAJOR" -eq 2 ] && [ "$GIT_MINOR" -ge 46 ]; } || {
+  echo "error: git >= 2.46 required" >&2; exit 1
+}
+command -v curl >/dev/null || { echo "error: curl required" >&2; exit 1; }
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/git"
+mkdir -p "$CONF_DIR"
+TOKEN_FILE="$CONF_DIR/$SLUG-token"
+HELPER_FILE="$CONF_DIR/$SLUG-credential-helper"
+CA_FILE="$CONF_DIR/$SLUG-ca.pem"
+
+# 2. Self-signed TLS: download ca.pem, register it with git.
+{{if .CASelfSigned}}
+curl -fsSL "$BASE/services/public/ca.pem" -o "$CA_FILE"
+git config --global "http.https://$HOST/.sslCAInfo" "$CA_FILE"
+{{end}}
+
+# 3. Token source order: $WALGIT_TOKEN -> stored token file -> terminal.
+TOKEN="${WALGIT_TOKEN:-}"
+if [ -z "$TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
+  TOKEN=$(cat "$TOKEN_FILE")
+fi
+if [ -z "$TOKEN" ] && [ "$AUTH_NONE" -eq 0 ]; then
+  if [ -t 0 ] && [ -n "${WALGIT_INSTALL_TTY:-}" ]; then
+    printf "Open %s to mint a token, then paste it: " "$TOKEN_URL" > "$WALGIT_INSTALL_TTY"
+    IFS= read -r TOKEN < "$WALGIT_INSTALL_TTY"
+  fi
+fi
+if [ -z "$TOKEN" ] && [ "$AUTH_NONE" -eq 0 ]; then
+  echo "error: no token available." >&2
+  echo "  1. Browse to $TOKEN_URL and mint a token, or" >&2
+  echo "  2. run: git config --global credential.https://$HOST.helper $HELPER_FILE" >&2
+  exit 2
+fi
+if [ "$AUTH_NONE" -eq 1 ]; then
+  EXTRA_HDR="X-Walgit-Anonymous: 1"
+fi
+
+# 4. Write the token file (0600) and the credential helper (0755).
+umask 077
+printf '%s' "$TOKEN" > "$TOKEN_FILE"
+cat > "$HELPER_FILE" <<'HEOF'
+{{.Helper}}
+HEOF
+chmod 0755 "$HELPER_FILE"
+
+# 5. Git config (exact keys).
+git config --global "credential.https://$HOST.helper" ""
+git config --global "credential.https://$HOST.helper" "$HELPER_FILE"
+git config --global --unset-all "http.https://$HOST/.extraHeader" 2>/dev/null || true
+git config --global "transfer.bundleURI" "true"
+git config --global --unset-all "fetch.bundleURI" 2>/dev/null || true
+git config --global "fetch.uriProtocols" "https"
+
+# 6. Self-test.
+if [ -n "$REPO" ]; then
+  git ls-remote "$BASE/$REPO.git" HEAD >/dev/null
+else
+  PRINCIPAL=$(curl -fsSL -H "Authorization: Bearer $TOKEN" -H "$EXTRA_HDR" "$BASE/api/v1/me" | sed -n 's/.*"principal"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p') || {
+    echo "error: self-test refused; mint a token at $TOKEN_URL" >&2; exit 1
+  }
+  echo "authenticated as $PRINCIPAL"
+fi
+
+# 7. With ?repo= -> print ready + exec the plain clone; with $1 -> set/add
+#    origin; else print the remote recipe.
+if [ -n "$REPO" ]; then
+  echo "ready. cloning $REPO"
+  exec git clone -c fetch.bundleURI="$BASE/$REPO.git/bundles/catchup" "$BASE/$REPO.git"
+fi
+if [ -n "$1" ]; then
+  git remote remove origin 2>/dev/null || true
+  git remote add origin "$BASE/$1.git"
+  git push -u origin HEAD
+  exit 0
+fi
+echo "git remote add origin \"$BASE/<repo>.git\" && git push -u origin HEAD"
