@@ -57,10 +57,14 @@ func (l StoreLeaser) Acquire(ctx context.Context, name, holder, purpose string, 
 		if now.Before(expires.Add(skew)) {
 			return nil, ErrLeaseHeld // §3.3: never waits, never retries within the pass
 		}
-		// Steal: expired (+ skew when the lease honors it).
+		// Steal: expired (+ skew when the lease honors it). The epoch
+		// increments on every steal (proto.Lease: "incremented on every
+		// heartbeat/steal"), so stale writers holding the pre-steal epoch
+		// always lose their CAS.
 		next := *cur
 		next.Holder = holder
 		next.Purpose = purpose
+		next.Epoch = cur.Epoch + 1
 		acq, exp := proto.TimeFromGo(now), proto.TimeFromGo(now.Add(ttl))
 		next.AcquiredAt, next.ExpiresAt = &acq, &exp
 		put, err := l.St.Put(ctx, key, store.PutBody{Bytes: next.Marshal()},

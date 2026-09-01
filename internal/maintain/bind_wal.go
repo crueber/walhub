@@ -266,7 +266,7 @@ func (p walPlanner) Build(ctx context.Context, repo string, s Slot) (bool, error
 		return false, err
 	}
 	if len(deps.Verdicts) > 0 {
-		if err := bundle.RecordVerdicts(ctx, p.reg.Store(), deps.Verdicts); err != nil {
+		if err := bundle.RecordVerdicts(ctx, store.NewPrefixed(p.reg.Store(), repoPrefixOf(repo)), deps.Verdicts); err != nil {
 			return false, err
 		}
 	}

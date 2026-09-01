@@ -367,7 +367,7 @@ func (f *execFollow) git(ctx context.Context, dir string, env []string, argv []s
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return stdout.Bytes(), fmt.Errorf("git %s: %v: %s", strings.Join(argv, " "), err, tailLines(stderr.String(), 4))
+		return stdout.Bytes(), fmt.Errorf("git %s: %w: %s", strings.Join(argv, " "), err, tailLines(stderr.String(), 4))
 	}
 	return stdout.Bytes(), nil
 }

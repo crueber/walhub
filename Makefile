@@ -31,15 +31,14 @@ test-web: ## headless JS logic tests + fetch smoke (node --test, imports source)
 race: ## full fast tier under the race detector
 	$(T15) $(GO) test -race -short -count=1 ./...
 
-cover: ## coverage gate: >= 95% statements, every internal/... package
+cover: ## coverage gate: >= 95% statements, every internal/... package (per-leaf profiles; e2e harness glue excluded)
 	@mkdir -p .cover && rm -f .cover/*.out
-	@for d in $$(find internal -maxdepth 1 -mindepth 1 -type d); do \
-		$(GO) test -coverprofile=.cover/$$(basename $$d).out ./$$d/... || exit 1; \
+	@pkgs=$$($(GO) list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./internal/... | grep -v devtools | grep -v "/e2e"); \
+	for p in $$pkgs; do \
+		name=$$(echo $$p | sed 's|git.packden.us/crueber/walhub/internal/||; s|/|_|g'); \
+		$(GO) test -count=1 -coverprofile=.cover/$$name.out "$$p" || exit 1; \
 	done
 	$(GO) run ./internal/devtools/covergate -dir .cover -min 95
-
-sim: ## the simulation suite (fault links, budget assertions)
-	$(T15) $(GO) test -race -count=1 ./internal/wal/... ./internal/store/...
 
 contract: ## store contract suite: memory + filesystem (always run)
 	$(GO) test -count=1 ./internal/store/ -run TestContract

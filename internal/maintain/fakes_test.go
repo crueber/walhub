@@ -173,6 +173,7 @@ type fakeRepo struct {
 
 	// knobs / observation
 	packMuBusy  bool
+	compactErr  error
 	annotated   []string
 	compacts    []compactCall
 	adds        []addCall
@@ -241,6 +242,9 @@ func (r *fakeRepo) WriteCheckpoint(ctx context.Context, trigger string) error {
 }
 
 func (r *fakeRepo) PublishCompact(ctx context.Context, pack *PreparedPack, supersedes []string, meta map[string]string) (uint64, error) {
+	if r.compactErr != nil {
+		return 0, r.compactErr
+	}
 	r.compacts = append(r.compacts, compactCall{pack.Checksum, supersedes, pack.Tier})
 	// Mirror what the manifest CAS commits: drop the superseded set, add the
 	// new pack ref.
@@ -300,18 +304,21 @@ func (r *fakeRepo) GitOps() GitOps { return r.git }
 
 // fakeGit stands in for *git.Layer (the machinery boundary).
 type fakeGit struct {
-	mu            sync.Mutex
-	repackCalls   int // FullRepack (the once-across-attempts invariant)
-	geoCalls      int
-	keepPacks     [][]string
-	fullDiff      *git.PackDiff
-	geoDiff       *git.PackDiff
-	failRepack    bool
-	historyCalls  int
-	commitGraph   string
-	historyPack   string
-	fetchErr      error
-	fetchPackPath string
+	mu              sync.Mutex
+	repackCalls     int // FullRepack (the once-across-attempts invariant)
+	geoCalls        int
+	keepPacks       [][]string
+	fullDiff        *git.PackDiff
+	geoDiff         *git.PackDiff
+	failRepack      bool
+	historyCalls    int
+	commitGraph     string
+	historyPack     string
+	fetchErr        error
+	fetchPackPath   string
+	geoErr          error
+	failHistory     bool
+	failCommitGraph bool
 }
 
 func (g *fakeGit) GeometricRepack(ctx context.Context, repo *git.LocalRepo, factor int, bitmap bool, keepPacks []string) (*git.PackDiff, error) {
@@ -319,9 +326,11 @@ func (g *fakeGit) GeometricRepack(ctx context.Context, repo *git.LocalRepo, fact
 	defer g.mu.Unlock()
 	g.geoCalls++
 	g.keepPacks = append(g.keepPacks, keepPacks)
+	if g.geoErr != nil {
+		return nil, g.geoErr
+	}
 	return g.geoDiff, nil
 }
-
 func (g *fakeGit) FullRepack(ctx context.Context, repo *git.LocalRepo, keepPacks []string) (*git.PackDiff, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -333,15 +342,20 @@ func (g *fakeGit) FullRepack(ctx context.Context, repo *git.LocalRepo, keepPacks
 	return g.fullDiff, nil
 }
 
-func (g *fakeGit) WriteCommitGraph(ctx context.Context, repo *git.LocalRepo, changedPaths bool, sideDir string) (string, error) {
-	return g.commitGraph, nil
-}
-
 func (g *fakeGit) HistoryPack(ctx context.Context, repo *git.LocalRepo, base string) (string, error) {
 	g.mu.Lock()
 	g.historyCalls++
 	g.mu.Unlock()
+	if g.failHistory {
+		return "", errors.New("history boom")
+	}
 	return g.historyPack, nil
+}
+func (g *fakeGit) WriteCommitGraph(ctx context.Context, repo *git.LocalRepo, changedPaths bool, sideDir string) (string, error) {
+	if g.failCommitGraph {
+		return "", errors.New("commit-graph boom")
+	}
+	return g.commitGraph, nil
 }
 
 func (g *fakeGit) FetchObjectsAsPack(ctx context.Context, repo *git.LocalRepo, u git.UpstreamSpec, oids []string) (string, error) {
@@ -451,9 +465,13 @@ func (p *fakePlanner) PreviousFire(s config.BundleStrategy, now time.Time) time.
 type fakeLeaser struct {
 	held     map[string]bool
 	acquired []string
+	err      error
 }
 
 func (l *fakeLeaser) Acquire(ctx context.Context, name, holder, purpose string, ttl, skew time.Duration) (func(), error) {
+	if l.err != nil {
+		return nil, l.err
+	}
 	if l.held[name] {
 		return nil, ErrLeaseHeld
 	}
