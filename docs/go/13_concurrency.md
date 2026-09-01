@@ -71,8 +71,11 @@ for minutes. Go's `sync.RWMutex` has exactly this hazard (a pending `Lock()` blo
 
 **Rule: pack removal is the ONLY writer, and it must use `rw.TryLock()`.** On failure (any reader active)
 the removal checksums stay in `pending_pack_removals` and the next sync retries — this is not an error
-path, it is the designed defer. Go 1.18+ provides `sync.RWMutex.TryLock`; use it, do not hand-roll
-atomic-flag variants. Do NOT use `TryRLock`-style polling elsewhere; readers always block normally.
+path, it is the designed defer. **Canonical primitive: `internal/wal/rw.TryRWMutex`** (mutex + atomics;
+race-tested, 100% covered) — the shipped engine uses it because it keeps the try-or-defer removal
+protocol on one auditable type; `sync.RWMutex.TryLock` (Go 1.18+) satisfies the same invariant and is
+the fallback if `wal/rw` is ever refactored away. Do NOT use `TryRLock`-style polling elsewhere;
+readers always block normally.
 
 ```go
 // removeSuperseded: called under packMu, from reconcile_packs.
@@ -173,8 +176,8 @@ calls except the enumerated `freshenManifest` exception.
 
 ## 3. Single-flight patterns (per key)
 
-Five known single-flights. One shared helper, hand-rolled (no `golang.org/x/sync` — see Dependencies
-policy), used everywhere:
+Five known single-flights. One shared helper, hand-rolled (no `golang.org/x/sync` — the
+bounded-parallelism primitives live in `internal/store/errgroup.go`; ruling C-1), used everywhere:
 
 ```go
 // internal/singleflight/singleflight.go — canonical; every doc's "single-flight" means this.
@@ -225,8 +228,9 @@ single-flight respawns a dead leader instead of letting joiners wait forever.
 ## 4. Bounded parallelism everywhere
 
 **No unbounded goroutine spawn, ever.** Every fan-out is an errgroup-with-limit or a weighted semaphore.
-`golang.org/x/sync` is an approved dependency; the two primitives used are `errgroup.Group.SetLimit` and
-`semaphore.Weighted`. Where neither is worth the import in a leaf package, the equivalent is 6 lines:
+**Ruling C-1: no `golang.org/x/sync`** — the canonical primitives are the hand-rolled
+`internal/store/errgroup.go` (`Group.SetLimit` semantics) and weighted semaphore, shared by every
+package. Where a leaf package needs neither in full, the equivalent is 6 lines:
 
 ```go
 // internal/store/limits.go — bulk permits (§4.6): control plane and bulk NEVER share a permit.
@@ -490,13 +494,12 @@ func withCanary(t *testing.T, d time.Duration, body func()) {
 
 ## Decisions & deviations from the Rust design
 
-- `sync.RWMutex.TryLock` (Go 1.18+) replaces `tokio::RwLock::try_write` — same try-or-defer removal
-  protocol, no hand-rolled atomic-flag mutex; the starvation hazard is identical, so the invariant ports unchanged.
-- Dedicated **bulk worker pool via bounded channel + `semaphore.Weighted` permits** replaces the tokio
+- `rw` try-write (§2: canonical primitive `internal/wal/rw.TryRWMutex`, ruling C-2) replaces `tokio::RwLock::try_write` — same try-or-defer removal protocol; the starvation hazard is identical, so the invariant ports unchanged.
+- Dedicated **bulk worker pool via bounded channel + weighted-semaphore permits** (`internal/store/errgroup.go`) replaces the tokio
   "bulk runtime 4 workers" — the permit (`gcs_bulk_permit` metric name kept) is acquired inside the pool,
   never on request goroutines, preserving §4.6 transport separation.
-- **`errgroup.SetLimit` / `semaphore.Weighted` (golang.org/x/sync)** replace `buffer_unordered(n)` and
-  `Semaphore::acquire` fan-outs; `x/sync` is one of the two approved dependencies.
+- **`errgroup.SetLimit` / weighted semaphore (hand-rolled, `internal/store/errgroup.go`, ruling C-1)** replace `buffer_unordered(n)` and
+  `Semaphore::acquire` fan-outs.
 - **Hand-rolled `singleflight.Group`** replaces `DashMap`+join semantics and moka's single-flight: one
   20-line helper covers all five per-key sites, honoring §6.8's join-with-bounded-wait rule via
   `ctx`-select; `sync.Map`/sharded maps replace `DashMap` for registry/task tables.

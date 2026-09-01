@@ -129,7 +129,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `events.webhook_url` / `webhook_secret` / `sweep_interval` | — / — / `"5m"` | events bridge (09_events.md) |
 
 Notes:
-- `git.upload_pack_engine`: the Rust `gix` engine has no Go equivalent and none is wanted (dependency law). In walhub the accepted values are still `auto | git | gix` for file compatibility, but `gix` is treated exactly as `git` at load time with no warning; `auto` resolves to `git`. See 04_git.md for the upload-pack implementation.
+- `git.upload_pack_engine`: the Rust `gix` engine has no Go equivalent and none is wanted (dependency law). In walhub the accepted values are still `auto | git | gix` for file compatibility, but `gix` is treated exactly as `git` at load time **with a one-time startup WARN naming the key** (ruling C-4: an inert config value must be visible to the operator); `auto` resolves to `git`. See 04_git.md for the upload-pack implementation.
 - `telemetry.log_filter` keeps the Rust EnvFilter syntax as a string; the Go logger interprets the `info,walgit=debug` shape by mapping the `walgit` target to `walhub` (see §7.3 of 06_server_http.md — that doc owns logging).
 - Bundle strategy array entries (`[[bundles.strategy]]`) decode in declaration order; `bundles.strategy` order is meaningful for §11 default families.
 - Rows marked † have a different effective value on a zero-config first run; §2.3 is normative there. The table otherwise lists the compiled-in defaults, which equal the Rust-spec defaults.
