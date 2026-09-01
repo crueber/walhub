@@ -53,7 +53,9 @@ type RemoteReader struct {
 func (r *RemoteReader) Locate(oid string) (int, int64, bool) { panic("unimplemented") }
 
 // Header returns kind + inflated size without materializing.
-func (r *RemoteReader) Header(oid string) (kind string, size int64, err error) { panic("unimplemented") }
+func (r *RemoteReader) Header(oid string) (kind string, size int64, err error) {
+	panic("unimplemented")
+}
 
 // Decode returns the full object contents (iterative delta resolution, LRU-cached).
 func (r *RemoteReader) Decode(ctx context.Context, oid string) (kind string, data []byte, err error) {
@@ -62,9 +64,9 @@ func (r *RemoteReader) Decode(ctx context.Context, oid string) (kind string, dat
 
 // RefError is a per-ref rejection reason.
 type RefError struct {
-	Kind    RefErrorKind
-	Ref     string
-	Detail  string
+	Kind   RefErrorKind
+	Ref    string
+	Detail string
 }
 
 type RefErrorKind int
@@ -129,8 +131,8 @@ func (e *WalError) Error() string {
 
 func (e *WalError) Unwrap() error { return e.Wrapped }
 
-func ErrNotFound(repo string) *WalError   { return &WalError{Kind: WalErrNotFound, Detail: repo} }
-func ErrExists(repo string) *WalError     { return &WalError{Kind: WalErrAlreadyExists, Detail: repo} }
+func ErrNotFound(repo string) *WalError { return &WalError{Kind: WalErrNotFound, Detail: repo} }
+func ErrExists(repo string) *WalError   { return &WalError{Kind: WalErrAlreadyExists, Detail: repo} }
 func ErrTooLarge(bytes, max int64) *WalError {
 	return &WalError{Kind: WalErrTooLarge, Detail: fmt.Sprintf(
 		"repository pack set is %d bytes, larger than this instance's cache limit (%d bytes); clone via bundle-uri", bytes, max)}
@@ -175,13 +177,13 @@ type TaskRecord struct {
 
 // Progress packets (SSE envelope payloads; MASTER_RUST_SPEC §9.3).
 type Progress struct {
-	Kind    string  `json:"-"` // "notice" | "progress" | "task"
-	Text    string  `json:"text,omitempty"`
-	Label   string  `json:"label,omitempty"`
-	Done    uint64  `json:"done,omitempty"`
-	Total   *uint64 `json:"total,omitempty"`
-	Unit    string  `json:"unit,omitempty"`
-	Percent *float64 `json:"percent,omitempty"`
+	Kind    string      `json:"-"` // "notice" | "progress" | "task"
+	Text    string      `json:"text,omitempty"`
+	Label   string      `json:"label,omitempty"`
+	Done    uint64      `json:"done,omitempty"`
+	Total   *uint64     `json:"total,omitempty"`
+	Unit    string      `json:"unit,omitempty"`
+	Percent *float64    `json:"percent,omitempty"`
 	Task    *TaskRecord `json:"task,omitempty"`
 }
 

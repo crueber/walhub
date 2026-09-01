@@ -15,3 +15,4 @@ web/node_modules/
 /data/
 *.json.tmp
 walgit-state.json
+covergate/
