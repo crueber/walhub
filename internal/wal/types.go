@@ -47,19 +47,55 @@ func (o ObjectAccess) IsRemote() bool { return o.Remote != nil }
 // CONTRACT: methods below are the surface server/api call.
 type RemoteReader struct {
 	Revision uint64 // manifest revision this reader was built for
+
+	// eng is attached by the engine (remote.go); nil = not built.
+	// SPEC AMEND NOTE (doc 05 §5.7): the engine implements Locate/Header/
+	// Decode; the frozen stubs above panicked, so the bodies below delegate
+	// to the engine. No wire shape changed — same type, same method set.
+	eng *remoteEngine
 }
 
 // Locate returns (packIndex, offset) for oid; ok=false when absent.
-func (r *RemoteReader) Locate(oid string) (int, int64, bool) { panic("unimplemented") }
+func (r *RemoteReader) Locate(oid string) (int, int64, bool) {
+	if r.eng == nil {
+		return 0, 0, false
+	}
+	ix, off, ok := r.eng.packs.locate(oid)
+	if !ok {
+		return 0, 0, false
+	}
+	idx := -1
+	for i, p := range r.eng.packs.idxs {
+		if p == ix {
+			idx = i
+			break
+		}
+	}
+	return idx, off, true
+}
 
 // Header returns kind + inflated size without materializing.
 func (r *RemoteReader) Header(oid string) (kind string, size int64, err error) {
-	panic("unimplemented")
+	if r.eng == nil {
+		return "", 0, &WalError{Kind: WalErrInvalid, Detail: "no remote reader attached"}
+	}
+	ix, off, ok := r.eng.packs.locate(oid)
+	if !ok {
+		return "", 0, &WalError{Kind: WalErrNotFound, Detail: oid}
+	}
+	return r.eng.header(r.eng.ctx(), ix, off)
 }
 
 // Decode returns the full object contents (iterative delta resolution, LRU-cached).
 func (r *RemoteReader) Decode(ctx context.Context, oid string) (kind string, data []byte, err error) {
-	panic("unimplemented")
+	if r.eng == nil {
+		return "", nil, &WalError{Kind: WalErrInvalid, Detail: "no remote reader attached"}
+	}
+	ix, off, ok := r.eng.packs.locate(oid)
+	if !ok {
+		return "", nil, &WalError{Kind: WalErrNotFound, Detail: oid}
+	}
+	return r.eng.decodeAt(ctx, ix, off)
 }
 
 // RefError is a per-ref rejection reason.
