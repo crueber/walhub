@@ -460,7 +460,8 @@ func (r *repoRegistry) Create(ctx context.Context, id git.RepoId, format git.Obj
 }
 
 func (r *repoRegistry) Delete(ctx context.Context, id git.RepoId) error {
-	return r.reg.Delete(ctx, id.String())
+	_, err := r.reg.Delete(ctx, id.String())
+	return err
 }
 
 // ---- api.Tasks adapter (07_api.md §12: ops + task table) ------------------------

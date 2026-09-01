@@ -1,6 +1,5 @@
 // Package config: the walhub configuration (11_config_cli.md — key names, defaults, and
 // meanings are normative and byte-compatible with the Rust spec §15.1).
-//
 // CONTRACT FILE: the Config struct + duration/byte-size scalar types + compiled-in Defaults().
 // Loading (TOML file, WALHUB__/WALGIT__ env overlay, PORT lockstep, validation, per-repo
 // settings merge, setup save) is implemented by the config owner in sibling files.
@@ -344,7 +343,7 @@ func Defaults() *Config {
 		},
 		Bundles: Bundles{
 			Strategy: []BundleStrategy{
-				{Name: "weekly", Kind: "full", Schedule: "0 0 23 * * Sun", Keep: 2, BackfillMax: 1},
+				{Name: "weekly", Kind: "full", Schedule: "0 0 23 * * 0", Keep: 2, BackfillMax: 1}, // Sunday 23:00 UTC (@weekly; numeric dow — names are rejected by the parser)
 				{Name: "daily", Kind: "incremental", Base: "weekly", Schedule: "0 0 23 * * *", BackfillMax: 0, Chain: true},
 				{Name: "hourly", Kind: "incremental", Base: "daily", Schedule: "0 0 * * * *", BackfillMax: 48},
 			},

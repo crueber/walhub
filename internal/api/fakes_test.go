@@ -247,6 +247,10 @@ type fakeTasks struct {
 	records map[string]TaskRecord
 	streams map[string]TaskStream
 	listErr error
+	// error injection for the remaining RPC arms
+	beginErr  error
+	attachErr error
+	getErr    error
 }
 
 func (f *fakeTasks) Ops() []OpSpec { return nil } // ops handler falls back to the frozen table
@@ -256,15 +260,24 @@ func (f *fakeTasks) List(_ context.Context, _ git.RepoId) ([]TaskRecord, []TaskR
 }
 
 func (f *fakeTasks) Get(_ context.Context, _ git.RepoId, id string) (TaskRecord, bool, error) {
+	if f.getErr != nil {
+		return TaskRecord{}, false, f.getErr
+	}
 	r, ok := f.records[id]
 	return r, ok, nil
 }
 
 func (f *fakeTasks) Begin(_ context.Context, _ git.RepoId, op string, params map[string]string) (TaskStream, error) {
+	if f.beginErr != nil {
+		return TaskStream{}, f.beginErr
+	}
 	return f.streams["op:"+op], nil
 }
 
 func (f *fakeTasks) Attach(_ context.Context, _ git.RepoId, id string) (TaskStream, bool, error) {
+	if f.attachErr != nil {
+		return TaskStream{}, false, f.attachErr
+	}
 	st, ok := f.streams[id]
 	return st, ok, nil
 }

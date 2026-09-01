@@ -71,7 +71,7 @@ func (h *RepoHandle) reconcilePacks(ctx context.Context, lvl SyncLevel) error {
 				return h.materialize(tctx, t, m, lvl)
 			})
 		if err != nil {
-			return err
+			return &WalError{Kind: WalErrRetry, Detail: "materialize failed: " + err.Error(), Wrapped: err}
 		}
 		if rec != nil && rec.OK != nil && !*rec.OK {
 			return &WalError{Kind: WalErrRetry, Detail: "materialize failed: " + rec.Summary}

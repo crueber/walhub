@@ -98,6 +98,7 @@ type runningTask struct {
 	done    chan struct{} // closed exactly once by the task goroutine's defer
 	drone   *Broadcast[Packet]
 	outcome *TaskRecord // final record, set before done closes
+	err     error       // body error, set before done closes (propagated to callers)
 }
 
 func newTaskTable(hostname string, ctx context.Context) *TaskTable {
@@ -174,7 +175,7 @@ func (t *TaskTable) Run(ctx context.Context, repo, kind string, params map[strin
 			// 13 §3), then reuse the outcome.
 			select {
 			case <-rt.done:
-				return rt.outcome, nil
+				return rt.outcome, rt.err
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -213,6 +214,7 @@ func (t *TaskTable) Run(ctx context.Context, repo, kind string, params map[strin
 			rt.rec.OK = &ok
 			if err != nil {
 				rt.rec.Summary = err.Error()
+				rt.err = err
 			}
 			if st, serr := time.Parse(time.RFC3339Nano, rt.rec.Started); serr == nil {
 				rt.rec.ElapsedMS = fin.Sub(st).Milliseconds()
@@ -237,7 +239,7 @@ func (t *TaskTable) Run(ctx context.Context, repo, kind string, params map[strin
 		// The leader also awaits (its caller wants the outcome).
 		select {
 		case <-rt.done:
-			return rt.outcome, nil
+			return rt.outcome, rt.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
