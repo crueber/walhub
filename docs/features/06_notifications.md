@@ -183,9 +183,8 @@ chrome badge. The per-user stream is the only per-user SSE; repo streams stay re
 
 No SMTP client, no email address storage in v1. The seam: the §5.3 activity log is an ordinary event
 stream; an email sink is a future `Sink`/delivery-loop registration (Seam 4/5 pattern) that reads the
-same cursor family. A future agent needs: an SMTP client hand-rolled per the dependency budget, a user
-email-verified flag (01), and per-user email preference keys. Nothing in this doc's objects precludes
-it; nothing here implements it.
+same cursor family. A future agent needs: a hand-rolled SMTP client, a user email-verified flag (01),
+and per-user email preference keys — nothing in this doc's objects precludes that; nothing implements it.
 
 ### 5.3 Repo webhooks — v1 decision
 
@@ -199,16 +198,15 @@ stays git-only (P1 law); the events-bridge loop is frozen and gains no collabora
   `{seq, repo, action, num?, kind, actor, title, at, payload}`; `action` ∈
   `commented\|opened\|closed\|reopened\|assigned\|review_requested\|review_posted\|check_reported\|release_published\|mentioned\|ping`.
   Also the notification backfill source (§4). `check_reported` (05's emission point, `state: failure\|error`
-  only) carries `{sha, context, state, description?, pr?, target_url?}` and notifies PR participants
-  (`subscribed`).
+  only) carries `{sha, context, state, description?, pr?, target_url?}` → PR participants get `subscribed`.
 - **Config objects:** §1.4. `events` filter matches on `action` (with `*` wildcard).
 - **Delivery loop:** new maintain task kind `webhooks` (Seam 5, `internal/notifications` package),
   single-flight `(repo, "webhooks")` per §6.8. One loop pass per repo: for each active hook, scan
   `collab-events/` from the hook's cursor, POST each matching event, CAS-advance the cursor.
 - **Per-hook cursor:** `repos/<o>/<r>/webhooks/cursors/<hook-id>.json`,
   `{"published_seq": N, "updated_at": RFC3339}` — CAS'd, a direct analog of the per-sink
-  `events/cursors/<sink>.json` family (14 §14.6). This key family is proposed for the frozen overwritable
-  list (same amendment class as D-EXT-2's `events/cursors/<sink>.json`).
+  `events/cursors/<sink>.json` family (14 §14.6); proposed for the frozen overwritable list (the D-EXT-2
+  amendment class).
 - **Wire shape (per 09_events §12.2, keepers intact):** one POST per event, JSON body = the activity event,
   headers `Content-Type: application/json`, `X-Walgit-Delivery: <hex(sha256(event body+seq))>`,
   `X-Walgit-Signature: sha256=<hex HMAC-SHA256(body, secret)>` (omitted if no secret),
@@ -225,9 +223,9 @@ per repo per process (§6.8 join semantics); the per-hook cursor CAS arbitrates 
 lost cursor CAS = redelivery = at-least-once, never a skip — the cursor advances only after a successful
 POST batch). Per hook, delivery is sequential; hooks on one repo run in parallel under
 `errgroup.SetLimit(8)`. A slow webhook holds back only its own cursor — exactly the per-sink isolation
-of 14 §14.6. Cursor below a compacted/gap window: log + count `walhub_webhook_gap_total{repo}` and
-continue from the oldest readable event (09 §12.3's honest-gap semantics). The loop body never runs
-under any repo lock (13 §2 rule 4); it is a maintainer-pass unit with a 10 s-per-POST context budget.
+of 14 §14.6. Cursor below a compacted/gap window: count `walhub_webhook_gap_total{repo}` and continue
+from the oldest readable event (09 §12.3's honest-gap semantics). The loop body never runs under any
+repo lock (13 §2 rule 4); it is a maintainer-pass unit with a 10 s-per-POST context budget.
 
 ## 6. API endpoints
 
@@ -254,10 +252,10 @@ RouteProvider (Seam 1).
 | `DELETE /{o}/{r}/api/webhooks/{id}` | admin | → 204 | also deletes cursor + deliveries |
 | `POST /{o}/{r}/api/webhooks/{id}/ping` | admin | → `{delivery: true}` | enqueues `ping` activity event |
 | `GET /{o}/{r}/api/webhooks/{id}/deliveries` | admin | → `{updated_at, entries: [...]}` | no-store |
+
 `Notification` (wire) = the §1.1 object; `Hook` = the §1.4 object minus `secret` plus `secret_set`. Auth
-detail: `{id}` routes resolve only for the owning principal — a foreign `id` is `404` (never `403`, which
-would leak existence). Webhook secrets are never logged.
-`404` (never `403`, which would leak existence). Webhook secrets are never logged.
+detail: `{id}` routes resolve only for the owning principal — a foreign `id` is `404` (never `403`,
+which would leak existence). Webhook secrets are never logged.
 
 ## 7. UI and SDK
 
@@ -278,8 +276,8 @@ client.notifications.list({state, after, n})             // GET tray
 client.notifications.unreadCount()                       // GET unread_count
 client.notifications.markRead(id) / markUnread(id) / markAllRead()
 client.notifications.stream(onNotification)              // fetch-based SSE reader, cancel fn returned
+client.watch.get(o, r) / client.watch.set(o, r, on)      // PUT/DELETE watch
 client.webhooks.list(o, r) / create(o, r, spec) / update(o, r, id, patch) / remove(o, r, id) / ping(o, r, id) / deliveries(o, r, id)
-client.webhooks.remove(o, r, id) / ping(o, r, id) / deliveries(o, r, id)
 ```
 
 Streaming uses the SDK's fetch-based reader (never `EventSource`; 12 §2.5 lane/auth rules apply — the
@@ -294,17 +292,15 @@ per-user stream is a browser-lane, credentials-included stream).
 | `notify-retention` | global (maintainer pass unit, `Ops: nil`) | no | §9 retention + index compaction |
 
 ## 9. Retention and compaction
+
 - The `notify-retention` maintenance unit (Seam 5, maintainer pass, not user-startable) runs once per pass:
   for each principal with a `notifications/index.json` older than its `swept_at`, compact — drop `read`
-  entries older than `notifications.retention_days` (default 30) from the index, `Delete` their objects,
-  advance `compacted_through`, and reconcile `unread_count` against actual unreads (drift repair). Unread
-  notifications are never swept.
-  denormalized-count drift repair). Unread notifications are never swept.
+  entries older than `notifications.retention_days` (default 30), `Delete` their objects, advance
+  `compacted_through`, reconcile `unread_count` against actual unreads (drift repair); unread never swept.
+- The webhook `deliveries/recent.json` ring self-trims to 25; no separate task.
 - Repo activity events (`collab-events/`) are compacted by the same pass once the newest webhook cursor is
   ≥ 1 000 seqs ahead: events below the minimum webhook cursor AND older than 7 days are deleted; the
-  cursor honesty rule (§5.3) covers the gaps. The minimum-cursor check spans hooks — still one
-  sequential sweep, no locks.
-  reads all cursors first; still one sequential sweep, no locks.
+  cursor honesty rule (§5.3) covers the gaps. The minimum-cursor check spans hooks — still one sweep, no locks.
 
 ### Concurrency
 

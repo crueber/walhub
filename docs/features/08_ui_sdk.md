@@ -153,10 +153,12 @@ this section is the client mirror of exactly one provider; auth levels shown per
 
 | Method | Endpoint | Shape |
 |---|---|---|
-| `list({all, after, n})` | `GET /api/v1/notifications` | `{notifications: [], more}` |
-| `markRead(id)` / `markAllRead()` | `PUT /api/v1/notifications/{id}/read` / `PUT …/notifications/read` | `{}` |
-| `stream(onFrame, opts)` | `GET /api/v1/notifications/stream` | per-user SSE; returns a cancel function |
-| watch toggle | `PUT`/`DELETE …/api/watch` (07) | UI verb lives in `repo.social` |
+| `list({state, after, n})` | `GET /api/v1/notifications?state=&after=&n=` | `{notifications: [], more}` |
+| `unreadCount()` | `GET /api/v1/notifications/unread_count` | `{count}` |
+| `markRead(id)` / `markUnread(id)` | `POST /api/v1/notifications/{id}/read` \| `/unread` | → Notification |
+| `markAllRead()` | `POST /api/v1/notifications/read_all` | `{updated}` |
+| `stream(onFrame, opts)` | `GET /api/v1/notifications/stream` | per-user SSE (envelope §6); frames `event: notification` with the notification object; runs until cancelled — returns a cancel function |
+| `watch.get(o, r)` / `watch.set(o, r, bool)` | `GET`/`PUT`/`DELETE …/api/watch` | `{watching, count?}` (read to toggle; 06 owns the verb — see Decisions) |
 
 ### 3.6 `orgs.js` → `client.orgs` + repo permission groups (01, 06)
 
@@ -173,16 +175,16 @@ this section is the client mirror of exactly one provider; auth levels shown per
 | `repo.access.invitations.list/create()/delete(id)` | `POST/GET …/api/invitations`, `DELETE …/api/invitations/{id}` | repo invites (admin) |
 | `repo.collaborators.list()` | `GET …/api/collaborators` | effective bindings + resolution source |
 | `repo.assignables()` | `GET …/api/assignables` | `[{principal, display}]` |
-| `repo.webhooks.*` (list/create/patch/delete) | `…/api/webhooks[/{id}]` | per 06 (settings tab) |
+| `repo.webhooks.list/create/update/remove(id)/ping(id)/deliveries(id)` | `GET/POST …/api/webhooks`, `GET/PATCH/DELETE …/webhooks/{id}`, `POST …/webhooks/{id}/ping`, `GET …/webhooks/{id}/deliveries` | per 06; the secret is never returned (`secret_set`) |
 
 ### 3.7 `releases.js` + `social.js` (07)
 
 `repo.releases`: `list({n, after})`, `latest({include_prereleases?})`, `get(tag)`, `put(tag, {body, name?,
 draft?, prerelease?}, ifMatch?)`, `delete(tag)`, `uploadAsset(tag, name, bytes, {sha256})`,
 `deleteAsset(tag, name)`, `autodraft({tag, since})`. `repo.social`: `get()` → `{stars, watchers, forks,
-viewer:{starred, watching}}`, `star()/unstar()`, `watch()/unwatch()`. `client.starred({n, after})`,
-`client.userStarred(principal)` for the top-level starred lists. Asset bytes download via the static
-`/{o}/{r}/releases/{tag}/assets/{name}` URL (`browser_download_url`).
+viewer:{starred, watching}}`, `star()/unstar()` (watch lives in `client.watch`, §3.5 — Decisions).
+`client.starred({n, after})`, `client.userStarred(principal)` for the top-level starred lists. Asset bytes
+download via the static `/{o}/{r}/releases/{tag}/assets/{name}` URL (`browser_download_url`).
 
 ### Concurrency — SDK additions
 Same hazard set as 12 §1.6: leaked readers, unbounded parallel streams, popup-auth races. Avoidance is
@@ -208,7 +210,8 @@ truth**; frames invalidate cache keys, they do not carry full state.
   head_sha}`; 04: `review` on posted/dismissed with rollup state, `thread` on comments/resolution with
   `thread_id`; 05: `check` with `{sha, context, state, combined_state, updated_at}`; 07: `release` with
   `{tag, action}`; 01: `access` with `{updated_at}` when access.json CAS commits).
-- `GET /api/v1/notifications/stream` — per 06 (authenticated, browser lane credentials).
+- `GET /api/v1/notifications/stream` — per 06 (authenticated self-only, browser lane credentials); frames
+  `event: notification` whose data is the notification object itself; runs until the client cancels.
 
 | Page | Streams | Frame handling |
 |---|---|---|
@@ -298,6 +301,7 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
 - **PR diff served as `text/plain` unified patch** — the 12 §2.8 parser is already the contract; no JSON diff shape to invent.
 - **`repo.permissions()` endpoint for client gating** — P6 resolution is server-side; the UI reads one resolved role instead of re-implementing resolution order.
 - **Cache-frames-not-patch for lists; append-only for timelines** — lists stay simple TTL caches; timelines use `(num, seq)` dedup so SSE and pagination compose.
+- **Watch is a subscription verb owned by 06 (`client.watch.{get,set}`), not 07's `repo.social`** — both docs named `PUT/DELETE …/api/watch`; reconciled to 06 (subscriptions/notifications domain). `repo.social.get()` still returns `viewer.watching` for the header toggle's state; star stays in `repo.social`.
 - **Hide for absent roles, disable for forbidden states** — anonymous users see no chrome they cannot use; authenticated users see what exists and learn why it is off.
 - **English-only v1, no i18n scaffolding** — additive later, zero cost now.
 - **Releases/stars SDK per 07's submodule plan** (`releases.js`, `social.js`) — absorbed verbatim to avoid conflicting paths.

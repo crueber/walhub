@@ -223,11 +223,13 @@ blocks a CI report (07_api.md §6 backpressure rules).
 
 On a transition into `failure` or `error` whose sha is the head of an **open** PR (resolved via the
 shared `issues/index.json` — cards carry `head_sha`, filter `kind: "pr"`; 03 §2/§8 — bounded lookup
-at collaboration rate), the handler synchronously enqueues a
-`check_failed` notification `{repo, sha, context, state, description, target_url, pr}` to the PR
-author and PR watchers, per P8: after the CAS commits, in the same request, best-effort. A crash
-after CAS loses one notification, not data. Success/pending transitions notify no one (a green check
-is not an interruption).
+at collaboration rate), the handler synchronously enqueues the 06 activity-log action
+`check_reported` (06's §5.3 enum — emitted for transitions into `failure` or `error` ONLY), payload
+`{sha, context, state, description?, target_url?, pr?}` with reason `subscribed`. 06's fan-out
+computes the recipients (PR participants); this handler only enqueues the event, synchronously per
+P8: after the CAS commits, in the same request, best-effort. A crash after CAS loses one
+notification, not data. Success/pending transitions emit nothing (a green check is not an
+interruption).
 
 ## 9. UI & SDK
 
