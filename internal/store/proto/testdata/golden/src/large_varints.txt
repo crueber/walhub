@@ -1,0 +1,3 @@
+seq: 18446744073709551615
+pack { checksum: "aa" pack_size: 4294967296 idx_size: 4294967295 object_count: 128 seq: 127 tier: 1 }
+checkpoint { seq: 9223372036854775808 key: "k" }

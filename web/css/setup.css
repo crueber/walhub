@@ -1,0 +1,14 @@
+/* web/css/setup.css — Setup UI: schema-grouped cards, per-key inputs, validation
+   hints, banners. */
+
+.setup-page { max-width: 900px; }
+.setup-actions { position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 10; border-bottom: 1px solid var(--border); }
+.setup-section h3 { text-transform: capitalize; margin-top: 0; }
+.setup-key { padding: 8px 0; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: 1fr 320px; gap: 6px 16px; align-items: center; }
+.setup-key textarea, .setup-key input, .setup-key select { width: 100%; }
+.setup-label { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.setup-label .doc { flex-basis: 100%; font-size: 12px; }
+.key-errors { grid-column: 1 / -1; }
+.banner { padding: 12px 16px; border-radius: 8px; margin: 12px 0; }
+.banner-error { background: #3d1d20; border: 1px solid var(--del); }
+.errors-card { border-color: var(--del); }

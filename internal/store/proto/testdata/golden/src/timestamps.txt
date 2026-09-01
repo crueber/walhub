@@ -1,0 +1,5 @@
+seq: 1
+key: "checkpoints/0000000000000001/checkpoint.pb"
+created_at { seconds: 1700000000 nanos: 123456789 }
+first_state_at { seconds: -1 nanos: 1 }
+as_of { seconds: 946684800 nanos: 999999999 }

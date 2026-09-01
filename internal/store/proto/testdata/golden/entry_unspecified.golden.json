@@ -1,0 +1,8 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 7,
+    "kind": 0,
+    "writer": "w1"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "walhub-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:sdk": "esbuild sdk/src/index.js --bundle --format=esm --target=es2022 --minify --outfile=dist/repos.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

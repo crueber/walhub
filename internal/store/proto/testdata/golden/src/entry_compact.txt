@@ -1,0 +1,6 @@
+seq: 51
+kind: ENTRY_KIND_COMPACT
+pack { checksum: "1111111111111111111111111111111111111111" pack_size: 4096 idx_size: 1024 has_rev: true object_count: 100 seq: 51 tier: 1 }
+supersedes: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+supersedes: "cafecafecafecafecafecafecafecafecafecafe"
+writer: "walhub-maint-1"

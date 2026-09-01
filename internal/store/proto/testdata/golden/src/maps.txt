@@ -1,0 +1,7 @@
+seq: 1
+writer: "w"
+meta { key: "zeta" value: "1" }
+meta { key: "alpha" value: "2" }
+meta { key: "empty" value: "" }
+meta { key: "" value: "4" }
+meta { key: "mid" value: "3" }

@@ -1,0 +1,36 @@
+{
+  "type": "LogSegment",
+  "value": {
+    "entries": [
+      {
+        "seq": 1,
+        "kind": 1,
+        "writer": "w1"
+      },
+      {
+        "seq": 2,
+        "kind": 3,
+        "txn": {
+          "updates": [
+            {
+              "name": "refs/heads/main",
+              "old_oid": "",
+              "new_oid": "abc"
+            }
+          ],
+          "atomic": false
+        },
+        "writer": "w1"
+      },
+      {
+        "seq": 3,
+        "kind": 4,
+        "checkpoint": {
+          "seq": 2,
+          "key": "checkpoints/0000000000000002/checkpoint.pb"
+        },
+        "writer": "w1"
+      }
+    ]
+  }
+}

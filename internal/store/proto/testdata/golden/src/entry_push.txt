@@ -1,0 +1,9 @@
+seq: 41
+kind: ENTRY_KIND_PUSH
+pack { checksum: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" pack_size: 1024 idx_size: 256 object_count: 3 seq: 41 }
+txn { updates { name: "refs/heads/main" old_oid: "0000000000000000000000000000000000000000" new_oid: "1234567890abcdef1234567890abcdef12345678" } updates { name: "refs/tags/v1" new_oid: "abcdefabcdefabcdefabcdefabcdefabcdefabcd" new_peeled: "1234567890abcdef1234567890abcdef12345678" } push_options: "atomic" push_options: "ci.skip" atomic: true }
+created_at { seconds: 1700000000 nanos: 999999999 }
+writer: "walhub-7f3a"
+meta { key: "principal" value: "user:alice" }
+meta { key: "request_id" value: "req-123" }
+meta { key: "agent" value: "git/2.43" }

@@ -1,0 +1,15 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 1,
+    "kind": 0,
+    "writer": "w",
+    "meta": {
+      "": "4",
+      "alpha": "2",
+      "empty": "",
+      "mid": "3",
+      "zeta": "1"
+    }
+  }
+}

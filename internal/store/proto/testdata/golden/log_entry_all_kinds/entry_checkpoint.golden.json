@@ -1,0 +1,24 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 60,
+    "kind": 4,
+    "checkpoint": {
+      "seq": 59,
+      "key": "checkpoints/000000000000003b/checkpoint.pb",
+      "created_at": {
+        "seconds": 1700000100,
+        "nanos": 0
+      },
+      "first_state_at": {
+        "seconds": 1700000000,
+        "nanos": 0
+      },
+      "as_of": {
+        "seconds": 1700000099,
+        "nanos": 0
+      }
+    },
+    "writer": "walhub-maint-1"
+  }
+}

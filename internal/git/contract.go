@@ -171,10 +171,7 @@ type LocalRepo struct {
 	Root string // cache root
 	ID   RepoId
 	Path string // <root>/<owner>/<name>.git
+
+	// cacheRef is the per-repo RefCache, created lazily by the git machinery.
+	cacheRef *RefCache
 }
-
-// OpenLocalRepo opens <root>/<owner>/<name>.git (nil, nil) when absent.
-func OpenLocalRepo(root string, id RepoId) (*LocalRepo, error) { panic("unimplemented") }
-
-// InitLocalRepo creates the bare repo with the §7.1 config keys.
-func InitLocalRepo(root string, id RepoId, format ObjectFormat) (*LocalRepo, error) { panic("unimplemented") }

@@ -1,0 +1,4 @@
+seq: 2
+kind: ENTRY_KIND_REF_UPDATE
+txn { updates { name: "refs/heads/main" new_oid: "abc" } }
+writer: "w1"

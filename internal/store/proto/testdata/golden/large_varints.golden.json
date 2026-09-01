@@ -1,0 +1,25 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 18446744073709551615,
+    "kind": 0,
+    "pack": {
+      "checksum": "aa",
+      "pack_size": 4294967296,
+      "idx_size": 4294967295,
+      "has_rev": false,
+      "has_bitmap": false,
+      "object_count": 128,
+      "seq": 127,
+      "tier": 1,
+      "has_commit_graph": false,
+      "kind": 0,
+      "derived_from": ""
+    },
+    "checkpoint": {
+      "seq": 9223372036854775808,
+      "key": "k"
+    },
+    "writer": ""
+  }
+}

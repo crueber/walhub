@@ -1,0 +1,4 @@
+seq: 60
+kind: ENTRY_KIND_CHECKPOINT
+checkpoint { seq: 59 key: "checkpoints/000000000000003b/checkpoint.pb" created_at { seconds: 1700000100 } first_state_at { seconds: 1700000000 } as_of { seconds: 1700000099 } }
+writer: "walhub-maint-1"

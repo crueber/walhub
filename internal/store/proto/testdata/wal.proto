@@ -1,0 +1,181 @@
+// Canonical wire schema — walgit/v1/wal.proto, reproduced verbatim and normative from
+// docs/go/02_storage_protobuf.md §2.2. Dev-time only: used ONCE, offline, to generate the
+// golden wire fixtures under testdata/golden/ with `protoc --encode` (see §2.3.3). It is
+// NEVER imported by the build; the Go codec in ../codec.go is hand-rolled to this schema.
+syntax = "proto3";
+package walgit.v1;
+import "google/protobuf/timestamp.proto";
+
+message Manifest {
+  uint32 format_version = 1;        // 1; readers reject unknown values
+  string repo = 2;                  // "<owner>/<repo>"
+  string object_format = 3;         // "sha1" | "sha256"
+  uint64 head_seq = 4;              // last committed entry seq (0 = empty repo)
+  uint64 min_seq = 5;               // oldest entry still in log_segments; == checkpoint.seq+1 when checkpointed
+  CheckpointRef checkpoint = 6;     // optional
+  repeated LogSegmentRef log_segments = 7; // covers [min_seq, head_seq]; ascending, contiguous, non-overlapping
+  repeated PackRef packs = 8;       // DENORMALIZED live pack set after all entries <= head_seq; sorted by seq
+  google.protobuf.Timestamp updated_at = 9;
+  string writer = 10;               // instance id that produced this generation
+  uint64 revision = 11;             // monotonic counter of successful manifest writes (starts 1)
+  RepoSettings settings = 12;       // D24: latest per-repo settings, INLINE (every refs sync sees it free)
+}
+
+message RepoSettings {            // published to the WAL; TOML restricted to allowed sections, <= 16 KiB
+  string toml = 1;
+  uint64 revision = 2;            // per-repo settings revision, 1 = first publish
+  string author = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  string message = 5;             // free-text reason (history)
+}
+
+message LogSegmentRef {
+  string key = 1;                 // repo-relative, e.g. "log/0000000000000042.pb"
+  uint64 first_seq = 2;
+  uint64 last_seq = 3;
+  uint64 size = 4;                // bytes at manifest-write time (appendable segments grow)
+  bool sealed = 5;                // regional segments always true
+}
+
+message LogSegment { repeated LogEntry entries = 1; } // decoded form / whole-object encoding
+
+message PackRef {
+  string checksum = 1;            // pack trailing SHA, hex; key = wal/<checksum>.pack
+  uint64 pack_size = 2;
+  uint64 idx_size = 3;
+  bool has_rev = 4;
+  bool has_bitmap = 5;
+  uint64 object_count = 6;
+  uint64 seq = 7;                 // entry that introduced this pack
+  uint32 tier = 8;                // 0 fresh push pack, 1 medium (compacted), 2 base
+  bool has_commit_graph = 9;      // wal/<checksum>.commit-graph exists
+  PackKind kind = 10;             // OBJECTS (default) | HISTORY
+  string derived_from = 11;       // base pack checksum for HISTORY packs
+}
+enum PackKind { PACK_KIND_OBJECTS = 0; PACK_KIND_HISTORY = 1; }
+
+enum EntryKind {
+  ENTRY_KIND_UNSPECIFIED = 0;
+  ENTRY_KIND_PUSH = 1;            // zero or one pack + a ref transaction
+  ENTRY_KIND_COMPACT = 2;         // one new pack superseding `supersedes`; refs unchanged
+  ENTRY_KIND_REF_UPDATE = 3;      // ref-only change (deletes, force-updates, admin ops)
+  ENTRY_KIND_CHECKPOINT = 4;      // checkpoint written; packs unchanged
+  ENTRY_KIND_SETTINGS = 5;        // settings changed (manifest carries latest; this is history)
+}
+
+message LogEntry {
+  uint64 seq = 1;
+  EntryKind kind = 2;
+  PackRef pack = 3;               // PUSH (when objects pushed), COMPACT
+  RefTransaction txn = 4;         // PUSH, REF_UPDATE
+  repeated string supersedes = 5; // COMPACT only: checksums removed from the live set
+  CheckpointRef checkpoint = 6;   // CHECKPOINT only
+  google.protobuf.Timestamp created_at = 7;
+  string writer = 8;
+  map<string, string> meta = 9;   // provenance: principal, request_id, agent, push-options, imported_from…
+  RepoSettings settings = 10;     // SETTINGS only
+}
+
+message RefUpdate {
+  string name = 1;                // "refs/heads/main" or "HEAD" (symbolic update)
+  string old_oid = 2;             // hex; all-zero = "does not exist"
+  string new_oid = 3;             // hex; all-zero = delete
+  string new_symbolic_target = 4; // HEAD symbolic target; oids then empty
+  string new_peeled = 5;          // peeled commit for annotated-tag updates (replicas advertise ^{} without objects)
+}
+
+message RefTransaction {
+  repeated RefUpdate updates = 1;
+  repeated string push_options = 2;
+  bool atomic = 3;                // recorded client intent; WAL application is ALWAYS atomic
+}
+
+message Checkpoint {              // checkpoints/<seq>/checkpoint.pb
+  uint64 seq = 1;
+  string object_format = 2;
+  repeated PackRef packs = 3;     // pack set fully representing the repo at seq (typically 1 base)
+  string refs_key = 4;            // "checkpoints/<seq>/refs.pb"
+  uint64 ref_count = 5;
+  string bundle_key = 6;          // optional rendered bundle
+  google.protobuf.Timestamp created_at = 7;
+  string writer = 8;
+}
+
+message CheckpointRef {
+  uint64 seq = 1;
+  string key = 2;
+  google.protobuf.Timestamp created_at = 3;     // drives the time trigger without a fetch
+  google.protobuf.Timestamp first_state_at = 4; // earliest WAL state ever (carried forward)
+  google.protobuf.Timestamp as_of = 5;          // created_at of newest folded entry
+}
+
+message RefSnapshot {
+  uint64 seq = 1;
+  string object_format = 2;
+  repeated Ref refs = 3;          // sorted by name, no duplicates
+  string head_target = 4;         // symbolic target of HEAD
+  google.protobuf.Timestamp created_at = 5;
+}
+message Ref { string name = 1; string oid = 2; string peeled = 3; }
+
+message Lease {
+  string holder = 1; string purpose = 2;
+  google.protobuf.Timestamp acquired_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  uint64 epoch = 5;               // incremented on every heartbeat/steal
+}
+
+message BundleList {              // bundles/list.pb (CAS'd, NOT immutable)
+  string mode = 1;                // "all" | "any" (git bundle.mode)
+  string heuristic = 2;           // "creationToken"
+  repeated BundleEntry bundles = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  repeated SkippedSlot skipped = 5; // closed slots measured and NOT cut
+}
+message SkippedSlot {
+  string strategy = 1; uint64 slot = 2; string base_id = 3;
+  uint64 as_of_seq = 4;           // 0 = no state
+  string reason = 5;
+  google.protobuf.Timestamp at = 6;
+}
+
+message BundleEntry {
+  string id = 1;                  // stable id used in bundle.<id>.uri
+  string key = 2;                 // repo-relative object key
+  string strategy = 3;
+  string kind = 4;                // "full" | "incremental"
+  uint64 creation_token = 5;      // monotonic; = slot epoch seconds (0 for pre-slot bundles)
+  uint64 seq = 6;                 // WAL seq the bundle was created from
+  uint64 size = 7;
+  string base_id = 8;             // bundle this incremental is based on ("" for full)
+  google.protobuf.Timestamp created_at = 9;
+  string version = 10;            // store version tag at upload → HTTP ETag
+  repeated Ref tips = 11;         // ref tips contained
+  uint64 slot = 12;               // calendar slot (epoch of the fire time)
+  string filter = 13;             // "" = none; "blob:none" = blobless family
+}
+
+message FsckReport {              // fsck.pb; overwritten, never replayed
+  uint64 seq = 1;
+  google.protobuf.Timestamp at = 2;
+  string host = 3;
+  repeated string missing = 4;    // bounded list
+  uint64 missing_total = 5;
+  uint64 problems = 6;            // count only
+  double elapsed_secs = 7;
+  uint64 repaired_seq = 8;
+}
+
+message RepoCatalog { repeated string repos = 1; google.protobuf.Timestamp updated_at = 2; }
+
+message MaintainerHeartbeat {     // bucket root maintain/<host>.pb
+  string host = 1;
+  repeated string repos = 2;
+  repeated string exclude = 3;
+  uint64 max_pack_bytes = 4;
+  string disk = 5;                // "tmpfs" | "ssd"
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp last_pass_at = 7;
+  string last_unit = 8;           // "<repo> <kind> <detail>"
+  uint64 passes = 9;
+}

@@ -51,7 +51,7 @@ type Object struct {
 }
 
 func (NotModified) isGetResult() {}
-func (Object) isGetResult()     {}
+func (Object) isGetResult()      {}
 
 // PutMode is the write discipline.
 type PutMode int
@@ -148,20 +148,28 @@ func (e *StoreError) Error() string {
 
 func (e *StoreError) Unwrap() error { return e.Err }
 
-func NewNotFound(key string) *StoreError          { return &StoreError{Kind: ErrKindNotFound, Key: key} }
+func NewNotFound(key string) *StoreError { return &StoreError{Kind: ErrKindNotFound, Key: key} }
 func NewPrecondition(key string, cur Version) *StoreError {
 	return &StoreError{Kind: ErrKindPreconditionFailed, Key: key, Current: cur}
 }
-func NewRetryable(key string, err error) *StoreError { return &StoreError{Kind: ErrKindRetryable, Key: key, Err: err} }
-func NewInvalid(key string, err error) *StoreError   { return &StoreError{Kind: ErrKindInvalidArgument, Key: key, Err: err} }
-func NewOther(key string, err error) *StoreError     { return &StoreError{Kind: ErrKindOther, Key: key, Err: err} }
-func NewCorrupt(key string, err error) *StoreError   { return &StoreError{Kind: ErrKindCorrupt, Key: key, Err: err} }
+func NewRetryable(key string, err error) *StoreError {
+	return &StoreError{Kind: ErrKindRetryable, Key: key, Err: err}
+}
+func NewInvalid(key string, err error) *StoreError {
+	return &StoreError{Kind: ErrKindInvalidArgument, Key: key, Err: err}
+}
+func NewOther(key string, err error) *StoreError {
+	return &StoreError{Kind: ErrKindOther, Key: key, Err: err}
+}
+func NewCorrupt(key string, err error) *StoreError {
+	return &StoreError{Kind: ErrKindCorrupt, Key: key, Err: err}
+}
 
-func IsNotFound(err error) bool             { return kindIs(err, ErrKindNotFound) }
-func IsPreconditionFailed(err error) bool   { return kindIs(err, ErrKindPreconditionFailed) }
-func IsRetryable(err error) bool            { return kindIs(err, ErrKindRetryable) }
-func IsInvalidArgument(err error) bool      { return kindIs(err, ErrKindInvalidArgument) }
-func IsCorrupt(err error) bool              { return kindIs(err, ErrKindCorrupt) }
+func IsNotFound(err error) bool           { return kindIs(err, ErrKindNotFound) }
+func IsPreconditionFailed(err error) bool { return kindIs(err, ErrKindPreconditionFailed) }
+func IsRetryable(err error) bool          { return kindIs(err, ErrKindRetryable) }
+func IsInvalidArgument(err error) bool    { return kindIs(err, ErrKindInvalidArgument) }
+func IsCorrupt(err error) bool            { return kindIs(err, ErrKindCorrupt) }
 
 func kindIs(err error, k StoreErrorKind) bool {
 	for err != nil {
@@ -296,8 +304,8 @@ func (p *Prefixed) AccelTarget(ctx context.Context, key string) (*AccelTarget, e
 	return p.Inner.AccelTarget(ctx, p.full(key))
 }
 
-func (p *Prefixed) SupportsCompose() bool  { return p.Inner.SupportsCompose() }
-func (p *Prefixed) ComposeIsNative() bool  { return p.Inner.ComposeIsNative() }
+func (p *Prefixed) SupportsCompose() bool { return p.Inner.SupportsCompose() }
+func (p *Prefixed) ComposeIsNative() bool { return p.Inner.ComposeIsNative() }
 
 func (p *Prefixed) Compose(ctx context.Context, dst string, sources []string, opts PutOptions) (ObjectMeta, error) {
 	full := make([]string, len(sources))

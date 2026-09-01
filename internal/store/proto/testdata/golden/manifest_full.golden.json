@@ -1,0 +1,86 @@
+{
+  "type": "Manifest",
+  "value": {
+    "format_version": 1,
+    "repo": "alice/widget",
+    "object_format": "sha256",
+    "head_seq": 66,
+    "min_seq": 41,
+    "checkpoint": {
+      "seq": 40,
+      "key": "checkpoints/0000000000000028/checkpoint.pb",
+      "created_at": {
+        "seconds": 1700000000,
+        "nanos": 500000000
+      },
+      "first_state_at": {
+        "seconds": 1690000000,
+        "nanos": 0
+      },
+      "as_of": {
+        "seconds": 1699999000,
+        "nanos": 0
+      }
+    },
+    "log_segments": [
+      {
+        "key": "log/0000000000000029.pb",
+        "first_seq": 41,
+        "last_seq": 50,
+        "size": 4096,
+        "sealed": true
+      },
+      {
+        "key": "log/0000000000000033.pb",
+        "first_seq": 51,
+        "last_seq": 66,
+        "size": 8192,
+        "sealed": false
+      }
+    ],
+    "packs": [
+      {
+        "checksum": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        "pack_size": 1024,
+        "idx_size": 512,
+        "has_rev": true,
+        "has_bitmap": false,
+        "object_count": 42,
+        "seq": 41,
+        "tier": 1,
+        "has_commit_graph": true,
+        "kind": 0,
+        "derived_from": ""
+      },
+      {
+        "checksum": "cafecafecafecafecafecafecafecafecafecafe",
+        "pack_size": 999999,
+        "idx_size": 4096,
+        "has_rev": false,
+        "has_bitmap": true,
+        "object_count": 123456789,
+        "seq": 50,
+        "tier": 2,
+        "has_commit_graph": false,
+        "kind": 1,
+        "derived_from": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+      }
+    ],
+    "updated_at": {
+      "seconds": 1700000066,
+      "nanos": 123456789
+    },
+    "writer": "walhub-7f3a",
+    "revision": 12,
+    "settings": {
+      "toml": "[push]\nmax_pack_bytes = 67000000",
+      "revision": 3,
+      "author": "alice",
+      "updated_at": {
+        "seconds": 1700000000,
+        "nanos": 1
+      },
+      "message": "tune push policy"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 52,
+    "kind": 3,
+    "txn": {
+      "updates": [
+        {
+          "name": "refs/heads/wip",
+          "old_oid": "",
+          "new_oid": "0000000000000000000000000000000000000000"
+        },
+        {
+          "name": "HEAD",
+          "old_oid": "",
+          "new_oid": "",
+          "new_symbolic_target": "refs/heads/main"
+        }
+      ],
+      "atomic": false
+    },
+    "writer": "walhub-admin",
+    "meta": {
+      "imported_from": "legacy"
+    }
+  }
+}

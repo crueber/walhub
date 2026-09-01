@@ -35,41 +35,41 @@ type StaticToken struct {
 }
 
 type Auth struct {
-	Mode               string        `toml:"mode"` // "none" | "token" | "oidc" (default "none")
-	AnonymousRead      bool          `toml:"anonymous_read"`
-	Tokens             []StaticToken `toml:"tokens"`
-	AdminEmails        []string      `toml:"admin_emails"`
-	AdminDomains       []string      `toml:"admin_domains"`
-	Issuer             string        `toml:"issuer"`
-	AllowedDomains     []string      `toml:"allowed_domains"`
-	AllowedEmails      []string      `toml:"allowed_emails"`
-	WriteDomains       []string      `toml:"write_domains"`
-	OAuthClientID      string        `toml:"oauth_client_id"`
-	OAuthClientSecret  string        `toml:"oauth_client_secret"`
-	SessionSecret      string        `toml:"session_secret"`
-	SessionTTL         Duration      `toml:"session_ttl"`         // 30d
-	AccessTokenTTL     Duration      `toml:"access_token_ttl"`    // 90d
-	Audiences          []string      `toml:"audiences"`
-	TrustedForwarders  []string      `toml:"trusted_forwarders"`
+	Mode              string        `toml:"mode"` // "none" | "token" | "oidc" (default "none")
+	AnonymousRead     bool          `toml:"anonymous_read"`
+	Tokens            []StaticToken `toml:"tokens"`
+	AdminEmails       []string      `toml:"admin_emails"`
+	AdminDomains      []string      `toml:"admin_domains"`
+	Issuer            string        `toml:"issuer"`
+	AllowedDomains    []string      `toml:"allowed_domains"`
+	AllowedEmails     []string      `toml:"allowed_emails"`
+	WriteDomains      []string      `toml:"write_domains"`
+	OAuthClientID     string        `toml:"oauth_client_id"`
+	OAuthClientSecret string        `toml:"oauth_client_secret"`
+	SessionSecret     string        `toml:"session_secret"`
+	SessionTTL        Duration      `toml:"session_ttl"`      // 30d
+	AccessTokenTTL    Duration      `toml:"access_token_ttl"` // 90d
+	Audiences         []string      `toml:"audiences"`
+	TrustedForwarders []string      `toml:"trusted_forwarders"`
 }
 
 // --- Server ---
 
 type Server struct {
-	Listen                  string   `toml:"listen"` // default "127.0.0.1:8080"; first run "0.0.0.0:8080"
-	HTTP2                   bool     `toml:"http2"`
-	MaxConcurrentRequests   int      `toml:"max_concurrent_requests"`
-	MaxConcurrentPerRepo    int      `toml:"max_concurrent_per_repo"`
-	RequestTimeout          Duration `toml:"request_timeout"`
-	DrainTimeout            Duration `toml:"drain_timeout"`
-	MaxPushBytes            ByteSize `toml:"max_push_bytes"`
-	Roles                   []string `toml:"roles"` // serve | maintain | events; empty = all
-	AutoCreateOnPush        bool     `toml:"auto_create_on_push"`
-	AccelRedirect           bool     `toml:"accel_redirect"`
-	PublicURL               string   `toml:"public_url"`
-	CorsOrigins             []string `toml:"cors_origins"`
-	TLS                     TLSStruct `toml:"tls"`
-	Auth                    Auth      `toml:"auth"`
+	Listen                string    `toml:"listen"` // default "127.0.0.1:8080"; first run "0.0.0.0:8080"
+	HTTP2                 bool      `toml:"http2"`
+	MaxConcurrentRequests int       `toml:"max_concurrent_requests"`
+	MaxConcurrentPerRepo  int       `toml:"max_concurrent_per_repo"`
+	RequestTimeout        Duration  `toml:"request_timeout"`
+	DrainTimeout          Duration  `toml:"drain_timeout"`
+	MaxPushBytes          ByteSize  `toml:"max_push_bytes"`
+	Roles                 []string  `toml:"roles"` // serve | maintain | events; empty = all
+	AutoCreateOnPush      bool      `toml:"auto_create_on_push"`
+	AccelRedirect         bool      `toml:"accel_redirect"`
+	PublicURL             string    `toml:"public_url"`
+	CorsOrigins           []string  `toml:"cors_origins"`
+	TLS                   TLSStruct `toml:"tls"`
+	Auth                  Auth      `toml:"auth"`
 }
 
 // --- Store ---
@@ -104,21 +104,21 @@ type Store struct {
 // --- Cache ---
 
 type Cache struct {
-	Dir                  string   `toml:"dir"`
-	Mode                 string   `toml:"mode"` // "budget" | "disk" | "auto"
-	MaxBytes             ByteSize `toml:"max_bytes"`
-	DiskHighWatermark    float64  `toml:"disk_high_watermark"`
-	EvictIdleAfter       Duration `toml:"evict_idle_after"`
-	Prewarm              []string `toml:"prewarm"`
-	PrewarmParallelism   int      `toml:"prewarm_parallelism"`
-	PrewarmReadyTimeout  Duration `toml:"prewarm_ready_timeout"`
-	RefAdvertEntries     int      `toml:"ref_advert_entries"`
-	ObjectInfoEntries    int      `toml:"object_info_entries"`
-	BundleListEntries    int      `toml:"bundle_list_entries"`
-	RemoteBlockBytes     ByteSize `toml:"remote_block_bytes"`
-	RemoteObjectBytes    ByteSize `toml:"remote_object_bytes"`
-	SharedRenderCache    bool     `toml:"shared_render_cache"`
-	StoreMount           string   `toml:"store_mount"`
+	Dir                 string   `toml:"dir"`
+	Mode                string   `toml:"mode"` // "budget" | "disk" | "auto"
+	MaxBytes            ByteSize `toml:"max_bytes"`
+	DiskHighWatermark   float64  `toml:"disk_high_watermark"`
+	EvictIdleAfter      Duration `toml:"evict_idle_after"`
+	Prewarm             []string `toml:"prewarm"`
+	PrewarmParallelism  int      `toml:"prewarm_parallelism"`
+	PrewarmReadyTimeout Duration `toml:"prewarm_ready_timeout"`
+	RefAdvertEntries    int      `toml:"ref_advert_entries"`
+	ObjectInfoEntries   int      `toml:"object_info_entries"`
+	BundleListEntries   int      `toml:"bundle_list_entries"`
+	RemoteBlockBytes    ByteSize `toml:"remote_block_bytes"`
+	RemoteObjectBytes   ByteSize `toml:"remote_object_bytes"`
+	SharedRenderCache   bool     `toml:"shared_render_cache"`
+	StoreMount          string   `toml:"store_mount"`
 }
 
 // --- WAL ---
@@ -161,28 +161,28 @@ type Placement struct {
 }
 
 type Compaction struct {
-	Enabled            bool     `toml:"enabled"`
-	Factor             int      `toml:"factor"`
-	TriggerPacks       int      `toml:"trigger_packs"`
-	TriggerBytes       ByteSize `toml:"trigger_bytes"`
-	LeaseTTL           Duration `toml:"lease_ttl"`
+	Enabled             bool     `toml:"enabled"`
+	Factor              int      `toml:"factor"`
+	TriggerPacks        int      `toml:"trigger_packs"`
+	TriggerBytes        ByteSize `toml:"trigger_bytes"`
+	LeaseTTL            Duration `toml:"lease_ttl"`
 	RetentionSuperseded Duration `toml:"retention_superseded"`
-	Engine             string   `toml:"engine"` // "git"
+	Engine              string   `toml:"engine"` // "git"
 }
 
 // --- Bundles ---
 
 type BundleStrategy struct {
-	Name         string   `toml:"name"`
-	Kind         string   `toml:"kind"` // "full" | "incremental"
-	Base         string   `toml:"base,omitempty"`
-	Schedule     string   `toml:"schedule"` // 6-field UTC cron
-	Keep         int      `toml:"keep,omitempty"`
-	BackfillMax  int      `toml:"backfill_max"`
-	Chain        bool     `toml:"chain,omitempty"`
-	Filter       string   `toml:"filter,omitempty"`
-	Refs         []string `toml:"refs,omitempty"`
-	MinCommits   int      `toml:"min_commits,omitempty"`
+	Name        string   `toml:"name"`
+	Kind        string   `toml:"kind"` // "full" | "incremental"
+	Base        string   `toml:"base,omitempty"`
+	Schedule    string   `toml:"schedule"` // 6-field UTC cron
+	Keep        int      `toml:"keep,omitempty"`
+	BackfillMax int      `toml:"backfill_max"`
+	Chain       bool     `toml:"chain,omitempty"`
+	Filter      string   `toml:"filter,omitempty"`
+	Refs        []string `toml:"refs,omitempty"`
+	MinCommits  int      `toml:"min_commits,omitempty"`
 }
 
 type Bundles struct {
@@ -209,10 +209,10 @@ type LFS struct {
 }
 
 type Upstream struct {
-	Git         string   `toml:"git"`
-	Lfs         string   `toml:"lfs"`
-	TokenEnv    string   `toml:"token_env"`
-	Follow      []string `toml:"follow"`
+	Git      string   `toml:"git"`
+	Lfs      string   `toml:"lfs"`
+	TokenEnv string   `toml:"token_env"`
+	Follow   []string `toml:"follow"`
 }
 
 type Git struct {
@@ -276,10 +276,10 @@ func Defaults() *Config {
 			DrainTimeout:          Duration(20 * time.Second),
 			MaxPushBytes:          64 << 30,
 			Auth: Auth{
-				Mode:               "none",
-				AnonymousRead:      true,
-				SessionTTL:         Duration(30 * 24 * time.Hour),
-				AccessTokenTTL:     Duration(90 * 24 * time.Hour),
+				Mode:           "none",
+				AnonymousRead:  true,
+				SessionTTL:     Duration(30 * 24 * time.Hour),
+				AccessTokenTTL: Duration(90 * 24 * time.Hour),
 			},
 			TLS: TLSStruct{Mode: "off"},
 		},
@@ -298,18 +298,18 @@ func Defaults() *Config {
 			GCS: GCS{BulkClients: 4, BulkConcurrency: 32},
 		},
 		Cache: Cache{
-			Dir:                 "/tmp/walgit",
-			Mode:                "auto",
-			MaxBytes:            20 << 30,
-			DiskHighWatermark:   0.9,
-			EvictIdleAfter:      Duration(6 * time.Hour),
-			PrewarmParallelism:  2,
-			RefAdvertEntries:    256,
-			ObjectInfoEntries:   4096,
-			BundleListEntries:   128,
-			RemoteBlockBytes:    1 << 30,
-			RemoteObjectBytes:   256 << 20,
-			SharedRenderCache:   true,
+			Dir:                "/tmp/walgit",
+			Mode:               "auto",
+			MaxBytes:           20 << 30,
+			DiskHighWatermark:  0.9,
+			EvictIdleAfter:     Duration(6 * time.Hour),
+			PrewarmParallelism: 2,
+			RefAdvertEntries:   256,
+			ObjectInfoEntries:  4096,
+			BundleListEntries:  128,
+			RemoteBlockBytes:   1 << 30,
+			RemoteObjectBytes:  256 << 20,
+			SharedRenderCache:  true,
 		},
 		WAL: WAL{
 			BatchWindow:           Duration(5 * time.Millisecond),
@@ -361,12 +361,12 @@ func Defaults() *Config {
 			MaxObjectBytes: 16 << 30,
 		},
 		Git: Git{
-			Binary:            "git",
-			UploadPackEngine:  "auto",
-			AllowFilter:       true,
-			ObjectFormat:      "sha1",
-			CommitGraph:       true,
-			HistoryPack:       true,
+			Binary:           "git",
+			UploadPackEngine: "auto",
+			AllowFilter:      true,
+			ObjectFormat:     "sha1",
+			CommitGraph:      true,
+			HistoryPack:      true,
 		},
 		Telemetry: Telemetry{
 			LogFormat:    "pretty",

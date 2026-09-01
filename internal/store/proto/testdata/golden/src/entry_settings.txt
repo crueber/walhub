@@ -1,0 +1,4 @@
+seq: 62
+kind: ENTRY_KIND_SETTINGS
+settings { toml: "[bundle]\nmode = \"any\"" revision: 2 author: "carol" message: "any-strategy" }
+writer: "walhub-admin"

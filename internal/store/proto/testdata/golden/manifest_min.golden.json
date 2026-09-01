@@ -1,0 +1,14 @@
+{
+  "type": "Manifest",
+  "value": {
+    "format_version": 1,
+    "repo": "bob/empty",
+    "object_format": "sha1",
+    "head_seq": 0,
+    "min_seq": 0,
+    "log_segments": null,
+    "packs": null,
+    "writer": "",
+    "revision": 0
+  }
+}

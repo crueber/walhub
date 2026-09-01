@@ -1,0 +1,36 @@
+/* web/css/wal.css — WAL page: health, ops, manifest/local/packs, bundle chain,
+   slot plan, compactions, segments; owners/repos lists; api docs page. */
+
+.wal-page { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; align-items: start; }
+.wal-page .card { margin: 0; }
+
+.issues { color: var(--warn); padding-left: 20px; }
+.suggestions { margin-top: 8px; }
+.suggestion { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; flex-wrap: wrap; }
+
+.op-row { border-bottom: 1px solid var(--border); padding: 6px 0; }
+.op-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.op-params { display: flex; gap: 12px; flex-wrap: wrap; margin: 4px 0; font-size: 13px; }
+.op-param { display: inline-flex; align-items: center; gap: 4px; }
+.op-log {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; font-size: 12px; max-height: 260px; overflow: auto; white-space: pre-wrap;
+}
+.recent-ops { font-size: 13px; }
+
+.bundle-chain { list-style: none; padding-left: 0; font-size: 13px; }
+.bundle-node { padding: 2px 0; }
+.bundle-node.orphan > .chip { margin-left: 6px; }
+
+.plan-table td, .plan-table th { font-size: 13px; }
+.segments-table { font-size: 13px; }
+
+.owner-list, .repo-list { list-style: none; padding: 0; }
+.owner-list li, .repo-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.owner-link, .repo-link { font-size: 15px; font-weight: 500; }
+
+.subtabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.policy-results { display: flex; flex-direction: column; gap: 6px; }
+.rev-row { border-bottom: 1px solid var(--border); padding: 8px 0; }
+.rev-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.apidocs-page td code { white-space: nowrap; }

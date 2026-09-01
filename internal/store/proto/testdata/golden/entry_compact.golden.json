@@ -1,0 +1,25 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 51,
+    "kind": 2,
+    "pack": {
+      "checksum": "1111111111111111111111111111111111111111",
+      "pack_size": 4096,
+      "idx_size": 1024,
+      "has_rev": true,
+      "has_bitmap": false,
+      "object_count": 100,
+      "seq": 51,
+      "tier": 1,
+      "has_commit_graph": false,
+      "kind": 0,
+      "derived_from": ""
+    },
+    "supersedes": [
+      "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "cafecafecafecafecafecafecafecafecafecafe"
+    ],
+    "writer": "walhub-maint-1"
+  }
+}

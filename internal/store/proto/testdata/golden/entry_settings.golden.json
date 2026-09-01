@@ -1,0 +1,14 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 62,
+    "kind": 5,
+    "writer": "walhub-admin",
+    "settings": {
+      "toml": "[bundle]\nmode = \"any\"",
+      "revision": 2,
+      "author": "carol",
+      "message": "any-strategy"
+    }
+  }
+}

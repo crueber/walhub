@@ -1,0 +1,5 @@
+seq: 52
+kind: ENTRY_KIND_REF_UPDATE
+txn { updates { name: "refs/heads/wip" new_oid: "0000000000000000000000000000000000000000" } updates { name: "HEAD" new_symbolic_target: "refs/heads/main" } }
+writer: "walhub-admin"
+meta { key: "imported_from" value: "legacy" }

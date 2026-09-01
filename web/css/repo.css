@@ -1,0 +1,112 @@
+/* web/css/repo.css — repo chrome (header/tabs/picker/clone), tree, blob, commits,
+   commit detail + diffs, markdown preview. */
+
+.repo-shell { display: flex; flex-direction: column; }
+.repo-header { display: flex; align-items: flex-start; gap: 12px; }
+.repo-title { flex: 1; }
+.repo-title h1 { margin: 0 0 4px; font-size: 20px; }
+.repo-meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; }
+
+.repo-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 14px 0; }
+.repo-tab { padding: 6px 14px; color: var(--fg); border-bottom: 2px solid transparent; }
+.repo-tab:hover { text-decoration: none; border-bottom-color: var(--border); }
+.repo-tab.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+.crumbs { margin: 6px 0 12px; font-size: 14px; }
+.tree-table .entry-icon { width: 24px; }
+.tree-table td, .tree-table th { padding: 5px 10px; }
+.readme h2 { margin-top: 0; font-size: 15px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+
+.blob-head { display: flex; align-items: center; gap: 12px; }
+.blob-head h2 { margin: 0; font-size: 16px; font-family: var(--mono); }
+.blob-body { padding: 0; }
+.blob-cols { display: flex; overflow: auto; }
+.blob-gutter {
+  color: var(--muted); text-align: right; padding: 12px 10px; user-select: none;
+  border-right: 1px solid var(--border); background: var(--panel); font-size: 12.5px; line-height: 1.45;
+}
+.blob-pre { margin: 0; padding: 12px 14px; font-size: 12.5px; line-height: 1.45; }
+.tok-kw { color: #ff7b72; }
+.tok-str { color: #a5d6ff; }
+.tok-com { color: #8b949e; font-style: italic; }
+.tok-num { color: #79c0ff; }
+
+/* markdown preview */
+.markdown-body { padding: 12px 16px; }
+.markdown-body h1, .markdown-body h2 { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.markdown-body pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+.markdown-body code { background: var(--bg); }
+.markdown-body blockquote { border-left: 3px solid var(--border); margin: 8px 0; padding: 2px 12px; color: var(--muted); }
+.markdown-body table { border-collapse: collapse; margin: 8px 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 4px 10px; }
+.markdown-body img { max-width: 100%; }
+
+/* commits */
+.commit-list { display: flex; flex-direction: column; }
+.commit-row { display: flex; align-items: baseline; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+.commit-main { flex: 1; min-width: 0; }
+.commit-subject { color: var(--fg); font-weight: 500; }
+.commit-meta { font-size: 13px; display: flex; gap: 6px; flex-wrap: wrap; }
+.pager { margin: 12px 0; }
+
+/* commit detail + diff */
+.file-nav { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.diff-file-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.diff-file-head h3 { margin: 0; font-family: var(--mono); font-size: 14px; flex: 1; word-break: break-all; }
+.diffstat .add { color: var(--add); }
+.diffstat .del { color: var(--del); }
+.diff { font-family: var(--mono); font-size: 12.5px; width: 100%; border-collapse: collapse; }
+.diff td { padding: 0 8px; white-space: pre-wrap; word-break: break-all; }
+.diff.unified td { width: 100%; }
+.diff.split td { width: 50%; }
+.d-  { background: var(--panel); }
+.d-\+ { background: rgba(63, 185, 80, 0.15); }
+.d-- { background: rgba(248, 81, 73, 0.15); }
+.d-blank { background: var(--bg); }
+.hunk-header td { color: var(--muted); background: var(--bg); }
+.trailers summary { cursor: pointer; }
+.trailers-table { margin-top: 8px; }
+.trailers-group td { background: var(--panel); color: var(--muted); }
+.trailer-key { font-family: var(--mono); white-space: nowrap; }
+
+/* ref picker */
+.ref-picker { position: relative; }
+.ref-drop {
+  position: absolute; right: 0; top: 32px; width: 320px; max-height: 420px; overflow: auto; z-index: 20;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.ref-controls { display: flex; gap: 6px; margin-bottom: 8px; }
+.ref-controls input { flex: 1; min-width: 0; }
+.ref-list { display: flex; flex-direction: column; max-height: 300px; overflow: auto; }
+.ref-row {
+  display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border: none;
+  background: none; color: var(--fg); cursor: pointer; text-align: left; border-radius: 4px;
+}
+.ref-row:hover { background: var(--bg); }
+.ref-sha { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+
+/* clone menu */
+.clone-menu { position: relative; }
+.clone-menu summary { list-style: none; }
+.clone-body { padding: 8px 0; }
+.clone-recipe { margin: 8px 0; }
+.clone-recipe p { margin: 2px 0; font-size: 12px; }
+.clone-cmd { display: block; padding: 6px 8px; user-select: all; }
+
+/* tasks overlay */
+.tasks-indicator { position: relative; margin-left: auto; }
+.tasks-pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--panel); cursor: pointer; font-size: 12px;
+}
+.tasks-pill.busy { border-color: var(--accent); }
+.tasks-pill.failed { border-color: var(--del); }
+.tasks-drop {
+  position: absolute; right: 0; top: 30px; width: 360px; z-index: 20;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.task-row { padding: 3px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+.task-row.failed { color: var(--del); }
+.task-kind { font-weight: 600; }

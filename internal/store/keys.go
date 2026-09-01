@@ -26,15 +26,15 @@ const (
 // LogSegmentKey returns "log/<first_seq:016x>.pb" (lowercase hex, zero-padded 16).
 func LogSegmentKey(firstSeq uint64) string { return fmt.Sprintf("log/%016x.pb", firstSeq) }
 
-func PackKey(sha string) string         { return "wal/" + sha + ".pack" }
-func IdxKey(sha string) string          { return "wal/" + sha + ".idx" }
-func RevKey(sha string) string          { return "wal/" + sha + ".rev" }
-func BitmapKey(sha string) string       { return "wal/" + sha + ".bitmap" }
-func CommitGraphKey(sha string) string  { return "wal/" + sha + ".commit-graph" }
+func PackKey(sha string) string        { return "wal/" + sha + ".pack" }
+func IdxKey(sha string) string         { return "wal/" + sha + ".idx" }
+func RevKey(sha string) string         { return "wal/" + sha + ".rev" }
+func BitmapKey(sha string) string      { return "wal/" + sha + ".bitmap" }
+func CommitGraphKey(sha string) string { return "wal/" + sha + ".commit-graph" }
 
-func CheckpointDir(seq uint64) string          { return fmt.Sprintf("checkpoints/%016x/", seq) }
-func CheckpointKey(seq uint64) string          { return fmt.Sprintf("checkpoints/%016x/checkpoint.pb", seq) }
-func CheckpointRefsKey(seq uint64) string      { return fmt.Sprintf("checkpoints/%016x/refs.pb", seq) }
+func CheckpointDir(seq uint64) string     { return fmt.Sprintf("checkpoints/%016x/", seq) }
+func CheckpointKey(seq uint64) string     { return fmt.Sprintf("checkpoints/%016x/checkpoint.pb", seq) }
+func CheckpointRefsKey(seq uint64) string { return fmt.Sprintf("checkpoints/%016x/refs.pb", seq) }
 func CheckpointBundleKey(seq uint64, sha string) string {
 	return fmt.Sprintf("checkpoints/%016x/%s.bundle", seq, sha)
 }

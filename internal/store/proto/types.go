@@ -33,8 +33,8 @@ func TimeFromGo(t time.Time) Timestamp {
 type PackKind int32
 
 const (
-	PackKindObjects  PackKind = 0
-	PackKindHistory  PackKind = 1
+	PackKindObjects PackKind = 0
+	PackKindHistory PackKind = 1
 )
 
 // EntryKind (enum).
@@ -69,18 +69,18 @@ func (k EntryKind) String() string {
 
 // Manifest — repos/<o>/<r>/manifest.pb; the CAS'd linearization point.
 type Manifest struct {
-	FormatVersion uint32            `json:"format_version"` // 1; readers reject unknown values
-	Repo          string            `json:"repo"`           // "<owner>/<repo>"
-	ObjectFormat  string            `json:"object_format"`  // "sha1" | "sha256"
-	HeadSeq       uint64            `json:"head_seq"`       // last committed entry seq (0 = empty)
-	MinSeq        uint64            `json:"min_seq"`        // oldest entry still in log_segments
-	Checkpoint    *CheckpointRef    `json:"checkpoint,omitempty"`
-	LogSegments   []*LogSegmentRef  `json:"log_segments"` // covers [min_seq, head_seq]; ascending, contiguous
-	Packs         []*PackRef        `json:"packs"`        // denormalized live pack set, sorted by seq
-	UpdatedAt     *Timestamp        `json:"updated_at,omitempty"`
-	Writer        string            `json:"writer"`   // instance id that produced this generation
-	Revision      uint64            `json:"revision"` // monotonic counter of successful writes (starts 1)
-	Settings      *RepoSettings     `json:"settings,omitempty"` // D24: latest inline
+	FormatVersion uint32           `json:"format_version"` // 1; readers reject unknown values
+	Repo          string           `json:"repo"`           // "<owner>/<repo>"
+	ObjectFormat  string           `json:"object_format"`  // "sha1" | "sha256"
+	HeadSeq       uint64           `json:"head_seq"`       // last committed entry seq (0 = empty)
+	MinSeq        uint64           `json:"min_seq"`        // oldest entry still in log_segments
+	Checkpoint    *CheckpointRef   `json:"checkpoint,omitempty"`
+	LogSegments   []*LogSegmentRef `json:"log_segments"` // covers [min_seq, head_seq]; ascending, contiguous
+	Packs         []*PackRef       `json:"packs"`        // denormalized live pack set, sorted by seq
+	UpdatedAt     *Timestamp       `json:"updated_at,omitempty"`
+	Writer        string           `json:"writer"`             // instance id that produced this generation
+	Revision      uint64           `json:"revision"`           // monotonic counter of successful writes (starts 1)
+	Settings      *RepoSettings    `json:"settings,omitempty"` // D24: latest inline
 }
 
 // RepoSettings — per-repo TOML overrides published into the WAL (≤ 16 KiB).
@@ -97,7 +97,7 @@ type LogSegmentRef struct {
 	Key      string `json:"key"` // repo-relative, e.g. "log/0000000000000042.pb"
 	FirstSeq uint64 `json:"first_seq"`
 	LastSeq  uint64 `json:"last_seq"`
-	Size     uint64 `json:"size"`  // bytes at manifest-write time (appendable segments grow)
+	Size     uint64 `json:"size"` // bytes at manifest-write time (appendable segments grow)
 	Sealed   bool   `json:"sealed"`
 }
 
@@ -131,13 +131,13 @@ type LogEntry struct {
 	Checkpoint *CheckpointRef    `json:"checkpoint,omitempty"` // CHECKPOINT
 	CreatedAt  *Timestamp        `json:"created_at,omitempty"`
 	Writer     string            `json:"writer"`
-	Meta       map[string]string `json:"meta,omitempty"` // principal, request_id, agent, imported_from…
+	Meta       map[string]string `json:"meta,omitempty"`     // principal, request_id, agent, imported_from…
 	Settings   *RepoSettings     `json:"settings,omitempty"` // SETTINGS
 }
 
 // RefUpdate — one ref move inside a transaction.
 type RefUpdate struct {
-	Name              string `json:"name"`  // "refs/heads/main" or "HEAD" (symbolic)
+	Name              string `json:"name"`    // "refs/heads/main" or "HEAD" (symbolic)
 	OldOid            string `json:"old_oid"` // hex; all-zero = "does not exist"
 	NewOid            string `json:"new_oid"` // hex; all-zero = delete
 	NewSymbolicTarget string `json:"new_symbolic_target,omitempty"`
@@ -166,8 +166,8 @@ type Checkpoint struct {
 // CheckpointRef — manifest pointer to a checkpoint.
 type CheckpointRef struct {
 	Seq          uint64     `json:"seq"`
-	Key          string     `json:"key"` // "checkpoints/<seq:016x>/checkpoint.pb"
-	CreatedAt    *Timestamp `json:"created_at,omitempty"` // drives the time trigger without a fetch
+	Key          string     `json:"key"`                      // "checkpoints/<seq:016x>/checkpoint.pb"
+	CreatedAt    *Timestamp `json:"created_at,omitempty"`     // drives the time trigger without a fetch
 	FirstStateAt *Timestamp `json:"first_state_at,omitempty"` // earliest WAL state ever (carried forward)
 	AsOf         *Timestamp `json:"as_of,omitempty"`          // state is "as of" the newest folded entry
 }
@@ -199,18 +199,18 @@ type Lease struct {
 
 // BundleList — bundles/list.pb (CAS'd, NOT immutable).
 type BundleList struct {
-	Mode      string          `json:"mode"`      // "all" | "any" (git bundle.mode)
-	Heuristic string          `json:"heuristic"` // "creationToken"
-	Bundles   []*BundleEntry  `json:"bundles"`
-	UpdatedAt *Timestamp      `json:"updated_at,omitempty"`
-	Skipped   []*SkippedSlot  `json:"skipped,omitempty"` // closed slots measured and NOT cut
+	Mode      string         `json:"mode"`      // "all" | "any" (git bundle.mode)
+	Heuristic string         `json:"heuristic"` // "creationToken"
+	Bundles   []*BundleEntry `json:"bundles"`
+	UpdatedAt *Timestamp     `json:"updated_at,omitempty"`
+	Skipped   []*SkippedSlot `json:"skipped,omitempty"` // closed slots measured and NOT cut
 }
 
 // SkippedSlot — a closed slot verdict, final per (strategy, slot, base_id).
 type SkippedSlot struct {
 	Strategy string     `json:"strategy"`
 	Slot     uint64     `json:"slot"`
-	BaseID   string     `json:"base_id"` // "" for full / no-state
+	BaseID   string     `json:"base_id"`   // "" for full / no-state
 	AsOfSeq  uint64     `json:"as_of_seq"` // 0 = no state
 	Reason   string     `json:"reason"`    // "too-small: N commits (min M)" | "no state as of the slot"
 	At       *Timestamp `json:"at,omitempty"`
@@ -218,12 +218,12 @@ type SkippedSlot struct {
 
 // BundleEntry — one advertised bundle.
 type BundleEntry struct {
-	ID            string     `json:"id"`     // stable id for bundle.<id>.uri
-	Key           string     `json:"key"`    // repo-relative object key
+	ID            string     `json:"id"`  // stable id for bundle.<id>.uri
+	Key           string     `json:"key"` // repo-relative object key
 	Strategy      string     `json:"strategy"`
-	Kind          string     `json:"kind"`   // "full" | "incremental"
+	Kind          string     `json:"kind"`           // "full" | "incremental"
 	CreationToken uint64     `json:"creation_token"` // = slot epoch seconds (0 for pre-slot bundles)
-	Seq           uint64     `json:"seq"`  // WAL seq the bundle was created from
+	Seq           uint64     `json:"seq"`            // WAL seq the bundle was created from
 	Size          uint64     `json:"size"`
 	BaseID        string     `json:"base_id,omitempty"`
 	CreatedAt     *Timestamp `json:"created_at,omitempty"`

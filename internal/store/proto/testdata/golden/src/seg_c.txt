@@ -1,0 +1,4 @@
+seq: 3
+kind: ENTRY_KIND_CHECKPOINT
+checkpoint { seq: 2 key: "checkpoints/0000000000000002/checkpoint.pb" }
+writer: "w1"

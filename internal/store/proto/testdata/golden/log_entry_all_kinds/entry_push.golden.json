@@ -1,0 +1,50 @@
+{
+  "type": "LogEntry",
+  "value": {
+    "seq": 41,
+    "kind": 1,
+    "pack": {
+      "checksum": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "pack_size": 1024,
+      "idx_size": 256,
+      "has_rev": false,
+      "has_bitmap": false,
+      "object_count": 3,
+      "seq": 41,
+      "tier": 0,
+      "has_commit_graph": false,
+      "kind": 0,
+      "derived_from": ""
+    },
+    "txn": {
+      "updates": [
+        {
+          "name": "refs/heads/main",
+          "old_oid": "0000000000000000000000000000000000000000",
+          "new_oid": "1234567890abcdef1234567890abcdef1234"
+        },
+        {
+          "name": "refs/tags/v1",
+          "old_oid": "",
+          "new_oid": "abcdefabcdefabcdefabcdefabcd",
+          "new_peeled": "1234567890abcdef1234567890abcdef1234"
+        }
+      ],
+      "push_options": [
+        "atomic",
+        "ci.skip"
+      ],
+      "atomic": true
+    },
+    "created_at": {
+      "seconds": 1700000000,
+      "nanos": 999999999
+    },
+    "writer": "walhub-7f3a",
+    "meta": {
+      "agent": "git/2.43",
+      "principal": "user:alice",
+      "request_id": "req-123"
+    }
+  }
+}
