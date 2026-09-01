@@ -148,6 +148,9 @@ func (s *Server) eventsNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if aerr := requireWrite(p); aerr != nil {
+		// A bare return would emit an empty 200; map it like every other
+		// handler-authenticated route (§8.6).
+		s.mapAuthStatus(w, aerr)
 		return
 	}
 	if s.notify != nil {

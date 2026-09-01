@@ -363,7 +363,9 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, id git.Repo
 // local fallback (only when buffered).
 func (s *Server) receivePackForward(w http.ResponseWriter, r *http.Request, id git.RepoId, p auth.Principal) {
 	_, bufMax := s.pushBroker()
-	buffered, err := io.ReadAll(io.LimitReader(r.Body, bufMax))
+	// Read one byte beyond the cap so an over-cap body is detectable; a plain
+	// bufMax cap would silently truncate and forward oversized pushes.
+	buffered, err := io.ReadAll(io.LimitReader(r.Body, bufMax+1))
 	if err != nil || int64(len(buffered)) > bufMax {
 		s.metrics.Counter("walgit_push_refused_total", "pushes refused").Inc("reason", "spill")
 		plainStatus(w, http.StatusRequestEntityTooLarge,
@@ -381,8 +383,11 @@ func (s *Server) receivePackForward(w http.ResponseWriter, r *http.Request, id g
 	if ferr == nil {
 		resp.Body.Close()
 	}
-	// Broker down → local fallback (we buffered, so replay works).
+	// Broker down → local fallback (we buffered, so replay works). The body
+	// was drained for the broker attempt; the buffered copy is the only way
+	// receivePackLocal can see the push (it re-reads r.Body).
 	s.log.Warn("push broker down; local fallback", "repo", id.String(), "err", ferr)
+	r.Body = io.NopCloser(bytes.NewReader(buffered))
 	s.receivePackLocal(w, r, id, p)
 }
 

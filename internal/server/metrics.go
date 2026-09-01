@@ -207,20 +207,36 @@ func (r *Registry) Render() string {
 func (f *family) writeHistogram(b *strings.Builder) {
 	f.hist.mu.Lock()
 	defer f.hist.mu.Unlock()
-	extra := ""
+	// braced is `{a="b"}` (or ""), comma is the spliceable `{a="b",` form
+	// used before the le= pair. The le pair and the closing brace are always
+	// appended here so labeled and unlabeled families both render valid text.
+	braced := ""
+	comma := ""
 	if f.hist.extra != "" {
-		extra = renderLabels(f.hist.extra)
-		extra = extra[:len(extra)-1] + "," // "{a=\"b\"," → spliceable
+		braced = renderLabels(f.hist.extra)
+		comma = braced[:len(braced)-1] + ","
 	}
 	cum := int64(0)
 	for i := range f.hist.bounds {
 		cum += f.hist.buckets[i]
-		fmt.Fprintf(b, "%s_bucket%s{le=\"%s\"} %d\n", f.name, extra,
+		writeHistSample(b, f.name+"_bucket", comma, "le",
 			strconv.FormatFloat(f.hist.bounds[i], 'g', -1, 64), cum)
 	}
-	fmt.Fprintf(b, "%s_bucket%s{le=\"+Inf\"} %d\n", f.name, extra, f.hist.count)
-	fmt.Fprintf(b, "%s_sum%s %s\n", f.name, extra, strconv.FormatFloat(f.hist.sum, 'g', -1, 64))
-	fmt.Fprintf(b, "%s_count%s %d\n", f.name, extra, f.hist.count)
+	writeHistSample(b, f.name+"_bucket", comma, "le", "+Inf", f.hist.count)
+	fmt.Fprintf(b, "%s_sum%s %s\n", f.name, braced,
+		strconv.FormatFloat(f.hist.sum, 'g', -1, 64))
+	fmt.Fprintf(b, "%s_count%s %d\n", f.name, braced, f.hist.count)
+}
+
+// writeHistSample renders one sample whose last label (name="value") joins a
+// possibly-labeled prefix: unlabeled → `{name="value"}`, labeled →
+// `{a="b",name="value"}`.
+func writeHistSample(b *strings.Builder, metric, comma, name, value string, val int64) {
+	if comma != "" {
+		fmt.Fprintf(b, "%s%s%s=\"%s\"} %d\n", metric, comma, name, value, val)
+		return
+	}
+	fmt.Fprintf(b, "%s{%s=\"%s\"} %d\n", metric, name, value, val)
 }
 
 // metricsHandler serves GET /metrics (`text/plain; version=0.0.4`).

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -67,7 +68,14 @@ func (s *Server) EnsureSelfSigned() error {
 // desiredSANs is the §11 SAN list.
 func (s *Server) desiredSANs() []string {
 	out := []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
-	if h := hostOnly(s.cfg.Server.PublicURL); h != "" && h != "localhost" {
+	// public_url is a URL ("https://host[:port]"); hostOnly only handles
+	// authority strings, so peel the scheme first or a bogus "https" SAN
+	// lands in the cert.
+	pub := s.cfg.Server.PublicURL
+	if i := strings.Index(pub, "://"); i >= 0 {
+		pub = pub[i+3:]
+	}
+	if h := hostOnly(pub); h != "" && h != "localhost" {
 		out = append(out, h)
 	}
 	return append(out, s.cfg.Server.TLS.Hostnames...)
