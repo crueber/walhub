@@ -91,9 +91,10 @@ func composeTwoLevels(ctx context.Context, s ObjectStore, key string, n int, opt
 		if len(partKeys) <= 32 {
 			return s.Compose(ctx, key, partKeys, opts)
 		}
+		ng := (len(partKeys) + 31) / 32
 		var mids []string
-		for g := range len(partKeys) / 32 {
-			chunk := partKeys[g*32 : (g+1)*32]
+		for g := range ng {
+			chunk := partKeys[g*32 : min((g+1)*32, len(partKeys))]
 			mk := midKey(key, g)
 			if _, err := s.Compose(ctx, mk, chunk, PutOptions{Mode: PutOverwrite}); err != nil {
 				return ObjectMeta{}, err

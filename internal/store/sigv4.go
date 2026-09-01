@@ -131,24 +131,12 @@ func hmacSha256(key, data []byte) []byte {
 	return m.Sum(nil)
 }
 
-// buildCanonicalRequest assembles the newline-separated canonical request.
 func buildCanonicalRequest(method, canonicalURI, query string, headers []sigv4Header, payloadHash string) string {
-	creq, _ := canonicalHeaders(headers)
-	// canonicalHeaders already produced "name:value\n" lines; the canonical
-	// request needs the block, then the signed-header names, then the hash.
-	var b strings.Builder
-	b.WriteString(method)
-	b.WriteByte('\n')
-	b.WriteString(canonicalURI)
-	b.WriteByte('\n')
-	b.WriteString(query)
-	b.WriteByte('\n')
-	b.WriteString(creq) // ends with '\n'
-	_, signed := canonicalHeaders(headers)
-	b.WriteString(signed)
-	b.WriteByte('\n')
-	b.WriteString(payloadHash)
-	return b.String()
+	creq, signed := canonicalHeaders(headers)
+	// creq ends with '\n' after the last header; the canonical request needs
+	// one more '\n' (the empty line AWS puts between the header block and
+	// the signed-headers list) or the signature never verifies.
+	return method + "\n" + canonicalURI + "\n" + query + "\n" + creq + "\n" + signed + "\n" + payloadHash
 }
 
 // deriveSigningKey computes k = HMAC(HMAC(HMAC(HMAC("AWS4"+secret, date),
@@ -185,8 +173,10 @@ func signRequestHeaders(method, canonicalURI string, query url.Values, headers [
 // presignQuery returns the query-string SigV4 variant (§2.1 presigned GETs):
 // X-Amz-Algorithm, X-Amz-Credential, X-Amz-Date, X-Amz-Expires,
 // X-Amz-SignedHeaders=host (plus x-amz-security-token when a session token
-// is present), X-Amz-Signature. Payload hash is UNSIGNED-PAYLOAD.
-func presignQuery(method, canonicalURI string, extra url.Values, creds sigv4Creds, scope sigv4Scope, amzDate string, ttl time.Duration) url.Values {
+// is present), X-Amz-Signature. Payload hash is UNSIGNED-PAYLOAD. host is the
+// request's Host value (bucket-prefixed for virtual-host style); it IS part
+// of the canonical request and must not be empty.
+func presignQuery(method, canonicalURI, host string, extra url.Values, creds sigv4Creds, scope sigv4Scope, amzDate string, ttl time.Duration) url.Values {
 	q := url.Values{}
 	for k, vs := range extra {
 		for _, v := range vs {
@@ -197,15 +187,15 @@ func presignQuery(method, canonicalURI string, extra url.Values, creds sigv4Cred
 	q.Set("X-Amz-Credential", creds.AccessKey+"/"+scope.String())
 	q.Set("X-Amz-Date", amzDate)
 	q.Set("X-Amz-Expires", fmt.Sprintf("%d", int(ttl.Seconds())))
-	signed := []sigv4Header{{name: "host", value: ""}}
-	if creds.Session != "" {
-		signed = append(signed, sigv4Header{name: "x-amz-security-token", value: creds.Session})
-		q.Set("X-Amz-Security-Token", creds.Session)
-	}
 	q.Set("X-Amz-SignedHeaders", "host")
 	if creds.Session != "" {
 		// host;x-amz-security-token
 		q.Set("X-Amz-SignedHeaders", "host;x-amz-security-token")
+		q.Set("X-Amz-Security-Token", creds.Session)
+	}
+	signed := []sigv4Header{{name: "host", value: host}}
+	if creds.Session != "" {
+		signed = append(signed, sigv4Header{name: "x-amz-security-token", value: creds.Session})
 	}
 	creq := buildCanonicalRequest(method, canonicalURI, canonicalQuery(q), signed, unsignedPayload)
 	sig := signature(deriveSigningKey(creds.SecretKey, scope), amzDate, scope, creq)

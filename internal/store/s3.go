@@ -158,12 +158,20 @@ func (s *S3) clock() time.Time {
 // https://<endpoint>/<bucket>/<encoded-key> or virtual-host style (§2).
 func (s *S3) urlFor(key string, query url.Values) *url.URL {
 	u := *s.endpoint
+	var rawPath, plainPath string
 	if s.forcePathStyle {
-		u.Path = "/" + s.bucket + "/" + encodePathS3(key)
+		rawPath = "/" + s.bucket + "/" + encodePathS3(key)
+		plainPath = "/" + s.bucket + "/" + key
 	} else {
 		u.Host = s.bucket + "." + u.Host
-		u.Path = "/" + encodePathS3(key)
+		rawPath = "/" + encodePathS3(key)
+		plainPath = "/" + key
 	}
+	// RawPath carries the SigV4-encoded form; Path the decoded one. Go only
+	// uses RawPath when it is a valid encoding of Path — this keeps the wire
+	// path byte-identical to canonicalURI instead of double-escaping.
+	u.Path = plainPath
+	u.RawPath = rawPath
 	if query != nil {
 		u.RawQuery = query.Encode()
 	}
@@ -239,7 +247,9 @@ func (s *S3) do(ctx context.Context, client *http.Client, req *http.Request, key
 // mapStatus applies the §2.6 wire→StoreError table.
 func (s *S3) mapStatus(key string, resp *http.Response) error {
 	switch code := resp.StatusCode; {
-	case code >= 200 && code < 300:
+	case code >= 200 && code < 300, code == http.StatusNotModified:
+		// 304 is a success for a conditional GET (§2.2): Get maps it to
+		// NotModified; no other op accepts a 304.
 		return nil
 	case code == http.StatusNotFound:
 		return NewNotFound(key)
@@ -372,7 +382,9 @@ func (s *S3) signedReq(ctx context.Context, method, key string, query url.Values
 // presignGet mints a presigned GET URL for key with the given TTL (§2.2).
 func (s *S3) presignGet(key string, ttl time.Duration) string {
 	t := s.clock()
-	u := s.urlFor(key, presignQuery(http.MethodGet, s.canonicalURI(key), url.Values{}, s.creds, s.scope(t), t.Format(amzDateLayout), ttl))
+	u := s.urlFor(key, nil)
+	q := presignQuery(http.MethodGet, s.canonicalURI(key), u.Host, url.Values{}, s.creds, s.scope(t), t.Format(amzDateLayout), ttl)
+	u.RawQuery = q.Encode()
 	return u.String()
 }
 

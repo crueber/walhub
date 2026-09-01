@@ -12,29 +12,28 @@ import (
 	"unsafe"
 )
 
+// renameat2Sysnums maps GOARCH → the renameat2 syscall number. Arches absent
+// from the table fall back to the portable lock+stat+rename path.
+var renameat2Sysnums = map[string]uintptr{
+	"amd64":    316,
+	"arm64":    276,
+	"riscv64":  276,
+	"loong64":  276,
+	"386":      353,
+	"arm":      382,
+	"mips64":   5311,
+	"mips64le": 5311,
+	"mips":     4353,
+	"mipsle":   4353,
+	"ppc64":    357,
+	"ppc64le":  357,
+	"s390x":    347,
+}
+
 // renameat2Sysnum returns the renameat2 syscall number for the running
 // GOARCH, or 0 when unknown (the caller then uses the portable fallback).
 func renameat2Sysnum() uintptr {
-	switch runtime.GOARCH {
-	case "amd64":
-		return 316
-	case "arm64", "riscv64", "loong64":
-		return 276
-	case "386":
-		return 353
-	case "arm":
-		return 382
-	case "mips64", "mips64le":
-		return 5311
-	case "mips", "mipsle":
-		return 4353
-	case "ppc64", "ppc64le":
-		return 357
-	case "s390x":
-		return 347
-	default:
-		return 0
-	}
+	return renameat2Sysnums[runtime.GOARCH]
 }
 
 // renameNoReplace renames old to new, failing with EEXIST when new exists.
