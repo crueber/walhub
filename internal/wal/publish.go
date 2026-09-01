@@ -245,7 +245,15 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 		anyValid := false
 		prevTime := lastEntry
 		for i, j := range batch {
-			txErrs := verifyTxn(j.req.Txn, view)
+			// Pack-only (COMPACT) and SETTINGS jobs carry no ref updates:
+			// nil Txn is their valid shape. A plain push with no transaction
+			// is still rejected.
+			var txErrs []*RefError
+			if j.req.Txn != nil {
+				txErrs = verifyTxn(j.req.Txn, view)
+			} else if !j.req.Compact && j.req.Settings == nil {
+				txErrs = []*RefError{{Kind: RefErrRejected, Ref: "*", Detail: "nil transaction"}}
+			}
 			// Monotonic created_at (§5.3.2 step 3): an explicit time must be
 			// ≥ the WAL head's last entry time, and within the batch ≥ the
 			// previous job's explicit time.
@@ -482,7 +490,11 @@ func verifyTxn(txn *proto.RefTransaction, view *refOverlay) []*RefError {
 }
 
 // applyTxnToView folds a verified txn into the working view (no re-checks).
+// A nil txn (COMPACT/SETTINGS jobs) folds nothing.
 func applyTxnToView(view *refOverlay, txn *proto.RefTransaction) {
+	if txn == nil {
+		return
+	}
 	for _, u := range txn.Updates {
 		if u.NewSymbolicTarget != "" {
 			continue // HEAD moves are applied at commit time
@@ -533,26 +545,26 @@ func (p *Publisher) uploadPack(ctx context.Context, pack *PreparedPack) error {
 			return &WalError{Kind: WalErrIo, Detail: pack.PackPath, Wrapped: err}
 		}
 		defer f.Close()
-		if _, err := store.PutFileParallel(ctx, p.h.reg.st, store.PackKey(pack.Checksum), f, int64(pack.PackSize), opts); err != nil {
+		if _, err := store.PutFileParallel(ctx, p.h.reg.st, p.h.repoKey(store.PackKey(pack.Checksum)), f, int64(pack.PackSize), opts); err != nil {
 			if store.IsPreconditionFailed(err) {
 				return nil // duplicate create is success
 			}
-			return &WalError{Kind: WalErrStore, Detail: store.PackKey(pack.Checksum), Wrapped: err}
+			return &WalError{Kind: WalErrStore, Detail: p.h.repoKey(store.PackKey(pack.Checksum)), Wrapped: err}
 		}
 	} else if pack.PackPath != "" {
-		if _, err := store.PutBytes(ctx, p.h.reg.st, store.PackKey(pack.Checksum), mustRead(pack.PackPath), opts); err != nil {
+		if _, err := store.PutBytes(ctx, p.h.reg.st, p.h.repoKey(store.PackKey(pack.Checksum)), mustRead(pack.PackPath), opts); err != nil {
 			if store.IsPreconditionFailed(err) {
 				return nil
 			}
-			return &WalError{Kind: WalErrStore, Detail: store.PackKey(pack.Checksum), Wrapped: err}
+			return &WalError{Kind: WalErrStore, Detail: p.h.repoKey(store.PackKey(pack.Checksum)), Wrapped: err}
 		}
 	}
 	if pack.IdxPath != "" {
-		if _, err := store.PutBytes(ctx, p.h.reg.st, store.IdxKey(pack.Checksum), mustRead(pack.IdxPath), opts); err != nil {
+		if _, err := store.PutBytes(ctx, p.h.reg.st, p.h.repoKey(store.IdxKey(pack.Checksum)), mustRead(pack.IdxPath), opts); err != nil {
 			if store.IsPreconditionFailed(err) {
 				return nil
 			}
-			return &WalError{Kind: WalErrStore, Detail: store.IdxKey(pack.Checksum), Wrapped: err}
+			return &WalError{Kind: WalErrStore, Detail: p.h.repoKey(store.IdxKey(pack.Checksum)), Wrapped: err}
 		}
 	}
 	return nil
@@ -646,41 +658,38 @@ func buildNextManifest(base *pbManifest, entries []*proto.LogEntry, firstSeq, se
 	}
 	next.HeadSeq = lastSeq
 
-	packs := make([]*proto.PackRef, 0, len(base.Packs)+len(entries))
 	keep := map[string]bool{}
 	for _, p := range base.Packs {
 		keep[p.Checksum] = true
-		packs = append(packs, p)
 	}
+	var added []*proto.PackRef
 	for _, e := range entries {
 		switch e.Kind {
 		case proto.EntryKindPush:
 			if e.Pack != nil {
-				packs = append(packs, e.Pack)
+				added = append(added, e.Pack)
 			}
 		case proto.EntryKindCompact:
 			for _, dead := range e.Supersedes {
 				delete(keep, dead)
 			}
 			if e.Pack != nil {
-				packs = append(packs, e.Pack)
+				added = append(added, e.Pack)
 			}
 		case proto.EntryKindSettings:
 			next.Settings = e.Settings
 		}
 	}
-	// Superseded removal only applies to packs still referenced.
-	live := packs[:0]
-	seen := map[string]bool{}
-	for _, p := range packs {
-		if !keep[p.Checksum] || seen[p.Checksum] {
-			continue
+	// Base packs minus superseded, then the batch's new packs (always kept).
+	packs := make([]*proto.PackRef, 0, len(base.Packs)+len(added))
+	for _, p := range base.Packs {
+		if keep[p.Checksum] {
+			packs = append(packs, p)
 		}
-		seen[p.Checksum] = true
-		live = append(live, p)
 	}
-	sortPackRefs(live)
-	next.Packs = live
+	packs = append(packs, added...)
+	sortPackRefs(packs)
+	next.Packs = packs
 
 	segs := make([]*proto.LogSegmentRef, 0, len(base.LogSegments)+1)
 	segs = append(segs, base.LogSegments...)
@@ -918,7 +927,7 @@ func (h *RepoHandle) applyTxnsOffline(txns []*proto.RefTransaction) error {
 
 // PublishCompact publishes a repack/base/add-pack result as a COMPACT entry.
 func (h *RepoHandle) PublishCompact(ctx context.Context, pack *PreparedPack, supersedes []string, meta map[string]string) (PublishResult, error) {
-	return h.Publish(ctx, PublishRequest{Pack: pack, Supersedes: supersedes, Compact: true, Meta: meta})
+	return h.Publish(ctx, PublishRequest{Pack: pack, Supersedes: supersedes, Compact: true, Tier: pack.Tier, Meta: meta})
 }
 
 // AddPack installs a pack file into the local copy (filename must be

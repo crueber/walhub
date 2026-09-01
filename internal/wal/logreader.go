@@ -178,10 +178,10 @@ func (h *RepoHandle) foldTo(ctx context.Context, m *pbManifest, view *RefsView, 
 
 // checkpointRefs GETs and converts a checkpoint's refs.pb snapshot.
 func (h *RepoHandle) checkpointRefs(ctx context.Context, cp *proto.CheckpointRef) (*proto.RefSnapshot, error) {
-	key := cp.Key
-	if key == "" {
-		key = store.CheckpointRefsKey(cp.Seq)
-	}
+	// The RefSnapshot lives at checkpoints/<seq>/refs.pb. cp.Key points at
+	// checkpoint.pb — the wrong object for a refs fold (same trap as
+	// foldCheckpoint, which documents it).
+	key := store.CheckpointRefsKey(cp.Seq)
 	body, _, err := store.GetBytes(ctx, h.reg.st, h.repoKey(key), store.GetOptions{})
 	if err != nil {
 		return nil, &WalError{Kind: WalErrStore, Detail: key, Wrapped: err}
@@ -192,9 +192,6 @@ func (h *RepoHandle) checkpointRefs(ctx context.Context, cp *proto.CheckpointRef
 	snap := &proto.RefSnapshot{}
 	if err := snap.Unmarshal(body); err != nil {
 		return nil, &WalError{Kind: WalErrCorrupt, Detail: "refs snapshot", Wrapped: err}
-	}
-	if err != nil {
-		return nil, &WalError{Kind: WalErrCorrupt, Detail: key, Wrapped: err}
 	}
 	return snap, nil
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -20,12 +21,8 @@ type repoUsage struct {
 
 // evictorLoop runs one pass per interval (13 §1 row 10: tickers; blocking
 // `rw.Lock` is forbidden here — try-only).
-func (r *Registry) evictorLoop(ctx context.Context) {
+func (r *Registry) evictorLoop(ctx context.Context, interval time.Duration) {
 	defer r.wg.Done()
-	interval := r.vals.evictIdleAfter / 4
-	if interval < 30*time.Second {
-		interval = 30 * time.Second
-	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -36,6 +33,15 @@ func (r *Registry) evictorLoop(ctx context.Context) {
 			r.evictIdle()
 		}
 	}
+}
+
+// evictInterval derives the evictor tick (idle-after/4, clamped ≥ 30s).
+func (r *Registry) evictInterval() time.Duration {
+	interval := r.vals.evictIdleAfter / 4
+	if interval < 30*time.Second {
+		interval = 30 * time.Second
+	}
+	return interval
 }
 
 // evictIdle runs one pass (05 §5.1.6).
@@ -147,7 +153,7 @@ func (r *Registry) repoUsages() []repoUsage {
 			id := o.Name() + "/" // owner dir
 			_ = id
 			dir := filepath.Join(r.vals.cacheDir, o.Name(), n.Name())
-			repoID := o.Name() + "/" + trimExt(n.Name())
+			repoID := o.Name() + "/" + strings.TrimSuffix(n.Name(), ".git") // dir "name.git" → id "owner/name"
 			if seen[repoID] {
 				continue
 			}

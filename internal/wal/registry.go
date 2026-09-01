@@ -62,7 +62,9 @@ func NewRegistry(ctx context.Context, st store.ObjectStore, cfg *config.Config) 
 	}
 
 	r.wg.Add(3)
-	go r.evictorLoop(cctx)
+	// The evictor's tick period is derived HERE, on the spawning goroutine,
+	// and passed in — later r.vals mutations (tests) never race this read.
+	go r.evictorLoop(cctx, r.evictInterval())
 	go r.listingRefresher(cctx)
 	go func() { defer r.wg.Done(); r.tasks.janitor(cctx) }()
 	return r
@@ -262,12 +264,13 @@ func (r *Registry) createSlow(ctx context.Context, id string, format git.ObjectF
 
 // ---- delete -----------------------------------------------------------------
 
-// Delete removes a repo. The manifest delete is the linearization point; it
-// happens FIRST so new opens fail immediately, then the repo's objects page
-// away and the local dir goes (05 §5.1.2 delete).
-func (r *Registry) Delete(ctx context.Context, id string) error {
+// Delete removes a repo, returning the torn-down handle (nil when it was not
+// open). The manifest delete is the linearization point; it happens FIRST so
+// new opens fail immediately, then the repo's objects page away and the local
+// dir goes (05 §5.1.2 delete).
+func (r *Registry) Delete(ctx context.Context, id string) (*RepoHandle, error) {
 	if _, err := git.ParseRepoId(id); err != nil {
-		return err
+		return nil, err
 	}
 
 	r.mu.Lock()
@@ -283,7 +286,7 @@ func (r *Registry) Delete(ctx context.Context, id string) error {
 
 	// Linearization point: delete the manifest first.
 	if err := r.st.Delete(ctx, prefix+store.Manifest, ""); err != nil && !store.IsNotFound(err) {
-		return &WalError{Kind: WalErrStore, Detail: prefix + store.Manifest, Wrapped: err}
+		return h, &WalError{Kind: WalErrStore, Detail: prefix + store.Manifest, Wrapped: err}
 	}
 
 	// Page through the rest sequentially — slow and paged, not a hot path.
@@ -295,23 +298,23 @@ func (r *Registry) Delete(ctx context.Context, id string) error {
 			return nil
 		})
 		if err != nil {
-			return &WalError{Kind: WalErrStore, Detail: prefix, Wrapped: err}
+			return h, &WalError{Kind: WalErrStore, Detail: prefix, Wrapped: err}
 		}
 		if len(keys) == 0 {
 			break
 		}
 		for _, k := range keys {
 			if err := r.st.Delete(ctx, k, ""); err != nil && !store.IsNotFound(err) {
-				return &WalError{Kind: WalErrStore, Detail: k, Wrapped: err}
+				return h, &WalError{Kind: WalErrStore, Detail: k, Wrapped: err}
 			}
 		}
 		after = keys[len(keys)-1]
 	}
 
 	if err := os.RemoveAll(rid.LocalDir(r.cacheRoot)); err != nil {
-		return &WalError{Kind: WalErrIo, Detail: rid.LocalDir(r.cacheRoot), Wrapped: err}
+		return h, &WalError{Kind: WalErrIo, Detail: rid.LocalDir(r.cacheRoot), Wrapped: err}
 	}
-	return nil
+	return h, nil
 }
 
 // Get returns the open handle without opening (nil when not open).

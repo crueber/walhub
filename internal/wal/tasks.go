@@ -125,6 +125,12 @@ func (t *Task) Ctx() context.Context { return t.ctx }
 // Record returns the live record (callers copy).
 func (t *Task) Record() TaskRecord { return *t.rec }
 
+// Errorf records a formatted error line in the task's narration (test and
+// reporter convenience; failures are still returned by the task body).
+func (t *Task) Errorf(format string, args ...any) {
+	t.Notice("ERROR " + fmt.Sprintf(format, args...))
+}
+
 // Notice publishes a notice packet and appends to the record's log tail (60).
 func (t *Task) Notice(text string) {
 	t.rec.LogTail = append(t.rec.LogTail, text)
@@ -143,7 +149,9 @@ func (t *Task) Progress(label string, done, total uint64, unit string) {
 		pct := float64(done) / float64(total) * 100
 		p.Percent = &pct
 	}
-	t.rec.Progress = &p
+	if p.Total != nil { // the record's snapshot keeps the latest bar with a total
+		t.rec.Progress = &p
+	}
 	t.bcast.Send(p)
 }
 

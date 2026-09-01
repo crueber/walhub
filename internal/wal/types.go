@@ -112,6 +112,8 @@ const (
 	RefErrConflict
 	RefErrRejected
 	RefErrMissing
+	RefErrStale    // sync raced a publish: retry against the fresh manifest
+	RefErrFallback // rejected pending the one-shot bundle-uri fallback (D17)
 )
 
 func (e *RefError) Error() string {
@@ -122,8 +124,12 @@ func (e *RefError) Error() string {
 		return fmt.Sprintf("conflict: %s %s", e.Ref, e.Detail)
 	case RefErrMissing:
 		return fmt.Sprintf("missing object: %s %s", e.Ref, e.Detail)
+	case RefErrStale:
+		return fmt.Sprintf("stale: %s %s", e.Ref, e.Detail)
+	case RefErrFallback:
+		return fmt.Sprintf("fallback: %s %s", e.Ref, e.Detail)
 	default:
-		return fmt.Sprintf("rejected: %s %s", e.Ref, e.Detail)
+		return fmt.Sprintf("ref-error(%d): %s %s", int(e.Kind), e.Ref, e.Detail)
 	}
 }
 
@@ -160,6 +166,8 @@ func (e *WalError) Error() string {
 		return "pack set too large for this instance: " + e.Detail
 	case WalErrRetry:
 		return fmt.Sprintf("CAS retries exhausted (%s)", e.Detail)
+	case WalErrCorrupt:
+		return "corrupt: " + e.Detail
 	default:
 		return e.Detail
 	}

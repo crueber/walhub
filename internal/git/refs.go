@@ -765,22 +765,37 @@ const peelCacheCap = 256
 // hops; deeper chains unpeelable).
 func (pc *peelClient) peel(ctx context.Context, binary, repoPath, oid string) (string, bool, error) {
 	cur := oid
+	hops := 0
 	for range maxTagHops {
 		if v, ok := pc.cacheLookup(cur); ok {
 			if v == "" {
+				// A negative memo says cur is a non-tag: after ≥1 tag hop
+				// that makes cur the peeled object itself.
+				if hops > 0 {
+					return cur, true, nil
+				}
 				return "", false, nil
 			}
 			return v, true, nil
 		}
 		typ, body, err := pc.catFile(ctx, binary, repoPath, cur)
-		if err != nil || typ != "tag" {
+		if err != nil {
 			return "", false, err
+		}
+		if typ != "tag" {
+			// Chain end: after ≥1 tag hop cur IS the peeled object; a
+			// non-tag on the first hop is simply not peelable.
+			if hops > 0 {
+				return cur, true, nil
+			}
+			return "", false, nil
 		}
 		next, ok := tagObjectTarget(body)
 		if !ok {
 			return "", false, nil
 		}
 		pc.cacheStore(cur, next)
+		hops++
 		cur = next
 	}
 	return "", false, nil // chain deeper than 16 hops: unpeelable

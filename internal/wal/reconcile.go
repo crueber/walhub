@@ -62,15 +62,19 @@ func (h *RepoHandle) reconcilePacks(ctx context.Context, lvl SyncLevel) error {
 	if err := h.checkFits(m, lvl); err != nil {
 		return err
 	}
-
-	// The whole phase is one task; concurrent callers join it (§5.8).
 	if lvl >= LevelServe {
-		_, err := h.reg.tasks.Run(ctx, h.ID, "materialize", map[string]string{"level": lvl.String()},
+		// The whole phase is one task; concurrent callers join it (§5.8). Run
+		// never propagates fn's error (joiners reuse the outcome), so the
+		// record is checked explicitly.
+		rec, err := h.reg.tasks.Run(ctx, h.ID, "materialize", map[string]string{"level": lvl.String()},
 			func(tctx context.Context, t *Task) error {
 				return h.materialize(tctx, t, m, lvl)
 			})
 		if err != nil {
 			return err
+		}
+		if rec != nil && rec.OK != nil && !*rec.OK {
+			return &WalError{Kind: WalErrRetry, Detail: "materialize failed: " + rec.Summary}
 		}
 		// Refresh the local repo state the git layer caches.
 		if _, err := h.Layer().Snapshot(h.repo); err != nil {
@@ -96,18 +100,18 @@ func (h *RepoHandle) materialize(ctx context.Context, t *Task, m *pbManifest, lv
 	var missing []need
 	present := localPacks(packDir)
 	for _, p := range plan.local {
-		_, havePack := present[p.Checksum+".pack"]
-		_, haveIdx := present[p.Checksum+".idx"]
+		_, havePack := present["pack-"+p.Checksum+".pack"]
+		_, haveIdx := present["pack-"+p.Checksum+".idx"]
 		if !havePack {
-			missing = append(missing, need{p, "pack"})
+			missing = append(missing, need{p, ".pack"})
 		}
 		if !haveIdx {
-			missing = append(missing, need{p, "idx"})
+			missing = append(missing, need{p, ".idx"})
 		}
 	}
 	for _, p := range plan.sideFiles {
 		for _, suf := range sideFileSuffixes(p) {
-			if _, ok := present[p.Checksum+suf]; !ok {
+			if _, ok := present["pack-"+p.Checksum+suf]; !ok {
 				missing = append(missing, need{p, suf})
 			}
 		}
@@ -160,7 +164,7 @@ func (h *RepoHandle) materialize(ctx context.Context, t *Task, m *pbManifest, lv
 func (h *RepoHandle) fetchPackFile(ctx context.Context, p *proto.PackRef, what string) error {
 	packDir := h.repo.PackDir()
 	switch what {
-	case "pack":
+	case ".pack":
 		dst := filepath.Join(packDir, "pack-"+p.Checksum+".pack")
 		key := h.repoKey(store.PackKey(p.Checksum))
 		size := int64(p.PackSize)
@@ -179,7 +183,7 @@ func (h *RepoHandle) fetchPackFile(ctx context.Context, p *proto.PackRef, what s
 		}
 		f.Close()
 		return os.Rename(dst+".tmp", dst)
-	case "idx":
+	case ".idx":
 		return h.fetchSideFile(ctx, p.Checksum, ".idx", store.IdxKey(p.Checksum), int64(p.IdxSize))
 	default:
 		for _, suf := range []string{".rev", ".bitmap", ".commit-graph"} {
@@ -330,12 +334,16 @@ func (h *RepoHandle) remoteReaderFor(ctx context.Context, m *pbManifest) (*Remot
 	if cur := h.remoteIdx.Load(); cur != nil && cur.Revision == m.Revision {
 		return &RemoteReader{Revision: m.Revision, eng: h.engineFor(cur)}, nil
 	}
-	_, err := h.reg.tasks.Run(ctx, h.ID, "remote-index", map[string]string{"revision": itoa(m.Revision)},
+	// Run never propagates fn's error; the record carries the outcome.
+	rec, err := h.reg.tasks.Run(ctx, h.ID, "remote-index", map[string]string{"revision": itoa(m.Revision)},
 		func(tctx context.Context, t *Task) error {
 			return h.buildRemoteIndex(tctx, t, m)
 		})
 	if err != nil {
 		return nil, err
+	}
+	if rec != nil && rec.OK != nil && !*rec.OK {
+		return nil, &WalError{Kind: WalErrCorrupt, Detail: "remote index build failed: " + rec.Summary}
 	}
 	cur := h.remoteIdx.Load()
 	if cur == nil || cur.Revision != m.Revision {

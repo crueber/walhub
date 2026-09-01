@@ -61,7 +61,7 @@ func TestRegistry_CreateOpenDelete(t *testing.T) {
 	}
 
 	// Delete: manifest gone, local dir gone, opens fail.
-	if err := r.Delete(ctx, "acme/api"); err != nil {
+	if _, err := r.Delete(ctx, "acme/api"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if ok, _ := store.Exists(ctx, st, "repos/acme/api/manifest.pb"); ok {

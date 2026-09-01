@@ -5,6 +5,8 @@ package wal
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -257,5 +259,98 @@ func TestPublish_GroupCommitBatchSharesSegment(t *testing.T) {
 	m, _ := h.ManifestSnapshot()
 	if m.HeadSeq != 3 {
 		t.Fatalf("head = %d, want 3", m.HeadSeq)
+	}
+}
+
+func TestPublishCompact_AdvancesSeqUploadsPackUpdatesManifest(t *testing.T) {
+	// Regression: COMPACT carries a nil Txn — verifyTxn's nil rejection used
+	// to silently no-op the whole publish (err nil, seq 0, no manifest change).
+	r, st := newTestRegistry(t)
+	ctx := context.Background()
+	h, err := r.Create(ctx, "acme/api", git.Sha1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Publish(ctx, PublishRequest{
+		Txn: refTxn("refs/heads/main", git.Sha1.ZeroHex(), strings.Repeat("a", 40)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m0, _ := h.ManifestSnapshot()
+
+	// A "repack" result: fake pack + idx files, superseding nothing here.
+	packData := []byte("PACK-fake-pack-bytes")
+	idxData := []byte("fake-idx-bytes")
+	dir := t.TempDir()
+	packPath := filepath.Join(dir, "pack-cc.pack")
+	indexPath := filepath.Join(dir, "pack-cc.idx")
+	if err := os.WriteFile(packPath, packData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, idxData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pack := &PreparedPack{Checksum: "cc", PackPath: packPath, IdxPath: indexPath,
+		PackSize: uint64(len(packData)), IdxSize: uint64(len(idxData)), Tier: 2}
+
+	res, err := h.PublishCompact(ctx, pack, nil, map[string]string{"agent": "repack"})
+	if err != nil {
+		t.Fatalf("publishCompact: %v", err)
+	}
+	if res.Seq != m0.HeadSeq+1 {
+		t.Fatalf("seq = %d, want %d (COMPACT must advance the WAL)", res.Seq, m0.HeadSeq+1)
+	}
+	m, _ := h.ManifestSnapshot()
+	if m.HeadSeq != m0.HeadSeq+1 {
+		t.Fatalf("head = %d, want %d", m.HeadSeq, m0.HeadSeq+1)
+	}
+	found := false
+	for _, p := range m.Packs {
+		if p.Checksum == "cc" {
+			found = true
+			if p.Tier != 2 {
+				t.Fatalf("tier = %d, want 2", p.Tier)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("manifest packs missing cc: %+v", m.Packs)
+	}
+	// The pack + idx were uploaded create-if-absent into the bucket.
+	for _, key := range []string{"repos/acme/api/" + store.PackKey("cc"), "repos/acme/api/" + store.IdxKey("cc")} {
+		if ok, _ := store.Exists(ctx, st, key); !ok {
+			t.Fatalf("bucket object missing: %s", key)
+		}
+	}
+
+	// publishCompact with supersedes: the superseded checksum lands in
+	// pending_pack_removals (its removal goes through the try-write path).
+	// The dd job must upload its idx too — the manifest's IdxSize claim is
+	// only satisfied when IdxPath points at the local idx file.
+	res2, err := h.PublishCompact(ctx, &PreparedPack{Checksum: "dd", PackPath: packPath, IdxPath: indexPath,
+		PackSize: uint64(len(packData)), IdxSize: uint64(len(idxData)), Tier: 1}, []string{"cc"}, nil)
+	if err != nil || res2.Seq != m.HeadSeq+1 {
+		t.Fatalf("publishCompact 2: res=%+v err=%v", res2, err)
+	}
+	m2, _ := h.ManifestSnapshot()
+	for _, p := range m2.Packs {
+		if p.Checksum == "cc" {
+			t.Fatalf("superseded pack still live: %+v", m2.Packs)
+		}
+	}
+	if stt := loadState(h.Dir()); len(stt.PendingPackRemovals) == 0 || stt.PendingPackRemovals[0] != "cc" {
+		t.Fatalf("pending removals = %v, want [cc]", stt.PendingPackRemovals)
+	}
+
+	// PublishSettings also publishes with a nil Txn.
+	if err := h.PublishSettings(ctx, "[git]\ndefault_branch = \"main\"\n", "op", "set defaults", nil); err != nil {
+		t.Fatalf("publishSettings: %v", err)
+	}
+	m3, _ := h.ManifestSnapshot()
+	if m3.Settings == nil || m3.Settings.Toml == "" {
+		t.Fatalf("settings = %+v, want published", m3.Settings)
+	}
+	if m3.HeadSeq != m2.HeadSeq+1 {
+		t.Fatalf("SETTINGS did not advance head: %d vs %d", m3.HeadSeq, m2.HeadSeq+1)
 	}
 }
