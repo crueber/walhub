@@ -18,9 +18,10 @@ Seams that keep future GitHub-like features (issues, PRs, review) additive:
 - Route registration is table-driven: `[]Route{Method, Pattern, Handler, Auth}` consumed by
   `internal/server`. Lanes (`/api` vs `/api-browser`) are resolved **before** dispatch: strip
   `/{owner}/{repo}[.git]/api` or `/api-browser` and mark the lane; handlers are lane-agnostic (§8.2).
-- The repository prefix is the only routing key. Go 1.22 `ServeMux` patterns (`GET /{owner}/{repo}/api/refs`)
-  cover the obvious cases, but `.git`-suffix stripping and `/{owner}/{repo}/api` (no trailing slash) are a
-  hand-rolled fallback parser on `/` — `ServeMux` cannot express `[{o}/{r}[.git]]`. Parse order: exact
+- The repository prefix is the only routing key. **Chi** (divergence D1) routes the obvious cases
+  (`r.Get("/{owner}/{repo}/api/refs", h)`); `.git`-suffix stripping and `/{owner}/{repo}/api` (no trailing
+  slash) are handled by the shared fallback parser (06_server_http.md §3.2) — chi wildcards cannot express
+  `[{o}/{r}[.git]]`. Parse order: exact
   mux → fallback (`/{o}/{r}[.git]/<sub>`; bad repo id → 404; `.git` accepted everywhere and stripped).
 
 Binary/module identity: `walhub`, module `git.packden.us/crueber/walhub`.
@@ -323,7 +324,13 @@ packets — this dialect predates the §9.3 envelope and stays byte-compatible.
 
 ## 8. Discovery document, instance, owners (§9.6 — with the §20.4 fix)
 
-`GET /api/v1` (public-informational; `Cache-Control: no-cache`):
+`GET /api/v1` (public-informational; `Cache-Control: no-cache`). Divergence addition: the setup surface
+(`GET|POST|PUT /api/v1/setup*`) is specified in `06_server_http.md` (Bootstrap & Setup) — it is owned
+there because its behavior is bound to the boot lifecycle, not to this API's cache/SSE conventions; this
+doc's discovery `endpoints[]` list MUST include `/api/v1/setup` once it exists. Everything below follows
+the Rust spec.
+
+The discovery document:
 
 ```json
 {

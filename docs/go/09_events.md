@@ -217,7 +217,7 @@ Both wake-up kinds are idempotent and only ever call `catchUp`.
 
 ### 6.1 `POST /_events/notify`
 
-Route in `internal/server` (Go 1.22+ ServeMux pattern `POST /_events/notify`), auth: **read**
+Route in `internal/server` (chi route `r.Post("/_events/notify", …)`, divergence D1), auth: **read**
 (`require_read` in the handler); **404 when this instance has no bridge**. Accepted bodies —
 parsed with `encoding/json` into explicit structs, tolerant of extra fields:
 

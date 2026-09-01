@@ -1,11 +1,11 @@
 # 06 — HTTP server (`internal/server`)
 > Source: MASTER_RUST_SPEC.md §8 (8.1 middleware, 8.2 routing, 8.3 routes, 8.4 git endpoints, 8.5 static objects, 8.6 edge contract, 8.7 LFS, 8.8 auth, 8.9 setup/recipes/installer, 8.10 health/metrics/startup, 8.11 TLS notes), §20 items 2–5 · Status: normative for the walhub Go implementation.
 
-Package: `internal/server` (module `git.packden.us/crueber/walhub`). Binary `walhub`. Dependencies allowed here: stdlib + `golang.org/x/net/http2`/`h2c` only. The router is Go 1.22+ `http.ServeMux`; the git subprocess layer (`internal/git`), WAL engine (`internal/wal`), and API handlers (`internal/api`) are consumed through small interfaces defined in this doc (§2.4) so siblings can land independently. Cross-references: 04_git.md, 07_api.md, 11_config_cli.md, 13_concurrency.md.
+Package: `internal/server` (module `git.packden.us/crueber/walhub`). Binary `walhub`. Dependencies allowed here: `github.com/go-chi/chi/v5` (core only), `github.com/BurntSushi/toml`, `golang.org/x/net` (`h2c`) — nothing else. The router is chi (§3); the git subprocess layer (`internal/git`), WAL engine (`internal/wal`), API handlers (`internal/api`), and the setup module (`internal/setup`, §3.4) are consumed through small interfaces defined in this doc (§2.4) so siblings can land independently. Cross-references: 04_git.md, 07_api.md, 11_config_cli.md, 13_concurrency.md.
 
 ## 1. What this server is
 
-One process serves: git smart HTTP (v0/v2), the LFS basic transfer protocol, immutable static objects (bundles, LFS bytes), the JSON API with SSE, the SPA shell, and instance health/metrics. There is **no dumb-HTTP mode** (§20.2: `GET /{o}/{r}/HEAD` and `/objects/info/packs` MUST NOT exist — always 404 via the fallback) and **no `/services/git-*` routes** (§20.3: `/services/*` hosts only JSON-UI endpoints, `setup.json`, and `public/*`).
+One process serves: git smart HTTP (v0/v2), the LFS basic transfer protocol, immutable static objects (bundles, LFS bytes), the JSON API with SSE, the SPA shell, the setup UI/API (§3.4), and instance health/metrics. There is **no dumb-HTTP mode** (§20.2: `GET /{o}/{r}/HEAD` and `/objects/info/packs` MUST NOT exist — always 404 via the wildcard catch-all) and **no `/services/git-*` routes** (§20.3: `/services/*` hosts only JSON-UI endpoints, `setup.json`, and `public/*`).
 
 ## 2. Server core
 
@@ -36,15 +36,15 @@ type Inflight struct {
 
 ### 2.2 Handler composition
 
-One `http.Handler` chain, built in `internal/server/middleware.go` as an **explicit ordered slice** — no reflection, no registration magic:
+One `http.Handler` chain, built in `internal/server/middleware.go` as an **explicit ordered slice** of `func(http.Handler) http.Handler` factories applied through chi's `Use` — no reflection, no registration magic (chi requires all `Use` calls before any route registration, which the fixed order guarantees):
 
 ```go
 func (s *Server) Handler() http.Handler {
-    var h http.Handler = s.routes() // §3: ServeMux
-    for i := len(s.cfg.MiddlewareOrder) - 1; i >= 0; i-- {
-        h = middlewareByName[s.cfg.MiddlewareOrder[i]](s, h)
+    r := chi.NewRouter() // chi v5
+    for _, name := range s.cfg.MiddlewareOrder { // outermost first; MUST precede route registration
+        r.Use(middlewareByName[name](s)) // each factory returns func(http.Handler) http.Handler
     }
-    return h
+    s.mount(r) // §3: the chi route tree
 }
 ```
 
@@ -59,8 +59,8 @@ The ordered list, outermost first, is FIXED (the Rust spec's stack; the code-vs-
 | 5 | `recoverPanic` | `defer recover()` → log with request_id → 500 plain text `internal error` (request_id included). MUST NOT kill the process; MUST NOT swallow the inflight decrement (order matters: recovery inside the inflight-wrapped writer). |
 | 6 | `cors` | path-scoped only. See §2.3. |
 | 7 | `refreshSession` | sliding cookie: if a valid `walgit_session` cookie is older than `session_ttl/4` AND the principal still passes policy, re-issue via `Set-Cookie` on app responses (skip `/_auth/*`). Stateless: age comes from the token's `iat` (§8.5). |
-| 8 | *(gated-router only)* `requireAuth` | NOT in the main chain. Attached to the gated sub-router (SPA shell, `/_ui/*`, `/services/setup.json`, `/metrics`, `/{owner}` UI routes). On failure: if the request is a browser-ish GET without an `Authorization` header and browser login is enabled → 307 `/_auth/login?next=<path?query>`; else emit the mapped status (401 with `WWW-Authenticate: Bearer realm="walgit"`, 403, 503+`Retry-After: 15`) with a plain-text body naming the setup command. All other endpoints authenticate **inside handlers**. |
-| 9 | `compress` | attached ONLY to the three web sub-routers (JSON API `/api*`+`/api-browser*`, repo JSON lanes, UI). brotli+gzip at fastest level. **NEVER** on git smart HTTP, bundles, LFS bytes, or the token page's SSE-adjacent streams; SSE excluded (streamed answers are never compressed); `/_ui` assets arrive precompressed and pass through untouched. Rationale: packs are already compressed and Content-Length/Range must stay exact. |
+| 8 | *(gated group only)* `requireAuth` | NOT in the main chain. Attached with `Use` inside the gated route group (SPA shell, `/_ui/*`, `/services/setup.json`, `/metrics`, `/{owner}` UI routes — a `chi.Router` group via `r.Route`/`r.Group`; §3.1). On failure: if the request is a browser-ish GET without an `Authorization` header and browser login is enabled → 307 `/_auth/login?next=<path?query>`; else emit the mapped status (401 with `WWW-Authenticate: Bearer realm="walgit"`, 403, 503+`Retry-After: 15`) with a plain-text body naming the setup command. All other endpoints authenticate **inside handlers**. |
+| 9 | `compress` | attached with `Use` ONLY to the three web route groups (JSON API `/api*`+`/api-browser*`, repo JSON lanes, UI) — each is a chi sub-router/group so compression stays scoped. brotli+gzip at fastest level. **NEVER** on git smart HTTP, bundles, LFS bytes, or the token page's SSE-adjacent streams; SSE excluded (streamed answers are never compressed); `/_ui` assets arrive precompressed and pass through untouched. Rationale: packs are already compressed and Content-Length/Range must stay exact. |
 
 ### 2.3 CORS — exact rules
 
@@ -71,6 +71,7 @@ Scope: only paths matching `/api*`, `/api-browser*`, and `/{o}/{r}/api[-browser]
 - Non-preflight from an allowed origin: `Access-Control-Allow-Origin`, `Access-Control-Allow-Credentials: true`, `Access-Control-Expose-Headers: ETag, Cache-Control, Content-Type, Location`, `Vary: Origin`.
 - **A state-changing request (non-GET/HEAD/OPTIONS) from a foreign non-same-origin → 403 before any handler runs.** "Foreign" = not in cors_origins and not the canonical host itself.
 - Credentials mode is always `include`, so the allow-origin value is never `*` — it is the concrete origin.
+- The `cors` middleware stays **hand-rolled** — `chi/cors` is NOT used (chi core only; the header rules above, including the foreign-origin 403, are more specific than any library). It plugs into the chain as any other `func(http.Handler) http.Handler`.
 
 ### 2.4 Interfaces this package consumes (seams for 07/04/05 siblings)
 
@@ -89,37 +90,55 @@ type ObjectSource interface {
     Open(ctx context.Context, key string, rng string) (io.ReadCloser, error)
     PresignURL(ctx context.Context, key string, ttl time.Duration) (string, error) // accel offload
 }
+
+// internal/setup HTTP surface, mounted per §3.4
+type SetupAPI interface {
+    http.Handler // GET /api/v1/setup · POST /api/v1/setup/test · PUT /api/v1/setup (§3.4)
+}
 ```
 
 ## 3. Routing
 
 ### 3.1 Router shape
 
-One flat `*http.ServeMux` (Go 1.22 patterns). Repo-scoped traffic is additionally served by a `"/"` fallback registered last that parses `/{owner}/{repo}[.git]/<sub>` **by hand** (the mux cannot express optional `.git`). `.git` is accepted everywhere and stripped; `RepoId` parse failure (owner/repo charset per 04_git.md) → 404 plain text.
+One `chi.Router` (`github.com/go-chi/chi/v5`, core package only — `chi/cors`, `chi/middleware`, and every other chi subpackage are NOT used). The root router carries the §2.2 middleware chain via `Use`; everything below mounts onto it. chi's precedence (static > param > wildcard) serves the explicit tree first and sends everything unmatched to the trailing `/*` wildcard, which replaces the old ServeMux `"/"` fallback and parses `/{owner}/{repo}[.git]/<sub>` **by hand** (chi patterns cannot express an optional `.git` suffix). `.git` is accepted everywhere and stripped; `RepoId` parse failure (owner/repo charset per 04_git.md) → 404 plain text.
 
 ```go
-mux.HandleFunc("GET /healthz", s.healthz)
-mux.HandleFunc("GET /readyz", s.readyz)
-mux.HandleFunc("GET /repos.js", s.sdk("repos.js"))
-mux.HandleFunc("GET /repos.mjs", s.sdk("repos.mjs"))
-mux.HandleFunc("GET /services/public/install.sh", s.installSh)
-mux.HandleFunc("GET /services/public/ca.pem", s.caPem)
-mux.HandleFunc("/services/public/", notFound)           // deliberate 404 for the rest
-mux.HandleFunc("GET /api/v1", api.Discovery)             // public-informational
-mux.HandleFunc("/api/v1/", api.NonRepo)                  // me/authenticate/owners + /services/api twins
-mux.HandleFunc("/_auth/", s.authFlow)                    // §8.6
-mux.HandleFunc("/_events/notify", s.eventsNotify)        // handler-authenticated (09_events.md)
-mux.HandleFunc("/_ui/", gated(s.serveUIAssets))
-mux.HandleFunc("/services/setup.json", gated(s.setupJSON))
-mux.HandleFunc("/metrics", gated(s.metrics))
-mux.HandleFunc("GET /{$}", gated(s.spaHome))             // SPA shell; ?format=text → plain repo list
-mux.HandleFunc("/", s.repoFallback)                      // EVERYTHING repo-scoped, parsed by hand
+r := chi.NewRouter()                     // §2.2: middlewares Use'd first
+// health & SDK
+r.Get("/healthz", s.healthz)
+r.Get("/readyz", s.readyz)
+r.Get("/repos.js", s.sdk("repos.js"))    // one plain-ESM SDK file (divergence D2)
+r.Get("/services/public/install.sh", s.installSh)
+r.Get("/services/public/ca.pem", s.caPem)
+r.Get("/api/v1", api.Discovery)          // public-informational
+r.Mount("/api/v1/setup", s.setupAPI)     // internal/setup HTTP surface (§3.4) — mounted BEFORE the /api/v1 catch
+r.Mount("/api/v1", http.StripPrefix("/api/v1", api.NonRepo)) // me/authenticate/owners + /services/api twins
+r.Mount("/_auth", s.authFlow)            // §8.6
+r.Post("/_events/notify", s.eventsNotify) // handler-authenticated (09_events.md)
+r.Mount("/_ui", gated(s.serveUIAssets))
+r.Get("/services/setup.json", gated(s.setupJSON))
+r.Get("/metrics", gated(s.metrics))
+r.Mount("/setup", s.setupUI)             // setup UI shell + assets (§3.4)
+r.Get("/", gated(s.spaHome))             // SPA shell; ?format=text → plain repo list
+r.NotFound(notFound)                     // everything else: deliberate 404 — includes /services/public/* beyond install.sh/ca.pem
+r.MethodNotAllowed(methodNotAllowed)     // 405 + Allow
+r.HandleFunc("/*", s.repoDispatch)       // EVERYTHING repo-scoped, parsed by hand (§3.2)
 ```
 
-### 3.2 The `{owner}/{repo}` fallback parser
+chi mechanics (normative):
+
+- **Method enforcement** is chi's on the routes above: a `GET`-only route hit with `POST` reaches `MethodNotAllowed` → 405 with `Allow`. Inside the `/*` wildcard the hand dispatch owns the §3.3 table and enforces methods itself: known repo path + unsupported method → 405 with `Allow` + plain-text body; unknown path → 404. Both 404 and 405 bodies are plain text, no HTML error pages (Rust contract).
+- **Gated group** (`requireAuth`, §2.2 #8): `r.Group(func(g chi.Router) { g.Use(s.requireAuth); … })` holds the SPA shell `/`, `/_ui/*`, `/services/setup.json`, and `/metrics`; the `/{owner}` and `/{owner}/{repo}` UI page routes are reached through the wildcard, which applies the same check per §3.3.
+- **Compress groups** (§2.2 #9): the JSON API (`/api*`, `/api-browser*`) and UI lanes are `r.Route`/`r.Group` subtrees with `Use(compress)`; git, bundles, and LFS traffic stays outside them.
+- **Setup-only mode** (§3.4) is a branch at the top of `s.mount`: when active, only `/setup*`, `/api/v1/setup*`, `/healthz`, `/readyz`, and `/services/public/*` are registered (plus a `503` fallback for everything else); the full tree below is never mounted.
+
+### 3.2 The `{owner}/{repo}` wildcard dispatch
+
+The trailing `r.HandleFunc("/*", s.repoDispatch)` receives every path the explicit tree did not match:
 
 ```
-segments = path[1:] split on "/"
+segments = TrimPrefix(path, "/") split on "/"
 owner, rest = segments[0], segments[1:]
 if len(rest) == 0 → UI page route /{owner} (gated)
 repoSeg, sub = rest[0], rest[1:]
@@ -127,7 +146,7 @@ if strings.HasSuffix(repoSeg, ".git") { repoSeg = trim; hadGit = true }
 repo = wal.ParseRepoRef(owner, repoSeg) or 404
 ```
 
-Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table in §3.3. The repository prefix (`/{owner}/{repo}[.git]`) is the **only routing key** — everything after it is dispatched inside the fallback, which is what makes `.git`-everywhere work in Go without a third-party router.
+Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table in §3.3. The repository prefix (`/{owner}/{repo}[.git]`) is the **only routing key** — everything after it is dispatched inside the wildcard handler, which is what makes `.git`-everywhere work with chi: no single chi pattern can express `/{owner}/{repo}[.git][/…]` with the optional suffix, and `repoDispatch` is also the last-resort 404 for non-repo-shaped junk (§1).
 
 ### 3.3 Complete route inventory (every row copied from Rust spec §8.3)
 
@@ -137,7 +156,7 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 |---|---|---|
 | GET | `/healthz` | `{status:"ok", version}` |
 | GET | `/readyz` | §10.2 |
-| GET | `/repos.js`, `/repos.mjs` | SDK; no-cache + strong ETag + precompressed |
+| GET | `/repos.js` | plain-ESM SDK (single file, divergence D2); no-cache + strong ETag + precompressed |
 | GET | `/services/public/install.sh[?repo=]` | `text/x-shellscript`, `Cache-Control: public, max-age=300` |
 | GET | `/services/public/ca.pem` | only when this host terminates TLS itself; else 404 |
 | * | `/services/public/*` (other) | deliberate 404 |
@@ -145,6 +164,15 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 | GET | `/api/v1` | discovery JSON, public-informational |
 | POST | `/_events/notify` | handler-authenticated |
 | OPTIONS | (preflights) | §2.3 |
+
+**Setup (open per the §3.4 access rules; the API is `internal/setup`, the UI is `web/src/setup*`):**
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/setup` | setup UI shell (plain ESM page, D2); assets at `/setup/assets/*` |
+| GET | `/api/v1/setup` | full config schema + effective values + file state + validation errors |
+| POST | `/api/v1/setup/test` | validate a proposed config without saving |
+| PUT | `/api/v1/setup` | validate + atomically write `<data-dir>/walhub.toml` |
 
 **Self-authing (`require_read`/`require_write` in handler):**
 
@@ -183,13 +211,58 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 | POST | `{lane}/ops/{op}?params` | require_write | start maintenance op; SSE attach; joins a running same-(repo,kind) task |
 | GET/POST | `/_auth/tokens` | session | token page / mint (CSRF-guarded same-origin) |
 
-**Gated (`require_auth` = read):** SPA shell + `/_ui/*` assets, `/services/setup.json`, `/metrics` (`text/plain; version=0.0.4`), `GET /` (SPA; `?format=text` or text Accept → plain one-per-line repo list), `/{owner}`, `/{owner}/{repo}` UI page routes (tree/blob/commits/commit/wal/settings all return `index.html`, `no-cache`).
+**Gated (`require_auth` = read):** SPA shell + `/_ui/*` assets, `/services/setup.json`, `/metrics` (`text/plain; version=0.0.4`), `GET /` (SPA; `?format=text` or text Accept → plain one-per-line repo list), `/{owner}`, `/{owner}/{repo}` UI page routes (tree/blob/commits/commit/wal/settings all return `index.html`, `no-cache`). The setup routes above are NOT in this group — their access rule is §3.4 (open exactly while no config file exists, the config is invalid, or auth mode is `none`).
 
 **Both API lanes hit the same handlers.** `/{owner}/{repo}/api/…` (bearer/same-origin) and `/{owner}/{repo}/api-browser/…` (cross-origin browser, `credentials: include`) differ only in the `Lane` value passed to the handler (which changes cache headers and auth-redirect behavior per 07_api.md). Same for `/api/v1` vs `/api-browser/v1` in the non-repo lane.
 
 #### Concurrency (routing)
 
-Hazard: the fallback parser runs on every unmatched request (scanners, probes). Avoidance: it is pure CPU on ≤ 4 segments — no allocation beyond the split slice, no locks; a hard `strings.HasPrefix` fast-path rejects paths that can't be repo-shaped (no `/a/b` prefix) before any parse.
+Hazard: the wildcard dispatch runs on every unmatched request (scanners, probes). Avoidance: it is pure CPU on ≤ 4 segments — no allocation beyond the split slice, no locks; a hard `strings.HasPrefix` fast-path rejects paths that can't be repo-shaped (no `/a/b` prefix) before any parse. chi's trie adds a constant-time miss before the wildcard is reached.
+
+### 3.4 Bootstrap & setup (zero-config first run)
+
+`internal/setup` owns the schema description for the UI, validate-for-save, the atomic write of `<data-dir>/walhub.toml`, and bootstrap-mode detection; `internal/server` wires its HTTP surface (`s.setupAPI`, `s.setupUI`); `web/src/setup*` is the frontend page (plain ESM, D2).
+
+**Boot flow decision tree (normative):**
+
+```
+locate data dir (--data-dir flag > WALHUB_DATA_DIR env; default ~/.local/share/walhub, containers /var/lib/walhub)
+├─ no <data-dir>/walhub.toml → boot with the first-run defaults (below) + a LOUD setup banner in the logs on every start
+├─ config file present, parses + validates → normal boot (§10.4)
+└─ config file present but INVALID (parse or validation errors) → SETUP-ONLY MODE:
+     only /setup, /setup/assets/*, /api/v1/setup, /api/v1/setup/test, PUT /api/v1/setup,
+     /healthz, /readyz, and /services/public/* answer; everything else → 503 plain text
+     with a pointer to /setup. The UI shows the exact errors; a saved fix takes effect
+     after a restart (the process stays in setup-only mode until restarted).
+```
+
+**First-run defaults (built into the binary; no TOML needed to start):**
+
+| Key | Default |
+|---|---|
+| `server.listen` | `"0.0.0.0:8080"` |
+| `store.backend` | `"filesystem"`, rooted at `<data-dir>/store` (02_storage_protobuf.md) |
+| `server.auth.mode` | `"none"` — **deliberately allowed on any bind** (see below) |
+| `server.auto_create_on_push` | `true` |
+| everything else | Rust-spec defaults (11_config_cli.md) |
+
+**Data-dir layout:** `<data-dir>/store/` (object store), `<data-dir>/cache/` (prewarm, LFS spool, TLS), `<data-dir>/walhub.toml` (saved by setup Save; the only config file the server reads).
+
+**Setup UI:** `GET /setup` serves the page; `GET /setup/assets/*` serves its ESM/CSS (embedded `fs.FS`, precompressed, like `/_ui`). The page groups ALL config keys by section with current effective values (merging defaults ← file ← env), validates client-side, and Saves via the API.
+
+**Setup API:**
+
+- `GET /api/v1/setup` → `{ "file_state": "absent"|"valid"|"invalid", "errors": [<validation error>], "requires_restart": [<key>…], "groups": [{ "section": "server", "keys": [{ "key": "server.listen", "value": <effective>, "default": <…>, "type": "string"|"int"|"bool"|"duration"|"list", "secret": bool, "doc": "…" }] }] }`. `no-cache`.
+- `POST /api/v1/setup/test` — body: raw TOML (or `{overrides: {key: value}}`); runs the full validator WITHOUT saving → `200 {errors: []}` or `422 {errors: [{key, message}]}`.
+- `PUT /api/v1/setup` — body: same as test. Validate; on success atomically write `<data-dir>/walhub.toml` (tmp + rename in the data dir), then respond `200 {saved: true, requires_restart: [<key>…], errors: []}`. The running process does NOT hot-reload — `requires_restart` lists every key whose effective value differs from the just-saved file (all of them, effectively; the process continues in its current boot mode).
+
+**Access rules:** open while (no config file) OR (config invalid) OR (`server.auth.mode = "none"`); otherwise an admin principal is required (same `require_admin` mapping as §8.3). Optional `WALHUB_SETUP_TOKEN` env: when set, the setup routes require it (query `?token=` or `Authorization: Bearer <token>`) and skip the admin check — the escape hatch for exposed hosts.
+
+**auth-none on any bind (supersedes the Rust fail-closed loopback rule):** the Rust rule (refuse auth `none` unless the listen address is loopback) is deliberately dropped for zero-config friendliness. With `mode = "none"` on a non-loopback bind, the server boots but: logs a persistent `WARN auth mode is "none" — anyone on the network has write+admin` at startup AND once per hour thereafter; `/setup` shows a red banner; `readyz` gains `"warnings":["auth_none"]`; and the setup UI pre-selects a real auth mode as the recommended fix. No request is ever refused because of it.
+
+#### Concurrency (setup)
+
+Hazard: concurrent Saves racing the file write. Avoidance: `internal/setup` serializes Saves with a process-wide mutex, writes `<data-dir>/walhub.toml.tmp` then `rename`s (same directory, atomic on POSIX); validation reads the in-memory effective config, never the file mid-write.
 
 ## 4. Git endpoint behaviors (§8.4)
 
@@ -272,7 +345,6 @@ One code path for every immutable byte (bundles, LFS objects, anything immutable
 #### Concurrency (LFS)
 
 Hazards: the spool tee and body streaming limits. Avoidance:
-
 - **Spool tee lifecycle:** the handler owns one goroutine — `io.Copy` from upstream into a `MultiWriter(clientW, spoolFile)` — no channel, no fan-in. Client write error closes the client half only (`clientW.Close()` semantically: stop writing to the client, keep reading upstream) by switching the client writer to `io.Discard`; the upstream read continues to EOF, verify runs, persist runs. The persist is the goroutine's terminal step; handler returns after the persist OR after the client-abandon path completes, whichever is later. Owner writes; nothing else touches the spool file; it is removed on failure.
 - **Bounded memory:** never buffer the object. `io.Copy` with a fixed 1 MiB buffer; the sha256 runs in the same copy loop (`io.TeeReader` into `sha256.New()`), no second pass.
 - **PUT limits:** wrap `r.Body` in `io.LimitReader(n = max_object_bytes+1)`; reading one byte over the cap → 413 and drain-abandon. No global body-limit middleware exists (§2.1); limits are per-feature.
@@ -296,7 +368,7 @@ type Principal struct {
 var Anonymous = Principal{Name: "anonymous", Anonymous: true} // no write, no admin
 ```
 
-`mode=none`: everyone is `anon` with write+admin — config validation refuses this mode unless the listen address is loopback (fail-closed).
+`mode=none`: everyone is `anon` with write+admin. The Rust spec's fail-closed rule (refuse this mode unless the listen address is loopback) is **superseded** by the walhub divergence (§3.4): any bind is allowed, with loud warnings in the logs, the setup UI, and `readyz`.
 
 ### 8.2 Client credential resolution order
 
@@ -458,8 +530,9 @@ The helper is generated with the host baked in and served by the installer; the 
 
 ### 10.2 `GET /readyz`
 
-- 200 `{"status":"ready","prewarm_pending":N,"instance":"<name>","placement":{"serve":bool,"serve_exclude":bool,"maintain":bool,"maintain_exclude":bool}}` when prewarm finished (or `cache.prewarm_ready_timeout` elapsed; 0 = don't gate).
+- 200 `{"status":"ready","prewarm_pending":N,"instance":"<name>","placement":{"serve":bool,"serve_exclude":bool,"maintain":bool,"maintain_exclude":bool}}` when prewarm finished (or `cache.prewarm_ready_timeout` elapsed; 0 = don't gate). In defaults-banner mode (no config file, §3.4) this adds `"config":"defaults"`.
 - 503 `{"status":"warming"|"draining","running":N}` before readiness or during phase-2 drain; the draining variant adds `Retry-After: 15`.
+- 503 `{"status":"setup_required","errors":[<config validation error>…]}` in SETUP-ONLY MODE (§3.4) — the readiness gate IS the config; `/healthz` still answers 200 so orchestrators can tell "up but unconfigured" from "down".
 
 ### 10.3 Metrics — hand-rolled Prometheus text exposition
 
@@ -476,18 +549,18 @@ curl -s localhost:8442/metrics | grep walgit_http_inflight
 ### 10.4 Startup order
 
 1. TLS crypto provider init (§11).
-2. Config load — a missing config file is a fatal exit 2 **before logging init**.
+2. **Bootstrap leg (§3.4, `internal/setup`):** resolve the data dir (`--data-dir` flag → `WALHUB_DATA_DIR` → default `~/.local/share/walhub`; containers `/var/lib/walhub`), ensure `store/` + `cache/`, load `<data-dir>/walhub.toml` if present. Missing → first-run defaults + loud setup banner; invalid → SETUP-ONLY MODE (log the exact errors, mount only the §3.4 subset, and skip steps 4–8); valid → continue.
 3. Tracing init (filter from `RUST_LOG`-equivalent env else `telemetry.log_filter`; pretty or Cloud-Logging JSON).
 4. Open store.
 5. Build AppState (wal registry, bundler, auth service + JWKS, per-repo semaphores, metrics registry).
 6. Spawn: prewarm (bounded parallelism `cache.prewarm_parallelism`, default 2), events bridge (if role+sink), maintainer loop (if role), follow loop (if role), watchdog (1 s tick; warns "runtime stalled" when a tick is > 2.5 s late).
 7. Bind:
-   - TLS off: plain TCP, `TCP_NODELAY` per connection, **h2c** (HTTP/2 prior knowledge) + HTTP/1.1 — via `golang.org/x/net/http2/h2c` wrapped around the mux.
+   - TLS off: plain TCP, `TCP_NODELAY` per connection, **h2c** (HTTP/2 prior knowledge) + HTTP/1.1 — via `golang.org/x/net/http2/h2c` wrapped around the chi router.
    - TLS on: `crypto/tls` in-process (lazy handshake on first I/O — net/http does this natively); ALPN `h2`, `http/1.1`.
    - Loopback binds also take the IPv6 twin (`::1`) so `*.localhost` works.
-8. A loopback `listen` is mandatory in auth `none` mode (fail-closed validation at bind time).
+8. Auth `none` on a non-loopback bind is allowed (§3.4 divergence from the Rust fail-closed rule) — emit the loud warning instead of refusing.
 
-Go shape: one `http.Server` with `BaseContext` carrying the app context; `Serve(l)` on a listener built per the above; h2c via `h2c.NewHandler(mux, &http2.Server{})`.
+Go shape: one `http.Server` with `BaseContext` carrying the app context; `Serve(l)` on a listener built per the above; h2c via `h2c.NewHandler(r, &http2.Server{})` where `r` is the chi router (§3.1).
 
 ## 11. TLS (§8.10–8.11)
 
@@ -495,7 +568,7 @@ Go shape: one `http.Server` with `BaseContext` carrying the app context; `Serve(
 - `files` mode: cert + key from config paths.
 - HTTP/2 both clear (h2c) and via ALPN; request and response bodies stream both ways; `TCP_NODELAY` on every connection (report-status stalls without it) — set via a wrapped listener's `Accept` loop (`net.TCPConn.SetNoDelay(true)`).
 
-## 12. Graceful shutdown — two-phase drain (§3.4)
+## 12. Graceful shutdown — two-phase drain (Rust spec §3.4)
 
 Signal handler (`SIGTERM`/`SIGINT`) drives the `DrainState`:
 
@@ -524,8 +597,8 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
 
 ## 14. Decisions & deviations from the Rust design
 
-- Router is Go 1.22+ `http.ServeMux` plus a hand-rolled `/{owner}/{repo}[.git]/<sub>` fallback instead of a path-matching framework — zero dependencies, and the `.git`-everywhere rule needs custom parsing anyway.
-- Middleware is an explicit ordered slice applied by name (not tower layers) — the order is load-bearing (§2.1); making it data makes it reviewable and testable.
+- ~~Router is Go 1.22+ `http.ServeMux` plus a hand-rolled `/{owner}/{repo}[.git]/<sub>` fallback instead of a path-matching framework~~ — superseded by divergence D1 (chi); the hand-rolled `/{owner}/{repo}[.git]/<sub>` parsing survives inside the trailing wildcard (§3.2).
+- Middleware is an explicit ordered slice of `func(http.Handler) http.Handler` factories applied via chi `Use` (not tower layers) — the order is load-bearing (§2.2); making it data makes it reviewable and testable.
 - Self-signed TLS uses `crypto/x509`/`crypto/ecdsa` instead of `rcgen` — the SAN-stable regeneration contract (§11) is preserved; rcgen is not needed.
 - JWKS/JWT verification hand-rolled on `crypto/rsa`/`crypto/ecdsa` instead of a JWT library — per the dependency policy; the algorithm/claim rules are copied verbatim from the Rust spec so behavior is identical.
 - Prometheus exposition hand-rolled (text format writer) instead of a client library — dependency policy; the metric inventory is normative so dashboards survive the rewrite.
@@ -534,3 +607,11 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
 - The install.sh and credential helper are served from `embed` templates rather than shipped as separate files — single-binary packaging (16_packaging.md) and one source of truth for the host-slug rules.
 - Go adaptation of the request-id span: the Rust "open the span" becomes the structured log record + trace_id extraction, since Go tracing here is slog-based — same observability surface, no otel dependency.
 - No timeout/body-limit middleware is implemented, matching §20.4's truth about the Rust code; limits stay per-feature (push ingest, settings ≤ 16 KiB, blob ≤ 2 MiB, LFS ≤ `lfs.max_object_bytes`).
+
+**Divergence (2026-08-31):**
+
+- **D1 — Router is chi.** `github.com/go-chi/chi/v5` (core package ONLY — no `chi/cors`, no `chi/middleware`) replaces Go 1.22 ServeMux patterns (§3.1). Route inventory and handler behavior are unchanged; only registration/matching mechanics moved to chi. CORS stays hand-rolled (§2.3). Backend dependency budget is now exactly: `chi/v5`, `BurntSushi/toml`, `golang.org/x/net` (h2c).
+- **D2 — Frontend is standard ECMAScript.** No TypeScript, no framework, no bundler. The SDK is ONE plain-ESM `web/sdk/repos.js`; the `/repos.mjs` route and the esbuild twin are gone (§3.1, §3.3). `web/src/setup*` is a plain-ESM setup page. Vite/solid-js/marked/esbuild are not used anywhere in this server's surfaces.
+- **D5 — Zero-config first run.** Missing config boots with built-in defaults (`0.0.0.0:8080`, filesystem store under `<data-dir>/store`, auth `none`, `auto_create_on_push`) instead of fatal exit 2 — the old step-2 "missing config file is a fatal exit 2" of the startup order is superseded by the bootstrap leg (§10.4, §3.4).
+- **D6 — Setup UI + API first-class.** `/setup` + `/api/v1/setup{,/test}` with the open-while-unsecured access rule and the SETUP-ONLY MODE for invalid configs (§3.4, new `internal/setup` package).
+- **Supersession (deliberate, fail-closed):** the Rust rule that auth `mode = "none"` is refused unless the listen address is loopback is REPLACED — auth-none is allowed on any bind with loud warnings (logs, setup UI, `readyz`) and zero refused requests (§3.4, §8.1, §10.4 step 8).

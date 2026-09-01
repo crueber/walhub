@@ -17,10 +17,11 @@ binary anyone can run against a bucket, predictable enough that tooling can buil
 verbatim; the product does not change with the language.)
 
 walhub serves git over smart HTTP (protocol v0 and v2) plus bundle-uri, LFS, a browsing web UI and a JSON API with a
-dependency-free SDK. Durable state is **only** an object-store bucket (S3-compatible or GCS). Every process instance is a
-disposable cache: wipe all instances and you lose warmth, nothing else. There is no database, no queue, no Redis, no node
-identity, no leader election, no gossip. Coordination happens only through bucket primitives: compare-and-swap on one tiny
-manifest object, content-addressed immutable objects, and CAS+TTL leases.
+dependency-free SDK. Durable state lives in one store backend: an object-store bucket (S3-compatible or GCS) or, for
+zero-config/self-hosted runs, the local filesystem (D4, §9.5). Every process instance is a disposable cache: wipe all
+instances and you lose warmth, nothing else. There is no database, no queue, no Redis, no node identity, no leader
+election, no gossip. Coordination happens only through store primitives: compare-and-swap on one tiny manifest object,
+content-addressed immutable objects, and CAS+TTL leases.
 
 It implements the architecture Cursor described in *Git at any scale* (their system "Continuity"), changed
 where necessary to run on machines **smaller than the repository** (a few vCPU, tens of GiB of RAM, disk =
@@ -40,16 +41,17 @@ contract").
 | git smart HTTP | v0 and v2 (`ls-refs` with prefixes/symrefs/peel/unborn; `fetch` with want/have, `filter`, `shallow`/`deepen`/`deepen-since`/`deepen-not`, `want-ref`, `sideband-all`, `no-progress`, `include-tag`, `wait-for-done`), `receive-pack` (create/delete/update refs, force detection, atomic, deletes, tags incl. peeled, push options, report-status, side-band-64k), `<owner>/<repo>[.git]` namespaces, sha1 and sha256 repositories, gzip request bodies, `object-info`-less (not implemented) |
 | bundle-uri | v2 capability + `bundle-uri` command, static lists `bundles/list` (clones) and `bundles/catchup` (fetch recipes), per-strategy bundle objects with ETag/Range/immutable, calendar-slot scheduling with backfill, chained incrementals, blobless (`blob:none`) family on a filtered list, optional presigned store URLs, `bundles.require` refusal of unbounded zero-have clones with the exact fix in the error |
 | LFS | Batch API (`operation=upload\|download`, transfer `basic`), basic transfer GET/HEAD/PUT + `verify`, sha256-addressed objects in the bucket, size+sha256 verification, `max_object_bytes` cap, optional read-through from an upstream LFS server (stream + persist), presigned or proxied serving |
-| web UI | GitHub-shaped owners/repos pages, tree/blob/commits/commit pages, README rendering, markdown preview, syntax-highlighted blobs, unified/split diffs, branch/tag picker (SSE), clone menu with setup recipes, WAL health dashboard (manifest, packs, bundle chain + plan, compactions, segments, ops), tasks overlay, settings tab (scheduled tasks, push policy editor + validate + dry-run, effective config editor + history + revert). *Rust renders this in React; walhub renders the same surface in SolidJS — see 12_web_ui.md.* |
+| web UI | GitHub-shaped owners/repos pages, tree/blob/commits/commit pages, README rendering, markdown preview, syntax-highlighted blobs, unified/split diffs, branch/tag picker (SSE), clone menu with setup recipes, WAL health dashboard (manifest, packs, bundle chain + plan, compactions, segments, ops), tasks overlay, settings tab (scheduled tasks, push policy editor + validate + dry-run, effective config editor + history + revert). *Rust renders this in React; walhub renders the same surface in vanilla ES modules (no TypeScript, no framework, no bundler) — see 12_web_ui.md.* |
+| setup | `/setup` web UI — ALL config keys grouped by section with current effective values, validate + Save; `GET /api/v1/setup` (full schema + effective values + file state), `POST /api/v1/setup/test` (validate without saving), `PUT /api/v1/setup` (validate + write); zero-config bootstrap, atomic save to `<data-dir>/walhub.toml`, restart-needed reporting, setup-only recovery mode. Full spec: 06_server_http.md |
 | JSON API | Repository-scoped read API (`refs`, `refs/{branches\|tags}` paged/streamed, `resolve`, `tree`, `blob`, `commits`, `commit`), repo summary/create/delete, per-repo settings (get/put/delete/effective/history/describe/validate), policy (get/put/delete/validate/dry-run), overview (WAL health), tasks + attachable SSE streams, ops (maintenance actions), owner listing, discovery document, `me`; two lanes (bearer/same-origin and cross-origin browser) |
-| SDK | `repos.js` (IIFE → `window.repos`) + `repos.mjs` (ESM), dependency-free, maps the whole API, picks the lane, performs the popup auth flow, unwraps the SSE envelope |
-| auth | `none` (loopback only, everyone anon+write+admin), `token` (static tokens as Bearer or Basic password), `oidc` (any OpenID Connect issuer: browser sign-in, verified ID tokens as bearers, `wgt_` access tokens minted at `/_auth/tokens`, static tokens for robots); admin flags independent of write; trusted-forwarder identity forwarding; real 401 semantics so git erases dead credentials |
+| SDK | one plain-ESM module `web/sdk/repos.js` — dependency-free, no build step; maps the whole API, picks the lane, performs the popup auth flow, unwraps the SSE envelope |
+| auth | `none` (everyone anon+write+admin; allowed on any bind with loud warnings in logs + setup UI — the Rust loopback-only rule is superseded, see §9.5), `token` (static tokens as Bearer or Basic password), `oidc` (any OpenID Connect issuer: browser sign-in, verified ID tokens as bearers, `wgt_` access tokens minted at `/_auth/tokens`, static tokens for robots); admin flags independent of write; trusted-forwarder identity forwarding; real 401 semantics so git erases dead credentials |
 | policy | Per-repo `policy.json` rule language: groups, ordered rules, ref/principal/path match, `protect` (AND-combined, enforced), `history`/`size` (parsed, not enforced), named-rule rejections on the wire |
 | settings | Per-repo TOML overrides (`[bundles]`, `[maintenance]`, `[compaction]`, `[upstream]`, `[integrations]`, ≤ 16 KiB) published **into the WAL** (inline on the manifest + SETTINGS log entries with history) |
 | events | A bridge (its own role) tails the WAL from a durable cursor and POSTs `ref` events (create/update/delete) to a webhook, at-least-once per batch, dedup key `(repo, seq, ref_name)`, HMAC signature, bucket-notification wake-up + periodic sweep |
 | maintenance | One self-healing loop per maintainer: checkpoints, object repair from upstream, weekly full bundle (base rebuild on SSD hosts, then bucket-side compose), chained dailies/hourlies, geometric compaction, rev-index retrofit, periodic connectivity audit (`fsck`); placement-driven assignment; resumable base rebuilds and imports |
 | CLI | `serve`, `compact`, `bundle run/plan/compose/rm`, `repo create/list/info/policy/settings`, `wal ls/show/materialize/add-pack/annotate-pack/rev-index`, `synth`, `import` (two modes, resumable), `mirror`, `config check/dump`. Binary name: `walhub`; `walhub serve` is the server (Rust: `walgit` / `walgit-server`) |
-| stores | S3 + S3-compatible (AWS, MinIO, rustfs, R2, Ceph), GCS (JSON API over HTTPS — Rust uses a gRPC+JSON hybrid, see §9.1), in-memory (tests) — one contract suite runs against all |
+| stores | S3 + S3-compatible (AWS, MinIO, rustfs, R2, Ceph), GCS (JSON API over HTTPS — Rust uses a gRPC+JSON hybrid, see §9.1), local filesystem (`store.backend = "filesystem"`, keys under `store.root`), in-memory (tests) — one contract suite runs against all, with filesystem + memory ALWAYS in it |
 | ops | `/healthz`, `/readyz` (prewarm/drain aware), Prometheus `/metrics`, structured logs (pretty/JSON) with request ids and trace correlation, lock-wait instrumentation, runtime watchdog, graceful two-phase drain |
 
 Explicitly **not** in scope (Rust spec §1.3): code review, merge queues, CI, issues, fork networks, PRs.
@@ -70,7 +72,7 @@ Explicitly **not** in scope (Rust spec §1.3): code review, merge queues, CI, is
 | Web UI on the monorepo | tree/blob/commits render without packs on disk, ~100–200 ms warm |
 | Push | acknowledged only after the bucket ACKs; one CAS per batch; the maintaining host writes |
 | Consistency | push then fetch anywhere sees it; concurrent pushers: exactly one winner (simulation suite proves) |
-| Security | every route authenticated in token/oidc mode; fail-closed config; dead credential ⇒ real 401 |
+| Security | every route authenticated in token/oidc mode; invalid config ⇒ setup-only mode (nothing else serves); dead credential ⇒ real 401 |
 | Data completeness | every object reachable from an advertised ref is in a live pack; weekly fsck + repair keep it so |
 
 The last two proof-bearing rows are covered by 15_testing.md (simulation/contract suites) and 03_store_backends.md (round-trip budgets).
@@ -91,10 +93,11 @@ require a core rewrite; see §9.3 and 14_extensibility.md.
 
 ---
 
-## 5. The ten principles (restated for Go)
+## 5. The principles (restated for Go)
 
-A rewrite MUST preserve all ten (Rust spec §2); every design decision answers to them. The numbering and the
-law are identical; each entry adds the Go mechanism that enforces it.
+A rewrite MUST preserve the Rust spec's ten principles (§2) — walhub adds an eleventh (D5, zero-config first
+run); every design decision answers to them. The numbering of 1–10 and the law are identical; each entry adds
+the Go mechanism that enforces it.
 
 1. **No state outside the object store.** Disk and memory are caches. If every instance is wiped, what is
    lost must be "warmth". No local queues, flag files, or env-encoded data. In Go: no goroutine may persist
@@ -127,6 +130,10 @@ law are identical; each entry adds the Go mechanism that enforces it.
 10. **Keep it small; upstream git does git things.** Stock `git` binary (`os/exec` with exact argv) for
     repack/bitmaps/bundle creation/upload-pack wherever it can read the packs; in-process git engines only
     where measured and correct (the remote-served-base fetch); protobuf wire format is append-only.
+11. **User friendliness is a first-class law.** The zero-config first run is part of the product: `walhub` with
+    no arguments and no config file must boot into a usable server (§9.5). Where the Rust spec fails closed —
+    refusing to boot without config, allowing auth `none` only on loopback — walhub warns loudly and serves
+    instead (warn-don't-refuse); refusal is reserved for an INVALID config, which enters setup-only mode.
 
 ---
 
@@ -313,17 +320,18 @@ Go module: `git.packden.us/crueber/walhub`. These paths are normative; every oth
 | Package | Responsibility |
 |---|---|
 | `cmd/walhub` | The single binary: subcommand dispatch (serve, compact, bundle, repo, wal, synth, import, mirror, config), signal handling, exit codes 0/1/2/3 |
-| `internal/config` | `walhub.toml` loading (`github.com/BurntSushi/toml`), env overrides (`WALHUB_*`), defaults, validation, per-repo settings parsing |
+| `internal/config` | `walhub.toml` loading (`github.com/BurntSushi/toml`), env overrides (`WALHUB_*`), defaults, validation, per-repo settings parsing; owns the zero-config default set and `<data-dir>` resolution (§9.5) |
 | `internal/store` | The object store interface + backends (memory, S3 via hand-rolled SigV4, GCS via JSON API), CAS helper, bucket key layout, the hand-rolled protobuf wire codec, log framing |
 | `internal/wal` | The WAL engine: per-repo handles, sync levels, publish/CAS ladder, group commit, checkpoints, replay, remote reader, narrated tasks |
 | `internal/git` | The git subprocess layer: exact-argv `os/exec` calls — ingest/index-pack, refs, connectivity, receive-pack, upload-pack, repack/bitmaps, bundle creation |
 | `internal/bundle` | The bundle-uri subsystem: strategies, calendar slots, backfill, chained incrementals, blobless family, `bundles/list` + `bundles/catchup` |
 | `internal/policy` | The per-repo push policy rule language: parse, validate, evaluate, dry-run |
-| `internal/server` | HTTP middleware, routing (`net/http.ServeMux` patterns), git smart-HTTP + LFS + static endpoints, auth (none/token/oidc), setup recipes, h2c/TLS listener |
+| `internal/server` | chi router (`github.com/go-chi/chi/v5`, core only), hand-ordered middleware as `func(http.Handler) http.Handler`, git smart-HTTP + LFS + static endpoints, auth (none/token/oidc), setup recipes, h2c/TLS listener |
+| `internal/setup` | The setup subsystem (wired into routes by `internal/server`): the config schema description for the UI, validate-for-save, atomic write of `<data-dir>/walhub.toml`, bootstrap-mode detection, the `/setup` UI and `/api/v1/setup` endpoints, and the setup-only mode gate (§9.5, 06_server_http.md) |
 | `internal/api` | The JSON API wire contract, SSE envelope, tasks surface, two-lane auth, render caches |
 | `internal/events` | The WAL → webhook bridge: durable cursor, delivery + HMAC signing, bucket-notification wake-ups, sweep |
 | `internal/maintain` | The maintainer loop: checkpoints, compaction, base rebuild, fsck/repair, upstream follow, leases |
-| `web/` | The SolidJS SPA + the dependency-free `repos.js`/`repos.mjs` SDK, embedded into the binary |
+| `web/` | The vanilla-ESM SPA (native import maps, `<template>`, ~40 lines of hand-rolled reactive helpers) + the single plain-ESM `web/sdk/repos.js` SDK, embedded into the binary; no build step, no npm dependencies |
 
 Cross-cutting: `internal/store`, `internal/wal`, `internal/git` are the frozen core; `internal/server`,
 `internal/api`, `internal/events`, `internal/maintain`, `cmd/walhub` are consumers wired through the
@@ -335,12 +343,13 @@ registries of §9.3.
 
 ### 9.1 Minimal dependencies
 
-The entire Go backend allows exactly **two** third-party modules — no exceptions without a written amendment:
+The entire Go backend allows exactly **three** third-party modules — no exceptions without a written amendment:
 
 | Module | Why it earns its place |
 |---|---|
-| `golang.org/x/net` | h2c serving (HTTP/2 without TLS) — `net/http` cannot do it alone |
+| `golang.org/x/net` | h2c serving (HTTP/2 without TLS) — `net/http` cannot do it alone; wrapped around the chi router |
 | `github.com/BurntSushi/toml` | Config parsing; hand-rolling a TOML parser is a spec bug |
+| `github.com/go-chi/chi/v5` | The HTTP router. Chi core ONLY — `chi/cors`, `chi/middleware`, and every other subpackage stay hand-rolled; the ordered middleware chain of 06_server_http.md is adapted to `func(http.Handler) http.Handler` |
 
 Everything else is stdlib or hand-rolled:
 
@@ -348,12 +357,15 @@ Everything else is stdlib or hand-rolled:
 - GCS via the JSON API over plain HTTPS — **no gRPC client** (the Rust gRPC+JSON hybrid collapses to JSON API only).
 - Prometheus text exposition, SSE encoding, JWT/JWKS verification (`crypto/rsa`, `crypto/ecdsa`,
   `encoding/base64`), protobuf-wire-compatible encoding (02_storage_protobuf.md; **no**
-  `google.golang.org/protobuf`), singleflight/errgroup equivalents, CLI subcommand dispatch, HTTP routing
-  (Go 1.22+ `ServeMux` patterns), weighted LRU caches.
+  `google.golang.org/protobuf`), singleflight/errgroup equivalents, CLI subcommand dispatch, weighted LRU
+  caches, and everything around the router: CORS and the ordered middleware chain, hand-rolled as
+  chi-compatible `func(http.Handler) http.Handler` middleware.
 - git is ALWAYS the subprocess `git` binary with exact argv — never go-git or a VCS library.
 
-Frontend budget (12_web_ui.md only): **≤ 6 npm direct dependencies** (SolidJS, NOT React; router; at most a
-markdown and a diff renderer); prefer platform primitives (fetch, streams, ES modules).
+Frontend budget (12_web_ui.md only): **zero** npm dependencies, zero build step — no TypeScript, no framework,
+no bundler. Standard ECMAScript modules served directly from `web/` (native import maps, `<template>`, small
+hand-rolled reactive helpers); prefer platform primitives (fetch, streams, ES modules). JS tests run on Node's
+built-in `node --test` runner (logic separated from DOM so it tests headlessly) plus server-smoke tests over fetch.
 
 ### 9.2 Goroutine-first concurrency, zero deadlocks
 
@@ -405,7 +417,7 @@ wave; arrows are hard dependencies.
 |---|---|---|
 | 1 | 02_storage_protobuf.md (store interface + proto codec + keys) ∥ 11_config_cli.md (config + CLI skeleton); then 03_store_backends.md (S3/GCS) and 15_testing.md's store contract suite | — |
 | 2 | 04_git.md (git subprocess layer) ∥ 05_wal_engine.md (sync refs, publish with group commit, checkpoints); then 13_concurrency.md rules are already in force from the first goroutine | 02 + 03 |
-| 3 | 06_server_http.md (HTTP + auth), then 07_api.md (JSON API + SSE); 08_bundles.md, 09_events.md, 10_maintenance.md can start as soon as 05 is done | 04 + 05 |
+| 3 | 06_server_http.md (HTTP + auth + setup), then 07_api.md (JSON API + SSE); 08_bundles.md, 09_events.md, 10_maintenance.md can start as soon as 05 is done | 04 + 05 |
 | 4 | 12_web_ui.md (SPA; the SDK can start in wave 1 — it only needs 07's shapes on paper) | 06 |
 | last | 16_packaging.md (build, container, nginx edge, compose) | all |
 
@@ -413,50 +425,61 @@ Always-on: read 13_concurrency.md before writing any goroutine; read 14_extensib
 Port early, from 15_testing.md: the simulation suite and the round-trip budget assertions — they encode the design's
 correctness AND its cost model (Rust spec §19's highest-value-tests note, kept).
 
+### 9.5 User friendliness (zero-config first run)
+
+A single binary anyone can run is the product (§1), so ease of use is design law, not polish (principle 11).
+The Rust spec's fail-closed boot rule is superseded in one direction: **warn, don't refuse**. Full spec:
+06_server_http.md (setup) and 11_config_cli.md (config, data dir).
+
+- **Zero-config first run.** No `walhub.toml` is needed to start: a missing config boots with built-in
+  defaults — `server.listen = "0.0.0.0:8080"`, `store.backend = "filesystem"` rooted at `<data-dir>/store`,
+  `server.auth.mode = "none"` (allowed on any bind, with loud warnings in the logs and a setup-UI banner — a
+  deliberate divergence from the Rust loopback-only rule), `server.auto_create_on_push = true`; every other
+  key keeps its Rust-spec default.
+- **Data dir.** `--data-dir` flag / `WALHUB_DATA_DIR` env, default `~/.local/share/walhub` (`/var/lib/walhub`
+  in containers); it holds `store/`, `cache/`, and the saved `walhub.toml`.
+- **Setup UI + API.** `/setup` groups ALL config keys by section with current effective values and validates +
+  saves (atomic tmp+rename to `<data-dir>/walhub.toml`, reporting which keys need a restart). API:
+  `GET /api/v1/setup` (full schema + effective values + file state), `POST /api/v1/setup/test` (validate
+  without saving), `PUT /api/v1/setup` (validate + write).
+- **Boot flow.** config present → validate → boot if it all works; config missing → defaults + setup banner;
+  config INVALID → **setup-only mode**: only `/setup`, `/healthz`, `/readyz` answer (everything else 503 with
+  a pointer to `/setup`), the UI shows the exact errors, and saving a fixed config requires a restart.
+- **Setup access rule.** Open while (no config file OR config invalid OR `auth.mode = none`); otherwise an
+  admin principal is required; `WALHUB_SETUP_TOKEN` optionally gates it on exposed hosts.
+
 ---
 
 ## 10. The 30-second quickstart
 
-Adapted to walhub naming (config keys unchanged; file name `walhub.toml` is primary, `walgit.toml` still accepted — see
-Decisions at the end).
-
-```toml
-# walhub.toml
-[store]
-backend = "s3"            # s3 | gcs | memory
-bucket   = "walhub"
-prefix   = ""             # optional key prefix
-
-[server]
-listen = "127.0.0.1:8080"
-
-[server.auth]
-mode = "token"
-[[server.auth.tokens]]
-principal = "alice"
-token     = "whdev-local-token"
-write     = true
-admin     = true
-```
+Zero config, zero flags, zero TOML required (§9.5):
 
 ```console
-# serve (all three roles on one box; for local play, a memory store also works:
-#   store.backend = "memory" — data lives only for the process lifetime)
-$ walhub serve --config walhub.toml
+$ walhub
+# boots with built-in defaults: filesystem store under the default data dir,
+# listening on 0.0.0.0:8080, auth `none` (loudly warned in the logs and in the UI),
+# auto_create_on_push on.
+```
 
-# push something
+Open **http://localhost:8080/setup** — every config key grouped by section with its effective value. Review and
+Save (writes `<data-dir>/walhub.toml` atomically and reports which keys need a restart), or just start using the
+server as-is.
+
+```console
+# push something (auth `none`: no credentials; the repo is created on first push)
 $ cd my-repo
-$ git remote add origin http://alice:whdev-local-token@127.0.0.1:8080/alice/my-repo.git
+$ git remote add origin http://localhost:8080/alice/my-repo.git
 $ git push -u origin main
 
 # clone elsewhere — a fresh clone reads the bundle list, not upload-pack
-$ git clone http://alice:whdev-local-token@127.0.0.1:8080/alice/my-repo.git
+$ git clone http://localhost:8080/alice/my-repo.git
 
-# browse http://127.0.0.1:8080/alice/my-repo — UI, API, and WAL health on the same prefix
+# browse http://localhost:8080/alice/my-repo — UI, API, and WAL health on the same prefix
 ```
 
-`walhub config check --config walhub.toml` validates before serving (exit codes: 0 ok, 1 error, 2 usage,
-3 crash). Full key reference: 11_config_cli.md; auth modes and the OIDC flow: 06_server_http.md.
+For a real deployment (S3/GCS bucket, token/OIDC auth), edit the config through the setup UI or
+`walhub config check --config walhub.toml` to validate before serving (exit codes: 0 ok, 1 error, 2 usage,
+3 crash). Full key reference: 11_config_cli.md; auth modes, the OIDC flow, and the setup spec: 06_server_http.md.
 
 ---
 
@@ -480,6 +503,7 @@ $ git clone http://alice:whdev-local-token@127.0.0.1:8080/alice/my-repo.git
 | bulk pool | the Go translation of the Rust "bulk runtime": 4 dedicated worker goroutines for pack materialization, fed by a bounded channel; never runs on request goroutines |
 | singleflight | hand-rolled in-flight dedup: concurrent fetches of one key collapse into one round trip |
 | h2c | HTTP/2 cleartext; walhub serves it via `golang.org/x/net` when `server.http2 = true` |
+| setup-only mode | the recovery state for an INVALID config: only `/setup`, `/healthz`, `/readyz` answer; everything else is 503 with a pointer to `/setup` (`internal/setup`) |
 
 ---
 
@@ -491,8 +515,15 @@ $ git clone http://alice:whdev-local-token@127.0.0.1:8080/alice/my-repo.git
 - HTTP header names `X-Walgit-Capabilities`, `X-Walgit-Principal`, `X-Walgit-Store-Url/-Authorization/-Key` are kept **verbatim** — they are part of the edge↔app contract and the nginx example; renaming would strand mixed walgit/walhub fleets and existing edge configs.
 - `Server` header becomes `walhub/<version> (<kind>; <name>[/<instance>])` — cosmetic identity; kind taxonomy unchanged.
 - OIDC access-token prefix stays `wgt_` — tokens are config-issued (not bucket state) and the SDK/docs reference the prefix; renaming buys nothing and breaks recognition.
-- GCS backend is JSON-API-over-HTTPS only (the Rust gRPC+JSON hybrid drops gRPC) — honors the two-module dependency budget; the store interface (§4.1 semantics) is unchanged, and conditional-GET/CAS map to `If-None-Match`/generation preconditions.
+- GCS backend is JSON-API-over-HTTPS only (the Rust gRPC+JSON hybrid drops gRPC) — honors the dependency budget (now three modules; see Divergence D1 below); the store interface (§4.1 semantics) is unchanged, and conditional-GET/CAS map to `If-None-Match`/generation preconditions.
 - Protobuf is encoded by a hand-rolled wire codec on the same field numbers (no `google.golang.org/protobuf`) — dependency budget; wire format is frozen and tested against fixtures (02_storage_protobuf.md).
 - Prometheus exposition is a hand-rolled text renderer with the metric names of Rust spec §8.10 kept exactly — dashboards/alerts depend on the names (07_api.md).
 - Package layout fixed to the §8 tree — `internal/wal` exists as its own package (Rust spread WAL code across crates) so the engine has one seam; consumers never import git internals directly.
 - Future forge features (multi-user, issues, PRs) are deferred with the §9.3 seams reserved — the Rust spec lists them as non-goals only; the seams make the deferral cheap instead of permanent.
+- **Divergence (2026-08-31, D1):** the HTTP router is `github.com/go-chi/chi/v5` — chi core only; `chi/cors`, `chi/middleware`, and every other subpackage stay hand-rolled, with the ordered middleware chain adapted to `func(http.Handler) http.Handler` (supersedes Go 1.22 `ServeMux` routing; route inventory and handler behavior are unchanged). The backend dependency budget becomes exactly three modules — chi, `github.com/BurntSushi/toml`, `golang.org/x/net` (h2c, wrapped around chi) — superseding the earlier two-module budget.
+- **Divergence (2026-08-31, D2):** the frontend is standard ECMAScript — no TypeScript, no framework, no bundler. Vanilla ES modules served directly from `web/` (native import maps, `<template>`, ~40 lines of hand-rolled reactive helpers), zero npm runtime dependencies, zero build step; the SDK is one plain-ESM `web/sdk/repos.js` (the `.mjs` twin and the esbuild build are dropped — pre-1.0 no-compat); JS tests run on Node's built-in `node --test` plus server-smoke tests over fetch. Supersedes SolidJS/vite and the ≤ 6-npm-dependency frontend budget.
+- **Divergence (2026-08-31, D3):** all dev/CI targets are Make targets (build, test, race, cover, sim, e2e, contract, vet, fmt, image, dev, clean) — no `just`file.
+- **Divergence (2026-08-31, D4):** a local-filesystem store backend (`store.backend = "filesystem"`) joins S3/GCS/memory: keys map to paths under `store.root`; conditional writes via sidecar `.lock` + flock + stat-compare + atomic rename (residual TOCTOU vs S3 documented); `renameat2(RENAME_NOREPLACE)` for create-if-absent with a portable fallback; version token/ETag = `"<size>:<mtime_ns>"`; compose = stream-concat temp + rename; range reads via `os.File.ReadAt`; no accel/signed URLs. It joins the contract suite as an ALWAYS-run backend. See 03_store_backends.md.
+- **Divergence (2026-08-31, D5):** zero-config first run is a first-class law (§9.5) — missing config boots with defaults (`0.0.0.0:8080`, filesystem store under `<data-dir>`, auth `none` + loud warnings, `auto_create_on_push = true`); data dir via `--data-dir`/`WALHUB_DATA_DIR` (default `~/.local/share/walhub`, containers `/var/lib/walhub`). Supersedes the Rust fail-closed boot rule and the auth-`none`-loopback-only rule (warn-don't-refuse instead).
+- **Divergence (2026-08-31, D6):** `/setup` web UI + `/api/v1/setup` API are first-class (§9.5; full spec in 06_server_http.md), including the setup-only recovery mode for invalid configs and the optional `WALHUB_SETUP_TOKEN` gate for exposed hosts.
+- **Divergence (2026-08-31, D7):** CI enforces ≥ 95% statement coverage per `internal/...` package (Make `cover` target with per-package fail-under; `cmd/` main glue excluded); table-driven httptest for every handler.

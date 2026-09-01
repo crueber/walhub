@@ -1,9 +1,10 @@
-# 03 — Store backends (S3, GCS, memory) and the lease layer
+# 03 — Store backends (filesystem, S3, GCS, memory) and the lease layer
 
 > Source: MASTER_RUST_SPEC.md §4.1–§4.10 · Status: normative for the walhub Go implementation.
 
-All bucket access in walhub goes through one Go interface in `internal/store`, with three backends behind
-it: `s3` (default, covers rustfs/MinIO), `gcs`, and `memory` (tests). The interface contract (types,
+All bucket access in walhub goes through one Go interface in `internal/store`, with four backends behind
+it: `filesystem` (the zero-config default, D5 below), `s3` (covers rustfs/MinIO), `gcs`, and `memory`
+(tests). The interface contract (types,
 semantics, `Prefixed` wrapper) is fixed by the Rust spec §4.1 and is not restated here; this doc specifies
 the Go mechanics of each backend, the transport discipline, striped I/O, the round-trip budgets, and the
 lease layer. Wire/bucket formats stay byte-compatible with the Rust implementation.
@@ -50,7 +51,7 @@ listing, sorted), `SignedGetURL(key, ttl)`, `AccelTarget(key)`, `SupportsCompose
 
 ## 1. Key classification: control plane vs bulk
 
-Per §4.2, exactly this function decides which transport and permit pool a request uses:
+Per Rust-spec §4.2, exactly this function decides which transport and permit pool a request uses:
 
 - **Control plane**: every key whose last path segment ends `.pb` or `.json` (manifests, log segments,
   checkpoints, leases, bundle lists, policy, cursor, fsck reports, render cache, refs blobs).
@@ -59,7 +60,7 @@ Per §4.2, exactly this function decides which transport and permit pool a reque
 - Everything else (e.g. object bytes under other prefixes) classifies as bulk; the classifier MUST exist
   even on backends with a single client (S3), because tests and metrics key off it.
 
-Control-plane traffic MUST NEVER queue behind bulk bytes. This is the incident-proven rule (§4.6): a
+Control-plane traffic MUST NEVER queue behind bulk bytes. This is the incident-proven rule (Rust-spec §4.6): a
 `bundles/list.pb` GET once sat 455–472 s behind 32 range stripes on a shared transport.
 
 ## 2. S3 backend
@@ -174,8 +175,8 @@ mid-body surfaces the error rather than re-reading).
 #### Concurrency
 
 - Hazard: multipart part uploads and UploadPartCopy loops can explode into unbounded goroutines.
-  Avoidance: bounded `errgroup` (see §4) with `SetLimit`-style counting (hand-rolled weighted semaphore,
-  §5.2); the owning goroutine owns cancellation context; every part upload takes `ctx` and aborts via
+  Avoidance: bounded `errgroup` (see §5) with `SetLimit`-style counting (hand-rolled weighted semaphore,
+  §6.2); the owning goroutine owns cancellation context; every part upload takes `ctx` and aborts via
   `ctx.Err()`. One writer owns the multipart state machine; only it may Complete/Abort (no double-abort).
 - The presigned GET client is one `http.Client` per backend instance; never construct a client per call
   (each drains the connection pool).
@@ -268,18 +269,82 @@ the precondition, while read/delete paths return PreconditionFailed.
   connection pool, `MaxIdleConnsPerHost` ≥ 8) and one bulk client — selected by the §1 classifier. Never
   share a transport between them.
 - Hazard: unbounded bulk concurrency saturates the NIC and inflates queue times invisibly. Avoidance: the
-  weighted semaphore of §5.2 gates **every** bulk request (reads and writes) with
+  weighted semaphore of §6.2 gates **every** bulk request (reads and writes) with
   `store.gcs.bulk_concurrency` (default 32) permits; queue time recorded as
   `walhub_store_bulk_queue_seconds` (histogram) plus an in-flight gauge; WARN past
   `telemetry.lock_wait_warn`. Metric names are kept Rust-compatible (§8.10 uses `walgit_*`; walhub renames
   the prefix — see Decisions).
 
-## 4. Striped upload and striped download
+## 4. Filesystem backend (`store.backend = "filesystem"`)
 
-### 4.1 Striped upload (`PutFileParallel`)
+A pure-stdlib backend: keys map to files under `store.fs.root` (default `<data-dir>/store`, the
+zero-config first-run backend per D5 — see 11_config_cli.md); no HTTP clients, signing, credentials.
+
+**Key mapping, guard.** Root layout = the key namespace (`repos/…`, `wal/`, `bundles/`, `lfs/`,
+`leases/`, `cache/api/v1/`, §5.1's `.part/` stripes); **mapping verbatim**:
+`filepath.Join(root, filepath.FromSlash(key))` — keys use `/` as the walgit layout does. **Guard
+(every entry point, before I/O) → `InvalidArgument`**: empty/absolute key; empty, `.`, or `..`
+segment; trailing `/`; `.lock` suffix or temp pattern; and post-`filepath.Clean` the path MUST stay
+under `root` (writes re-check via `EvalSymlinks`: symlinked directory components rejected; a symlink
+at the object path is *replaced*, never traversed). **Reserved namespace**: `<path>.lock` sidecars
+and `<path>.tmp-<rand>` temps persist (removing a `.lock` races with flock waiters); invisible to
+Head/List/ListPrefixes.
+
+**Version tokens.** `Version = "<size>:<mtime_ns>"` (decimal, from `stat`), equality-only; also the
+HTTP ETag. No wire origin for foreign token shapes → an unparseable `PutUpdate` token is
+`InvalidArgument` (documented divergence from the S3/GCS skip-the-precondition quirk (§2.3), which
+mirrors wire ETags only). **Collision guard**: a CAS write that would mint the token it replaces
+(same size, coarse-mtime fs) gets `os.Chtimes(temp, now+1ns)` pre-rename — writes strictly advance it.
+
+**Conditionals.** One shape: `flock(LOCK_EX)` on `<path>.lock` (`O_CREATE|O_RDWR`) → stat the target
+→ atomic rename of a same-directory temp (`fsync` first); dead holders release automatically, waiters
+block. **PutUpdate**: absent or token mismatch → `PreconditionFailed` (`Current` filled when cheaply
+known); else rename temp → path, token from the temp's stat. **PutCreate**: temp →
+`renameat2(AT_FDCWD, tmp, AT_FDCWD, path, RENAME_NOREPLACE)`; `EEXIST` → `PreconditionFailed`;
+`ENOSYS`/`EINVAL` → **portable fallback** (lock → stat present → `PreconditionFailed` → rename);
+Linux behind `//go:build linux` via `syscall.Syscall6(syscall.SYS_RENAMEAT2, …)` (no cgo), other
+GOOS and a test hook force the fallback. **Delete(key, ifVersion)**: absent → `Ok` (unconditional) /
+`NotFound` (CAS); mismatch → `PreconditionFailed`; else remove + best-effort empty-parent pruning.
+
+**Compose** (1..=32, order preserved): `io.Copy` (4 MiB buffer) the sources in order into the dest
+temp, then the dest PutMode as above; sources stay; `ComposeIsNative() = true` (striped §5.1 treats
+it like GCS). **Range reads**: `os.File.ReadAt` (stateless, concurrency-safe); `end` clamped to stat
+size, `start ≥ size` → `PreconditionFailed` (the 416 analog); full reads `io.ReadAll`; conditionals
+use the same `stat` that sized the read. **List/ListPrefixes**: byte-order walk — plain `WalkDir`
+pre-order is wrong (S3 order is byte order over key strings: `"a-x" < "a/b"`, but pre-order descends
+`a/` first): per directory, sorted entries, each subdir `d` descended where its `d+"/"` prefix
+falls among sibling files (yield files `< d+"/"`, recurse, continue); `startAfter`/delimiter fall
+out; lazy iterator; sidecars filtered; the §1 no-LIST-hot-path rule unchanged.
+
+| Condition | Kind |
+|---|---|
+| stat/open/remove `ENOENT` | NotFound |
+| `renameat2` `EEXIST`; CAS stat mismatch | PreconditionFailed |
+| key-guard rejection | InvalidArgument |
+| `EIO`; `ENFILE`/`EMFILE` | Retryable (one retry / semaphore-bounded) |
+| `ENOSPC`, `EACCES`, `EPERM`, `EROFS`, `EXDEV` (temp not in the object's dir — a bug) | Other |
+
+**Concurrency, metrics, durability.** `fsync` the temp pre-rename always; parent dir post-rename
+only for lease/manifest keys (bulk skips it — crash ⇒ re-push; the WAL tolerates). The §1 classifier
+and §6.2 semaphore are unchanged: bulk ops take a permit (`store.fs.bulk_concurrency`, default 32)
+so stripes cannot starve manifest CAS's on disk I/O/fd budget; control-plane ops bypass it; metric
+names unchanged. flock matters cross-process only (single-process writers are lease-guarded by
+protocol); never widen to a directory. `SignedGetURL`/`AccelTarget` → `None` (no `file://` URLs; the
+HTTP layer proxies bytes). **Residual TOCTOU (honest ledger)**: the stat-then-rename window is
+closed for every writer through this backend, open only to an out-of-band actor editing the store
+directory — strictly narrower than S3's accepted check-then-act race (§2.5); `RENAME_NOREPLACE`
+Create has no window, the portable fallback matches Update's. **Registry seam**: `OpenStore(cfg)`
+(`internal/store/registry.go`) switches on `cfg.Backend` (`"filesystem"` → `NewFilesystem(cfg)`;
+`"s3"`/`"gcs"`/`"memory"` likewise; unknown → error naming the key); zero-config first run (D5): no
+config file ⇒ backend `filesystem` rooted at `<data-dir>/store`, and the setup UI writes the choice
+to `<data-dir>/walhub.toml`.
+
+## 5. Striped upload and striped download
+
+### 5.1 Striped upload (`PutFileParallel`)
 
 Used for packs, bundles, LFS, and composed artifacts. Package: `internal/store` (algorithm) with the
-concurrency primitive from §5.2.
+concurrency primitive from §6.2.
 
 - If the backend cannot compose natively (`ComposeIsNative() == false`, i.e. S3) **or** `size ≤ 128 MiB`
   → single `Put` with the caller's PutMode (Create applies to the final object only).
@@ -296,7 +361,7 @@ concurrency primitive from §5.2.
 func PutFileParallel(ctx context.Context, s ObjectStore, key string, f *os.File, size int64, opts PutOptions) (ObjectMeta, error) {
     if !s.ComposeIsNative() || size <= 128<<20 { return s.Put(ctx, key, putBodyFromFile(f, size), opts) }
     n := (size + partSize(size) - 1) / partSize(size) // ≤ 1024 by construction
-    g, ctx := errgroup.WithContext(ctx)               // hand-rolled; §5.3
+    g, ctx := errgroup.WithContext(ctx)               // hand-rolled; §6.3
     g.SetLimit(8)                                     // bounded stripes; not 1024 goroutines
     for i := 0; i < int(n); i++ { i := i
         g.Go(func() error { return uploadPart(ctx, s, key, i, f, size, partSize(size)) })
@@ -306,7 +371,7 @@ func PutFileParallel(ctx context.Context, s ObjectStore, key string, f *os.File,
 }
 ```
 
-### 4.2 Striped download (large pack materialization)
+### 5.2 Striped download (large pack materialization)
 
 - Chunk = **32 MiB**, **16 concurrent stripes** per object. Requires a known size: take it from
   `PackRef` when available (skips the HEAD); otherwise one HEAD first.
@@ -338,9 +403,9 @@ err := g.Wait()
 - Who owns/closes channels: no channels are needed — results go straight to the file via `WriteAt`; the
   only synchronization is `g.Wait()`. Do not introduce a results channel "for symmetry".
 
-## 5. Bulk vs control-plane transport discipline in Go
+## 6. Bulk vs control-plane transport discipline in Go
 
-### 5.1 Separate http.Clients
+### 6.1 Separate http.Clients
 
 Per backend instance:
 
@@ -354,7 +419,7 @@ exist and both clients route through the same signing code. Rust's "4 dedicated 
 semaphore below plus the materialization worker pool (see `13_concurrency.md`); bulk work never runs on
 request goroutines.
 
-### 5.2 Weighted semaphore with permit-wait metrics
+### 6.2 Weighted semaphore with permit-wait metrics
 
 Hand-roll (no `golang.org/x/sync`):
 
@@ -379,7 +444,7 @@ Wait-time is measured from *before* Acquire to *after* acquisition (queue time),
 time. Capacity = `store.gcs.bulk_concurrency` (32) on GCS; on S3 use a generous default (e.g. 64) or share
 the GCS-style config knob — one semaphore per backend instance.
 
-### 5.3 errgroup equivalent
+### 6.3 errgroup equivalent
 
 Hand-rolled in `internal/store/errgroup.go` (~30 lines): `group{ctx, cancel, wg, sem}`; `Go(f)` runs `f`
 in a goroutine, stores the first non-nil error, and calls `cancel()`; `Wait` = `wg.Wait()` + cancel +
@@ -392,16 +457,16 @@ concurrency helper the store layer needs; the WAL/git layers have their own (see
   `ctx`; the semaphore Acquire and the HTTP request both honor it; response bodies are always closed via
   `defer resp.Body.Close()` — an unclosed body pins the connection and, with `MaxConnsPerHost` set,
   deadlocks the pool.
-- Hazard: one shared transport starves control-plane traffic. Avoidance: the two-client split (§5.1) plus
+- Hazard: one shared transport starves control-plane traffic. Avoidance: the two-client split (§6.1) plus
   classifier routing; the control client never takes a bulk permit, so a 7.5 GB download can add latency
   to *bulk* work only.
 - Never block a request goroutine on bulk work: materialization and striped downloads run on the bounded
   worker pool (see `13_concurrency.md`), not on the HTTP handler goroutine.
 
-## 6. Round-trip budget model (normative)
+## 7. Round-trip budget model (normative)
 
 Every protocol touching the bucket is judged on sequential round trips (depth) and total requests. Happy
-path budgets to defend (copy of §4.8 — normative numbers):
+path budgets to defend (copy of Rust-spec §4.8 — normative numbers):
 
 | Operation | Depth | Requests |
 |---|---|---|
@@ -434,7 +499,7 @@ push ≤ 5, warm refs = 1, cold refs with one tail = 2, checkpoint = 4 — via `
 requests concurrently and requiring their start timestamps to precede the first phase's completion (a
 simple instrumented transport recording per-request start/end suffices).
 
-## 7. Leases
+## 8. Leases
 
 Object: protobuf `Lease{holder=1, purpose=2, acquired_at=3, expires_at=4, epoch=5}` (wire encoding per
 doc 02; field numbers frozen) stored at `leases/<name>.pb` (repo-scoped — the store prefix already scopes
@@ -445,14 +510,13 @@ it). Rust guards map to Go: LeaseGuard is a struct with `Release()`; use `defer 
   return None. Not expired → None.
 - **Heartbeat:** CAS-rewrite with `epoch+1`, `expires_at = now+ttl`; loss (412) = `LeaseLost` — stop work
   immediately. Long holders run a background heartbeat; transient store errors are retried, loss releases.
-- **Release:** CAS delete (`ifGenerationMatch` / HEAD-then-delete on S3); deleting an already-stolen or
-  absent lease is Ok. `Release` is best-effort (log on failure, never panic).
+- **Release:** CAS delete (`ifGenerationMatch` / HEAD-then-delete on S3 / lock+CAS on filesystem); deleting an already-stolen or
 - **Names in use:** `leases/compact.pb` (compaction + base rebuild; TTL `compaction.lease_ttl`, default
   10 m; no heartbeat — TTL + release suffice); `leases/bundle-<strategy>.pb` (per-strategy; TTL per
   strategy; NOTE: the bundle variant historically lacks the 2 s skew tolerance — preserve the behavior).
 - **Polling acquire:** jittered backoff 10–200 ms until `wait_up_to` elapses, then None.
 
-### 7.1 Go API
+### 8.1 Go API
 
 ```go
 type Lease struct {
@@ -468,7 +532,7 @@ type LeaseGuard struct {
     cancel context.CancelFunc; done chan struct{} // closed when heartbeat stopped
     lost atomic.Bool
 }
-// AcquireOrSteal(ctx, name, ttl) (*LeaseGuard, error) — the 2-RTT acquire; CAS loop §7.
+// AcquireOrSteal(ctx, name, ttl) (*LeaseGuard, error) — the 2-RTT acquire; CAS loop §8.
 // g.Lost() bool — set when a heartbeat observed 412; workers check between units of work.
 // g.Release() — stops heartbeat (once), CAS-deletes, idempotent.
 ```
@@ -493,18 +557,19 @@ Retryable → retry next tick; on context cancel → exit silently.
 - S3 lease delete is HEAD-then-act (§2.5): the steal race on delete is accepted — the 2 s skew plus epoch
   CAS on acquire/heartbeat covers it.
 
-## 8. Memory backend (tests)
+## 9. Memory backend (tests)
 
 `BTreeMap` keyed (stdlib, no external LRU/map), global monotonic version counter unique across keys
 (mimics GCS generations). Implements the full interface including compose (concat under lock, CAS via
 Put) and range clamping. Test knobs: artificial per-op latency, `fake_object_urls` (accel returns a
 GCS-like URL + bearer for edge tests), `signing_fails` (SignedGetURL errors like VPC-SC). The simulation
-suite wraps it per-instance in a FaultStore (see `15_testing.md`); the op counter feeding the §6 budget
+suite wraps it per-instance in a FaultStore (see `15_testing.md`); the op counter feeding the §7 budget
 assertions lives here.
 
-## 9. Contract suite (what an implementer must pass)
+## 10. Contract suite (what an implementer must pass)
 
-Shared tests run against all three backends (table-driven, `testing/T`, no third-party assert libs):
+Shared tests run against all four backends (table-driven, `testing`, no third-party assert libs).
+Memory and filesystem run **unconditionally** in CI; S3/GCS are env-gated integration runs:
 
 1. Put/Create/Update/Overwrite × Get/Head/Delete round-trips; version equality only.
 2. Conditional GET: NotModified on equal IfNoneMatch; PreconditionFailed on wrong IfMatch.
@@ -512,10 +577,13 @@ Shared tests run against all three backends (table-driven, `testing/T`, no third
 4. Delete: CAS mismatch → PreconditionFailed; absent + unconditional → Ok.
 5. List/ListPrefixes ordering, startAfter, delimiter behavior.
 6. compose: 1..=32 sources, order preserved, destination CAS honored; S3 path exercises the UploadPartCopy
-   path including a < 5 MiB source (ranged-read fallback).
+   path including a < 5 MiB source (ranged-read fallback); filesystem composes via concat + rename.
 7. Striped upload/download: 200 MiB synthetic file through both paths, byte-identical round-trip.
-8. Budget assertions (§6) on the memory/FaultStore stack.
+8. Budget assertions (§7) on the memory/FaultStore stack.
 9. SigV4 test vectors; GCS token-source unit tests against an httptest OAuth server.
+10. Filesystem (§4, always-run): guard rejections (`..`, absolute, empty segment, `.lock` suffix),
+    `RENAME_NOREPLACE` Create and the forced portable fallback, Update/Delete CAS under two-goroutine
+    flock contention, mtime-collision token bump, byte-order list, `ReadAt` clamping, compose concat.
 
 ## Decisions & deviations from the Rust design
 
@@ -538,3 +606,14 @@ Shared tests run against all three backends (table-driven, `testing/T`, no third
   lease guarding makes them safe; changing them would diverge the backends' observable behavior.
 - **`SignedGetURL` on GCS via IAM signBlob over HTTPS** — the Rust path is the same call shape; no extra
   client library needed.
+- **Divergence (2026-08-31): D4 — `filesystem` backend added as a full peer** (`store.backend =
+  "filesystem"`; no Rust-spec counterpart). Mechanics in §4: verbatim guarded key→path mapping,
+  `"<size>:<mtime_ns>"` tokens (also the ETag), sidecar `.lock` + flock + stat-compare + atomic
+  rename, `renameat2(RENAME_NOREPLACE)` (Linux, stdlib `syscall`) with portable fallback, compose =
+  stream-concat + rename, `ReadAt` ranges, byte-order walk, URLs → `None`, TOCTOU ledgered (< S3's).
+- **Divergence (2026-08-31): D5 — zero-config first run defaults to this backend**: no config file ⇒
+  `store.backend = "filesystem"` rooted at `<data-dir>/store` (replaces the Rust fail-closed
+  config-required boot; setup flow in 11_config_cli.md / 06_server_http.md).
+- **Divergence (2026-08-31): D7 — the contract suite always runs memory AND filesystem** (§10.10); S3/GCS stay env-gated.
+- **Divergence (2026-08-31): D1 — dependency budget is exactly `go-chi/chi/v5`, `BurntSushi/toml`,
+  `golang.org/x/net`; the store layer spends none of it** (stdlib only, as before).

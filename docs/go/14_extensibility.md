@@ -24,7 +24,7 @@ internal/api          # JSON API + SSE + route registry (Seam 1)
 internal/events       # WAL tailing + sinks (Seam 4)
 internal/maintain     # maintainer loop, task kinds (Seam 5), fsck
 internal/config       # walhub.toml + env overrides
-web/                  # SolidJS SPA (doc 07)
+web/                  # vanilla ES-module SPA + SDK, zero npm deps (doc 12)
 ```
 
 Extensions live in their own packages (`internal/issues`, `internal/pulls`, …) and depend **only on seam interfaces plus frozen types** — never on each other's internals.
@@ -63,7 +63,10 @@ A seam change ships with the core (compiled-in registries, not plugins). There i
 
 ## 14.3 Seam 1 — HTTP route registration (`api.RouteProvider`)
 
-The server is one flat router (§8.2) with a fallback that hand-parses `/{owner}/{repo}[.git]/<sub>`. Core registers its routes; extensions register through the same mechanism, so an issue page and `refs` are peers at the mux. Go 1.22+ `ServeMux` patterns are the router; no third-party router (dependency policy).
+The server is one chi router (divergence D1; `06_server_http.md` §3.1) with the shared fallback that
+hand-parses `/{owner}/{repo}[.git]/<sub>`. Core registers its routes; extensions register through the same
+mechanism, so an issue page and `refs` are peers at the router. Chi core is the router; middleware stays
+hand-rolled (dependency policy).
 
 ```go
 // internal/api/env.go — the shared state every handler gets; constructed once at startup (§8.10 order).
@@ -82,40 +85,41 @@ type Env struct {
 type RouteProvider interface {
     // Name is used in startup logs, the /api/v1 discovery `endpoints[]` provenance, and metrics.
     Name() string
-    // Register receives the mux and shared env. It MUST register on BOTH lanes where the
-    // route is repo-scoped: use api.Lanes(mux, env, pattern, handler) which mounts
+    // Register receives the chi router and shared env. It MUST register on BOTH lanes where the
+    // route is repo-scoped: use api.Lanes(r, env, pattern, handler) which mounts
     // "/{owner}/{repo}/api/..." and "/{owner}/{repo}/api-browser/..." to the same handler.
-    Register(mux *http.ServeMux, env *Env) error
+    Register(r chi.Router, env *Env) error
 }
 
 // Core + extensions, in a fixed order:
-func Build(env *Env, extras ...RouteProvider) (*http.ServeMux, error) {
-    mux := http.NewServeMux()
+func Build(env *Env, extras ...RouteProvider) (chi.Router, error) {
+    r := chi.NewRouter()
     for _, p := range append(coreProviders(), extras...) {
-        if err := p.Register(mux, env); err != nil { return nil, err }
+        if err := p.Register(r, env); err != nil { return nil, err }
     }
-    return mux, nil
+    return r, nil
 }
 ```
 
 Rules for route providers:
 
-- Registration order is deterministic; collisions (`mux.Handle` panic on duplicate pattern) are a startup failure, never a runtime overwrite.
+- Registration order is deterministic; duplicate route registrations are a startup failure (chi panics on
+  double-mount of an identical method+pattern), never a runtime overwrite.
 - Handlers authenticate **in the handler** per §8.1 (only the gated sub-router uses `require_auth` middleware); a provider uses `env.Auth.RequireRead/Write/Admin(r)` — the 401/403/503 mapping is frozen.
 - Repo-scoped extensions MUST go under `/{owner}/{repo}/(api|api-browser)/…` and get the two-lane mount, SWR/ETag or no-store cache classification per §9.2, and SSE via the envelope helpers (§9.3) when work can be long.
 - New top-level path families (outside `/{o}/{r}` and `/api*`) require a spec note; the repository prefix is the only routing key.
 
 ```go
 // Extension example (internal/issues/routes.go)
-func (P) Register(mux *http.ServeMux, env *api.Env) error {
+func (P) Register(r chi.Router, env *api.Env) error {
     h := &handlers{env: env}
-    return api.Lanes(mux, env, "/{owner}/{repo}/issues", h.list) /* also mounts /{o}/{r}/issues/{id}/... */
+    return api.Lanes(r, env, "/{owner}/{repo}/issues", h.list) /* also mounts /{o}/{r}/issues/{id}/... */
 }
 ```
 
 ### Concurrency
 
-Hazard: a provider's handler blocking a request goroutine on bulk work (bucket fetches, merges) starves the control plane (§8.1/§19 incident rule). Avoidance: handlers do one manifest conditional GET + short bucket ops inline; anything long is a task (Seam 5) with SSE attach; git subprocesses run under the bounded pool, never on the serve path. Ownership: `Build` owns the mux for the process lifetime; no provider may mutate routes after startup (shutdown is server-wide, `http.Server.Shutdown` under context).
+Hazard: a provider's handler blocking a request goroutine on bulk work (bucket fetches, merges) starves the control plane (§8.1/§19 incident rule). Avoidance: handlers do one manifest conditional GET + short bucket ops inline; anything long is a task (Seam 5) with SSE attach; git subprocesses run under the bounded pool, never on the serve path. Ownership: `Build` owns the router for the process lifetime; no provider may mutate routes after startup (shutdown is server-wide, `http.Server.Shutdown` under context).
 
 ## 14.4 Seam 2 — authentication providers (`auth.Provider`)
 

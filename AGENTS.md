@@ -13,12 +13,13 @@ asked to implement, review, or extend walhub, this file tells you how to work. R
 
 ## 1. The laws (violating any of these is a rejected change)
 
-1. **Dependency budget is law.** Backend third-party modules: `golang.org/x/net` and
-   `github.com/BurntSushi/toml`. Frontend direct dependencies: ≤ 6 npm packages (SolidJS + router + at
-   most one markdown and one diff renderer). Anything else needs a written amendment in the relevant doc's
-   "Decisions & deviations" section BEFORE the code lands. Hand-roll instead: S3 SigV4, GCS JSON API,
-   protobuf wire codec, JWKS/JWT verification, SSE, Prometheus text exposition, LRU caches, singleflight,
-   CLI dispatch, the router (Go 1.22+ ServeMux).
+1. **Dependency budget is law.** Backend third-party modules: `github.com/go-chi/chi/v5` (the router),
+   `github.com/BurntSushi/toml` (config), `golang.org/x/net` (h2c). Frontend: **zero** npm dependencies —
+   the UI and SDK are vanilla standard ECMAScript modules (no TypeScript, no framework, no bundler, no
+   build step). Anything else needs a written amendment in the relevant doc's "Decisions & deviations"
+   section BEFORE the code lands. Hand-roll instead: S3 SigV4, GCS JSON API, protobuf wire codec,
+   JWKS/JWT verification, SSE, Prometheus text exposition, LRU caches, singleflight, CLI dispatch, CORS
+   and all other middleware (chi core only — no chi/cors, no chi/middleware packages).
 2. **git is a subprocess, always.** Every git operation shells out to the `git` binary with the exact argv
    specified in `docs/go/04_git.md`. Never link a Go git library. Never deviate from the specified argv
    without updating the doc in the same change.
@@ -51,11 +52,23 @@ asked to implement, review, or extend walhub, this file tells you how to work. R
    effects, event sinks, task kinds, CLI subcommands). Core packages (`internal/store`, `internal/wal`,
    `internal/git`) must not import upward (`internal/server`, `internal/api`, feature packages), and
    feature state must never live on local disk or in the WAL without a schema decision.
-9. **Fail closed.** Config validation refuses to run unsafe shapes (auth `none` on a public bind, oidc
-   without an allowlist). An unparseable policy rejects pushes. An invalid credential gets a real 401 (that
-   is what makes git erase it), never a 200 with in-band error — except the exact four-condition case in
-   `docs/go/06_server_http.md §8.4`.
-10. **Documents change with the code.** Every doc has a `Decisions & deviations from the Rust design`
+9. **Fail closed — with one deliberate exception.** Config validation still refuses oidc without an
+   allowlist and rejects unparseable policies; an invalid credential gets a real 401 (that is what makes
+   git erase it), never a 200 with in-band error — except the exact four-condition case in
+   `docs/go/06_server_http.md §8.4`. **Superseded by divergence:** auth `none` no longer requires a
+   loopback bind — it is allowed anywhere (zero-config friendliness) with loud warnings in logs and the
+   setup UI; the setup UI is the one-click path to real auth.
+10. **Zero-config first run.** `walhub` with no config boots on sane defaults (`0.0.0.0:8080`, filesystem
+    store under the data dir, auth `none`, `auto_create_on_push`) and the `/setup` UI configures
+    everything. A present config file is validated before boot; an INVALID file puts the server in
+    setup-only mode (everything but setup/health answers 503) until the user saves a fixed one. Setup
+    save is validated, written atomically to `<data-dir>/walhub.toml`, and lists restart-required keys.
+11. **Tests are the definition of done.** Backend: near-100% coverage, enforced — every `internal/...`
+    package holds ≥ 95% statement coverage in CI (`make cover`), table-driven httptest for every handler,
+    `-race` mandatory. Frontend: vanilla JS tested with Node's built-in `node --test` (logic modules
+    headless-testable, DOM kept thin). Never merge with skipped tests; never weaken a budget assertion to
+    make it pass.
+12. **Documents change with the code.** Every doc has a `Decisions & deviations from the Rust design`
     section; decisions are appended there with a one-line rationale, never silently overridden. If code and
     doc disagree, fix one of them in the same change — say which and why in the commit.
 
@@ -70,15 +83,16 @@ asked to implement, review, or extend walhub, this file tells you how to work. R
   interface in the doc wins; propose amendments, don't freelance.
 - **Tests are part of the definition of done.** Each package's doc names its tests (contract cases, budget
   assertions, e2e flows). `-race` is mandatory in CI; concurrency-heavy packages get stress tests
-  (`-count=100`) and the deadlock canary. Never merge with skipped tests; never weaken a budget assertion
-  to make it pass.
+  (`-count=100`) and the deadlock canary; `make cover` enforces the ≥ 95% per-package gate. Never merge
+  with skipped tests; never weaken a budget assertion to make it pass.
 - **Never run unbounded commands.** Wrap test/build invocations in a timeout. `go test ./...` in this repo
-  is tiered (see `docs/go/15_testing.md`); run the tier you need, not the world.
+  is tiered (see `docs/go/15_testing.md`) — run `make test` / `make race` / `make sim` for the tier you
+  need, not the world.
 - **Commit discipline.** One logical change per commit; the commit message states the doc section it
-  implements and any decision it appends. Format with gofmt; vet clean; the two allowed imports are the
-  only imports a linter should ever flag.
+  implements and any decision it appends. Format with gofmt (`make fmt`); vet clean (`make vet`); the
+  three allowed imports are the only non-stdlib imports a linter should ever flag.
 - **Naming.** Binary `walhub`, module `git.packden.us/crueber/walhub`, packages exactly as in
-  `docs/go/01_overview.md` (cmd/walhub, internal/{store,wal,git,bundle,policy,server,api,events,maintain,config},
+  `docs/go/01_overview.md` (cmd/walhub, internal/{store,wal,git,bundle,policy,server,api,setup,events,maintain,config},
   web/). Wire/bucket identifiers (header names `X-Walgit-*`, config key names, bucket key paths, protobuf
   package `walgit.v1`) keep their Rust-era names — they are wire contracts, not branding.
 
@@ -86,25 +100,28 @@ asked to implement, review, or extend walhub, this file tells you how to work. R
 
 ```
 cmd/walhub          one binary; no subcommand = serve; roles by config (serve/maintain/events)
-internal/store      ObjectStore interface, protobuf+framing codecs, S3/GCS/memory backends, leases
+internal/store      ObjectStore interface, protobuf+framing codecs, filesystem/S3/GCS/memory backends, leases
 internal/wal        the WAL engine: sync levels, publish/CAS, checkpoints, replay, remote reader, tasks
 internal/git        the git subprocess layer (ingest, refs, pkt-line, receive/upload-pack, repack)
-internal/server     HTTP: middleware, routing, git/LFS/static endpoints, auth, setup recipes
+internal/server     HTTP (chi): middleware, routing, git/LFS/static endpoints, auth, setup recipes
 internal/api        JSON API + SSE envelope + render caches (the /{o}/{r}/api[-browser] surface)
+internal/setup      bootstrap + setup: first-run defaults, config schema for the UI, validated save
 internal/bundle     bundle-uri scheduler: slots, chains, lists, D17
 internal/events     WAL → webhook bridge (cursor, delivery, wake-ups)
 internal/maintain   maintainer loop: checkpoints, bundles, compaction, fsck/repair, follow
-internal/config     walgit.toml + WALGIT__ env overrides, per-repo settings, fail-closed validation
+internal/config     walhub.toml (optional) + WALHUB__ env overrides, per-repo settings, validation
 internal/policy     push policy rule language (protect/history/size effects)
-web/                SolidJS SPA + dependency-free repos.js SDK, embedded into the binary
+web/                vanilla ES-module SPA + SDK (zero npm deps, no build), embedded into the binary
 ```
 
 ## 4. Verification ladder (what to run before you say "done")
 
-1. `gofmt` + `go vet ./...` — clean.
-2. Package tests for everything you touched (`go test ./internal/<pkg>/... -race`).
-3. Store contract suite (memory; S3 against the local rustfs rig when you touched a backend).
-4. Sim suite when you touched `internal/wal` or any publish/sync path (budget assertions included).
-5. e2e with real git when you touched `internal/git` or `internal/server` git routes.
-6. `pnpm build` (lint + typecheck inside) when you touched `web/`.
-7. If you appended a decision: the doc's "Decisions & deviations" section updated in the same commit.
+1. `make fmt && make vet` — clean.
+2. Package tests for everything you touched: `make test` (or `go test ./internal/<pkg>/... -race`).
+3. `make cover` — the ≥ 95% per-package gate holds with your change included.
+4. Store contract suite: `make contract` (memory + filesystem always; S3 via the rustfs rig when you
+   touched a backend).
+5. `make sim` when you touched `internal/wal` or any publish/sync path (budget assertions included).
+6. `make e2e` with real git when you touched `internal/git` or `internal/server` git routes.
+7. `make test-web` (node --test) when you touched `web/`.
+8. If you appended a decision: the doc's "Decisions & deviations" section updated in the same commit.

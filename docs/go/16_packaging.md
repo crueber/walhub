@@ -15,10 +15,10 @@ An operator MUST be able to build, containerize, deploy (one box or a fleet), an
   GOOS=linux GOARCH=arm64 CGO_ENABLED=0 make build   # cross, no toolchain changes
   ```
 - Release build flags: `CGO_ENABLED=0 go build -trimpath -buildvcs=stamp -ldflags "-s -w -X main.buildSHA=$(SHA)"`. Go has no LTO and does not need one; `-s -w` + `-trimpath` is the equivalent "thin" profile (smaller, reproducible).
-- Exit codes stay 0/1/2/3 (§16): 0 ok, 1 command/config error, 2 missing config file / bad argv, 3 `config check --strict` with ignored overrides.
+- Exit codes stay 0/1/2/3 (§16): 0 ok, 1 command/config error, 2 bad argv (a missing config file no longer exits — D5 boots on built-in defaults), 3 `config check --strict` with ignored overrides.
 - git is ALWAYS the subprocess `git` binary with exact argv (never go-git or any VCS library). On startup `serve` MUST run `git version`, parse it, and exit 1 with a clear message if it is < 2.47 (server-side needs: `pack.writeReverseIndex`, `--rev-index`, bundle-uri). The `git.binary` config key (unchanged name) selects the executable.
 
-### 1.2 Embedded web assets (`go:embed` replaces rust-embed)
+### 1.2 Embedded web assets (`go:embed`, zero build)
 
 - File `web/embed.go`:
   ```go
@@ -26,12 +26,11 @@ An operator MUST be able to build, containerize, deploy (one box or a fleet), an
 
   import "embed"
 
-  //go:embed all:dist
-  var Dist embed.FS
+  //go:embed .
+  var Files embed.FS
   ```
-- `internal/server` serves `web.Dist` through `http.FileServerFS` (Go 1.22+); `repos.js`/`repos.mjs` are served from the same FS at their contract paths (see 06_server_http.md / 07_api.md).
-- The build MUST fail if `web/dist` is missing or empty — this falls out of `go:embed` (compile error), matching the Rust rule "build fails if missing". No placeholder files. Every build entry point (Makefile `build`, CI, Containerfile stage 2) therefore depends on the web build first.
-- `all:` prefix includes dotfiles; `.gitignore`-style exclusions do not apply inside `dist` once built.
+- `internal/server` serves `web.Files` through `http.FileServerFS`; the browser loads hand-written ES modules straight off it (`index.html`, native import map, `<template>`, ~40 lines of reactive helpers). The SDK is ONE plain-ESM file, `web/sdk/repos.js`, served at its contract path (see 06_server_http.md / 07_api.md) — the `repos.mjs` twin and the esbuild-built `dist/` are gone (D2).
+- There is NO web build step: no TypeScript, no framework, no bundler, no node stage anywhere in the build. `node --test web/_tests/` runs the headless JS tests (§7.2/§8) but never feeds the build. The plain (non-`all:`) embed pattern excludes `.`/`_`-prefixed entries, so `web/_tests/` and dotfiles stay out of the binary while remaining on disk for tests.
 
 ### 1.3 Version identity
 
@@ -47,46 +46,32 @@ Exactly ONE external binary at runtime: `git` (≥ 2.47 server-side, ≥ 2.46 fo
 
 ## 2. Container image
 
-Multi-stage `Containerfile` at the repo root. Node 20 + pnpm builds the SPA → Go builds the static binary → alpine runtime with git. (Rust used debian-slim + tini; see deviations.)
+Two-stage `Containerfile` at the repo root: Go builds the static binary (`web/` embedded RAW — no node stage, no build step) → alpine runtime with git. (Rust used debian-slim + tini; see deviations.)
 
 ```dockerfile
-# Containerfile — one binary in front of an object store.
+# Containerfile — one binary in front of a store. Zero config by default: filesystem store in the data dir.
 #   podman build -t walhub -f Containerfile .
-#   podman run --rm -p 8080:8080 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
-#       -v ./walhub.toml:/etc/walhub/walhub.toml:ro -v walhub-cache:/var/lib/walhub walhub
+#   podman run --rm -p 8080:8080 walhub     # → open http://host:8080/setup
 
-# ---- 1. web UI (embedded at compile time) ------------------------------------------
-FROM docker.io/library/node:20-alpine AS web
-RUN corepack enable && corepack prepare pnpm@10 --activate
-WORKDIR /src/web
-COPY web/package.json web/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
-COPY web/ ./
-RUN pnpm run build && test -f dist/index.html && test -f dist/repos.js
-
-# ---- 2. Go build (static, no cgo, no protoc needed) --------------------------------
+# ---- 1. Go build (static, no cgo; web/ is embedded RAW — no node stage, no build step) ----
 FROM docker.io/library/golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=web /src/web/dist ./web/dist
 ARG WALHUB_BUILD_SHA=dev
 RUN CGO_ENABLED=0 go build -trimpath -buildvcs=stamp \
       -ldflags "-s -w -X main.buildSHA=${WALHUB_BUILD_SHA}" \
       -o /out/bin/walhub ./cmd/walhub
 
-# ---- 3. runtime: git >= 2.47, CA certs, nonroot ------------------------------------
+# ---- 2. runtime: git >= 2.47, CA certs, nonroot ----
 FROM docker.io/library/alpine:3.22
 RUN apk add --no-cache git ca-certificates \
     && git --version \
     && addgroup -g 1000 walhub && adduser -D -u 1000 -G walhub walhub \
-    && mkdir -p /etc/walhub /var/lib/walhub && chown -R walhub:walhub /var/lib/walhub
+    && mkdir -p /var/lib/walhub && chown -R walhub:walhub /var/lib/walhub
 COPY --from=build /out/bin/walhub /usr/local/bin/walhub
-COPY walhub.example.toml /etc/walhub/walhub.toml
-ENV WALHUB_CONFIG=/etc/walhub/walhub.toml \
-    WALHUB__CACHE__DIR=/var/lib/walhub \
-    WALHUB__SERVER__LISTEN=0.0.0.0:8080
+ENV WALHUB_DATA_DIR=/var/lib/walhub
 USER walhub
 WORKDIR /var/lib/walhub
 EXPOSE 8080
@@ -101,7 +86,7 @@ Rules:
 
 - **Runtime base is alpine, not distroless/static**: the one hard runtime dependency is `git`, and distroless ships none. Alpine 3.22 ships git ≥ 2.47; a CI job (§8) fails the image if `git --version` inside it is < 2.47. tini is not needed (alpine `docker run --init`, k8s, and podman reap zombies; `git` children are waited on by `os/exec` anyway — see 04_git.md).
 - `/readyz` reflects real readiness: store open + prewarm done (gated by `cache.prewarm_ready_timeout`) — NOT liveness. `/healthz` is the dumb liveness probe.
-- The config file baked at `/etc/walhub/walhub.toml` is the *example* file; operators mount their own over it or set `WALHUB__*` env overrides. The three baked ENVs (`WALHUB_CONFIG`, `WALHUB__CACHE__DIR`, `WALHUB__SERVER__LISTEN`) are the same three the Rust image baked, renamed.
+- **No config file is baked**: the image boots zero-config (D5) with `WALHUB_DATA_DIR=/var/lib/walhub`; that data dir holds `store/`, `cache/`, and the `walhub.toml` that `/setup` writes. Operators who prefer a file mount one and point `WALHUB_CONFIG` at it, or set `WALHUB__*` env overrides — the table in §3.1 is unchanged.
 - `WALHUB_BUILD_SHA` build-arg comes from CI; a locally built image reports `dev`.
 
 ## 3. Configuration for operators
@@ -120,15 +105,16 @@ Behavior is §15 of the Rust spec, unchanged, plus these naming rules:
 
 - TOML **key names** are unchanged from §15.1 — that is the compatibility surface. Both prefixes are stripped by the same loop (accept either; the longest matching prefix wins per key), so ops scripts and compose files written for the Rust deployment keep working verbatim.
 - `PORT` env overrides the listen port and rewrites a loopback `public_url`'s port in lockstep (unchanged).
-- `--config /dev/null` = explicit defaults + env only. Missing config file is fatal (exit 2).
-- `walhub config check [--env-file …] [--strict]` is fail-closed (§15) and is the supervisor pre-start gate (exit 3 on ignored overrides under `--strict`):
+- `--config /dev/null` = explicit defaults + env only. **A missing config file is NOT fatal (D5):** boot proceeds on built-in defaults — `server.listen = "0.0.0.0:8080"`, `store.backend = "filesystem"` rooted at `<data-dir>/store`, `server.auth.mode = "none"` (loud WARNINGs in logs + a setup banner), `server.auto_create_on_push = true` — and the UI advertises `/setup` (D6).
+- A config file that IS present but fails validation boots into **setup-only mode** (D6): only `/setup`, `/healthz`, `/readyz` answer; everything else is `503` with a pointer to the exact errors, which the setup UI also shows. Saving a fixed config then requires a restart.
+- `walhub config check [--env-file …] [--strict]` stays fail-closed for the file it is handed (§15) and remains the supervisor pre-start gate (exit 1 invalid, exit 3 on ignored overrides under `--strict`):
   ```sh
   docker run --rm -v ./walhub.toml:/etc/walhub/walhub.toml:ro walhub config check --strict
   ```
 
-### 3.2 `walhub.standalone.toml` — the one-box shape
+### 3.2 `walhub.standalone.toml` — OPTIONAL one-box bucket shape
 
-Copy-pasteable; every key is a §15.1 key. This is the local/dev default (`make dev`) and the template for a single production box. Memory-friendly: small cache budget, small remote-reader LRUs.
+Copy-pasteable; every key is a §15.1 key. **This file is OPTIONAL** — the documented default path is NO config at all (D5/D6: `./walhub serve`, first-run `/setup`). Use this shape when you deliberately want TLS in-process and a bucket as the durable state. The file the setup UI saves lands at `<data-dir>/walhub.toml` (atomic tmp+rename), not at this path. Memory-friendly: small cache budget, small remote-reader LRUs.
 
 ```toml
 # walhub.standalone.toml — one binary, one bucket, one origin.
@@ -195,7 +181,9 @@ remote_object_bytes = "128MiB"
 log_format = "pretty"
 ```
 
-### 3.3 Minimal S3 config (production)
+### 3.3 Minimal S3 config (production) — OPTIONAL
+
+OPTIONAL, like §3.2 — the zero-config filesystem default (D4/D5) needs none of this. Shown as the graduation path for when a bucket becomes the job.
 
 ```toml
 [server]
@@ -238,7 +226,7 @@ The Rust `deploy/nginx.conf.example` is the contract of record; walhub keeps it 
 | walhub → nginx | `X-Walgit-Store-Key` | bucket key, percent-encoded — the cache key |
 | walhub → nginx | `X-Walgit-Etag` | walhub's strong validator, re-emitted by nginx |
 
-Auth: everything except open routes (`^/(healthz|readyz|repos\.js|repos\.mjs)$`, `/services/public/`, `/_auth/`) passes `auth_request /_auth/check`; walhub answers `204` (or 401/403/503) with no body. Verdicts are cached **5 min per credential** (`proxy_cache_key "$http_authorization|$cookie_walgit_session"`), 401/403 only **5 s**; `proxy_cache_lock on`. A denied browser navigation (Accept: text/html) is 302'd to `/_auth/login?next=…`; everything else gets a real 401 with `WWW-Authenticate: Bearer realm="walgit"` so git erases the dead token.
+Auth: everything except open routes (`^/(healthz|readyz|repos\.js|repos\.mjs)$`, `/services/public/`, `/_auth/`) passes `auth_request /_auth/check`; walhub answers `204` (or 401/403/503) with no body. (`repos\.mjs` stays in the regex so edge configs written for walgit keep validating; walhub no longer ships that file — D2 — so the route simply never matches a real asset.) Verdicts are cached **5 min per credential** (`proxy_cache_key "$http_authorization|$cookie_walgit_session"`), 401/403 only **5 s**; `proxy_cache_lock on`. A denied browser navigation (Accept: text/html) is 302'd to `/_auth/login?next=…`; everything else gets a real 401 with `WWW-Authenticate: Bearer realm="walgit"` so git erases the dead token.
 
 Byte offload at `/_store/` (internal only): `slice 64m` (a resumed 30 GB download hits cache; `Range` is not a signed header for S3), `proxy_cache_key "$store_key$slice_range"`, cached `30d`, `proxy_cache_lock` + `use_stale updating`, conditionals stripped (`If-Range`/`If-(None-)Match`/`If-Modified-Since` were already decided by walhub against ITS validator), bucket headers hidden, exactly one validator re-emitted: walhub's `X-Walgit-Etag`. Pushes/LFS uploads stream: `client_max_body_size 0` + `proxy_request_buffering off`.
 
@@ -252,9 +240,12 @@ Repo-prefix routing for a fleet: `location ~ ^/<owner>/<repo>([./?]|$)` blocks p
 
 | Shape | Config essence | Notes |
 |---|---|---|
+| **Personal / self-hosted (default)** | no config at all: `./walhub serve` — filesystem store under `<data-dir>/store`, cache under `<data-dir>/cache`, `auth.mode = "none"` (loud warnings + setup banner), all roles | one binary, no bucket, no edge; tune later via `/setup` → `<data-dir>/walhub.toml`; add the nginx edge (§4) when it leaves the LAN |
 | **One box** | §3.2 standalone: all roles, TLS in-process, one S3/GCS bucket, nothing in front | `roles = []`; self-signed or files TLS; the bucket is the only durable state |
 | **Fleet** | many `walhub serve` hosts behind the nginx edge; the monorepo's host pins `cache.mode = "disk"` + `maintenance.disk = "ssd"`, everyone else budget-mode (`cache.max_bytes`) | placement globs decide who does what (below); the edge does TLS/routing/offload; `server.auth.session_secret` MUST be identical on every host (rotation revokes all sessions+tokens) |
 | **Serverless** | `server.roles = ["serve"]` only, config purely via env (`--config /dev/null` + `WALHUB__*`), `cache.dir` on the ephemeral FS, bounded prefetch (`wal.prefetch_max_bytes`, set it low; `wal.prefetch_packs = false` under tight CPU) | CPU throttles between requests; a maintain fleet elsewhere holds the maintain role; keep-alives off, cold starts re-warm on demand |
+
+One store per instance: `store.backend` is a single choice — the filesystem backend (D4) and the bucket backends cannot be mixed or tiered (03_store_backends.md). The personal shape uses filesystem; move to a bucket when durability/replication outgrows a disk, not alongside it.
 
 Placement globs (`owner/name` | `owner/*` | `*`), on every host:
 
@@ -289,7 +280,9 @@ Hazards at the packaging boundary (playbook: 13_concurrency.md):
 
 ## 7. Local rig
 
-### 7.1 `compose.yaml` (repo root) — rustfs + bucket creation
+### 7.1 `compose.yaml` (repo root) — rustfs, the bucket-backend contract fixture
+
+rustfs is NOT part of the zero-config dev loop anymore (D4/D5: `make dev` needs no bucket); this rig exists so `make test-s3` and CI's `s3-contract` job have a real S3-compatible endpoint. The yaml and the fixed dev keys are unchanged.
 
 ```yaml
 # S3-compatible store for local dev. Console on :9001. Fixed dev keys — never in production.
@@ -326,7 +319,7 @@ volumes:
   rustfs-data: {}
 ```
 
-### 7.2 `Makefile` (repo root) — the dev loop
+### 7.2 `Makefile` (repo root) — the ONLY task runner (D3)
 
 ```make
 BINARY  := walhub
@@ -334,63 +327,81 @@ SHA     ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo dev)
 GO      := CGO_ENABLED=0 go
 LDFLAGS := -s -w -X main.buildSHA=$(SHA)
 
-web-build:                      ## node20 + pnpm → web/dist (embedded at compile time)
-	cd web && pnpm install --frozen-lockfile && pnpm run build
-
-build: web-build                ## static binary; fails if web/dist is missing
+build:                          ## static binary; web/ embedded RAW — no build step
 	$(GO) build -trimpath -buildvcs=stamp -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/walhub
 
-vet: web-build
+vet:
 	go vet ./...
+
+fmt:
+	gofmt -w .
 
 test:                           ## fast tier; -race needs cgo, so CGO stays on here
 	CGO_ENABLED=1 go test -race ./...
 
+race: test                      ## alias, named for the flag
+
+js-test:                        ## headless JS logic tests — Node's own runner, zero npm deps
+	node --test web/_tests/
+
 e2e:                            ## smart-HTTP end-to-end against the real git binary
 	CGO_ENABLED=1 go test -race -tags e2e ./internal/server/... -run TestE2E
 
-dev-store:                      ## rustfs + bucket (compose.yaml)
-	docker compose up -d rustfs && docker compose run --rm create-bucket
+sim:                            ## WAL crash/replay simulation (see 08_wal.md)
+	CGO_ENABLED=1 go test -race -tags sim ./internal/wal/... -run TestSim
 
-dev: dev-store web-build        ## the whole loop: store + build + serve standalone
-	./$(BINARY) serve --config walhub.standalone.toml
+contract:                       ## store contract suite; filesystem + memory ALWAYS run (D4)
+	CGO_ENABLED=1 go test -race ./internal/store/...
+
+cover:                          ## D7 gate: >= 95% statements per internal/... package
+	@set -e; for pkg in $$($(GO) list ./internal/...); do \
+	  CGO_ENABLED=1 go test -count=1 -cover $$pkg \
+	    | awk -v p=$$pkg '/coverage:/ { gsub(/[^0-9.]/,"",$$2); \
+	        if ($$2+0 < 95) { print "FAIL " p ": " $$2 "%"; exit 1 } }'; \
+	done
+
+dev: build                      ## zero-config loop: filesystem store, no bucket, /setup on :8080
+	./$(BINARY) serve
+
+dev-store:                      ## rustfs + bucket — ONLY for the bucket-backend contract job
+	docker compose up -d rustfs && docker compose run --rm create-bucket
 
 test-s3:                        ## store contract against local rustfs (needs dev-store)
 	WALHUB_TEST_S3_ENDPOINT=http://127.0.0.1:9000 \
 	WALHUB_TEST_S3_BUCKET=walgit-test \
 	go test -tags s3 ./internal/store/... -run TestS3Contract
 
-image:                          ## multi-stage build with the real sha
+image:                          ## two-stage build with the real sha
 	podman build --build-arg WALHUB_BUILD_SHA=$(SHA) -t walhub -f Containerfile .
 
-ci: vet test e2e                ## what CI runs; image build happens in CI
+clean:
+	rm -f $(BINARY) cover.out
+
+ci: vet test js-test cover e2e contract   ## what CI runs; image build happens in CI
 ```
 
-(The `just dev`-equivalent is `make dev`. `just` is fine too; the Makefile is the canonical target set.)
+(Make is canonical and exclusive — there is no justfile. `dev-store` exists only so `test-s3` and CI's `s3-contract` job have a bucket; the zero-config dev loop never touches it.)
 
 ## 8. CI pipeline
 
-The repo lives on Forgejo; CI is Woodpecker-shaped (no GitHub Actions). Pipeline = vet → test `-race` → e2e → store contract against a rustfs service → image build. Web build runs FIRST in every Go step's dependency chain (embed fails otherwise).
+The repo lives on Forgejo; CI is Woodpecker-shaped (no GitHub Actions). Pipeline = vet → test `-race` → js-test (`node --test`, zero npm deps) → cover gate (D7) → e2e → store contract (filesystem + memory ALWAYS per D4; rustfs service for the optional S3 job) → image build. There is NO web build step — `web/` ships raw (D2), so node is needed only for the JS tests.
 
 ```yaml
 # .woodpecker/pipeline.yaml
 when: { event: [push, pull_request] }
 
 steps:
-  web:
-    image: node:20-alpine
-    commands:
-      - corepack enable && corepack prepare pnpm@10 --activate
-      - make web-build
-
-  vet:   { image: golang:1.25, commands: [make vet],    depends_on: [web] }
-  test:  { image: golang:1.25, commands: [make test],   depends_on: [web] }   # golang image ships git + gcc (-race)
-  e2e:   { image: golang:1.25, commands: [make e2e],    depends_on: [test] }
+  vet:   { image: golang:1.25, commands: [make vet]  }
+  test:  { image: golang:1.25, commands: [make test] }   # golang image ships git + gcc (-race)
+  js-test: { image: node:22-alpine, commands: [node --test web/_tests/] }
+  cover: { image: golang:1.25, commands: [make cover], depends_on: [test] }
+  e2e:   { image: golang:1.25, commands: [make e2e],   depends_on: [test] }
+  contract: { image: golang:1.25, commands: [make contract], depends_on: [test] }
 
   s3-contract:
     image: golang:1.25
     commands: [make test-s3]
-    depends_on: [web]
+    depends_on: [test]
     environment:
       WALHUB_TEST_S3_ENDPOINT: http://rustfs:9000
       WALHUB_TEST_S3_BUCKET: walgit-test
@@ -398,7 +409,7 @@ steps:
   image:
     image: plugins/docker
     settings: { repo: git.packden.us/crueber/walhub, tags: "${CI_COMMIT_SHA:0:12},latest" }
-    depends_on: [test, e2e, s3-contract]
+    depends_on: [test, js-test, cover, e2e, contract, s3-contract]
 
 services:
   rustfs:
@@ -413,24 +424,29 @@ CI MUST also verify the container contract: after `image`, run `podman run --rm 
 ## 9. Onboarding a developer (30-second quickstart)
 
 ```sh
-# Prerequisites: docker, git >= 2.46 on the client.
+# Prerequisites: docker (or Go 1.25 to build the binary); git >= 2.47 wherever the
+# server runs, >= 2.46 on client machines.
 git clone https://git.packden.us/crueber/walhub && cd walhub
-make dev                                  # rustfs + bucket + web build + serve
-# → https://walhub.localhost:8080 (self-signed; browser: Advanced → proceed)
 
-# Trust the self-signed CA for git (pinned once per machine):
-mkdir -p ~/.walhub && curl -k https://walhub.localhost:8080/services/public/ca.pem -o ~/.walhub/ca.pem
-git config --global http.https://walhub.localhost:8080/.sslCAInfo ~/.walhub/ca.pem
+# Zero-config: no TOML, no bucket, no TLS. Filesystem store inside the data dir.
+docker run --rm -p 8080:8080 walhub       # or: make build && ./walhub serve
+# The boot log warns that auth.mode = "none" and prints the setup banner.
 
-# Push creates the repo (auto_create_on_push = true):
+# Open http://host:8080/setup — every config section with its current effective
+# value. Save writes <data-dir>/walhub.toml atomically and lists the keys that
+# need a restart. Or change nothing and keep the defaults: also a valid choice.
+
+# First push creates the repo (auto_create_on_push defaults to true):
 mkdir demo && cd demo && git init -b main && echo hello > README.md
 git add . && git commit -m init
-git remote add origin https://walhub.localhost:8080/$USER/demo.git
+git remote add origin http://host:8080/$USER/demo.git
 git push -u origin main
 
 # Clone from another terminal/dir — a fresh clone rides bundle-uri:
-git clone https://walhub.localhost:8080/$USER/demo.git
+git clone http://host:8080/$USER/demo.git
 ```
+
+TLS, OIDC, and bucket-backed shapes are deliberate upgrades, not defaults — §3.2/§3.3 (OPTIONAL config files) and §4 (nginx edge).
 
 Token minting (team/production, `auth.mode = "oidc"`):
 
@@ -458,7 +474,7 @@ curl -fsSL https://git.packden.us/crueber/walhub/raw/branch/main/scripts/install
 - **`walhub.toml` is the default config name; `walgit.toml` still accepted, `WALHUB__` env prefix primary with `WALGIT__` also stripped** — TOML key names stay identical (the compat surface), while process/env names follow the new binary; honoring legacy prefixes keeps Rust-era ops scripts and compose files working verbatim.
 - **Runtime image is alpine (git ≥ 2.47), not debian-slim + tini** — distroless/static lacks `git`, the one hard runtime dependency; alpine also ships busybox `wget` so HEALTHCHECK needs no curl; zombie reaping is handled by `os/exec` wait + orchestrator init.
 - **git-lfs omitted from the image** — the Rust spec itself notes it is a client-side tool; the server never invokes it.
-- **Node 20 (not 24) + pnpm@10 for the web stage** — meets the SolidJS toolchain floor while keeping the image tag pinned and small.
+- **~~Node 20 (not 24) + pnpm@10 for the web stage~~ — SUPERSEDED by divergence D2 (2026-08-31): there is no web build stage at all.** The frontend is zero-build vanilla ES modules embedded raw from `web/`; TypeScript, SolidJS, vite, pnpm, and esbuild are gone.
 - **Go release flags `-trimpath -buildvcs=stamp -ldflags "-s -w"` replace thin LTO + unwind-panic profile** — Go has no LTO; per-request/per-pass `recover` reproduces the "one panic must not kill the instance" guarantee (§6).
 - **Startup git version check is fatal (exit 1) below 2.47** — the Rust spec declares ≥ 2.47 required for server features; failing fast with a message beats mysterious wire breakage.
 - **Header names stay `X-Walgit-*` (including the `walgit_session` cookie in the auth cache key) and the token prefix stays `wgt_`** — the nginx contract and users' stored credentials are the edge-compat surface; renaming would silently invalidate deployed edge configs and credential helpers.
@@ -466,3 +482,10 @@ curl -fsSL https://git.packden.us/crueber/walhub/raw/branch/main/scripts/install
 - **Nix flake packaging not ported** — the flake was a Rust toolchain convenience; Go's static cross-build plus the Containerfile covers the same ground without a second packaging system (revisit only on demand).
 - **CI is a Makefile + Woodpecker pipeline, not GitHub Actions** — the repo lives on Forgejo; Woodpecker's services block covers the rustfs contract job.
 - **`install.sh` is served from the Forgejo raw URL** — the Rust edge example leaves the installer out of the open-route set; keeping it repo-hosted avoids inventing a new public server route in the Go rewrite.
+- **Divergence (2026-08-31), applied in this revision:**
+- **D2 — frontend is zero-build vanilla ESM; the node stage is gone.** `web/` is hand-written ES modules (native import map, `<template>`, ~40 lines of reactive helpers) embedded RAW — no TypeScript, no framework, no bundler; SolidJS/vite/pnpm/esbuild are gone, superseding the "Node 20 + pnpm@10" decision above. The SDK is ONE file, `web/sdk/repos.js` (`repos.mjs` and `dist/` deleted); JS tests run on Node's built-in `node --test` with zero npm dependencies and never feed the build.
+- **D3 — Make is the only task runner.** All dev/CI entry points are Make targets (`build vet fmt test race js-test e2e sim contract cover dev dev-store test-s3 image clean ci`); the "`just` is fine too" note is retracted — there is no justfile.
+- **D4 — filesystem store backend is first-class.** `store.backend = "filesystem"` roots keys under `store.root` with sidecar-`flock` conditional writes, `renameat2(RENAME_NOREPLACE)` create-if-absent (portable fallback), `"<size>:<mtime_ns>"` version tokens/ETags, and no accel/signed URLs. It joins the contract suite as an ALWAYS-run backend beside memory (Make `contract`); the container's default path uses it; rustfs remains only as the bucket-contract fixture.
+- **D5 — zero-config first run (user friendliness is a first-class law).** A missing config boots on built-in defaults — `listen 0.0.0.0:8080`, filesystem store rooted at `<data-dir>/store`, `auth.mode = "none"` on ANY bind with loud warnings (a deliberate reversal of the Rust fail-closed loopback rule), `auto_create_on_push = true`; exit code 2 is now bad-argv only. Data dir = `--data-dir` / `WALHUB_DATA_DIR` (default `~/.local/share/walhub`, containers `/var/lib/walhub`), holding `store/`, `cache/`, and the saved `walhub.toml`.
+- **D6 — setup UI + API are first-class.** `/setup` groups every config key by section with effective values; `GET /api/v1/setup`, `POST /api/v1/setup/test` (validate only), `PUT /api/v1/setup` (validate + atomic write of `<data-dir>/walhub.toml`, reporting restart-needed keys). Invalid config → setup-only mode: only `/setup`, `/healthz`, `/readyz` answer, everything else 503. Access: open while (no config file OR config invalid OR auth.mode = none), else admin principal; optional `WALHUB_SETUP_TOKEN` gate for exposed hosts.
+- **D7 — coverage gate.** CI fails below 95% statement coverage per `internal/...` package (Make `cover`; `cmd/` main glue excluded); the pipeline gains `cover` + `js-test` steps; table-driven httptest for every handler.

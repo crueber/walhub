@@ -1,26 +1,34 @@
-# 12 — Web UI and the `repos.js` SDK (SolidJS)
+# 12 — Web UI and the `repos.js` SDK (vanilla ES modules)
 
 > Source: MASTER_RUST_SPEC.md §10 (web UI + SDK), §8.8/§8.9 (auth flows and setup recipes consumed by the UI), §9 (wire contract) · Status: normative for the walhub Go implementation.
 
-The UI is two artifacts in `web/`, built separately and served by the same Go binary:
+The UI is two artifacts in `web/`, served directly by the same Go binary — **no build step, no TypeScript, no framework, no bundler, zero npm dependencies**:
 
 | Artifact | Path | Language | Dependencies |
 |---|---|---|---|
-| SDK | `web/sdk/repos.ts` | TypeScript, dependency-free | none |
-| SPA | `web/src/**` | TypeScript + SolidJS | ≤ 6 direct npm packages |
+| SDK | `web/sdk/repos.js` | plain ES module, dependency-free | none |
+| SPA | `web/src/**`, `web/index.html` | standard ECMAScript (ES modules) | none |
 
-Everything else — SSE envelope parsing, diff parsing, markdown, highlighting, progress bar, error tray, ref picker — is hand-rolled per the dependency budget (`01_overview.md`, law 1). The SDK is the only way the SPA talks to the server (dogfood rule, §10.2).
+Files are modules: the browser loads them as-is via native `<script type="module">` and an **import map** in `index.html`. Everything — reactive helpers, SSE envelope parsing, diff parsing, markdown-lite, highlighting, progress bar, error tray, ref picker, router — is hand-rolled per the dependency budget (`01_overview.md`, law 1). The SDK is the only way the SPA talks to the server (dogfood rule, §10.2).
 
-## 1. Artifact A — the SDK (`web/sdk/repos.ts`)
+```html
+<!-- web/index.html (excerpt): import map + entry. -->
+<script type="importmap">{"imports":{"repos":"/repos.js","ui/":"/_ui/src/","lib/":"/_ui/src/lib/"}}</script>
+<script type="module" src="/_ui/src/main.js"></script>
+```
 
-The SDK is a **wire client**, not an app: keep it plain TypeScript with zero imports, no framework, no router. Build target: `esbuild` ONLY (no vite, no framework plugin needed — see §6). Output is dual: `web/dist/repos.js` (IIFE, global `window.repos`) and `web/dist/repos.mjs` (ESM, named exports).
+Routing is hand-rolled (~60 lines): a `route(pattern)` matcher against `location.pathname` plus a `navigate(path)` that calls `history.pushState` and re-runs the active page's `mount`/`unmount`. Route inventory and lazy loading behavior are UNCHANGED from §2.3; "lazy-loaded" pages are dynamic `import()` of the page module (native, no bundler needed).
+
+## 1. Artifact A — the SDK (`web/sdk/repos.js`)
+
+The SDK is a **wire client**, not an app: one plain ES module with zero imports, no framework, no router, no build. It is served at `/repos.js` as-is and imported by the SPA through the import map (`import ReposClient from "repos"`). There is no IIFE/global build and no `.mjs` twin — pre-1.0, no-compat: ES modules are the only distribution.
 
 ### 1.1 Public surface
 
-```ts
+```js
 export class ReposClient { /* constructor(opts), configure(opts) */ }
-export class ReposError extends Error { status; message; url; get notFound(); get unauthorized(); }
-export default ReposClient;   // repos.mjs named exports: ReposClient, ReposError, all types
+export class ReposError extends Error { status; message; url; get notFound() {} get unauthorized() {} }
+export default ReposClient;   // named exports: ReposClient, ReposError
 ```
 
 `client.repo("owner/name")` → repo client. Every method accepts trailing `{signal?, onProgress?, headers?}`. Full member list — **copy of the Rust spec §10.1 table, wire-identical**:
@@ -42,7 +50,7 @@ export default ReposClient;   // repos.mjs named exports: ReposClient, ReposErro
 | `repo.policy.{get, put, delete, validate, dryRun}` | policy surface |
 | `repo.settings.{get, put(toml, message), delete, effective, history, describe, validate}` | settings surface |
 
-Types are exported for every shape in the spec §9.5 (`Commit`, `TreeEntry`, `RefPage`, `Overview`, `TaskRecord`, `OpSpec`, …). `ReposError` carries `{status, message, url}` with `notFound`/`unauthorized` getters.
+Payloads are plain JSON objects — no type layer, no runtime schema. JSDoc `@typedef` blocks document each shape from spec §9.5 (`Commit`, `TreeEntry`, `RefPage`, `Overview`, `TaskRecord`, `OpSpec`, …) for editor IntelliSense without a type-check step. `ReposError` carries `{status, message, url}` with `notFound`/`unauthorized` getters.
 
 ### 1.2 Lane selection (normative, order fixed)
 
@@ -54,13 +62,13 @@ else                                       → browser lane   (/{o}/{r}/api-brow
 
 On 401 **or an opaque redirect** (a `redirect: manual` fetch reports `type: "opaqueredirect"` / status 0) in the browser lane: open `<base>/api-browser/v1/authenticate` in a popup (single-flight — if a popup is already open, await the same promise), then `await` a `postMessage` of `{type: "repos:authenticated"}` **from our own origin**, then retry the request **exactly once**.
 
-```ts
+```js
 // single-flight popup promise — one per client instance
-let popupAuth: Promise<void> | null = null;
-function authenticateOnce(base: string): Promise<void> {
+let popupAuth = null;
+function authenticateOnce(base) {
   return (popupAuth ??= new Promise((res, rej) => {
     const w = open(`${base}/api-browser/v1/authenticate`, "repos-auth", "width=520,height=640");
-    const onMsg = (ev: MessageEvent) => {
+    const onMsg = (ev) => {
       if (ev.origin !== location.origin) return;               // our origin only
       if (ev.data?.type !== "repos:authenticated") return;
       cleanup(); w?.close(); res();
@@ -76,7 +84,7 @@ Hazard: a second 401 while a popup is open MUST reuse the in-flight promise (sin
 
 ### 1.3 Base URL resolution
 
-`configure({base})` option → `<script data-base>` attribute → `import.meta.url`/script `src` origin → page origin. Off-DOM default `http://127.0.0.1:8080` for tests only. Resolution happens at construction and is re-evaluated by `configure`.
+`configure({base})` option → `<script data-base>` attribute → `import.meta.url` origin (the SDK is a module, so this always works) → page origin. Off-DOM default `http://127.0.0.1:8080` for tests only. Resolution happens at construction and is re-evaluated by `configure`.
 
 ### 1.4 Envelope handling
 
@@ -97,36 +105,48 @@ Every GET sends `Accept: application/json, text/event-stream`. If the response `
 Hazard: leaked readers and unbounded parallel streams if callers forget to abort.
 Avoidance: every method derives its own `AbortController` from the caller's `signal` and closes the `ReadableStream` reader in a `finally`; `refStream` and task-attach loops return a cancellation function in addition to honoring the signal; at most one popup auth promise per client. Playbook: `13_concurrency.md` (ownership: the caller owns the signal, the SDK owns the reader, the SDK closes it).
 
-## 2. Artifact B — the SolidJS SPA
+## 2. Artifact B — the vanilla SPA (`web/src/**`)
 
-Rewrite of the Rust spec §10.2 SPA on **SolidJS** (user decision — replaces React 19 + react-router 7). No state library, plain CSS, Suspense-driven data.
+Rewrite of the Rust spec §10.2 SPA on **standard ECMAScript** (user decision — replaces SolidJS, which itself replaced React 19 + react-router 7). No state library, no router library, plain CSS files, no build.
 
-### 2.1 npm dependency budget (DECIDED — exactly these, ≤ 6)
+### 2.1 Reactive core — `web/src/lib/reactive.js` (~40 lines, normative API)
 
-| Package | Dev? | Why allowed | What it replaces |
-|---|---|---|---|
-| `solid-js` | runtime | the framework itself (the one thing we cannot hand-roll sanely) | React 19 |
-| `@solidjs/router` | runtime | routing with data APIs; `<Suspense>`-integrated | react-router 7 |
-| `marked` | runtime | markdown → HTML; tiny, zero deps | react-markdown + GFM plugin chain |
-| `vite` | dev | bundler + dev server + `?raw` imports | — |
-| `vite-plugin-solid` | dev | compiles Solid JSX | — |
-| `typescript` | dev | type-checking | — |
+A signal-lite primitive set. The whole app's reactivity rests on this contract:
 
-Three runtime deps total. DECISIONS and hand-rolls:
+```js
+export function createSignal(initial)   // → [get, set]; get() reads, set(v) or set(prev => next) writes
+export function createEffect(fn)        // runs fn immediately; re-runs when any signal read inside changes
+export function createMemo(fn)          // derived value, cached until a dependency changes
+export function onCleanup(fn)           // registers teardown for the current computation scope (if any)
+export function createRoot(fn)          // scoped root: fn(dispose); teardown on dispose
+```
 
-- **Markdown: `marked` + hand-rolled GFM tables/autolinks.** `marked`'s core already covers GFM tables and autolinks; a react-markdown/rehype chain would drag 15+ transitive packages for no gain. Rendering happens through `sanitizedHtml()` (a hand-rolled DOMPurify-substitute, below).
-- **Diff: hand-rolled minimal unified-diff parser in TS (~120 lines).** DECIDED against a diff package (even one allowed): the server sends a single well-formed `git diff` patch (spec §9.5), not arbitrary diffs, so a tiny parser with an explicit grammar (§2.7) is smaller than any npm diff viewer, and the viewer chrome (per-file toggle, anchors, diffstat) is ours anyway.
-- **Syntax highlighting: DECIDED — none at runtime.** The Rust spec used shiki (heavy, lazy grammars). Budget says at most one markdown + one diff renderer; we spend it on markdown. Code blobs render as `<pre><code>` with line numbers via a cheap hand-rolled tokenizer for the common cases (keywords/strings/comments/numbers) driven by a filename-extension → language table; unknown extensions render plain. Rationale: a code view that is merely tinted is acceptable; 6th package saved.
+**Reactivity contract:**
+
+- Signals are synchronous pull/push: `set` notifies subscribers synchronously; effects run in registration order after a microtask-free synchronous flush (batching is NOT required; each `set` triggers dependent effects immediately — the app is small enough that consistency beats batching).
+- Dependencies are tracked at read time: any `get()` called while an effect/memo is running becomes a dependency. No explicit dependency lists.
+- `createEffect` inside `createRoot` registers its teardown; pages call `createRoot` in `mount` and `dispose()` in `unmount` — the lifecycle rule of §2.5.
+- Memos are lazy-ish: recomputed on first read after invalidation, not eagerly.
+- No props system, no JSX, no VDOM. UI updates are explicit: effects write to DOM nodes (`el.textContent = …`, `el.classList.toggle(…)`) or re-render a `<template>`-stamped list.
+
+**Templates:** static structure lives in `<template>` elements inside `index.html` / page modules, cloned with `template.content.cloneNode(true)` and wired with a tiny `bind(el, map)` helper (query by `data-*` attribute, attach). Pages stay plain functions: `mount(container, params) → unmount()`.
+
+### 2.2 npm dependency budget (DECIDED — exactly zero)
+
+No `package.json` runtime dependencies, no dev dependencies, no lockfile under `web/`. Everything previous packages provided is now hand-rolled or native:
+
+- **Markdown: hand-rolled markdown-lite (~150 lines).** Covers the preview surface: headings, paragraphs, fenced code blocks, inline code, bold/italic, links + autolinks, GFM tables, blockquotes, lists (nested one level), `hr`, images. No plugins, no AST — a line-based emitter feeding the sanitizer below. Preview fidelity is preview-level (prior decision preserved); the code view shows exact text.
+- **Diff: hand-rolled minimal unified-diff parser in JS (~120 lines).** Unchanged from the previous decision: the server sends a single well-formed `git diff` patch (spec §9.5), so a tiny parser with an explicit grammar (§2.8) is smaller than any library.
+- **Syntax highlighting: none at runtime.** Code blobs render as `<pre><code>` with line numbers via a cheap hand-rolled tokenizer for the common cases (keywords/strings/comments/numbers) driven by a filename-extension → language table; unknown extensions render plain.
 - **Sanitization:** markdown preview renders via a ~40-line allowlist sanitizer (tags `p, h1–h6, ul, ol, li, a, code, pre, em, strong, blockquote, table, thead, tbody, tr, th, td, hr, br, img, span`; attributes `href/src/alt/title` only; `href`/`src` schemes restricted to `http, https, mailto, /, #`). Output set via `innerHTML` of the sanitized string. (`innerHTML` of untrusted strings is prohibited everywhere else.)
-- **esbuild as a devDependency?** No — vite itself wraps esbuild; nothing extra needed.
-- **CSS:** plain CSS files, one per page group, imported by the components; no Tailwind, no CSS-in-JS.
+- **CSS:** plain CSS files, one per page group, `<link>`ed from `index.html`; no Tailwind, no CSS-in-JS.
 
-### 2.2 Routes (inventory identical to Rust spec §10.2)
+### 2.3 Routes (inventory identical to Rust spec §10.2)
 
 | Route | Page |
 |---|---|
 | `/` | owners (list of owners; each → their repos) |
-| `/api` | API docs page (lazy-loaded) |
+| `/api` | API docs page (lazy `import()`) |
 | `/:owner` | repos of an owner |
 | `/:owner/:repo` | repo shell — tabs Code, Commits, WAL, Settings + tasks overlay |
 | `/:owner/:repo/tree/*` | tree at ref/path |
@@ -135,58 +155,46 @@ Three runtime deps total. DECISIONS and hand-rolls:
 | `/:owner/:repo/commit/:sha` | commit detail |
 | `/:owner/:repo/wal` | WAL/overview page |
 | `/:owner/:repo/settings` | settings (3 sub-tabs) |
+| `/setup` | Setup UI (§2.10) |
 
-All deep-linkable; every UI route returns the SPA `index.html` from the server. Use `@solidjs/router` `<Route>` with lazy imports for `/api` and the repo sub-pages (`lazy(() => import("./pages/Commit"))` — Solid's `lazy` integrates with `<Suspense>` exactly like `React.lazy`).
+All deep-linkable; every UI route returns the SPA `index.html` from the server. Lazy pages: `const Commit = () => import("./pages/commit.js")` resolved on first navigation and cached in a module-level map — dynamic import is native, nothing to wire up.
 
-### 2.3 Data layer (hand-rolled, React-parity)
+### 2.4 Data layer (hand-rolled)
 
-Implement a module `web/src/lib/data.ts` providing:
+Implement a module `web/src/lib/data.js` providing:
 
-- **`useData(key, fn, ttl?)`** — a Suspense promise-cache: `Map` keyed by a string key, entry `{promise, value, at}`; TTL revalidation with default **5 s**; **sha-addressed payloads cached forever** (`ttl = Infinity`); LRU cap **400** entries; background refresh keeps stale data on screen; errors go to the **global error tray** (max 6, deduped by key+message) rather than throwing into the page. Back it with `createResource(key, fetcher)` so `<Suspense>` and transitions work; the cache maps are module-level singletons (store state lives outside the component tree, so Solid's props/reactivity warnings don't apply).
-- **`usePending()`** — a global counter of in-flight fetches AND lazy chunks; drives the **top progress bar** (a fixed-position bar animating width; 0 → hidden). Implement as a `createSignal(0)` in a module singleton + `createEffect` writing `style.width`.
-- **`useResolved(rev)`** — the two-step resolve→sha-addressed pattern of the spec §9.2: step 1 `repo.resolve(rest)` (ref-dependent, SWR, 5 s TTL, revalidates); step 2 fetches `tree/{sha}/…`, `blob/{sha}/…`, `commits?ref={sha}`, `commit/{sha}` with `ttl = Infinity` (immutable). Implement as a `createResource` chain: `const [resolved] = createResource(() => rest, doResolve); const [tree] = createResource(() => resolved()?.sha, doFetchShaTree);` — no `useResolved` hook equivalence needed; the chain IS the idiom.
+- **`useData(key, fn, ttl?)`** — a promise-cache: `Map` keyed by a string key, entry `{promise, value, at}`; TTL revalidation with default **5 s**; **sha-addressed payloads cached forever** (`ttl = Infinity`); LRU cap **400** entries; background refresh keeps stale data on screen; errors go to the **global error tray** (max 6, deduped by key+message) rather than throwing into the page. The cache maps are module-level singletons; the value is exposed as a signal so components `createEffect` over it.
+- **`usePending()`** — a global counter of in-flight fetches AND pending dynamic imports; drives the **top progress bar** (a fixed-position bar animating width; 0 → hidden). A module-singleton signal + an effect writing `style.width`.
+- **`useResolved(rev)`** — the two-step resolve→sha-addressed pattern of the spec §9.2: step 1 `repo.resolve(rest)` (ref-dependent, SWR, 5 s TTL, revalidates); step 2 fetches `tree/{sha}/…`, `blob/{sha}/…`, `commits?ref={sha}`, `commit/{sha}` with `ttl = Infinity` (immutable). Implemented as two chained caches keyed `resolve:{rest}` → then `sha:{sha}:…` — the chain IS the idiom; a tiny `useResolved(rest, kind)` helper composes it so pages don't repeat it.
 - **Error tray:** fixed bottom-right stack, max 6 entries, deduped, dismiss button, auto-fade after 10 s.
-- **Progress:** counts every `useData` fetch start/finish and every lazy chunk load.
+- **Progress:** counts every `useData` fetch start/finish and every dynamic import.
 
-### 2.4 SSE in the SPA (hand-rolled; never `EventSource`)
+### 2.5 SSE in the SPA (hand-rolled; never `EventSource`)
 
-`EventSource` cannot set `Accept`/auth headers, so ALL streaming goes through the SDK's fetch-based readers:
+`EventSource` cannot set `Accept`/auth headers, so ALL streaming goes through the SDK's fetch-based readers. Stream lifecycle is owned by the page, not a framework — a shared helper `mountStream(open, onFrame)` in `lib/sse.js` (used by every streaming component): holds one `AbortController` in a closure slot; `run()` aborts any previous controller, swaps in a fresh one, sets the state signal (`"open"|"closed"|"error"`), and calls `open(signal)`; it returns a cancel function that aborts and sets `"closed"` (unmount → stream gone). Errors set `"error"`, never throw into the page.
 
-```ts
-function useSse<T>(open: () => RequestInfo, onFrame: (ev: SseFrame) => void) {
-  const [state, setState] = createSignal<"open"|"closed"|"error">("closed");
-  createEffect(() => {
-    const ctrl = new AbortController();
-    onCleanup(() => ctrl.abort());                       // lifecycle: component gone → stream gone
-    state.value = "open";
-    (async () => { /* via client method that yields frames; SDK closes reader on abort */ })();
-  });
-  return { state };
-}
-```
+### 2.6 Repo chrome
 
-### 2.5 Repo chrome
-
-- **Tabs** computed from the pathname (Code / Commits / WAL / Settings), matching §2.2; the active tab is a derived signal of `useLocation().pathname`.
-- **Repo context** (owner/name/refs) fetched **once per visit** via `useData(`repo:${owner}/${name}`, …, 5s)` and provided through Solid `createContext` (map: React context → `createContext` + `useContext` unchanged in spirit).
+- **Tabs** computed from the pathname (Code / Commits / WAL / Settings), matching §2.3; the active tab is a memo over a `location` signal updated by the router's `popstate`/`navigate` hooks.
+- **Repo context** (owner/name/refs) fetched **once per visit** via `useData(`repo:${owner}/${name}`, …, 5s)` and stored in a module-level signal consumed by the repo pages.
 - **Clone menu** renders the setup recipes from `GET /services/setup.json` (spec §8.9) — never its own copy. The dogfood rule has the same two exceptions the Rust spec names: this fetch and nothing else bypass the SDK (both fetch server-rendered recipe payloads; use plain `fetch` with same-origin credentials).
-- **Branch/tag picker** streams refs over SSE via `repo.refStream`: 50 per page, **150 ms debounce** on the query input, **aborts the in-flight stream on every keystroke** (`AbortController` swapped per keystroke; previous reader closed in `onCleanup`-style teardown of the swap), paints rows as they arrive (`onRef` → append to a `createSignal([])` array).
+- **Branch/tag picker** streams refs over SSE via `repo.refStream`: 50 per page, **150 ms debounce** on the query input, **aborts the in-flight stream on every keystroke** (controller swapped per keystroke via the §2.5 pattern; previous stream aborted BEFORE the new one opens), paints rows as they arrive (`onRef` → append to a signal array).
 
-### 2.6 Blob rendering
+### 2.7 Blob rendering
 
 Server returns raw text (spec §9.5). Decision tree:
 
 ```text
 too_large (2 MiB cap hit)  → explanatory placeholder
 binary (NUL / invalid UTF-8) → explanatory placeholder ("binary file, N bytes")
-name ends .md/.markdown    → <MarkdownBlob>  (Preview | Code toggle; marked + sanitizer in preview,
+name ends .md/.markdown    → MarkdownBlob   (Preview | Code toggle; markdown-lite + sanitizer in preview,
                                               raw text in code view)
-otherwise                  → <CodeBlob>       (line-numbered <pre>, tinted by the mini tokenizer)
+otherwise                  → CodeBlob       (line-numbered <pre>, tinted by the mini tokenizer)
 ```
 
-### 2.7 Commit rendering — hand-rolled unified-diff parser
+### 2.8 Commit rendering — hand-rolled unified-diff parser
 
-`parsePatchFiles(patch: string, sha: string)` runs client-side on the `patch` field of `commit/{sha}` (spec §9.5: unified diff vs first parent, `--no-color`, rename detection). **Grammar it MUST accept** (each state terminal unless noted):
+`parsePatchFiles(patch, sha)` runs client-side on the `patch` field of `commit/{sha}` (spec §9.5: unified diff vs first parent, `--no-color`, rename detection). **Grammar it MUST accept** (each state terminal unless noted):
 
 ```text
 patch      := header+ body* EOF
@@ -203,106 +211,142 @@ Parse into `{path, oldPath?, added?, deleted?, isBinary?, hunks: [{oldStart, old
 
 Rendering: per-file unified/split toggle (unified default; split = two columns built by pairing `-`/`+` runs via a 20-line LCS window — hand-rolled, ~60 lines); file anchors by `stats[].path`; commit bodies linkified (sha → `commit/:sha` links, bare URLs → anchors); trailers grouped (People / merge-queue keys / Other) with sha → commit links and `mailto:` rendering.
 
-### 2.8 WAL page, tasks overlay, settings page
+### 2.9 WAL page, tasks overlay, settings page
 
 Content requirements are identical to the Rust spec §10.2 (this doc does not restate them; implement exactly there):
 
 - **WAL page** (`/:owner/:repo/wal`): health box (issues, deep fsck result, suggestions — each dispatches its op as a task), ops box (single-flight buttons, boolean/strategy params, live log via SSE, grouped op history), manifest + local-copy boxes, packs/checkpoints boxes, bundle chain tree (roots = fulls; children under `base_id`; sorted by `creation_token`; warning when an incremental's base vanished), bundle slot plan per strategy (built/skipped/too-small/unavailable counts + actionable rows), compactions table, WAL segments table (newest 5 + "all").
-- **Tasks overlay:** polls `…/tasks` (1.5 s busy / 15 s idle), instance-aware finishing rule, 20 s linger, progress pill + dropdown. Polling via `createEffect` + `setTimeout` chain (NOT `setInterval`, so a slow poll never stacks).
+- **Tasks overlay:** polls `…/tasks` (1.5 s busy / 15 s idle), instance-aware finishing rule, 20 s linger, progress pill + dropdown. Polling via a signal + recursive `setTimeout` chain (NOT `setInterval`, so a slow poll never stacks).
 - **Settings page:** three sub-tabs — Scheduled tasks (strategy table + placement/host facts + upstream follow status), Push policy (textarea editor, 400 ms debounced validate, dry-run against last N pushes, save/discard/copy), Effective config & history (TOML editor with debounced validate + live fields preview, publish with a message, clear, per-revision history with "Revert to this" + line diff).
 
-### 2.9 React → Solid idioms mapping (for a React-familiar implementer)
+### 2.10 Setup UI (`/setup`, D6)
 
-| React hook | Solid primitive |
-|---|---|
-| `useState` | `createSignal` |
-| `useEffect` (+ cleanup return) | `createEffect` (+ `onCleanup` inside) |
-| `useMemo` | `createMemo` |
-| `useRef` (DOM) | direct variable + `ref` attribute |
-| `useContext` / `createContext` | `createContext` / `useContext` (same names) |
-| `Suspense` / `React.lazy` | `<Suspense>` / `lazy(() => import(…))` |
-| `useResolved` (Rust spec) | `createResource` chain (`resolve` resource → sha-keyed immutable resource) |
-| `useData` promise-cache | `createResource(key, fetcher)` + module-level `Map` cache (§2.3) |
-| re-render on state change | signals re-run only dependent scopes — no VDOM diff |
+First-class page backed by the Setup API (specified in `05_config.md`): `GET /api/v1/setup` (full schema + effective values + file state), `POST /api/v1/setup/test` (validate without saving), `PUT /api/v1/setup` (validate + write).
 
-Mental model: in Solid components run ONCE; effects and JSX expressions, not the function body, re-run on signal changes. Never destructure props (breaks reactivity); access `props.x` directly.
+- **Rendering:** one section card per schema section (`server`, `store`, `auth`, …) listing every key with its type, default, and the **current effective value** (file value if present, else default, flagged as such). Booleans render checkboxes, enums `<select>`, everything else text/number inputs; TOML-only fields (e.g. inline policy) render textareas.
+- **Client-side validation mirrors the server rules exactly** (same field checks as the server's validator: ranges, enum membership, URL/listen formats, cross-field rules like auth mode vs listen address). Validation runs per-keystroke (debounced 250 ms) for inline hints and on submit as the gate.
+- **Buttons:** **Validate** → `POST /api/v1/setup/test` with the full normalized payload (unknown keys are a validation error, not a silent drop); **Save** → run validate, then `PUT /api/v1/setup`. On success the server writes `<data-dir>/walhub.toml` atomically (tmp + rename) and returns `{written: true, restart_required: [keys]}`; the UI shows which changed keys need a restart (hint list: keys under `server.*` and `store.backend`/`store.root` always require restart; others only when the server caches them — the response is authoritative, the UI just renders it).
+- **Setup-only mode:** when `GET /api/v1/setup` reports the config is invalid, the page renders the exact validation errors at the top (section, key, message, offending value), disables nothing (the operator must be able to fix and re-validate), and shows a banner that the server is serving only `/setup`, `/healthz`, `/readyz` (everything else 503) until a fixed config is saved AND the server restarted.
+- **Access state from the API response** (`open | admin_required | token_required`): open — page renders fully; admin/token required — page renders a 403 explanation with the retry instruction (reload after authenticating; `WALHUB_SETUP_TOKEN` hosts take the token as a query param on the PUT/POST, never stored).
+- **Dogfood exception:** like the recipe fetches, the Setup page may use plain `fetch` for the three `/api/v1/setup*` endpoints because the SDK surface does not include them (§6 dogfood rule).
 
 ## 3. Serving from the Go binary (embedding contract, byte-compatible)
 
-Same contract as the Rust spec §10.2 tail — the SPA is compiled to `web/dist` and **embedded into the server binary**:
+The SPA is **raw files in `web/`**, embedded directly — no `dist`, no build output:
 
 ```go
-//go:embed all:webdist
-var webdist embed.FS        // populated at build time (§6); placeholder index.html keeps fresh checkouts building
+//go:embed all:web
+var web embed.FS            // index.html, sdk/repos.js, src/**, css — served as-is; placeholder works on fresh checkouts with no toolchain
 ```
 
 | Path | Cache behavior |
 |---|---|
-| `/_ui/assets/*` | `Cache-Control: public, max-age=31536000, immutable` + **strong ETag** + `304` on If-None-Match + br/gz negotiation |
+| `/_ui/src/*`, `/_ui/css/*` (immutable-by-convention modules) | `Cache-Control: public, max-age=31536000, immutable` only for `/assets/*` if a hashed copy exists; modules are served `Cache-Control: no-cache` + **strong ETag** + `304` on If-None-Match |
 | `/_ui/index.html` (all UI routes) | `Cache-Control: no-cache` + ETag |
-| `/repos.js`, `/repos.mjs` | `Cache-Control: no-cache` + ETag |
+| `/repos.js` | `Cache-Control: no-cache` + ETag |
 
-Precompression: brotli(11) + gzip(9) sibling files (`*.br`, `*.gz`) for every asset ≥ 1 KiB, negotiated by `Accept-Encoding` (Go 1.22 `net/http` + manual `Vary: Accept-Encoding`; the Go server does NOT compress on the fly — it only serves the siblings; hand-roll the negotiation, ~30 lines). Generating the siblings is part of the build (§6), not server startup. Serving details, route registration under `internal/server`, and the `X-Walgit-Capabilities` edge contract are specified in `06_server_http.md`; the API endpoints themselves in `07_api.md`.
+Compression: `gzip` via server middleware for text assets (`text/*`, `application/javascript`, `application/json`, `text/css`) when `Accept-Encoding` contains `gzip` and the body is ≥ 1 KiB — on-the-fly `gzip.Writer` with level 6, `Vary: Accept-Encoding` set, no brotli, no precompressed sibling files (the zero-build rule means nothing generates them). Serving details, route registration under `internal/server`, and the `X-Walgit-Capabilities` edge contract are specified in `06_server_http.md`; the API endpoints themselves in `07_api.md`.
 
-## 4. Build pipeline
+## 4. Repository layout (no build pipeline)
 
 ```
 web/
-├── sdk/repos.ts        ← artifact A (no framework imports, zero deps)
-├── src/                ← artifact B (SolidJS app)
-├── package.json        ← deps exactly per §2.1
-├── vite.config.ts      ← solid plugin, base "/_ui/", build.outDir "dist"
-└── dist/               ← build output (embedded by Go)
-    ├── index.html  assets/  repos.js  repos.mjs  *.br  *.gz
+├── index.html          ← SPA entry: import map, <template>s, css <link>s
+├── sdk/repos.js        ← artifact A (plain ESM, zero imports)
+├── src/                ← artifact B: main.js router, pages/*.js, lib/{data,reactive,sse,diff,markdown,sanitize,highlight,setup}.js
+├── css/*.css           ← plain CSS, linked from index.html
+└── test/               ← node --test suites (§5): unit/*.test.js, smoke/*.test.js, helpers/server.js
 ```
 
-- **SDK: esbuild ONLY.** `esbuild sdk/repos.ts --format=iife --global-name=repos --outfile=dist/repos.js` and `--format=esm --outfile=dist/repos.mjs` (+ `.min` variants). No vite, no framework plugin: the SDK imports nothing, so bundling is pure TS → JS. DECISION: this replaces the Rust pipeline's pnpm script chain; `pnpm` is replaced by plain `npm`/`bun` scripts (any runner; the spec fixes commands, not the runner).
-- **SPA: vite + `vite-plugin-solid`.** DECIDED: vite, not esbuild, for the app — vite gives dev-server HMR plus the maintained Solid plugin for free; esbuild alone would mean hand-rolling HMR and JSX transform wiring for zero real gain. Dev: `vite dev` with `server.proxy` pointing `/api`, `/services`, `/_auth` at `http://127.0.0.1:8080`. Build: `vite build` → `web/dist`.
-- **Precompress step:** a tiny Node script `web/scripts/precompress.mjs` (brotli via zlib.brotliCompress, gzip via zlib.gzip) walked over `dist/**` for files ≥ 1 KiB, writing `.br`/`.gz` siblings. Runs after both builds.
-- **Order:** `npm run build` = `tsc --noEmit && vite build && esbuild (sdk ×2) && precompress`. The build FAILS without SPA artifacts (same rule as Rust spec).
-- **Go embed:** `16_packaging.md` owns the final wiring; this doc requires only that `go:embed` reads a directory that `make ui` populates from `web/dist` and that a placeholder `index.html` exists in the repo so `go build` works on fresh checkouts without a node toolchain.
+There is **no build step**: no `npm install`, no bundler, no TypeScript, no `package.json` scripts required to serve or build the UI. The Go binary embeds `web/` raw. `make ui` is a no-op placeholder kept for target-name stability (`16_packaging.md` owns final wiring).
 
-## 5. End-to-end: what an operator does
+## 5. Testing the JS (`node --test`, zero npm test deps)
+
+Runner: Node's built-in test runner — `node --test web/test/unit/ web/test/smoke/`. No jest, no vitest, no dependencies. Logic and DOM are **separated by rule**: every module in `web/src/lib/` except `data.js`'s DOM-adjacent bits must be importable in Node with no `document`/`window` access; DOM wiring lives in `web/src/pages/` and `main.js`.
+
+**Pure (headless-testable) modules:** `sdk/repos.js` (api client, injectable `fetch` + `EventTarget`-free stream shim), `lib/sse.js` (envelope/frame parser), `lib/diff.js`, `lib/markdown.js`, `lib/sanitize.js`, `lib/reactive.js`, `lib/setup.js` (setup form validation rules, mirroring the server), `lib/highlight.js`.
+**DOM-wiring modules (not unit-tested):** `pages/*.js`, `main.js`, the router glue, anything touching `document`/`template`/`location` — exercised by smoke tests instead.
+
+```js
+// web/test/unit/reactive.test.js (skeleton)
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createSignal, createEffect } from "../../src/lib/reactive.js";
+
+test("effect reruns on signal change", () => {
+  const [get, set] = createSignal(1);
+  let runs = 0;
+  createEffect(() => { get(); runs++; });
+  set(2);
+  assert.equal(runs, 2);
+});
+```
+
+```js
+// web/test/unit/sdk-envelope.test.js (skeleton)
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { ReposClient } from "../../sdk/repos.js";
+
+test("SSE envelope → result payload", async () => {
+  const fakeFetch = async () => new Response(
+    `event: progress\ndata: {"n":1}\n\nevent: result\ndata: {"entries":[]}\n\n`,
+    { headers: { "content-type": "text/event-stream" } });
+  const c = new ReposClient({ base: "http://x", fetch: fakeFetch });
+  assert.deepEqual(await c.repo("a/b").tree("main", ""), { entries: [] });
+});
+```
+
+```js
+// web/test/smoke/server.test.js (skeleton) — real server binary, real fetch
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { startServer } from "./helpers/server.js";   // spawns ./walhub serve on a temp data-dir, waits for /healthz
+
+test("pages and SDK serve", async () => {
+  const base = await startServer();
+  const ui = await fetch(`${base}/_ui/`);
+  assert.equal(ui.status, 200);
+  assert.match(await ui.text(), /importmap/);
+  const sdk = await fetch(`${base}/repos.js`);
+  assert.equal(sdk.status, 200);
+  const mod = await import(sdk.url);                   // the served bytes parse as ESM
+  assert.equal(typeof mod.ReposClient, "function");
+});
+```
+
+`web/test/smoke/setup-api.test.js` (same shape): on a fresh data-dir (D5 defaults boot), `GET /api/v1/setup` → `{access: "open"}`, `POST /api/v1/setup/test` with `{server: {listen: "0.0.0.0:9999"}}` → 200, `PUT /api/v1/setup` → 200 with `restart_required` containing `"server.listen"`. Also required: `web/test/unit/setup.test.js` — table-driven cases for the `lib/setup.js` validators mirroring the server (valid values pass; range/enum/format/cross-field violations fail with the server's message).
+
+Make wiring (D3 — all dev/CI targets are Make targets): `test-web:` runs `node --test web/test/unit/ web/test/smoke/`.
+
+## 5b. End-to-end: what an operator does
 
 ```bash
-cd web && npm ci && npm run build   # → web/dist with index.html, assets/, repos.js/mjs, *.br/*.gz
-cd .. && go build ./cmd/walhub      # binary embeds web/dist
-./walhub serve                      # UI at http://127.0.0.1:8080/_ui/, SDK at /repos.js and /repos.mjs
+make build   # go build; web/ is embedded raw — no UI build step exists
+make dev     # ./walhub serve with defaults (D5) — UI at http://127.0.0.1:8080/_ui/, SDK at /repos.js
 ```
 
-Dev loop (UI only, against a running server):
-
-```bash
-cd web && npm run dev               # vite dev server, proxying API/auth to :8080
-```
-
-A third-party page embedding the SDK:
-
-```html
-<script src="https://walhub.example.com/repos.js" data-base="https://walhub.example.com"></script>
-<script>
-  const c = window.repos.default.configure({ token: "…" });   // bearer lane
-  c.repo("demo/hello").tree("main", "").then(t => console.log(t.entries));
-</script>
-```
+A third-party page embeds the SDK as a module — the only supported integration (no IIFE/global build exists): `<script type="module">import repos from "https://walhub.example.com/repos.js"; repos.configure({token:"…"}).repo("demo/hello").tree("main","").then(console.log)</script>`.
 
 ## 6. Dogfood rule
 
-The UI uses the SDK for every server call, without exception except the two named in §2.5 (both fetch server-rendered recipe payloads). No raw `fetch` in `web/src/**` outside the SDK directory and those two recipe fetches. CI grep-checkable: `fetch(` must appear in `web/src/**` only inside those two files.
+The UI uses the SDK for every server call, without exception except the ones named in §2.6 and §2.10 (both recipe fetches and the three Setup API calls; all fetch server-rendered JSON payloads). No raw `fetch` in `web/src/**` outside the SDK directory and those files. CI grep-checkable: `fetch(` must appear in `web/src/**` only inside those files.
 
 ### Concurrency
 
 Hazard: SSE readers leak when components unmount mid-stream; ref-picker keystrokes stack streams (one per keystroke) and repaint out of order.
-Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): every stream is owned by exactly one component-scoped `AbortController`; `onCleanup` aborts it, and the SDK closes the `ReadableStream` reader in its `finally` (the SDK owns the reader, the component owns the signal — one closer each, no shared mutable reader state). The ref picker swaps its controller per debounced keystroke and aborts the previous one BEFORE opening the new stream, so only one ref stream per picker is ever live; rows are keyed by `name` so late frames from an aborted stream (already cancelled) can never overwrite fresh ones. No unbounded buffering: SSE frames are processed as they are read, appended to bounded signal arrays (cap 1000 rows per picker page); progress callbacks fan out synchronously, never queued.
+Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): every stream is owned by exactly one component-scoped `AbortController`; unmount tears it down via the §2.5 pattern's returned cancel function, and the SDK closes the `ReadableStream` reader in its `finally` (the SDK owns the reader, the component owns the signal — one closer each, no shared mutable reader state). The ref picker swaps its controller per debounced keystroke and aborts the previous one BEFORE opening the new stream, so only one ref stream per picker is ever live; rows are keyed by `name` so late frames from an aborted stream (already cancelled) can never overwrite fresh ones. No unbounded buffering: SSE frames are processed as they are read, appended to bounded signal arrays (cap 1000 rows per picker page); progress callbacks fan out synchronously, never queued.
 
 ## Decisions & deviations from the Rust design
 
-- **SPA framework: SolidJS replaces React 19 + react-router 7** (explicit user decision; wire contract untouched — the SDK defines the wire, the framework does not).
-- **Dependency set fixed at `solid-js`, `@solidjs/router`, `marked` (+ dev: `vite`, `vite-plugin-solid`, `typescript`)** — 3 runtime deps under the ≤ 6 budget; each named in §2.1 with its rationale.
-- **Hand-rolled unified-diff parser instead of a diff package** — the server emits one well-formed `git diff` shape; a ~120-line parser with the §2.7 grammar beats any npm diff viewer on size and control.
-- **No shiki: hand-rolled mini tokenizer for code blobs** — spends the "one diff renderer" budget slot on nothing rather than a heavy highlighter; tinted code is an acceptable trade to hold 3 runtime deps.
-- **Markdown sanitizer hand-rolled (~40 lines allowlist)** — replaces DOMPurify/rehype-sanitize; render surface is self-produced markdown, attack surface is small and enumerated.
-- **SDK built with esbuild ONLY, SPA with vite + solid plugin** — the SDK imports nothing so it needs no framework plugin; the app gets HMR + maintained JSX transform from vite. Simplest split that works.
-- **pnpm → npm/bun scripts; oxlint dropped from the required chain** — runner choice left to the operator; `tsc --noEmit` remains the required gate.
-- **Import-map/SCC chunk-hash scheme from the Rust build dropped** — plain vite chunking + immutable `/assets` hashing achieves the same cache behavior with far less machinery; the embedding contract (immutable assets, strong ETag, no-cache HTML/SDK, br+gz siblings) is preserved byte-for-byte in behavior.
-- **GFM/markdown extras beyond `marked`'s built-ins are not implemented** — preview fidelity is preview-level; code view remains available for exact text.
+- **SPA framework: vanilla standard ECMAScript replaces SolidJS** (D2, explicit user decision — itself a supersession of the earlier SolidJS-over-React decision; wire contract untouched — the SDK defines the wire, the framework does not). Native ES modules + import map, `<template>` + a ~40-line hand-rolled reactive core (§2.1), hand-rolled router. No state library, no JSX, no VDOM.
+- **Superseded — dependency set `solid-js`, `@solidjs/router`, `marked` (+ dev: `vite`, `vite-plugin-solid`, `typescript`)**: the npm budget is now **zero** (runtime and dev). `solid-js`/`@solidjs/router` are replaced by the §2.1 reactive core + hand-rolled router; `marked` by hand-rolled markdown-lite (§2.1) with unchanged preview-fidelity stance and the same allowlist sanitizer.
+- **Superseded — SDK built with esbuild, SPA with vite + solid plugin**: there is no build. The SDK is one plain-ESM `web/sdk/repos.js` (no IIFE build, no `.mjs` twin, pre-1.0 no-compat); the SPA is raw modules served from `web/`.
+- **Superseded — `tsc --noEmit` as required gate; pnpm/npm/bun script chain**: no TypeScript anywhere; no package manager in the UI path. Gates are `make test-web` (§5) and CI greps (dogfood rule, no-TS rule).
+- **Superseded — vite chunk-hash immutable `/assets` scheme with br+gz precompressed siblings**: modules are served raw with `no-cache` + strong ETag; compression is on-the-fly gzip middleware (§3). The behavioral contract (fresh content on deploy, cheap revalidation, compressed text assets) is preserved.
+- **Hand-rolled unified-diff parser instead of a diff package** — unchanged: the server emits one well-formed `git diff` shape; a ~120-line parser with the §2.8 grammar beats any library on size and control.
+- **No shiki: hand-rolled mini tokenizer for code blobs** — unchanged: tinted code is an acceptable trade.
+- **Markdown sanitizer hand-rolled (~40 lines allowlist)** — unchanged: render surface is self-produced markdown, attack surface is small and enumerated.
+- **GFM/markdown extras beyond the hand-rolled markdown-lite are not implemented** — preview fidelity is preview-level; code view remains available for exact text.
+- **NEW — Setup UI is a first-class page** (`/setup`, §2.10) backed by the D6 Setup API, with setup-only-mode error display and restart-required hints.
+- **NEW — JS testing is normative** (§5): `node --test`, zero npm test deps, strict logic/DOM separation, unit + server-smoke suites wired as `make test-web`.

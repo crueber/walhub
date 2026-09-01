@@ -2,14 +2,14 @@
 
 > Source: MASTER_RUST_SPEC.md §15 (configuration reference, per-repo settings D24), §16 (CLI reference), §19 (porting notes: clap/exit codes) · Status: normative for the walhub Go implementation.
 
-The binary is `walhub` (module `git.packden.us/crueber/walhub`). It reads the same config files, honors the same environment variables, emits the same exit codes, and exposes the same subcommand surface as the Rust `walgit`, so operators' `walgit.toml`, deployment scripts, and shell habits carry over unchanged. Config parsing uses `github.com/BurntSushi/toml` — the only TOML dependency allowed. All other CLI mechanics (dispatch, flag parsing, duration/size parsing) are hand-rolled or stdlib.
+The binary is `walhub` (module `git.packden.us/crueber/walhub`). It reads the same config files, honors the same environment variables, emits the same exit codes, and exposes the same subcommand surface as the Rust `walgit`, so operators' `walgit.toml`, deployment scripts, and shell habits carry over unchanged. Config parsing uses `github.com/BurntSushi/toml` — the only TOML dependency allowed, and one of exactly three backend dependencies in the budget (`go-chi/chi/v5`, `BurntSushi/toml`, `golang.org/x/net`). One deliberate divergence: **a config file is now OPTIONAL** — a first run with no file boots on built-in defaults (§2.3), and the default file location lives under the data dir (§3.1). All other CLI mechanics (dispatch, flag parsing, duration/size parsing) are hand-rolled or stdlib.
 
 ---
 
 ## 1. Layering and packages
 
 ```
-cmd/walhub/            main.go: build-info version, global --config, dispatcher, exit-code mapping
+cmd/walhub/            main.go: build-info version, global --config and --data-dir, dispatcher, exit-code mapping
 internal/config/       file+env loading, decoding, validation, per-repo settings, effective-config dump
 internal/config/       (files) config.go, env.go, validate.go, size.go, repo_settings.go, check.go
 ```
@@ -45,7 +45,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `server.listen` | `"127.0.0.1:8080"` | bind address; loopback twin for `*.localhost`; `none` auth requires loopback |
+| `server.listen` | `"127.0.0.1:8080"` | bind address; loopback twin for `*.localhost`; `none` auth on a non-loopback bind warns (divergence, §5) † |
 | `server.http2` | `true` | h2c / ALPN (Go: `golang.org/x/net/http2` h2c handler) |
 | `server.max_concurrent_requests` | `512` | global in-flight cap (advisory) |
 | `server.max_concurrent_per_repo` | `64` | per-repo git semaphore |
@@ -53,7 +53,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.drain_timeout` | `"20s"` | phase-2 drain: in-flight requests finish; new work refused |
 | `server.max_push_bytes` | `"64GiB"` | largest accepted push |
 | `server.roles` | `[]` | `serve` / `maintain` (implies compact+bundle) / `events`; empty = all |
-| `server.auto_create_on_push` | `false` | create a repo on first push |
+| `server.auto_create_on_push` | `false` | create a repo on first push † |
 | `server.accel_redirect` | `false` | answer byte requests with X-Accel-Redirect (edge-fronted hosts only) |
 | `server.public_url` | — | pins absolute URIs (bundle-uri, LFS, recipes, OAuth callback) behind a proxy |
 | `server.cors_origins` | `[]` | exact or one leading `*.`; empty = no cross-origin lane |
@@ -72,15 +72,16 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.auth.access_token_ttl` | `"90d"` | `wgt_` token lifetime |
 | `server.auth.audiences` | `[]` | accepted `aud` on bearer ID tokens (∪ oauth_client_id) |
 | `server.auth.trusted_forwarders` | `[]` | principals allowed to set `X-Walgit-Principal` (push broker hop) |
-| `store.backend` | `"s3"` | `s3` \| `gcs` \| `memory` |
+| `store.backend` | `"s3"` | `s3` \| `gcs` \| `memory` \| `filesystem` (D4, 03_store_backends.md) † |
 | `store.bucket` / `store.prefix` | `"walgit"` / `""` | bucket + key prefix |
+| `store.root` | — | filesystem backend root (D4); first-run default `<data-dir>/store` (§2.3) † |
 | `store.max_retries` | `8` | retryable store errors, jittered backoff |
 | `store.multipart_threshold` / `multipart_part_size` | `"64MiB"` / `"32MiB"` | multipart thresholds |
 | `store.s3.endpoint/region/access_key_env/secret_key_env/force_path_style` | AWS defaults | incl. rustfs/MinIO (path style true) |
 | `store.gcs.endpoint` | Google endpoint | endpoint override (emulators) |
 | `store.gcs.signing_service_account` | — | signer for `signed_url` serving |
 | `store.gcs.bulk_clients` / `bulk_concurrency` | `4` / `32` | bulk transport separation (spec §4.6) |
-| `cache.dir` | `"/tmp/walgit"` | local cache root (`<dir>/<owner>/<name>.git`; + `tls/`) |
+| `cache.dir` | `"/tmp/walgit"` | local cache root (`<dir>/<owner>/<name>.git`; + `tls/`) † |
 | `cache.mode` | `"auto"` | `budget` \| `disk` \| `auto` (= disk when `maintenance.disk = "ssd"`) |
 | `cache.max_bytes` | `"20GiB"` | budget-mode cap for everything on disk |
 | `cache.disk_high_watermark` | `0.9` | disk-mode eviction trigger (low mark = −0.10) |
@@ -131,6 +132,7 @@ Notes:
 - `git.upload_pack_engine`: the Rust `gix` engine has no Go equivalent and none is wanted (dependency law). In walhub the accepted values are still `auto | git | gix` for file compatibility, but `gix` is treated exactly as `git` at load time with no warning; `auto` resolves to `git`. See 04_git.md for the upload-pack implementation.
 - `telemetry.log_filter` keeps the Rust EnvFilter syntax as a string; the Go logger interprets the `info,walgit=debug` shape by mapping the `walgit` target to `walhub` (see §7.3 of 06_server_http.md — that doc owns logging).
 - Bundle strategy array entries (`[[bundles.strategy]]`) decode in declaration order; `bundles.strategy` order is meaningful for §11 default families.
+- Rows marked † have a different effective value on a zero-config first run; §2.3 is normative there. The table otherwise lists the compiled-in defaults, which equal the Rust-spec defaults.
 
 ### 2.1 Example: minimal config
 
@@ -183,15 +185,47 @@ mode = "disk"                   # real SSD host: full materialization + watermar
 object_format = "sha1"
 ```
 
+### 2.3 First-run defaults (zero-config boot; divergence D5)
+
+When no config file is found (§3.1), the server boots anyway on these **first-run defaults**. They replace the compiled-in defaults of the table above for the marked keys; every unmarked key keeps its table value. User friendliness is a first-class law: `walhub` with zero configuration must serve git over HTTP on a fresh machine.
+
+| Key | First-run value | Why it differs |
+|---|---|---|
+| `server.listen` | `"0.0.0.0:8080"` | a first-run server should be reachable, not only loopback |
+| `store.backend` | `"filesystem"` | no bucket credentials exist yet; keys map to paths under `store.root` (D4, 03_store_backends.md) |
+| `store.root` | `<data-dir>/store` | the filesystem backend's root, inside the data dir |
+| `cache.dir` | `<data-dir>/cache` | the data dir owns all writable state — no `/tmp` surprise |
+| `server.auth.mode` | `"none"` | zero-friction first run; allowed on ANY bind with a loud warning (§5, rule 1 — the Rust fail-closed loopback rule is superseded) |
+| `server.auto_create_on_push` | `true` | `git push` to a fresh server should just work |
+
+All other keys take their table (Rust-spec) defaults. The effective first-run config is exactly what `config dump` prints when no file is present, and what `GET /api/v1/setup` reports as effective values with `file_state = "absent"`.
+
+A first-run boot also surfaces a **setup banner**: the log warns that auth is `none`, and the web UI shows a persistent banner linking `/setup` until a config file exists with auth configured. When `auth.mode = "none"` on a non-loopback bind, the warning is emitted at every startup regardless of first-run state.
+
 ## 3. Loading order, env overrides, PORT lockstep
 
 ### 3.1 The ladder
 
-1. **Defaults.** The `Config` struct's Go zero values are NOT the defaults; `Config` values are first set from the compiled-in default table (§2). This is a literal table (`defaultConfig()` returning a fully populated `Config`), because the zero value of `time.Duration(0)` or `int64(0)` legitimately means "off" for some keys — the defaults must not be confusable with "off".
-2. **File.** `--config PATH` (or `WALGIT_CONFIG` env, see §4.1). BurntSushi/toml `DecodeFile` into a fresh struct seeded from defaults; unknown keys are an error listing key + line (fail-closed, same as serde's `deny_unknown_fields` behavior in the Rust binary). A missing file is fatal (exit 2). Explicit `--config /dev/null` = defaults+env only (file leg is skipped when the path is `/dev/null`).
-3. **Env overlay.** `WALHUB__SECTION__KEY=value` (legacy `WALGIT__SECTION__KEY=value` accepted as a fallback alias; `WALHUB_` wins when both define the same key) on top of the file result (§3.2).
+1. **Defaults.** The `Config` struct's Go zero values are NOT the defaults; `Config` values are first set from the compiled-in default table (§2). This is a literal table (`defaultConfig()` returning a fully populated `Config`), because the zero value of `time.Duration(0)` or `int64(0)` legitimately means "off" for some keys — the defaults must not be confusable with "off". When no config file exists at all, the first-run defaults of §2.3 are applied on top of the compiled-in table before the remaining legs run.
+2. **File (optional).** The config file is looked up in this order, first hit wins:
+   - **Explicit `--config PATH`** (or `WALHUB_CONFIG` / legacy `WALGIT_CONFIG` env when `--config` is absent). BurntSushi/toml `DecodeFile` into a fresh struct seeded from defaults; unknown keys are an error listing key + line (fail-closed, same as serde's `deny_unknown_fields` behavior in the Rust binary). **A missing explicitly-named file is fatal (exit 2, `config file not found: <path>`)** — if the operator pointed at a file, silence would be a footgun. Explicit `--config /dev/null` = defaults+env only (file leg is skipped when the path is `/dev/null`).
+   - **`<data-dir>/walhub.toml`**, if it exists (data dir: §3.1.1). `<data-dir>/walgit.toml` is accepted as an alias (checked second). If the file exists but is INVALID — parse error or unknown key — boot enters **setup-only mode** (06_server_http.md): only `/setup`, `/healthz`, and `/readyz` answer; everything else returns 503 with a pointer to the errors, and the setup UI displays them. Saving a fixed config (§3.7) then requires a restart.
+   - **No file** → zero-config first run on the §2.3 first-run defaults, with the setup banner (§2.3).
+3. **Env overlay.** `WALHUB__SECTION__KEY=value` (legacy `WALGIT__SECTION__KEY=value` accepted as a fallback alias; `WALHUB_` wins when both define the same key) on top of the file result (§3.2) — or on top of the defaults when no file was loaded. The overlay applies identically in all three file states; **env always wins over the file** (file ⊕ env, documented).
 4. **PORT lockstep.** If `PORT` env is set, it overrides the port portion of `server.listen` AND, when `server.public_url` is a loopback URL (`http://127.0.0.1:PORT`, `http://localhost:PORT`, `http://[::1]:PORT`), rewrites its port to the same value (§3.3).
-5. **Validation.** Fail-closed; any violation is exit 2 with the offending key(s) and reason on stderr (§5).
+5. **Validation.** Fail-closed; any violation is exit 2 with the offending key(s) and reason on stderr (§5) — with the single warn-only exception of rule 1 (auth-none loopback, divergence).
+
+#### 3.1.1 The data dir (divergence D5)
+
+All writable state lives under one **data dir**, selected by:
+
+1. the global `--data-dir PATH` flag (accepted in the same argv positions as `--config`);
+2. else the `WALHUB_DATA_DIR` env var;
+3. else the default: `~/.local/share/walhub` (XDG), or `/var/lib/walhub` when the process detects a container context (`/.dockerenv` present or `KUBERNETES_SERVICE_HOST` set).
+
+The data dir holds `<data-dir>/store/` (filesystem store backend root, `store.root` when `backend = "filesystem"`, D4), `<data-dir>/cache/` (first-run `cache.dir`, §2.3), and the saved config `<data-dir>/walhub.toml` (written by the setup UI, §3.7; `walgit.toml` alias accepted).
+
+The directory is created (mode `0700`) on first boot if missing. `--data-dir` never sets a config value directly — it only relocates the file leg (§3.1 step 2) and provides the default expansion for `store.root` / `cache.dir` in the first-run table; an explicit `store.root` or `cache.dir` in the file or env always wins. Like `--config`, `--data-dir` is peeled before subcommand dispatch (§6.3) and is honored by every subcommand that loads config.
 
 ### 3.2 Env override mechanics
 
@@ -230,11 +264,21 @@ If ANY `WALGIT__PLACEMENT__*` override is present, the entire `[placement]` sect
 
 ### 3.5 Validation is fail-closed
 
-Every rule in §5 runs after the ladder completes. A violation aborts startup (exit 2) or `config check` (exit 1). There is no "warn and continue" path for a rule violation — only unknown-key env overrides get the softer ignored-override treatment (§3.2), because those cannot change behavior.
+Every rule in §5 runs after the ladder completes. A violation aborts startup (exit 2) or `config check` (exit 1). There is exactly one "warn and continue" path — rule 1 (auth-none on a non-loopback bind), a deliberate divergence from the Rust fail-closed rule (§5) — and the softer ignored-override treatment for unknown-key env overrides (§3.2), because those cannot change behavior. Everything else remains fail-closed.
 
 ### 3.6 Concurrency
 
 Config is loaded once, before any goroutine that reads it is started, and is never mutated afterwards. `cmd/walhub` passes `*Config` by value (the struct is read-only by convention) to subsystem constructors. No locks, no atomics, no copy-on-write: the hazard (a subsystem mutating shared config mid-flight) is avoided by construction — nothing in walhub holds a `*Config` it may write to. If a future feature needs hot-reload, it must own its own snapshot (see 13_concurrency.md "immutable snapshot" pattern); it MUST NOT mutate the shared `*Config`.
+
+### 3.7 Setup save semantics (divergence D6)
+
+The setup UI (`/setup`) and its API (`GET /api/v1/setup`, `POST /api/v1/setup/test`, `PUT /api/v1/setup`; endpoint shapes and access rules are 06_server_http.md's job — this doc fixes the file semantics) write the config file:
+
+- **Atomic write.** The setup API serializes the submitted config to TOML (same key names as §2), writes it to `<data-dir>/walhub.toml.tmp`, fsyncs, then `rename`s it over `<data-dir>/walhub.toml`. Readers see either the old or the new file, never a partial one. Permissions `0600` (the file may contain `token_env`-adjacent material; secrets themselves never live in the file — `token_env` names an env var).
+- **Validate before write.** `PUT /api/v1/setup` runs the full §5 validation on the submitted values FIRST; invalid input writes nothing and returns the per-key errors (this is also what `POST /api/v1/setup/test` does without saving). Only an all-green submission is written.
+- **Restart-required keys.** The save response reports, per key, whether it takes effect without a restart. Restart-required (the default — most keys are consumed once at subsystem construction: store backend, WAL, cache, TLS, auth, listen address, …) vs. read-live (picked up on the next tick/emit): `telemetry.log_format`, `telemetry.log_filter`, `maintenance.interval`, `maintenance.follow_interval`, `wal.freshness_ttl`. walhub does NOT hot-reload the shared `*Config` (§3.6); read-live keys are re-read from the effective config at their point of use, which the setup save updates by writing the file and refreshing the in-memory first-run overlay — a restart is still the supported way to be sure.
+- **Interaction with env (file ⊕ env, env wins).** The saved file participates in the ordinary ladder (§3.1): env overrides and PORT lockstep still apply on top of it, and an env override of a key the operator just set in the UI will silently win — the setup UI therefore shows the effective value (post-env) for every key and warns when a submitted value is masked by an active `WALHUB__`/`WALGIT__`/`PORT` override. Setup never writes env vars.
+- **Invalid-config rescue.** When boot landed in setup-only mode (§3.1 step 2), a successful setup save writes a valid file but does NOT swap the running config; the response says `restart_required: true` for every key and the UI tells the operator to restart. (Boot flow: config present → validate → boot if it all works; config missing → defaults + setup banner; config INVALID → setup-only mode.)
 
 ## 4. Per-repo settings (D24)
 
@@ -275,11 +319,11 @@ main_only = false
 $ walhub repo settings set acme/monorepo --file /tmp/settings.toml -m "bundle all heads"
 ```
 
-## 5. Validation rules (fail-closed; exit 2 at boot, exit 1 in `config check`)
+## 5. Validation rules (fail-closed — one warn-only divergence; exit 2 at boot, exit 1 in `config check`)
 
 Each rule is a named function in `internal/config/validate.go`; the list is the contract:
 
-1. **none-mode loopback.** `server.auth.mode = "none"` requires `server.listen` on a loopback address (127.0.0.0/8, `::1`, or `localhost` host). Violation: `auth.mode=none requires a loopback listen`.
+1. **none-mode loopback (DIVERGENCE — warn, not fail).** When `server.auth.mode = "none"` and `server.listen` is NOT on a loopback address (127.0.0.0/8, `::1`, or `localhost` host), startup logs a loud warning — `auth.mode=none on non-loopback listen <addr>; anyone who can reach this port can read and write every repository — set server.auth.mode = "token" (or oidc) and restart` — and continues. The Rust rule (fail-closed, exit 2) is **superseded by divergence**: zero-config first runs bind `0.0.0.0` with auth `none` by design (§2.3), and an operator who sets an explicit file keeps the freedom to do the same, warned. `config check` reports it as a warning, exit 0.
 2. **oidc allowlist.** `mode = "oidc"` requires `server.auth.anonymous_read = false` AND at least one of `allowed_domains` / `allowed_emails` non-empty. `oauth_client_id` and `oauth_client_secret` must be both set or both unset. `session_secret`, when set, MUST be ≥ 32 bytes.
 3. **bundle strategy validation.** For each `[[bundles.strategy]]`:
    - `kind = "incremental"` requires `base` naming an earlier-declared strategy's `name` (unknown or later-declared base → error);
@@ -289,7 +333,7 @@ Each rule is a named function in `internal/config/validate.go`; the list is the 
    - `filter`, when present, is only `"blob:none"` (Rust accepts nothing else);
    - `backfill_max` ≥ 0; `min_commits` ≥ 0; a strategy's `refs` globs compile as `owner`-free git ref globs.
 4. **chain-shared filter (restated).** A filtered chain is all-or-nothing: mixing `filter = "blob:none"` with a filterless strategy in one lineage is the classic footgun and is rejected by name in the error.
-5. **store**: `store.backend ∈ {s3,gcs,memory}`; for s3, `access_key_env`/`secret_key_env` name existing env vars only at use time (not validated at load — the Rust behavior); `multipart_part_size` ≤ `multipart_threshold` when both are non-zero.
+5. **store**: `store.backend ∈ {s3,gcs,memory,filesystem}`; for s3, `access_key_env`/`secret_key_env` name existing env vars only at use time (not validated at load — the Rust behavior); `multipart_part_size` ≤ `multipart_threshold` when both are non-zero; for filesystem, `store.root` (default `<data-dir>/store`, §2.3) must be an absolute path or empty (empty = first-run default).
 6. **sizes/timeouts**: every duration/size key parses (§1); `cache.disk_high_watermark ∈ (0,1)` or 0; negative values nowhere.
 7. **placement globs** compile: each entry is `*`, `owner/*`, or `owner/name` (one `/` at most).
 8. **tls**: `mode ∈ {off,self_signed,files}`; `files` requires cert+key paths; `self_signed` implies nothing else.
@@ -300,13 +344,13 @@ Each rule is a named function in `internal/config/validate.go`; the list is the 
 
 ### 6.1 Global shape, exit codes, version
 
-- Binary: `walhub`. `walhub [--config PATH] <command>`; `--config` may also appear after the subcommand (`walhub serve --config x.toml`) — both positions are accepted, last wins.
-- Config default: **keep the file name `walgit.toml`** (decision, rationale in §8): `--config walgit.toml` is the implied default; env `WALGIT_CONFIG` overrides the default path; explicit `--config` beats the env var. Missing file → exit 2 with `config file not found: <path>`.
+- Binary: `walhub`. `walhub [--config PATH] [--data-dir PATH] <command>`; `--config`/`--data-dir` may also appear after the subcommand (`walhub serve --config x.toml`) — both positions are accepted, last wins.
+- Config default: the implied default path is **`<data-dir>/walhub.toml`** (data dir: §3.1.1), with `<data-dir>/walgit.toml` accepted as an alias name (checked second; §8). `WALHUB_CONFIG` (legacy `WALGIT_CONFIG`) overrides the default path when `--config` is absent; explicit `--config` beats the env var. A missing file is NOT fatal at the default location — it means zero-config first run (§2.3). A missing explicitly-named file (`--config` or the env pointer) IS fatal: exit 2 with `config file not found: <path>`. An explicit path of `/dev/null` forces defaults+env (§3.1).
 - **No subcommand = `serve`** (with the parsed config; identical to `walhub serve`).
 - Exit codes (normative; copy of Rust §16):
   - `0` — success;
   - `1` — command/config error (bad flag value, validation failure surfaced by a command, strategy not found, …);
-  - `2` — missing config file, and argv-level errors (unknown command, malformed `--config` use);
+  - `2` — a missing **explicitly-named** config file (`--config`/`WALHUB_CONFIG`/`WALGIT_CONFIG` — never the absent default file, which is the zero-config first run), and argv-level errors (unknown command, malformed `--config`/`--data-dir` use);
   - `3` — `config check --strict` observed ignored overrides (supervisor pre-start check).
   - Mapping: Go's `flag` package calls `os.Exit(2)` on flag errors by default — the dispatcher overrides `flag.Usage`/error handling per subcommand so every argv error funnels to exit 2 uniformly (see §6.3).
 - Version: from build info, in order: linker-injected `WALHUB_BUILD_SHA` (set via `-ldflags "-X main.buildSHA=$(git rev-parse --short=12 HEAD)"` at build time, from `runtime/debug.ReadBuildInfo()` VCS info when present (Go embeds `vcs.revision` with `-buildvcs=true`, default when building from a git checkout; take first 12 hex chars), else `dev`. `walhub version` prints it; `serve` logs it at startup.
@@ -345,18 +389,18 @@ Implementation notes per group (behavioral truth from Rust spec §16; each comma
 | `import --from GITDIR owner/name [--reuse-packs] [--refs GLOB]…` | classic import: publish refs + packs (reuse source packs or `pack-objects --all`), then immediately a full bitmap'd repack published as the tier-2 base. | 05_wal_engine.md, 04_git.md |
 | `import --direct --from GITDIR owner/name [--packs DIR] [--refs GLOB]… [--bundle=true] [--bundle-strategy S] [--replace] [--force] [--commit-graph=true] [--history-pack=true] [--parallelism 8] [--verify-closure=true]` | bucket-direct import of ready-made packs: verify closure → side files → history pack → striped uploads (HEAD-skip existing, marker-file resumability, `--force` after a moved target) → ref snapshot + checkpoint → manifest CAS (`min_seq = seq+1`; `first_state_at = as_of = now`) → bundle list (supersedes same-strategy + dependents). Re-run on a completed import = no-op. Striped upload parallelism = `--parallelism` goroutines (see 03_store_backends.md §striped). | 05_wal_engine.md, 03_store_backends.md |
 | `mirror --from URL --to URL --dir PATH [--ref NAME]… [--interval 30s] [--once] [--force] [--repack-every 1h] [--identity token\|gcloud\|gce]` | external bridge via a local bare buffer repo: fetch from source, ff-only push to destination; bearer token from `$WALGIT_TOKEN` / gcloud / GCE metadata (cached 50 min); `--once` exits non-zero on push failure; geometric repack of the buffer on `--repack-every`. The interval loop and any child git processes take the command's ctx. | 10_maintenance.md |
-| `config check [--env-file PATH]… [--strict]` / `config dump` | validate file ⊕ env, print ignored overrides to stderr; `--strict` exits 3 when any override was ignored (supervisor pre-start check). `config dump` prints the effective config as TOML (defaults + file + env, post-PORT-lockstep, post-placement-all-or-nothing). `--env-file` loads KEY=VALUE pairs into the override set (does not touch the real environment). | §6.3 |
+| `config check [--env-file PATH]… [--strict]` / `config dump` | validate file ⊕ env, print ignored overrides to stderr; `--strict` exits 3 when any override was ignored (supervisor pre-start check). With NO config file present, `config check` validates the effective defaults (§2.3) ⊕ env — it passes (exit 0) unless an env override breaks a rule; this makes it usable as a pre-flight check on a not-yet-configured host. `config dump` prints the effective config as TOML (defaults ⊕ first-run overrides ⊕ file ⊕ env, post-PORT-lockstep, post-placement-all-or-nothing), reporting `file_state` (present / absent / invalid) so scripts can tell the three boot states apart. `--env-file` loads KEY=VALUE pairs into the override set (does not touch the real environment). | §6.3 |
 
 There are NO `fsck`/`repair` subcommands — those are maintainer units (10_maintenance.md); manual recovery is `walhub wal add-pack --tier 0` + ref-delete pushes.
 
 ### 6.3 Flag parsing and dispatcher mechanics
 
 - Per-subcommand `flag.NewFlagSet` (stdlib), one instance per invocation. The dispatcher:
-  1. peel `--config PATH` (and `--help/-h`) from anywhere in argv before dispatch;
+  1. peel `--config PATH` and `--data-dir PATH` (and `--help/-h`) from anywhere in argv before dispatch;
   2. look up the subcommand (first token; `bundle`/`wal`/`repo`/`import`/`config` consume a second token from a nested table);
   3. run the subcommand's `run(ctx, remainingArgs)`.
 - Errors: a FlagSet parse error or an unknown subcommand prints usage to stderr and exits 2; a runtime error from `run` prints `walhub: <err>` and exits 1. `ctx` is cancelled on SIGTERM/SIGINT — every subcommand's `run` MUST honor it (interval loops, `git` subprocesses, store retries).
-- No hidden flags, no config-in-flags tricks: flags never set config values except `--config` itself (the env/PORT layering in §3 is the only other writer). This keeps `config dump` honest.
+- No hidden flags, no config-in-flags tricks: flags never set config values except `--config` and `--data-dir` themselves (`--data-dir` only relocates the file leg and the first-run root defaults, §3.1.1; the env/PORT layering in §3 is the only other writer). This keeps `config dump` honest.
 - Output formats: table commands (`wal ls`, `repo list`, `repo info`, `bundle plan`) print human tables to stdout; every command accepts `--json` (added for walhub; not in the Rust CLI) emitting one JSON object per line (JSONL), keys stable and snake_case, for scripting. When a Rust command had a documented exact output shape (e.g. `wal ls` columns), the human table keeps those columns in that order.
 
 ### 6.4 Concurrency
@@ -390,12 +434,23 @@ $ walhub wal add-pack acme/monorepo /tmp/pack-ab12.pack --tier 0
 # synth a test repo
 $ walhub synth --out /tmp/big --size l --seed 7
 ```
+```console
+# zero-config first run: no file anywhere, boots on §2.3 defaults with setup banner
+$ walhub serve
+# → server.listen = "0.0.0.0:8080", store.backend = "filesystem" (<data-dir>/store),
+#   server.auth.mode = "none" (warning logged), server.auto_create_on_push = true
+```
 
 ## 7. Worked end-to-end example
 
 ```console
+# 0. zero-config first run (no --config, no <data-dir>/walhub.toml): §2.3 defaults + env
+$ walhub config dump
+# → listen = "0.0.0.0:8080", store = filesystem @ ~/.local/share/walhub/store,
+#   cache.dir = <data-dir>/cache, auth.mode = "none" (warned), auto_create_on_push = true
+# → file_state = "absent"
+
 # 1. defaults + file + env
-$ cat /etc/walhub/walgit.toml
 [server]
 listen = "127.0.0.1:8080"
 public_url = "http://127.0.0.1:8080"
@@ -427,11 +482,19 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
 
 ## 8. Decisions & deviations from the Rust design
 
-- **Env prefix stays `WALGIT__`** (not `WALHUB__`): deployment scripts, systemd units, and secret manifests written for walgit keep working; both binaries can coexist in one fleet. Documented as the compat decision, not an accident.
-- **Config file name stays `walgit.toml`** (default value of `--config` and of `WALGIT_CONFIG`): same rationale; the README's compatibility contract already promises "`walgit.toml` remains a valid config file name".
+- **Env prefix: `WALHUB__` is primary, `WALGIT__` accepted as a legacy alias** (supersedes the earlier "stays `WALGIT__`" decision): new deployments and docs use `WALHUB__`; scripts, systemd units, and secret manifests written for walgit keep working via the alias, and `WALHUB_` wins when both define the same key (§3.2). Compat preserved, naming future-proofed.
+- **Config file name/location (superseded in part):** the earlier decision kept `walgit.toml` as the implied default file name. The divergence moves the default location under the data dir — `<data-dir>/walhub.toml` is the default path, `<data-dir>/walgit.toml` is accepted as an alias (checked second, §3.1, §6.1) — so the README's "`walgit.toml` remains a valid config file name" promise still holds for the alias, while first-run and setup-UI files are written as `walhub.toml`.
 - **`--json` flag added to table-output commands** (JSONL, stable snake_case keys): Rust's human tables are unscriptable; JSONL costs ~20 lines and no dependency.
 - **`gix` as `git.upload_pack_engine` value accepted but treated as `git`**: the Rust gix engine has no Go equivalent and none is wanted (dependency law); file compatibility is preserved.
 - **`walgit-server` binary alias not shipped**: `walhub serve` is the entrypoint; units referencing `walgit-server` are a packaging concern (16_packaging.md MAY add an alias later).
 - **Version env var is `WALHUB_BUILD_SHA`** (Rust used `WALGIT_BUILD_SHA`): it is build-time, not deployment-facing, so no compat value; VCS build info from the Go toolchain is the primary source anyway.
 - **`RUST_LOG` honored (kept) as an override of `telemetry.log_filter`**, and `WALHUB_LOG` accepted as the new-style spelling: zero-cost compat for existing log-tuning scripts.
 - **Unknown-key env overrides are soft (ignored + reported) rather than fatal**: matches Rust behavior and keeps a stale variable from taking down a fleet; `--strict` makes them fatal for supervisors.
+
+### Divergence (2026-08-31)
+
+- **D5 — Config is optional; zero-config first run.** The Rust spec boots fail-closed with no config file ("run `walgit init` first"); walhub boots on the first-run defaults of §2.3 instead: `listen = "0.0.0.0:8080"`, `store.backend = "filesystem"` rooted at `<data-dir>/store`, `auth.mode = "none"` (warned), `auto_create_on_push = true`, everything else per the Rust defaults. User friendliness is a first-class law. A missing file at the DEFAULT location is a first run, not an error; a missing explicitly-named file (`--config`/config-env pointer) remains fatal (exit 2), and `/dev/null` still forces defaults+env (§3.1). Data dir (`--data-dir` / `WALHUB_DATA_DIR`, default `~/.local/share/walhub`, `/var/lib/walhub` in containers) owns `store/`, `cache/`, and the saved `walhub.toml` (§3.1.1).
+- **D6 — Setup UI + API save semantics (§3.7).** The setup UI writes `<data-dir>/walhub.toml` atomically (tmp + fsync + rename, mode `0600`) after full §5 validation; the save response reports restart-required vs read-live keys; the saved file joins the ordinary ladder so env ⊕ file still holds with env winning. Boot states: config present → validate → boot; absent → defaults + setup banner; INVALID → setup-only mode (only `/setup`, `/healthz`, `/readyz` answer; rest 503) until a fixed config is saved and the process restarted. Endpoint shapes and the setup access rule live in 06_server_http.md.
+- **Auth-none loopback rule superseded.** Rust validation rule 1 (auth `none` requires a loopback listen, fail-closed) is replaced by a loud warning on any bind (§5 rule 1); the first-run default `0.0.0.0:8080` + `auth = "none"` depends on it. All other validation stays fail-closed.
+- **D4 — `filesystem` added to `store.backend`** (`s3|gcs|memory|filesystem`, §2 note † and §5 rule 5): keys map to paths under `store.root`, first-run default `<data-dir>/store`. 03_store_backends.md owns the backend semantics; this doc owns the key, its validation, and the default.
+- **D1 — dependency budget** (restated where it touches this doc): exactly `github.com/go-chi/chi/v5`, `github.com/BurntSushi/toml`, `golang.org/x/net`. TOML stays the config file format and BurntSushi/toml stays the parser — no format migration was entertained.
