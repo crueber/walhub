@@ -26,7 +26,7 @@ An operator MUST be able to build, containerize, deploy (one box or a fleet), an
 
   import "embed"
 
-  //go:embed .
+  //go:embed index.html all:dist all:sdk all:src all:css
   var Files embed.FS
   ```
 - `internal/server` serves `web.Files` through `http.FileServerFS`; the browser loads hand-written ES modules straight off it (`index.html`, native import map, `<template>`, ~40 lines of reactive helpers). The SDK is **authored as submodules** (`web/sdk/src/*.js`, 12_web_ui.md §1.0) and bundled by esbuild into `web/dist/repos.js`, served at its contract path (see 06_server_http.md / 07_api.md) — the `repos.mjs` twin is gone (D2); `make build` depends on `make web`.

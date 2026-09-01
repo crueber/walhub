@@ -1,0 +1,17 @@
+# build output
+/walhub
+/walhub-server
+/bin/
+*.test
+*.out
+.cover/
+
+# web
+web/dist/*
+!web/dist/.keep
+web/node_modules/
+
+# runtime data
+/data/
+*.json.tmp
+walgit-state.json
