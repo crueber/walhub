@@ -265,9 +265,9 @@ Mandatory for every PR that touches shared state:
 
 The frontend is vanilla standard ECMAScript (12_web_ui.md): no TypeScript, no framework, no bundler, zero npm dependencies — so its tests need none either. Runner: Node's built-in `node --test` (Node ≥ 20), invoked by `make test-web`, wired into `make test` and `ci`. `web/package.json` is a dev-only manifest (`{"type": "module"}`, no `dependencies`) purely so Node loads the ESM sources directly.
 
-- **Logic/DOM split, normative.** Every testable module — the API client in the single `web/sdk/repos.js` (plain ESM; the old `.mjs` twin and the esbuild build are gone), the SSE parser, the diff parser, markdown-lite, the ~40-line reactive helpers, the setup-form logic — is a pure ES module with zero DOM access; DOM glue lives in entry modules that import them. This is what makes the tier headless: tests import by relative path (import maps are a browser-only mechanism and never appear in test imports).
+- **Logic/DOM split, normative.** Every testable module — the SDK client groups in `web/sdk/src/*.js` (plain ESM submodules; the shipped `dist/repos.js` is the esbuild bundle of them, §1.0 of 12_web_ui.md), the SSE parser, the diff parser, markdown-lite, the ~40-line reactive helpers, the setup-form logic — is a pure ES module with zero DOM access; DOM glue lives in entry modules that import them. This is what makes the tier headless: tests import by relative path (import maps are a browser-only mechanism and never appear in test imports).
 - **`web/test/*.test.js`** — unit cases with `node:assert` in the Go tier's style: repos.js request shaping and error mapping, SSE event framing, diff parsing, markdown-lite, reactive-helper subscriptions, setup-form validation against the `/api/v1/setup` schema. Same assertion discipline: `if (got !== want) throw`.
-- **`web/test/smoke.test.js`** — fetch-based server smoke against `WALHUB_TEST_WEB_BASE_URL` (default `http://127.0.0.1:8080`): `/` serves the app, `/setup` serves, `/api/v1/setup` returns the schema JSON, one SDK call round-trips. Server absent → the smoke cases skip, so `make test` still passes on a cold machine; CI always has a server up for them. There is no build step to test — **the shipped file is the tested file**; Vite/solid-js/marked/esbuild are deleted from the repo, not just bypassed here.
+- **`web/test/smoke.test.js`** — fetch-based server smoke against `WALHUB_TEST_WEB_BASE_URL` (default `http://127.0.0.1:8080`): `/` serves the app, `/setup` serves, `/api/v1/setup` returns the schema JSON, one SDK call round-trips, and — when `web/dist/repos.js` exists (always in CI and after `make web`) — the BUNDLE imports and its exports match `sdk/src/index.js`. Server absent → the smoke cases skip, so `make test` still passes on a cold machine; CI always has a server up for them. Unit tests import the SOURCE modules directly, so testing needs no build; `make web` produces only the shipped artifact.
 
 ---
 
@@ -279,7 +279,10 @@ All dev/CI entry points are Make targets (Divergence D3); there is no justfile, 
 T5  := $(shell command -v timeout >/dev/null 2>&1 && echo "timeout 300" || command -v gtimeout >/dev/null 2>&1 && echo "gtimeout 300")
 T15 := $(shell command -v timeout >/dev/null 2>&1 && echo "timeout 900" || command -v gtimeout >/dev/null 2>&1 && echo "gtimeout 900")
 
-build: ## compile everything
+web: ## bundle the SDK from submodules: esbuild sdk/src/index.js → dist/repos.js (12_web_ui.md §1.0)
+	pnpm --dir web run build:sdk
+
+build: web ## compile everything (the SDK bundle is a build dependency)
 	go build ./...
 
 fmt: ## format Go sources
@@ -291,7 +294,7 @@ vet: ## the Go "-D warnings" gate: gofmt clean, go vet, go build
 test: test-go test-web ## fast tier = Go fast tests + web tests
 test-go: ## fast Go tier: hermetic, < 1 min, watchdog-wrapped
 	$(T5) go test -short -count=1 ./...
-test-web: ## headless JS logic tests + fetch smoke (§6.5); zero npm deps
+test-web: ## headless JS logic tests + fetch smoke (§6.5); tests import source, no build needed
 	node --test web/test/
 race: ## full fast tier under the race detector
 	$(T15) go test -race -short -count=1 ./...
@@ -383,5 +386,5 @@ The rewrite copies CODE behavior (§20); each of these gets an explicit assertio
 - **D3 — Make replaces just.** Every dev/CI entry point is a Make target (§7: `build`, `fmt`, `vet`, `test`, `race`, `cover`, `test-slow`, `sim`, `contract`, `contract-fs`, `contract-s3`, `contract-gcs`, `e2e`, `image`, `dev`, `dev-store`, `dev-store-stop`, `clean`, `ci`); the justfile is deleted. The old `lint` target is renamed `vet` (supersedes the `just lint` wording above; commands unchanged), and `just dev-local` becomes `make dev`. Rationale: make is ubiquitous — no extra tool to install for a first contribution — and the watchdog/watch-what-you-run semantics port one-to-one.
 - **D7 — Coverage gate.** `make cover` enforces **≥ 95% statement coverage on every `internal/...` package** (`cmd/` excluded), via per-package `-coverprofile` + the `covergate` checker (§7.1), CI-gated. Review bar is near 100%: new code lands with tests — table-driven `httptest` for every handler. This is new (the Rust spec had no coverage gate); it does not supersede any prior decision.
 - **D4 — Filesystem store joins the contract suite as an always-run backend.** `TestContract_Filesystem` runs wherever `TestContract_Memory` runs, no env needed; S3 and GCS stay env-gated (`WALHUB_TEST_S3_ENDPOINT`, `WALHUB_TEST_GCS_BUCKET`) and CI exercises S3 via the rustfs container. Supplements (does not supersede) the `TestContract_LeaseSteal` decision — the suite's "one suite, every backend" rule now has four backends, two of them unconditional.
-- **D2 — Web/JS tests without a toolchain.** The JS tier is `node --test` over headless pure-ESM logic modules plus fetch-based smoke tests (§6.5), wired into `make test` and `ci`; zero npm dependencies, no bundler, single `web/sdk/repos.js`. New tier; no prior decision affected.
+- **D2 — Web/JS tests without a toolchain (amended).** The JS tier is `node --test` over headless pure-ESM logic modules plus fetch-based smoke tests (§6.5), wired into `make test` and `ci`; tests import source (`sdk/src/*.js`) and need no build — the only build (`make web`, esbuild) produces the shipped `dist/repos.js`. Amended when the user directed a build step for the modular SDK (2026-08-31, second pass).
 - **D5/D6 — Bootstrap and setup lifecycle is e2e-tested.** Four scenarios (§5.3: no-config defaults boot; invalid-config setup-only 503s; setup save → restart → normal; setup API auth matrix incl. `WALHUB_SETUP_TOKEN`) run in `make e2e` and CI. New; no prior decision affected.

@@ -2,26 +2,61 @@
 
 > Source: MASTER_RUST_SPEC.md §10 (web UI + SDK), §8.8/§8.9 (auth flows and setup recipes consumed by the UI), §9 (wire contract) · Status: normative for the walhub Go implementation.
 
-The UI is two artifacts in `web/`, served directly by the same Go binary — **no build step, no TypeScript, no framework, no bundler, zero npm dependencies**:
+The UI is two artifacts in `web/`, served directly by the same Go binary — **standard ECMAScript, no TypeScript, no framework, zero runtime npm dependencies**. One dev-time exception: the SDK is bundled from submodules by esbuild (§1.0) — the SPA itself has no build step:
 
 | Artifact | Path | Language | Dependencies |
 |---|---|---|---|
-| SDK | `web/sdk/repos.js` | plain ES module, dependency-free | none |
+| SDK | source `web/sdk/src/*.js` → bundle `web/dist/repos.js` | plain ES modules, dependency-free | dev: esbuild only |
 | SPA | `web/src/**`, `web/index.html` | standard ECMAScript (ES modules) | none |
 
 Files are modules: the browser loads them as-is via native `<script type="module">` and an **import map** in `index.html`. Everything — reactive helpers, SSE envelope parsing, diff parsing, markdown-lite, highlighting, progress bar, error tray, ref picker, router — is hand-rolled per the dependency budget (`01_overview.md`, law 1). The SDK is the only way the SPA talks to the server (dogfood rule, §10.2).
 
 ```html
 <!-- web/index.html (excerpt): import map + entry. -->
-<script type="importmap">{"imports":{"repos":"/repos.js","ui/":"/_ui/src/","lib/":"/_ui/src/lib/"}}</script>
+<script type="importmap">{"imports":{"repos":"/_ui/sdk/src/index.js","ui/":"/_ui/src/","lib/":"/_ui/src/lib/"}}</script>
 <script type="module" src="/_ui/src/main.js"></script>
 ```
 
 Routing is hand-rolled (~60 lines): a `route(pattern)` matcher against `location.pathname` plus a `navigate(path)` that calls `history.pushState` and re-runs the active page's `mount`/`unmount`. Route inventory and lazy loading behavior are UNCHANGED from §2.3; "lazy-loaded" pages are dynamic `import()` of the page module (native, no bundler needed).
 
-## 1. Artifact A — the SDK (`web/sdk/repos.js`)
+## 1. Artifact A — the SDK (`web/sdk/`)
 
-The SDK is a **wire client**, not an app: one plain ES module with zero imports, no framework, no router, no build. It is served at `/repos.js` as-is and imported by the SPA through the import map (`import ReposClient from "repos"`). There is no IIFE/global build and no `.mjs` twin — pre-1.0, no-compat: ES modules are the only distribution.
+The SDK is a **wire client**, not an app: plain ES modules, zero runtime imports, no framework, no router.
+It is **authored as submodules** under `web/sdk/src/` (user decision — never one huge file) and a dev-time
+esbuild step bundles the entry module into the single distribution artifact `web/dist/repos.js`, served at
+`/repos.js` (one stable URL, one request for external consumers). The SPA does NOT import the bundle: the
+import map maps `"repos"` to the SOURCE entry (`/_ui/sdk/src/index.js`), so the app and the bundle share
+one source of truth and dev edits need no rebuild. No IIFE/global build and no `.mjs` twin — pre-1.0,
+no-compat: ES modules are the only distribution.
+
+### 1.0 Source layout and the build (normative)
+
+```
+web/sdk/src/
+├── index.js      entry: re-exports the public surface, creates the default client (window.repos only if unset)
+├── core.js       ReposClient: options/base-URL resolution, lane selection (§1.2), fetch wrapper
+│                 (credentials/redirect/manual rules), 401→popup single-flight retry
+├── errors.js     ReposError (+ notFound/unauthorized getters)
+├── sse.js        envelope + frame parser, readSse (also imported by the SPA's data layer — one parser)
+├── auth.js       popup flow: openAuthPopup, postMessage wait, probe
+├── repo.js       the repo client group: refs/tree/blob/raw/commits/commit/resolve/overview
+├── admin.js      create/delete, tasks, ops, policy, settings groups
+└── types.js      JSDoc @typedef blocks (§1.1) — editor IntelliSense only, no runtime
+```
+
+Build (the ONE dev-time tool step; `esbuild` is the single devDependency — runtime budget stays zero):
+
+```sh
+cd web && pnpm install --frozen-lockfile     # devDependencies only: esbuild
+pnpm run build:sdk                            # esbuild sdk/src/index.js --bundle --format=esm \
+                                              #   --target=es2022 --minify --outfile=dist/repos.js
+```
+
+Rules: the bundle is a build ARTIFACT (`web/dist/` is gitignored; a placeholder `web/dist/.keep` is
+committed so `go:embed` always resolves); `make web` runs it and `make build` depends on `make web`;
+tests import the SOURCE modules directly (§5) and need no build; CI runs the bundle smoke test only when
+`dist/repos.js` exists. No hashing/immutable scheme for the bundle — `/repos.js` stays `no-cache` + strong
+ETag so a redeploy is picked up on the next fetch.
 
 ### 1.1 Public surface
 
@@ -131,9 +166,9 @@ export function createRoot(fn)          // scoped root: fn(dispose); teardown on
 
 **Templates:** static structure lives in `<template>` elements inside `index.html` / page modules, cloned with `template.content.cloneNode(true)` and wired with a tiny `bind(el, map)` helper (query by `data-*` attribute, attach). Pages stay plain functions: `mount(container, params) → unmount()`.
 
-### 2.2 npm dependency budget (DECIDED — exactly zero)
+### 2.2 npm dependency budget (DECIDED — zero runtime, one dev tool)
 
-No `package.json` runtime dependencies, no dev dependencies, no lockfile under `web/`. Everything previous packages provided is now hand-rolled or native:
+Zero **runtime** `package.json` dependencies. Exactly one devDependency: `esbuild` (the §1.0 SDK bundle); no framework packages, no lockfile-heavy toolchain under `web/`. Everything previous packages provided is now hand-rolled or native:
 
 - **Markdown: hand-rolled markdown-lite (~150 lines).** Covers the preview surface: headings, paragraphs, fenced code blocks, inline code, bold/italic, links + autolinks, GFM tables, blockquotes, lists (nested one level), `hr`, images. No plugins, no AST — a line-based emitter feeding the sanitizer below. Preview fidelity is preview-level (prior decision preserved); the code view shows exact text.
 - **Diff: hand-rolled minimal unified-diff parser in JS (~120 lines).** Unchanged from the previous decision: the server sends a single well-formed `git diff` patch (spec §9.5), so a tiny parser with an explicit grammar (§2.8) is smaller than any library.
@@ -232,11 +267,11 @@ First-class page backed by the Setup API (specified in `05_config.md`): `GET /ap
 
 ## 3. Serving from the Go binary (embedding contract, byte-compatible)
 
-The SPA is **raw files in `web/`**, embedded directly — no `dist`, no build output:
+The SPA is **raw files in `web/`**, embedded directly. The SDK bundle is the one build output, embedded alongside:
 
 ```go
 //go:embed all:web
-var web embed.FS            // index.html, sdk/repos.js, src/**, css — served as-is; placeholder works on fresh checkouts with no toolchain
+var web embed.FS            // index.html, dist/repos.js, sdk/src/**, src/**, css — dist/.keep is committed so the embed resolves on fresh checkouts with no toolchain
 ```
 
 | Path | Cache behavior |
@@ -247,24 +282,28 @@ var web embed.FS            // index.html, sdk/repos.js, src/**, css — served 
 
 Compression: `gzip` via server middleware for text assets (`text/*`, `application/javascript`, `application/json`, `text/css`) when `Accept-Encoding` contains `gzip` and the body is ≥ 1 KiB — on-the-fly `gzip.Writer` with level 6, `Vary: Accept-Encoding` set, no brotli, no precompressed sibling files (the zero-build rule means nothing generates them). Serving details, route registration under `internal/server`, and the `X-Walgit-Capabilities` edge contract are specified in `06_server_http.md`; the API endpoints themselves in `07_api.md`.
 
-## 4. Repository layout (no build pipeline)
+## 4. Repository layout
 
 ```
 web/
 ├── index.html          ← SPA entry: import map, <template>s, css <link>s
-├── sdk/repos.js        ← artifact A (plain ESM, zero imports)
+├── sdk/src/            ← artifact A source, SUBMODULES (§1.0): index/core/errors/sse/auth/repo/admin/types
+├── dist/               ← build output: repos.js (gitignored except .keep placeholder)
+├── package.json        ← devDependencies: esbuild. scripts: build:sdk
 ├── src/                ← artifact B: main.js router, pages/*.js, lib/{data,reactive,sse,diff,markdown,sanitize,highlight,setup}.js
 ├── css/*.css           ← plain CSS, linked from index.html
 └── test/               ← node --test suites (§5): unit/*.test.js, smoke/*.test.js, helpers/server.js
 ```
 
-There is **no build step**: no `npm install`, no bundler, no TypeScript, no `package.json` scripts required to serve or build the UI. The Go binary embeds `web/` raw. `make ui` is a no-op placeholder kept for target-name stability (`16_packaging.md` owns final wiring).
+The SPA has **no build step** (raw modules in, raw modules served). The SDK has exactly one: esbuild from
+`sdk/src/index.js` to `dist/repos.js` (§1.0); `make web` runs it, `make build` depends on it
+(`16_packaging.md` owns the wiring).
 
 ## 5. Testing the JS (`node --test`, zero npm test deps)
 
 Runner: Node's built-in test runner — `node --test web/test/unit/ web/test/smoke/`. No jest, no vitest, no dependencies. Logic and DOM are **separated by rule**: every module in `web/src/lib/` except `data.js`'s DOM-adjacent bits must be importable in Node with no `document`/`window` access; DOM wiring lives in `web/src/pages/` and `main.js`.
 
-**Pure (headless-testable) modules:** `sdk/repos.js` (api client, injectable `fetch` + `EventTarget`-free stream shim), `lib/sse.js` (envelope/frame parser), `lib/diff.js`, `lib/markdown.js`, `lib/sanitize.js`, `lib/reactive.js`, `lib/setup.js` (setup form validation rules, mirroring the server), `lib/highlight.js`.
+**Pure (headless-testable) modules:** `sdk/src/*.js` (api client groups, injectable `fetch` + stream shim, envelope parser), `lib/sse.js` (frame parser, one parser shared with `sdk/src/sse.js`), `lib/diff.js`, `lib/markdown.js`, `lib/sanitize.js`, `lib/reactive.js`, `lib/setup.js` (setup form validation rules, mirroring the server), `lib/highlight.js`.
 **DOM-wiring modules (not unit-tested):** `pages/*.js`, `main.js`, the router glue, anything touching `document`/`template`/`location` — exercised by smoke tests instead.
 
 ```js
@@ -286,7 +325,7 @@ test("effect reruns on signal change", () => {
 // web/test/unit/sdk-envelope.test.js (skeleton)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ReposClient } from "../../sdk/repos.js";
+import { ReposClient } from "../../sdk/src/index.js";
 
 test("SSE envelope → result payload", async () => {
   const fakeFetch = async () => new Response(
@@ -340,9 +379,9 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
 ## Decisions & deviations from the Rust design
 
 - **SPA framework: vanilla standard ECMAScript replaces SolidJS** (D2, explicit user decision — itself a supersession of the earlier SolidJS-over-React decision; wire contract untouched — the SDK defines the wire, the framework does not). Native ES modules + import map, `<template>` + a ~40-line hand-rolled reactive core (§2.1), hand-rolled router. No state library, no JSX, no VDOM.
-- **Superseded — dependency set `solid-js`, `@solidjs/router`, `marked` (+ dev: `vite`, `vite-plugin-solid`, `typescript`)**: the npm budget is now **zero** (runtime and dev). `solid-js`/`@solidjs/router` are replaced by the §2.1 reactive core + hand-rolled router; `marked` by hand-rolled markdown-lite (§2.1) with unchanged preview-fidelity stance and the same allowlist sanitizer.
-- **Superseded — SDK built with esbuild, SPA with vite + solid plugin**: there is no build. The SDK is one plain-ESM `web/sdk/repos.js` (no IIFE build, no `.mjs` twin, pre-1.0 no-compat); the SPA is raw modules served from `web/`.
-- **Superseded — `tsc --noEmit` as required gate; pnpm/npm/bun script chain**: no TypeScript anywhere; no package manager in the UI path. Gates are `make test-web` (§5) and CI greps (dogfood rule, no-TS rule).
+- **Superseded — dependency set `solid-js`, `@solidjs/router`, `marked` (+ dev: `vite`, `vite-plugin-solid`, `typescript`)**: the npm budget is now **zero runtime dependencies; exactly one devDependency (`esbuild`, §1.0)**. `solid-js`/`@solidjs/router` are replaced by the §2.1 reactive core + hand-rolled router; `marked` by hand-rolled markdown-lite (§2.1) with unchanged preview-fidelity stance and the same allowlist sanitizer.
+- **Superseded (again) — "there is no build"**: a build step returns, scoped tightly (user decision): the SDK is authored as submodules and bundled by **esbuild** (the single devDependency) into `web/dist/repos.js`; the SPA remains unbuilt raw ES modules; runtime npm budget stays zero.
+- **Superseded — `tsc --noEmit` as required gate; vite/pnpm script chain**: no TypeScript anywhere; the only UI-path tooling is the §1.0 esbuild bundle via `make web`. Gates are `make test-web` (§5) and CI greps (dogfood rule, no-TS rule).
 - **Superseded — vite chunk-hash immutable `/assets` scheme with br+gz precompressed siblings**: modules are served raw with `no-cache` + strong ETag; compression is on-the-fly gzip middleware (§3). The behavioral contract (fresh content on deploy, cheap revalidation, compressed text assets) is preserved.
 - **Hand-rolled unified-diff parser instead of a diff package** — unchanged: the server emits one well-formed `git diff` shape; a ~120-line parser with the §2.8 grammar beats any library on size and control.
 - **No shiki: hand-rolled mini tokenizer for code blobs** — unchanged: tinted code is an acceptable trade.

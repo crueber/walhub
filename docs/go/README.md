@@ -15,9 +15,10 @@ order that matches your work.
 1. **Minimal dependencies.** The backend allows exactly three third-party modules: `github.com/go-chi/chi/v5`
    (the router — core only, all middleware hand-rolled), `github.com/BurntSushi/toml` (config), and
    `golang.org/x/net` (h2c). Everything else is stdlib or hand-rolled (SigV4, GCS JSON API, protobuf wire
-   codec, JWKS, SSE, Prometheus exposition, LRU, singleflight). The frontend budget: **zero** npm
-   dependencies — vanilla ES modules, no TypeScript, no framework, no build step. If a design reaches for
-   another dependency, it is a spec bug.
+   codec, JWKS, SSE, Prometheus exposition, LRU, singleflight). The frontend budget: **zero** npm runtime
+   dependencies — vanilla ES modules, no TypeScript, no framework; the single dev-time tool is esbuild,
+   bundling the modular SDK sources into the shipped `repos.js` (the SPA is unbuilt). If a design reaches
+   for another dependency, it is a spec bug.
 2. **Goroutines for performance, zero deadlocks.** I/O parallelism everywhere (striped uploads, batch
    workers, SSE fan-out, sweeps); every concurrency recommendation carries a `### Concurrency` subsection
    naming the hazard and the avoidance. [`13_concurrency.md`](13_concurrency.md) is the canonical playbook —

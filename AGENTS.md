@@ -14,12 +14,14 @@ asked to implement, review, or extend walhub, this file tells you how to work. R
 ## 1. The laws (violating any of these is a rejected change)
 
 1. **Dependency budget is law.** Backend third-party modules: `github.com/go-chi/chi/v5` (the router),
-   `github.com/BurntSushi/toml` (config), `golang.org/x/net` (h2c). Frontend: **zero** npm dependencies —
-   the UI and SDK are vanilla standard ECMAScript modules (no TypeScript, no framework, no bundler, no
-   build step). Anything else needs a written amendment in the relevant doc's "Decisions & deviations"
-   section BEFORE the code lands. Hand-roll instead: S3 SigV4, GCS JSON API, protobuf wire codec,
-   JWKS/JWT verification, SSE, Prometheus text exposition, LRU caches, singleflight, CLI dispatch, CORS
-   and all other middleware (chi core only — no chi/cors, no chi/middleware packages).
+   `github.com/BurntSushi/toml` (config), `golang.org/x/net` (h2c). Frontend: **zero** npm runtime
+   dependencies — the UI and SDK are vanilla standard ECMAScript modules (no TypeScript, no framework).
+   The ONE dev-time tool exception: `esbuild` (devDependency) bundles the modular SDK sources
+   (`web/sdk/src/*.js`) into the shipped `web/dist/repos.js` — the SPA itself has no build step. Anything
+   else needs a written amendment in the relevant doc's "Decisions & deviations" section BEFORE the code
+   lands. Hand-roll instead: S3 SigV4, GCS JSON API, protobuf wire codec, JWKS/JWT verification, SSE,
+   Prometheus text exposition, LRU caches, singleflight, CLI dispatch, CORS and all other middleware
+   (chi core only — no chi/cors, no chi/middleware packages).
 2. **git is a subprocess, always.** Every git operation shells out to the `git` binary with the exact argv
    specified in `docs/go/04_git.md`. Never link a Go git library. Never deviate from the specified argv
    without updating the doc in the same change.

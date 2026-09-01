@@ -18,7 +18,7 @@ An operator MUST be able to build, containerize, deploy (one box or a fleet), an
 - Exit codes stay 0/1/2/3 (§16): 0 ok, 1 command/config error, 2 bad argv (a missing config file no longer exits — D5 boots on built-in defaults), 3 `config check --strict` with ignored overrides.
 - git is ALWAYS the subprocess `git` binary with exact argv (never go-git or any VCS library). On startup `serve` MUST run `git version`, parse it, and exit 1 with a clear message if it is < 2.47 (server-side needs: `pack.writeReverseIndex`, `--rev-index`, bundle-uri). The `git.binary` config key (unchanged name) selects the executable.
 
-### 1.2 Embedded web assets (`go:embed`, zero build)
+### 1.2 Embedded web assets (`go:embed`; one build: the SDK bundle)
 
 - File `web/embed.go`:
   ```go
@@ -29,8 +29,8 @@ An operator MUST be able to build, containerize, deploy (one box or a fleet), an
   //go:embed .
   var Files embed.FS
   ```
-- `internal/server` serves `web.Files` through `http.FileServerFS`; the browser loads hand-written ES modules straight off it (`index.html`, native import map, `<template>`, ~40 lines of reactive helpers). The SDK is ONE plain-ESM file, `web/sdk/repos.js`, served at its contract path (see 06_server_http.md / 07_api.md) — the `repos.mjs` twin and the esbuild-built `dist/` are gone (D2).
-- There is NO web build step: no TypeScript, no framework, no bundler, no node stage anywhere in the build. `node --test web/_tests/` runs the headless JS tests (§7.2/§8) but never feeds the build. The plain (non-`all:`) embed pattern excludes `.`/`_`-prefixed entries, so `web/_tests/` and dotfiles stay out of the binary while remaining on disk for tests.
+- `internal/server` serves `web.Files` through `http.FileServerFS`; the browser loads hand-written ES modules straight off it (`index.html`, native import map, `<template>`, ~40 lines of reactive helpers). The SDK is **authored as submodules** (`web/sdk/src/*.js`, 12_web_ui.md §1.0) and bundled by esbuild into `web/dist/repos.js`, served at its contract path (see 06_server_http.md / 07_api.md) — the `repos.mjs` twin is gone (D2); `make build` depends on `make web`.
+- The SPA has NO build step (no TypeScript, no framework); the SDK bundle is the ONLY build output. `node --test web/test/` runs the headless JS tests (§7.2/§8) but never feeds the build. The plain (non-`all:`) embed pattern excludes `.`/`_`-prefixed entries, so `web/test/` and dotfiles stay out of the binary while remaining on disk for tests.
 
 ### 1.3 Version identity
 
@@ -46,14 +46,23 @@ Exactly ONE external binary at runtime: `git` (≥ 2.47 server-side, ≥ 2.46 fo
 
 ## 2. Container image
 
-Two-stage `Containerfile` at the repo root: Go builds the static binary (`web/` embedded RAW — no node stage, no build step) → alpine runtime with git. (Rust used debian-slim + tini; see deviations.)
+Three-stage `Containerfile` at the repo root: node runs the one web build (esbuild SDK bundle) → Go builds the static binary → alpine runtime with git. (Rust used debian-slim + tini; see deviations.)
 
 ```dockerfile
 # Containerfile — one binary in front of a store. Zero config by default: filesystem store in the data dir.
 #   podman build -t walhub -f Containerfile .
 #   podman run --rm -p 8080:8080 walhub     # → open http://host:8080/setup
 
-# ---- 1. Go build (static, no cgo; web/ is embedded RAW — no node stage, no build step) ----
+# ---- 1. Web: the ONE build step — esbuild bundles web/sdk/src → dist/repos.js ----
+FROM docker.io/library/node:22-alpine AS web
+RUN corepack enable && corepack prepare pnpm@10 --activate
+WORKDIR /src/web
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+RUN pnpm run build:sdk && test -f dist/repos.js
+
+# ---- 2. Go build (static, no cgo; embeds the built dist/ + raw src/) ----
 FROM docker.io/library/golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -327,7 +336,7 @@ SHA     ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo dev)
 GO      := CGO_ENABLED=0 go
 LDFLAGS := -s -w -X main.buildSHA=$(SHA)
 
-build:                          ## static binary; web/ embedded RAW — no build step
+build: web                      ## static binary; web/ embedded (dist/repos.js built by `make web`)
 	$(GO) build -trimpath -buildvcs=stamp -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/walhub
 
 vet:
@@ -342,7 +351,7 @@ test:                           ## fast tier; -race needs cgo, so CGO stays on h
 race: test                      ## alias, named for the flag
 
 js-test:                        ## headless JS logic tests — Node's own runner, zero npm deps
-	node --test web/_tests/
+	node --test web/test/
 
 e2e:                            ## smart-HTTP end-to-end against the real git binary
 	CGO_ENABLED=1 go test -race -tags e2e ./internal/server/... -run TestE2E
@@ -384,7 +393,7 @@ ci: vet test js-test cover e2e contract   ## what CI runs; image build happens i
 
 ## 8. CI pipeline
 
-The repo lives on Forgejo; CI is Woodpecker-shaped (no GitHub Actions). Pipeline = vet → test `-race` → js-test (`node --test`, zero npm deps) → cover gate (D7) → e2e → store contract (filesystem + memory ALWAYS per D4; rustfs service for the optional S3 job) → image build. There is NO web build step — `web/` ships raw (D2), so node is needed only for the JS tests.
+The repo lives on Forgejo; CI is Woodpecker-shaped (no GitHub Actions). Pipeline = vet → web (SDK bundle) → test `-race` → js-test (`node --test`) → cover gate (D7) → e2e → store contract (filesystem + memory ALWAYS per D4; rustfs service for the optional S3 job) → image build. The only web build is the SDK bundle (`make web`); JS tests import source and need no build.
 
 ```yaml
 # .woodpecker/pipeline.yaml
@@ -393,7 +402,7 @@ when: { event: [push, pull_request] }
 steps:
   vet:   { image: golang:1.25, commands: [make vet]  }
   test:  { image: golang:1.25, commands: [make test] }   # golang image ships git + gcc (-race)
-  js-test: { image: node:22-alpine, commands: [node --test web/_tests/] }
+  js-test: { image: node:22-alpine, commands: [node --test web/test/] }
   cover: { image: golang:1.25, commands: [make cover], depends_on: [test] }
   e2e:   { image: golang:1.25, commands: [make e2e],   depends_on: [test] }
   contract: { image: golang:1.25, commands: [make contract], depends_on: [test] }
@@ -474,7 +483,7 @@ curl -fsSL https://git.packden.us/crueber/walhub/raw/branch/main/scripts/install
 - **`walhub.toml` is the default config name; `walgit.toml` still accepted, `WALHUB__` env prefix primary with `WALGIT__` also stripped** — TOML key names stay identical (the compat surface), while process/env names follow the new binary; honoring legacy prefixes keeps Rust-era ops scripts and compose files working verbatim.
 - **Runtime image is alpine (git ≥ 2.47), not debian-slim + tini** — distroless/static lacks `git`, the one hard runtime dependency; alpine also ships busybox `wget` so HEALTHCHECK needs no curl; zombie reaping is handled by `os/exec` wait + orchestrator init.
 - **git-lfs omitted from the image** — the Rust spec itself notes it is a client-side tool; the server never invokes it.
-- **~~Node 20 (not 24) + pnpm@10 for the web stage~~ — SUPERSEDED by divergence D2 (2026-08-31): there is no web build stage at all.** The frontend is zero-build vanilla ES modules embedded raw from `web/`; TypeScript, SolidJS, vite, pnpm, and esbuild are gone.
+- **~~Node 20 (not 24) + pnpm@10 for the web stage~~ — SUPERSEDED twice by divergence D2 (2026-08-31): first removed entirely (zero-build), then restored in minimal form when the user directed a build step for the modular SDK — a node stage exists ONLY to run esbuild (`pnpm run build:sdk` → `web/dist/repos.js`).** The frontend itself is zero-build vanilla ES modules embedded raw from `web/`; TypeScript, SolidJS, and vite remain gone.
 - **Go release flags `-trimpath -buildvcs=stamp -ldflags "-s -w"` replace thin LTO + unwind-panic profile** — Go has no LTO; per-request/per-pass `recover` reproduces the "one panic must not kill the instance" guarantee (§6).
 - **Startup git version check is fatal (exit 1) below 2.47** — the Rust spec declares ≥ 2.47 required for server features; failing fast with a message beats mysterious wire breakage.
 - **Header names stay `X-Walgit-*` (including the `walgit_session` cookie in the auth cache key) and the token prefix stays `wgt_`** — the nginx contract and users' stored credentials are the edge-compat surface; renaming would silently invalidate deployed edge configs and credential helpers.
@@ -483,7 +492,7 @@ curl -fsSL https://git.packden.us/crueber/walhub/raw/branch/main/scripts/install
 - **CI is a Makefile + Woodpecker pipeline, not GitHub Actions** — the repo lives on Forgejo; Woodpecker's services block covers the rustfs contract job.
 - **`install.sh` is served from the Forgejo raw URL** — the Rust edge example leaves the installer out of the open-route set; keeping it repo-hosted avoids inventing a new public server route in the Go rewrite.
 - **Divergence (2026-08-31), applied in this revision:**
-- **D2 — frontend is zero-build vanilla ESM; the node stage is gone.** `web/` is hand-written ES modules (native import map, `<template>`, ~40 lines of reactive helpers) embedded RAW — no TypeScript, no framework, no bundler; SolidJS/vite/pnpm/esbuild are gone, superseding the "Node 20 + pnpm@10" decision above. The SDK is ONE file, `web/sdk/repos.js` (`repos.mjs` and `dist/` deleted); JS tests run on Node's built-in `node --test` with zero npm dependencies and never feed the build.
+- **D2 — frontend is vanilla ESM; the node stage is minimal.** `web/` is hand-written ES modules (native import map, `<template>`, ~40 lines of reactive helpers) embedded RAW — no TypeScript, no framework; SolidJS/vite are gone, superseding the "Node 20 + pnpm@10" decision above. The SDK is **authored as submodules** (`web/sdk/src/*.js`) and esbuild-bundled to `web/dist/repos.js` (the `repos.mjs` twin is deleted; `dist/` is a build artifact, `dist/.keep` committed for the embed); JS tests run on Node's built-in `node --test` with zero runtime npm dependencies and import source, never the build.
 - **D3 — Make is the only task runner.** All dev/CI entry points are Make targets (`build vet fmt test race js-test e2e sim contract cover dev dev-store test-s3 image clean ci`); the "`just` is fine too" note is retracted — there is no justfile.
 - **D4 — filesystem store backend is first-class.** `store.backend = "filesystem"` roots keys under `store.root` with sidecar-`flock` conditional writes, `renameat2(RENAME_NOREPLACE)` create-if-absent (portable fallback), `"<size>:<mtime_ns>"` version tokens/ETags, and no accel/signed URLs. It joins the contract suite as an ALWAYS-run backend beside memory (Make `contract`); the container's default path uses it; rustfs remains only as the bucket-contract fixture.
 - **D5 — zero-config first run (user friendliness is a first-class law).** A missing config boots on built-in defaults — `listen 0.0.0.0:8080`, filesystem store rooted at `<data-dir>/store`, `auth.mode = "none"` on ANY bind with loud warnings (a deliberate reversal of the Rust fail-closed loopback rule), `auto_create_on_push = true`; exit code 2 is now bad-argv only. Data dir = `--data-dir` / `WALHUB_DATA_DIR` (default `~/.local/share/walhub`, containers `/var/lib/walhub`), holding `store/`, `cache/`, and the saved `walhub.toml`.
