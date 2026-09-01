@@ -53,7 +53,6 @@ type RepoHandle struct {
 	repo    *git.LocalRepo
 	pub     *Publisher
 	pubOnce sync.Once
-	dead    atomic.Bool
 }
 
 // pbManifest aliases the proto type for brevity across this package.
@@ -97,7 +96,6 @@ func (h *RepoHandle) Progress() *Broadcast[Progress] { return h.progress }
 
 // teardown stops the publisher and drops background work (Close/Delete path).
 func (h *RepoHandle) teardown() {
-	h.dead.Store(true)
 	if h.pub != nil {
 		h.pub.Close()
 	}

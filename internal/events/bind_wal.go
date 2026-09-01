@@ -53,10 +53,9 @@ type WALRepo struct {
 // SyncRefs revalidates the manifest fresh: a LevelRefs sync (the manifest
 // conditional GET runs before any freshness skip, so the returned head/min_seq
 // are current), after which the manifest snapshot is the fresh state.
-//
-// TODO-INTEGRATION: doc 05's exported surface names this SyncRefs; the current
-// engine exposes Sync(ctx, wal.LevelRefs). If the engine renames/adds a
-// dedicated SyncRefs, rebind here only.
+// RESOLVED (Wave 4a): doc 05's engine exposes Sync(ctx, wal.LevelRefs); this
+// binding is the SyncRefs surface, and the manifest snapshot after the
+// conditional GET is the fresh state.
 func (r *WALRepo) SyncRefs(ctx context.Context) (RepoState, error) {
 	g, err := r.h.Sync(ctx, wal.LevelRefs)
 	if err != nil {
@@ -72,10 +71,9 @@ func (r *WALRepo) SyncRefs(ctx context.Context) (RepoState, error) {
 }
 
 // ReadLog reads log entries [from, to] from the framed segments.
-//
-// TODO-INTEGRATION: ReadLog holds syncMu and re-freshens; the engine contract
-// (doc 05) matches doc 09 §2's read_log(from, to) semantics including the
-// "stops at the first incomplete trailing frame" rule.
+// RESOLVED (Wave 4a): the engine contract matches doc 09 §2's
+// read_log(from, to) semantics, including the "stops at the first incomplete
+// trailing frame" rule.
 func (r *WALRepo) ReadLog(ctx context.Context, from, to uint64) ([]*proto.LogEntry, error) {
 	return r.h.ReadLog(ctx, from, to)
 }

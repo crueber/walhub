@@ -415,3 +415,13 @@ func (h *RepoHandle) buildRemoteIndex(ctx context.Context, t *Task, m *pbManifes
 	}
 	return nil
 }
+
+// TryLockPacks takes packMu without ever queueing (§6.1: try-lock semantics
+// vs the publish path). On success it returns an unlock func; ok=false means
+// a reconciliation is in flight — skip, never wait.
+func (h *RepoHandle) TryLockPacks() (unlock func(), ok bool) {
+	if !h.packMu.TryLock() {
+		return nil, false
+	}
+	return func() { h.packMu.Unlock() }, true
+}

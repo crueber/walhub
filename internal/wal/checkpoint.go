@@ -244,3 +244,10 @@ func trimManifest(base *pbManifest, cp *proto.CheckpointRef, seq uint64, writer 
 }
 
 func itoa(v any) string { return fmt.Sprintf("%d", v) }
+
+// WriteCheckpoint runs the §5.5 checkpoint write for the given trigger.
+// Exported for the maintenance unit (doc 05 §5.5: "evaluated ... by the
+// maintainer's checkpoint unit"); narration is the caller's task reporter.
+func (h *RepoHandle) WriteCheckpoint(ctx context.Context, trigger CheckpointTrigger) error {
+	return h.writeCheckpoint(ctx, nil, trigger)
+}

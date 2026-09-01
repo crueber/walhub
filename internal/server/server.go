@@ -42,8 +42,9 @@ type Server struct {
 	layer *git.Layer // git subprocess layer machinery (04_git.md)
 
 	authSvc *AuthService
-	metrics *Registry
 	sem     *RepoSemaphores
+	notify  func(repo string) // events bridge wake (09_events.md §1)
+	metrics *Registry
 	drain   *DrainState
 
 	inflight  Inflight
@@ -76,8 +77,12 @@ type Options struct {
 	Kind      ServerKind
 	TLSOn     bool
 	Boot      BootState
-	Log       *slog.Logger
-	Now       func() time.Time
+	// Notifier wakes the events bridge for a repo ("owner/name"); nil when
+	// the instance runs no bridge (09_events.md §1 — notify then answers 202
+	// without a wake).
+	Notifier func(repo string)
+	Log      *slog.Logger
+	Now      func() time.Time
 }
 
 // BootState is the §3.4 boot decision tree outcome.
@@ -114,10 +119,11 @@ func New(o Options) *Server {
 		version:   o.Version,
 		instance:  o.Instance,
 		kind:      o.Kind,
-		boot:      o.Boot,
 		tlsOn:     o.TLSOn,
-		Now:       o.Now,
+		boot:      o.Boot,
 		log:       o.Log,
+		notify:    o.Notifier,
+		Now:       o.Now,
 		cacheRoot: o.CacheRoot,
 	}
 	s.inflight.high = int64(o.Config.Server.MaxConcurrentRequests)

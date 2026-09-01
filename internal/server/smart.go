@@ -136,6 +136,20 @@ func (s *Server) gitInfoRefs(w http.ResponseWriter, r *http.Request, id git.Repo
 	}
 	v2 := git.ProtocolVersion(r.Header.Get("Git-Protocol")) == 2
 	if aerr := s.engine.Sync(r.Context(), id, wal.LevelRefs); aerr != nil {
+		if isNotFound(aerr) && svc == git.ServiceReceivePack && s.engine.AutoCreate(r.Context(), id) {
+			// auto_create_on_push (§3.4/§4.3): an unborn repo advertises an
+			// empty receive-pack ref list instead of 404 — the push creates it.
+			if repo, cerr := s.engine.Repo(r.Context(), id, true, git.Sha1); cerr == nil {
+				if advert, aerr := s.layer.Advertisement(repo, svc, v2, s.Version()); aerr == nil {
+					gitHeaders(w, svcContentType(svc))
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write(git.Pkt("# service=" + svcName + "\n"))
+					_, _ = w.Write(git.Flush())
+					_, _ = w.Write(advert)
+					return
+				}
+			}
+		}
 		if isNotFound(aerr) {
 			plainStatus(w, http.StatusNotFound, "repository not found")
 			return
@@ -409,9 +423,7 @@ func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git
 	if len(req.Pack) > 0 {
 		if _, ierr := s.layer.Ingest(r.Context(), repo, bytes.NewReader(req.Pack),
 			int64(s.cfg.Server.MaxPushBytes), req.Has("thin-pack"), true); ierr != nil {
-			gitHeaders(w, "application/x-git-receive-pack-result")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(git.Band2("pack rejected: " + ierr.Error()))
+			band2Failure(w, req, "pack rejected: "+ierr.Error())
 			return
 		}
 	}
@@ -423,9 +435,7 @@ func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git
 	}
 	if len(tips) > 0 {
 		if cerr := s.layer.CheckConnectivity(r.Context(), repo, tips); cerr != nil {
-			gitHeaders(w, "application/x-git-receive-pack-result")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(git.Band2("connectivity check failed: " + cerr.Error()))
+			band2Failure(w, req, "connectivity check failed: "+cerr.Error())
 			return
 		}
 	}
@@ -444,6 +454,20 @@ func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git
 			report.Refs = append(report.Refs, git.RefReport{Ref: rr.Name, OK: true})
 		}
 	}
+	_, _ = w.Write(report.EncodeReport())
+}
+
+// band2Failure answers a failed receive-pack the §4.3 way: the band-2
+// message, then the negotiated report-status trailer (unpack ng) — git hangs
+// waiting for the report if only the sideband is written (§7 step 6).
+func band2Failure(w http.ResponseWriter, req *git.PushRequest, msg string) {
+	gitHeaders(w, "application/x-git-receive-pack-result")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(git.Band2(msg))
+	if req == nil || !req.Has("report-status") {
+		return
+	}
+	report := git.Report{UnpackOK: false, UnpackMsg: msg, Sideband: req.Has("side-band-64k")}
 	_, _ = w.Write(report.EncodeReport())
 }
 

@@ -1,15 +1,18 @@
 // bind_wal.go — the real binding onto internal/wal + internal/git (§1
 // dependency direction: maintain → wal, git, store, config). Narrow seams
-// from units.go are wired here. TODO-INTEGRATION marks the one place the
-// concrete surface still drifts: internal/bundle (doc 08) owns the bundle
-// planner/builders and has not landed.
+// from units.go are wired here. The bundle planner seam is bound onto
+// internal/bundle (doc 08).
 package maintain
 
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/bundle"
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -163,25 +166,158 @@ func toWalPack(p *PreparedPack) *wal.PreparedPack {
 	}
 }
 
-// ---- the one TODO-INTEGRATION seam ---------------------------------------------
+// ---- bundle planner seam: internal/bundle (doc 08) ------------------------------
 
-// walPlanner is the internal/bundle seam (§5). internal/bundle (doc 08) owns
-// the planner and builders.
-// TODO-INTEGRATION: wire Plan/Build/PreviousFire onto internal/bundle's
-// exported planner once that package lands; until then the bundles unit
-// reports outcome error (visible, honest) for repos with strategies.
-type walPlanner struct{}
+// walPlanner binds the §5 BundlePlanner onto internal/bundle's exported
+// planner/builders over the same registry the maintainer drives.
+type walPlanner struct{ reg *wal.Registry }
 
-func (walPlanner) Plan(ctx context.Context, repo string, eff *config.Config, m *proto.Manifest, now time.Time) ([]Slot, error) {
-	return nil, fmt.Errorf("%w: internal/bundle planner pending", ErrNotWired)
+// bundleList reads the repo's bundles/list.pb (absent → empty list).
+func (p walPlanner) bundleList(ctx context.Context, repo string) *proto.BundleList {
+	st := p.reg.Store()
+	body, _, err := store.GetBytes(ctx, st, repoPrefixOf(repo)+store.BundleList, store.GetOptions{})
+	if err != nil || body == nil {
+		return &proto.BundleList{}
+	}
+	list, err := proto.UnmarshalBundleList(body)
+	if err != nil {
+		return &proto.BundleList{}
+	}
+	return list
 }
 
-func (walPlanner) Build(ctx context.Context, repo string, s Slot) (bool, error) {
-	return false, fmt.Errorf("%w: internal/bundle builder pending", ErrNotWired)
+func (p walPlanner) strategies(eff *config.Config) ([]bundle.Strategy, error) {
+	return bundle.FromConfig(eff.Bundles.Strategy, eff.Bundles.MinCommits)
 }
 
+func (p walPlanner) Plan(ctx context.Context, repo string, eff *config.Config, m *proto.Manifest, now time.Time) ([]Slot, error) {
+	strategies, err := p.strategies(eff)
+	if err != nil {
+		return nil, err
+	}
+	list := p.bundleList(ctx, repo)
+	adapter := &bundle.WalAdapter{R: p.reg}
+	first, ok := adapter.FirstStateAt(repo)
+	firstStateAt := func(string) (time.Time, bool) { return first, ok }
+	hostFits := func(*bundle.Strategy) bool { return fits(eff, m) }
+	states := bundle.PlanStates(repo, strategies, list, now, firstStateAt, hostFits)
+	byName := bundle.ByName(strategies)
+	out := make([]Slot, 0, len(states))
+	for _, s := range states {
+		kind := "full"
+		if st := byName[s.Strategy]; st != nil {
+			kind = st.Kind
+		}
+		row := Slot{Strategy: s.Strategy, Kind: kind, Slot: s.Slot, State: s.State}
+		if s.State == "built" {
+			row.BundleID = s.Detail
+		} else {
+			row.Detail = s.Detail
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func (p walPlanner) Build(ctx context.Context, repo string, s Slot) (bool, error) {
+	eff := p.reg.Config()
+	strategies, err := p.strategies(eff)
+	if err != nil {
+		return false, err
+	}
+	byName := bundle.ByName(strategies)
+	st := byName[s.Strategy]
+	if st == nil {
+		return false, fmt.Errorf("bundle: unknown strategy %q", s.Strategy)
+	}
+	list := p.bundleList(ctx, repo)
+	for _, b := range list.Bundles { // already built → nothing to do
+		if b.Strategy == s.Strategy && b.Slot == s.Slot {
+			return false, nil
+		}
+	}
+	h, err := p.reg.Open(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	packDir := h.Repo().PackDir()
+	deps := bundle.Deps{
+		Wal:          &bundle.WalAdapter{R: p.reg},
+		Prim:         &bundle.GitPrimitives{L: h.Layer()},
+		St:           p.reg.Store(),
+		Tasks:        bundleTaskRunner{t: p.reg.Tasks()},
+		CacheDir:     eff.Cache.Dir,
+		HostID:       p.reg.InstanceID(),
+		RepoDir:      h.Dir(),
+		MinCommits:   eff.Bundles.MinCommits,
+		List:         list,
+		MainOnly:     eff.Bundles.MainOnly,
+		ExtraRefs:    eff.Bundles.ExtraRefs,
+		ObjectFormat: objectFormatOf(h),
+		LocalPack: func(checksum string) (string, bool) {
+			path := filepath.Join(packDir, checksum+".pack")
+			if _, err := os.Stat(path); err != nil {
+				return "", false
+			}
+			return path, true
+		},
+	}
+	if err := bundle.BuildSlot(ctx, &deps, repo, strategies, st, time.Unix(int64(s.Slot), 0).UTC()); err != nil {
+		return false, err
+	}
+	if len(deps.Verdicts) > 0 {
+		if err := bundle.RecordVerdicts(ctx, p.reg.Store(), deps.Verdicts); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// PreviousFire walks the schedule backwards in day steps via Between (the
+// §6.2 trigger-4 window start); schedules fire at least yearly, so the cap is
+// bounded.
 func (walPlanner) PreviousFire(s config.BundleStrategy, now time.Time) time.Time {
+	c, err := bundle.ParseSchedule(s.Schedule)
+	if err != nil {
+		return time.Time{}
+	}
+	start := now
+	for range 400 {
+		start = start.AddDate(0, 0, -1)
+		fires, err := c.Between(start, now)
+		if err != nil {
+			return time.Time{}
+		}
+		if len(fires) > 0 {
+			return fires[len(fires)-1]
+		}
+	}
 	return time.Time{}
+}
+
+func objectFormatOf(h *wal.RepoHandle) string {
+	m, _ := h.ManifestSnapshot()
+	if m != nil && m.ObjectFormat != "" {
+		return m.ObjectFormat
+	}
+	return "sha1"
+}
+
+// bundleTaskRunner binds the bundle TaskRunner onto wal.TaskTable (kind
+// "bundle", params {strategy, slot}; §8.9.1).
+type bundleTaskRunner struct{ t *wal.TaskTable }
+
+func (r bundleTaskRunner) RunBundle(ctx context.Context, repo string, params map[string]string, fn func(ctx context.Context, tr bundle.Reporter) error) error {
+	_, err := r.t.Run(ctx, repo, "bundle", params, func(ctx context.Context, t *wal.Task) error {
+		return fn(ctx, walLogger{t})
+	})
+	return err
+}
+
+// repoPrefixOf returns "repos/<owner>/<repo>/" for an "owner/repo" id.
+func repoPrefixOf(repo string) string {
+	owner, name, _ := strings.Cut(repo, "/")
+	return "repos/" + owner + "/" + name + "/"
 }
 
 // NewWalMaintainer assembles the production maintainer over a registry.
@@ -194,13 +330,11 @@ func NewWalMaintainer(reg *wal.Registry, opt Options) *Maintainer {
 		opt.Follow = &execFollow{CacheDir: cfg.Cache.Dir, Binary: cfg.Git.Binary}
 	}
 	if opt.Planner == nil {
-		opt.Planner = walPlanner{}
+		opt.Planner = walPlanner{reg: reg}
 	}
 	if opt.Leaser == nil {
 		opt.Leaser = StoreLeaser{St: reg.Store()}
 	}
-	// Cadences from config unless the caller overrode them (the server wires
-	// the loops per §8.10; read-live keys re-read per pass elsewhere).
 	if opt.Interval == 0 {
 		opt.Interval = time.Duration(cfg.Maintenance.Interval)
 	}

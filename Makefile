@@ -12,7 +12,7 @@ web: ## bundle the SDK from submodules: esbuild sdk/src/index.js → dist/repos.
 	pnpm --dir web run build:sdk
 
 build: web ## compile everything (the SDK bundle is a build dependency)
-	$(GO) build -trimpath -buildvcs=stamp -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/walhub
+	$(GO) build -trimpath -buildvcs=auto -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/walhub
 
 fmt: ## format Go sources
 	gofmt -w $$(gofmt -l .)

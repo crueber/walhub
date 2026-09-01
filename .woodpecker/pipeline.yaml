@@ -1,0 +1,83 @@
+# .woodpecker/pipeline.yaml — 16_packaging.md §8:
+# vet → web (SDK bundle) → test -race → js-test → cover (D7) → e2e → contract
+# (+ env-gated S3 contract against the rustfs service) → image → container check.
+# The repo lives on Forgejo; CI is Woodpecker-shaped, not GitHub Actions.
+when: { event: [push, pull_request] }
+
+steps:
+  vet:
+    image: golang:1.25
+    commands: [make vet]
+
+  web:
+    image: node:22-alpine
+    commands:
+      - corepack enable && corepack prepare pnpm@10 --activate
+      - pnpm --dir web install --frozen-lockfile
+      - make web
+    depends_on: [vet]
+
+  # golang image ships git + gcc, so -race works (CGO on for the detector only).
+  test:
+    image: golang:1.25
+    commands: [make race]
+    depends_on: [web]
+
+  js-test:
+    image: node:22-alpine
+    commands: [node --test web/test/]
+    depends_on: [test]
+
+  cover:
+    image: golang:1.25
+    commands: [make cover]
+    depends_on: [test]
+
+  e2e:
+    image: golang:1.25
+    commands: [make e2e]
+    depends_on: [test]
+
+  contract:
+    image: golang:1.25
+    commands: [make contract]
+    depends_on: [test]
+
+  s3-contract:
+    image: golang:1.25
+    commands: [make contract-s3]
+    depends_on: [test]
+    environment:
+      WALHUB_TEST_S3_ENDPOINT: http://rustfs:9000
+      AWS_ACCESS_KEY_ID: walgit-dev
+      AWS_SECRET_ACCESS_KEY: walgit-dev-secret
+
+  image:
+    image: plugins/docker
+    settings:
+      repo: git.packden.us/crueber/walhub
+      tags: "${CI_COMMIT_SHA:0:12},latest"
+    depends_on: [test, js-test, cover, e2e, contract, s3-contract]
+
+  # Container contract (§8): the runtime image must ship git >= 2.47, and a
+  # zero-config boot (`--config /dev/null` = explicit defaults + env) must
+  # still pass the strict config gate.
+  container-check:
+    image: quay.io/podman/stable:latest
+    privileged: true
+    depends_on: [image]
+    commands:
+      - |
+        gitver="$$(podman run --rm git.packden.us/crueber/walhub:$${CI_COMMIT_SHA:0:12} git --version | awk '{print $$3}')"
+        echo "image git version: $$gitver"
+        if [ "$$(printf '%s\n' 2.47 "$$gitver" | sort -V | head -1)" != "2.47" ]; then
+          echo "FAIL: runtime image needs git >= 2.47, got $$gitver"; exit 1
+        fi
+      - podman run --rm git.packden.us/crueber/walhub:$${CI_COMMIT_SHA:0:12} walhub config check --config /dev/null --strict
+
+services:
+  rustfs:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ACCESS_KEY: walgit-dev
+      RUSTFS_SECRET_KEY: walgit-dev-secret

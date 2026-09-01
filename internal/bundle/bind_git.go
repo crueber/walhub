@@ -38,15 +38,15 @@ func (p *GitPrimitives) BundleCreate(ctx context.Context, repoDir, outPath strin
 //	git pack-objects --revs --delta-base-offset --stdout -q [--filter=blob:none]
 //	stdin: <tip-oid>\n… ^<base-tip-oid>\n…
 //
-// TODO-INTEGRATION: internal/git has not exposed this §7.8 primitive yet; the
-// direct exec below uses the configured binary via git.Layer's default and
-// must be replaced when the layer grows PackDelta.
+// These direct-exec bodies are the production primitives: the layer exposes
+// no pack-objects primitive, so the binary resolves through the layer's
+// configured git.binary (§decision: all git invocations honor git.binary).
 func (p *GitPrimitives) PackDelta(ctx context.Context, repoDir string, wants, excludes []string, filter string, w io.Writer) error {
 	argv := []string{"pack-objects", "--revs", "--delta-base-offset", "--stdout", "-q"}
 	if filter != "" {
 		argv = append(argv, "--filter="+filter)
 	}
-	cmd := exec.CommandContext(ctx, gitBinary(), argv...)
+	cmd := exec.CommandContext(ctx, p.binary(), argv...)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	var stderr bytes.Buffer
@@ -70,8 +70,7 @@ func (p *GitPrimitives) PackDelta(ctx context.Context, repoDir string, wants, ex
 //
 //	git rev-list --count <tip oids…> --not <base-tip oids…>
 //
-// over the local commit-graph. TODO-INTEGRATION: same seam as PackDelta —
-// replace when internal/git exposes CountCommits.
+// over the local commit-graph; same seam as PackDelta.
 func (p *GitPrimitives) CountCommits(ctx context.Context, repoDir string, tips, notTips []string) (int, error) {
 	if len(tips) == 0 {
 		return 0, nil
@@ -82,7 +81,7 @@ func (p *GitPrimitives) CountCommits(ctx context.Context, repoDir string, tips, 
 		argv = append(argv, "--not")
 		argv = append(argv, notTips...)
 	}
-	cmd := exec.CommandContext(ctx, gitBinary(), argv...)
+	cmd := exec.CommandContext(ctx, p.binary(), argv...)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	var out, stderr bytes.Buffer
@@ -98,8 +97,15 @@ func (p *GitPrimitives) CountCommits(ctx context.Context, repoDir string, tips, 
 	return n, nil
 }
 
-// gitBinary resolves the configured binary (§decision: all git invocations go
-// through internal/git's configured binary — git.binary).
+// binary resolves the git binary: the bound layer's configured git.binary,
+// else WALGIT_GIT_BINARY, else "git".
+func (p *GitPrimitives) binary() string {
+	if p != nil && p.L != nil && p.L.Binary != "" {
+		return p.L.Binary
+	}
+	return gitBinary()
+}
+
 func gitBinary() string {
 	if b := os.Getenv("WALGIT_GIT_BINARY"); b != "" {
 		return b

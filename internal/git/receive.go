@@ -1,6 +1,8 @@
 package git
 
 import (
+	"bufio"
+
 	"bytes"
 	"context"
 	"fmt"
@@ -235,7 +237,20 @@ func (l *Layer) connectivity(ctx context.Context, repo *LocalRepo, tips []Oid) e
 
 	// rev-list stdout → cat-file stdin; copier closes the write end.
 	go func() {
-		_, _ = io.Copy(catIn, revOut)
+		// rev-list --objects emits "<oid> <path>"; cat-file --batch-check
+		// treats everything after the first space as a path filter, which
+		// marks every blob/tree "missing" (§7.1). Split at the first space.
+		sc := bufio.NewScanner(revOut)
+		sc.Buffer(make([]byte, 64<<10), 1<<20)
+		for sc.Scan() {
+			line := sc.Text()
+			if i := strings.IndexByte(line, ' '); i >= 0 {
+				line = line[:i]
+			}
+			if _, err := io.WriteString(catIn, line+"\n"); err != nil {
+				break
+			}
+		}
 		catIn.Close()
 	}()
 	// rev-list stdin: tips one per line; closes on tips-EOF.

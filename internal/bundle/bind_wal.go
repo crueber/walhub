@@ -59,10 +59,13 @@ func (a *WalAdapter) FirstStateAt(repo string) (time.Time, bool) {
 	if m.Checkpoint != nil && m.Checkpoint.FirstStateAt != nil {
 		return m.Checkpoint.FirstStateAt.Go(), true
 	}
-	// TODO-INTEGRATION: with no checkpoint yet the first state is the
-	// earliest log entry's created_at; wal does not expose it. Until it
-	// does, no floor is claimed (every slot is considered available).
-	return time.Time{}, false
+	// With no checkpoint yet the floor is the earliest log entry's created_at
+	// (min_seq is the oldest entry still in the log): read just that entry.
+	entries, err := h.ReadLog(context.Background(), m.MinSeq, m.MinSeq)
+	if err != nil || len(entries) == 0 || entries[0].CreatedAt == nil {
+		return time.Time{}, false
+	}
+	return entries[0].CreatedAt.Go(), true
 }
 
 // refsFromView converts a wal fold view to the Refs seam type (name-sorted).

@@ -148,8 +148,10 @@ func (s *Server) eventsNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if aerr := requireWrite(p); aerr != nil {
-		s.mapAuthStatus(w, aerr)
 		return
+	}
+	if s.notify != nil {
+		s.notify(r.URL.Query().Get("repo"))
 	}
 	plainStatus(w, http.StatusAccepted, "accepted")
 }
