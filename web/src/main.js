@@ -51,13 +51,13 @@ const routes = [
   ["/setup", async (c, p) => (await import("./pages/setup.js")).mount(c, p)],
   ["/api", async (c, p) => (await import("./pages/apidocs.js")).mount(c, p)],
   ["/:owner", async (c, p) => (await import("./pages/repos.js")).mount(c, p)],
-  ["/:owner/:repo", REPO("code")],
-  ["/:owner/:repo/tree/*", REPO("code")],
-  ["/:owner/:repo/blob/*", REPO("code")],
-  ["/:owner/:repo/commits", REPO("commits")],
-  ["/:owner/:repo/commit/:sha", REPO("commits")],
-  ["/:owner/:repo/wal", REPO("wal")],
-  ["/:owner/:repo/settings", REPO("settings")],
+  ["/:owner/:name", REPO("code")],
+  ["/:owner/:name/tree/*", REPO("code")],
+  ["/:owner/:name/blob/*", REPO("code")],
+  ["/:owner/:name/commits", REPO("commits")],
+  ["/:owner/:name/commit/:sha", REPO("commits")],
+  ["/:owner/:name/wal", REPO("wal")],
+  ["/:owner/:name/settings", REPO("settings")],
 ].map(([pattern, load]) => ({ matcher: route(pattern), load }));
 
 let unmount = null;

@@ -55,8 +55,11 @@ func TestSDKReposJS(t *testing.T) {
 		t.Fatalf("repos.js = %d etag=%q", rec.Code, rec.Header().Get("ETag"))
 	}
 	etag := rec.Header().Get("ETag")
-	if !strings.Contains(rec.Body.String(), "export async function summary") {
-		t.Fatalf("sdk body = %q", rec.Body.String())
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/javascript") {
+		t.Fatalf("repos.js content-type = %q (module MIME is load-bearing)", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "ReposClient") {
+		t.Fatalf("repos.js must be the real SDK bundle (D-WEB-2), got %q", rec.Body.String()[:120])
 	}
 	// Conditional GET → 304.
 	req = httptest.NewRequest("GET", "/repos.js", nil)
@@ -72,6 +75,36 @@ func TestSDKReposJS(t *testing.T) {
 	s.sdkReposJS(rec, req)
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Fatalf("head = %d len=%d", rec.Code, rec.Body.Len())
+	}
+}
+
+// TestUIAssetResolvers: the embedded SPA must actually be reachable — the
+// /repos.js bundle, the /_ui module tree, and the standalone setup page
+// (regression: uiAsset/setupAsset were hardcoded stubs, blanking every page).
+func TestUIAssetResolvers(t *testing.T) {
+	b, ok := webAsset("index.html")
+	if !ok || !strings.Contains(string(b), `importmap`) || !strings.Contains(string(b), `/_ui/src/main.js`) {
+		t.Fatalf("embedded index.html missing or wrong: ok=%v len=%d", ok, len(b))
+	}
+	for _, name := range []string{"src/main.js", "src/pages/owners.js", "sdk/src/index.js", "css/base.css"} {
+		if b, ok := uiAsset(name); !ok || len(b) == 0 {
+			t.Fatalf("uiAsset(%q) must resolve from the embed", name)
+		}
+	}
+	if _, ok := uiAsset("../go.mod"); ok {
+		t.Fatal("uiAsset must refuse traversal-style names")
+	}
+	if _, ok := uiAsset("etc/passwd"); ok {
+		t.Fatal("uiAsset must refuse paths outside the UI tree")
+	}
+	if b, ok := setupAsset("setup.js"); !ok || !strings.Contains(string(b), "export function mount") {
+		t.Fatalf("setup.js must be the real setup page module, got %d bytes", len(b))
+	}
+	if b, ok := setupAsset("lib/reactive.js"); !ok || !strings.Contains(string(b), "export") {
+		t.Fatalf("setup page lib/ imports must resolve, got %d bytes", len(b))
+	}
+	if _, ok := setupAsset("nope.js"); ok {
+		t.Fatal("setupAsset must 404 unknown names")
 	}
 }
 
@@ -152,8 +185,8 @@ func TestSPAHome(t *testing.T) {
 	}
 	// HTML shell.
 	rec := do("http://x/", true)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `<div id="app">`) {
-		t.Fatalf("html home = %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `/_ui/src/main.js`) {
+		t.Fatalf("html home must serve the real SPA shell: %d %.120s", rec.Code, rec.Body.String())
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("home content-type = %q", ct)

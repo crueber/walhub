@@ -61,7 +61,7 @@ func (s *Server) setupUI(w http.ResponseWriter, r *http.Request) {
 		banner = `<div class="banner">auth mode is "none" — anyone on the network has write+admin.
 Pick a real auth mode below (recommended fix).</div>`
 	}
-	body := setupPageHTML + banner
+	body := strings.Replace(setupPageHTML, `<div class="banner-slot"></div>`, banner, 1)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(body))
 }
@@ -92,13 +92,24 @@ func (s *Server) setupUIAssets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-// setupPageHTML is the shell (the real schema comes from /api/v1/setup).
+// setupPageHTML is the standalone shell for the real setup page module
+// (web/src/pages/setup.js): the import map resolves its bare `lib/…`
+// specifiers to /setup/assets/lib/…, served by setupUIAssets.
 const setupPageHTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>walhub setup</title>
-<link rel="stylesheet" href="/setup/assets/setup.css"></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>walhub setup</title>
+  <script type="importmap">{"imports":{"lib/":"/setup/assets/lib/"}}</script>
+  <link rel="stylesheet" href="/setup/assets/setup.css">
+</head>
 <body>
-<h1>walhub setup</h1>
-<div id="groups"></div>
-<button id="save">Save</button>
-<script type="module" src="/setup/assets/setup.js"></script>
+  <h1>walhub setup</h1>
+  <div class="banner-slot"></div>
+  <main id="app"></main>
+  <script type="module">
+    import { mount } from "/setup/assets/setup.js";
+    mount(document.getElementById("app"));
+  </script>
 </body></html>`

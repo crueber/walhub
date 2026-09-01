@@ -169,7 +169,10 @@ export function useResolved(owner, name, rest, kind) {
     if (!r || !r.sha) return setOut(undefined);
     const key = `sha:${r.sha}:${kind}:${r.path ?? ""}`;
     const [getSha] = useDataRefetchable(key, shaFetcher(owner, name, kind, r), SHA_TTL);
-    setOut(getSha());
+    const out = getSha();
+    // Sha-addressed payloads are ref-free by design (§2.4); the UI builds
+    // URLs from the ref the user resolved, so attach it here.
+    setOut(out && !out.ref ? { ...out, ref: r.ref } : out);
   });
   return [getOut, setOut]; // same [get] contract as useData
 }

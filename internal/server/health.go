@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	web "git.packden.us/crueber/walhub/web"
 )
 
 // writeJSONBody emits a JSON body (server-side; the api seam has its own).
@@ -97,27 +99,27 @@ func (s *Server) prewarmTimedOut() bool {
 	return time.Since(prewarmStart) > t
 }
 
-// sdkReposJS serves the one plain-ESM SDK file (divergence D2): no-cache +
-// strong ETag + precompressed passthrough (§3.3).
+// sdkReposJS serves the esbuild bundle of the SDK submodules
+// (web/dist/repos.js, built by `make web`, embedded raw — D-WEB-2/D-WEB-3):
+// text/javascript, no-cache + strong ETag + 304.
 func (s *Server) sdkReposJS(w http.ResponseWriter, r *http.Request) {
-	const sdk = `// walhub repos.js — one plain-ESM SDK (divergence D2)
-export async function summary(repo, lane = "/api") {
-  const r = await fetch("/" + repo + lane, { credentials: "include" });
-  if (!r.ok) throw new Error(r.status);
-  return r.json();
-}
-`
-	etag := `"sdk-` + sdkETag(sdk) + `"`
+	b, ok := webAsset("dist/repos.js")
+	if !ok {
+		plainStatus(w, http.StatusNotFound, "repos.js is not built — run make web")
+		return
+	}
+	h := sdkETag(string(b))
+	etag := `"sdk-` + h + `"`
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	if inm := r.Header.Get("If-None-Match"); inm != "" && etagMatchHeader(inm, "sdk-"+sdkETag(sdk)) {
+	if inm := r.Header.Get("If-None-Match"); inm != "" && etagMatchHeader(inm, "sdk-"+h) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
-		_, _ = w.Write([]byte(sdk))
+		_, _ = w.Write(b)
 	}
 }
 
@@ -178,10 +180,7 @@ func (s *Server) spaHome(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(spaShellHTML))
+	s.serveSPA(w, r)
 }
 
 // ownerPage answers /{owner} (gated; index.html, no-cache).
@@ -197,17 +196,28 @@ func (s *Server) repoPage(id interface{ String() string }) http.HandlerFunc {
 	}
 }
 
+// serveSPA answers every UI route with the embedded SPA shell (web/index.html:
+// import map + raw ES modules — no-cache + ETag, §3.3/D-WEB-3).
 func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
+	b, ok := webAsset("index.html")
+	if !ok {
+		plainStatus(w, http.StatusInternalServerError, "ui shell missing — run make build")
+		return
+	}
+	h := sdkETag(string(b))
+	etag := `"` + h + `"`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", etag)
+	if inm := r.Header.Get("If-None-Match"); inm != "" && etagMatchHeader(inm, h) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(spaShellHTML))
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(b)
+	}
 }
-
-const spaShellHTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>walhub</title>
-<script type="module" src="/repos.js"></script></head>
-<body><div id="app"></div></body></html>`
 
 // setupJSON answers GET /services/setup.json[?repo=] — read-authed, no-cache
 // (§9.1): exact field names, every UI surface renders recipes from here.
@@ -291,7 +301,12 @@ func (s *Server) serveUIAssets(w http.ResponseWriter, r *http.Request) {
 		default:
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		h := sdkETag(string(b))
+		w.Header().Set("ETag", `"`+h+`"`)
+		if inm := r.Header.Get("If-None-Match"); inm != "" && etagMatchHeader(inm, h) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
 			_, _ = w.Write(b)
@@ -329,17 +344,45 @@ func equalFoldLast(s, suf string) bool {
 	return true
 }
 
-// setupAsset / uiAsset resolve the embedded asset FS; the packaging pass
-// embeds the real files — these stubs answer the two setup-page files so the
-// routes are live.
-func setupAsset(name string) ([]byte, bool) {
-	switch name {
-	case "setup.js":
-		return []byte("// walhub setup page (ESM)\n"), true
-	case "setup.css":
-		return []byte("body{font-family:sans-serif;margin:2rem}\n.banner{color:#b00}\n"), true
+// webAsset reads one path from the embedded UI tree (web/embed.go: index.html,
+// dist/, sdk/, src/, css/). Names are /-separated embed paths; traversal-safe
+// because embed.FS paths cannot escape the tree.
+func webAsset(name string) ([]byte, bool) {
+	if name == "" || strings.Contains(name, "..") || strings.HasPrefix(name, "/") {
+		return nil, false
+	}
+	b, err := web.Files.ReadFile(name)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// uiAsset maps /_ui/<name> to the embedded UI tree (12_web_ui.md §1.0: the
+// import map points at /_ui/sdk/src/index.js, /_ui/src/…, /_ui/css/…).
+func uiAsset(name string) ([]byte, bool) {
+	switch {
+	case name == "index.html" ||
+		strings.HasPrefix(name, "dist/") ||
+		strings.HasPrefix(name, "sdk/") ||
+		strings.HasPrefix(name, "src/") ||
+		strings.HasPrefix(name, "css/"):
+		return webAsset(name)
 	}
 	return nil, false
 }
 
-func uiAsset(name string) ([]byte, bool) { return nil, false }
+// setupAsset maps /setup/assets/<name> to the standalone setup page's files:
+// the page entry (src/pages/setup.js), its CSS, and the lib/ modules its bare
+// specifiers import (resolved by the page's import map → /setup/assets/lib/…).
+func setupAsset(name string) ([]byte, bool) {
+	switch {
+	case name == "setup.js":
+		return webAsset("src/pages/setup.js")
+	case name == "setup.css":
+		return webAsset("css/setup.css")
+	case strings.HasPrefix(name, "lib/"):
+		return webAsset("src/" + name)
+	}
+	return nil, false
+}
