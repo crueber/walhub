@@ -66,7 +66,7 @@ export default function Apidocs() {
                 <strong>{d().name}</strong> · API version{" "}
                 <span class="pill">{d().version}</span>
               </p>
-              <table class="grid">
+              <table class="data-table">
                 <tbody>
                   <tr>
                     <td class="w-32">base</td>
@@ -118,7 +118,7 @@ export default function Apidocs() {
 
       <section class="card mb-4 p-4">
         <h3 class="mb-2 font-semibold">Routes</h3>
-        <table class="grid">
+        <table class="data-table">
           <thead>
             <tr><th class="w-40">method</th><th>path</th><th>what</th></tr>
           </thead>

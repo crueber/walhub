@@ -102,7 +102,7 @@ export function attachAdmin(repo) {
         ...opts,
       }),
     delete: (opts) => client._call(p("/settings"), { method: "DELETE", sse: false, ...opts }),
-    effective: (opts) => client._call(p("/settings/effective"), { method: "GET", sse: false, ...opts }),
+    effective: (opts) => client._call(p("/settings/effective"), { method: "GET", sse: false, raw: true, ...opts }),
     history: (opts) => client._call(p("/settings/history"), { method: "GET", ...opts }),
     describe: (opts) => client._call(p("/settings/describe"), { method: "GET", ...opts }),
     validate: (toml, opts) =>

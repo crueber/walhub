@@ -110,19 +110,31 @@ function startIfStale(key, entry, fn, ttl) {
 /**
  * useData(key, fn, ttl?) → [get]. A promise-cache entry keyed by string;
  * TTL revalidation (default 5s; pass Infinity for sha-addressed payloads).
- * The key may be a GETTER (reactive): when it changes, the returned getter
- * re-points at the new entry — same-route param changes never go stale.
+ * Background refresh keeps stale data on screen; failures go to the tray.
+ * The key may be a GETTER (reactive): when it changes, the effect re-points
+ * at the new entry and copies its value into this hook's own signal —
+ * same-route param changes never go stale, and consumers track ONE signal.
  */
 export function useData(key, fn, ttl = DEFAULT_TTL) {
   const keyOf = () => (typeof key === "function" ? key() : key);
-  const [getEntry, setEntry] = createSignal(undefined);
+  const [getValue, setValue] = createSignal(undefined);
   createEffect(() => {
     const k = keyOf();
     const entry = ensureEntry(k);
     startIfStale(k, entry, fn, ttl);
-    setEntry(entry);
+    setValue(entry.signal[0]());
   });
-  return [() => getEntry()?.signal[0]()];
+  return [getValue];
+}
+
+/** Normalize an API field that may be a list, a comma string, a bool, or
+ * null into a displayable array — the describe/settings payloads mix all of
+ * these (e.g. this_host.serves is a BOOLEAN, roles a list). */
+export function asList(v) {
+  if (Array.isArray(v)) return v;
+  if (v === true) return ["yes"];
+  if (v === false || v == null || v === "") return [];
+  return String(v).split(",").map((x) => x.trim()).filter(Boolean);
 }
 
 /** Force a refetch of one key (e.g. after a mutating call). */

@@ -6,8 +6,8 @@
 //    a message, clear, per-revision history with "Revert to this" + line diff.
 
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
-import { useData, reportError } from "../lib/data.js";
-import { useRepo, fmtDate } from "./Repo.jsx";
+import { useData, reportError, asList } from "../lib/data.js";
+import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
 
 // --- tiny line diff (LCS) for the per-revision "line diff" ----------------------
 
@@ -46,7 +46,9 @@ const TABS = ["Scheduled tasks", "Push policy", "Effective config & history"];
 // --- tab 1: scheduled tasks ------------------------------------------------------
 
 function ScheduledTab(props) {
-  const [getDesc] = useData(`settings-describe:${props.ctx.full}`, () => props.repo.settings.describe(), 5000);
+  const full = props.ctx.full;   // captured once — no props reads inside the effect
+  const repo = props.repo;
+  const [getDesc] = useData(`settings-describe:${full}`, () => repo.settings.describe(), 5000);
   const strategies = (d) => d?.sections?.strategies ?? d?.strategies ?? [];
   const host = (d) => d?.maintenance?.this_host ?? {};
 
@@ -56,7 +58,8 @@ function ScheduledTab(props) {
         <>
           <section class="card p-4">
             <h3 class="mb-2 font-semibold">Bundle strategies</h3>
-            <table class="grid">
+            <div class="overflow-x-auto">
+            <table class="data-table">
               <thead>
                 <tr><th>name</th><th>kind</th><th>base</th><th>schedule</th><th>next</th><th>keep</th><th>filter</th><th>refs</th></tr>
               </thead>
@@ -71,24 +74,25 @@ function ScheduledTab(props) {
                       <td>{fmtDate(s.next)}</td>
                       <td>{String(s.keep ?? "—")}</td>
                       <td>{s.filter ?? "—"}</td>
-                      <td>{(s.refs ?? []).join(", ") || "—"}</td>
+                      <td>{asList(s.refs).join(", ") || "—"}</td>
                     </tr>
                   )}
                 </For>
               </tbody>
             </table>
+            </div>
           </section>
           <section class="card mt-4 p-4">
             <h3 class="mb-2 font-semibold">Placement &amp; host facts</h3>
-            <table class="grid kv">
+            <table class="data-table kv">
               <tbody>
                 <tr><th class="w-48 align-top">host</th><td>{host(d()).name ?? d().maintenance?.host ?? "—"}</td></tr>
-                <tr><th class="w-48 align-top">serves</th><td>{(host(d()).serves ?? []).join(", ") || "—"}</td></tr>
-                <tr><th class="w-48 align-top">maintains</th><td>{(host(d()).maintains ?? []).join(", ") || "—"}</td></tr>
+                <tr><th class="w-48 align-top">serves</th><td>{host(d()).serves === true ? "yes" : host(d()).serves === false ? "no" : "—"}</td></tr>
+                <tr><th class="w-48 align-top">maintains</th><td>{host(d()).maintains === true ? "yes" : host(d()).maintains === false ? "no" : "—"}</td></tr>
                 <tr><th class="w-48 align-top">disk</th><td>{host(d()).disk ?? "—"}</td></tr>
-                <tr><th class="w-48 align-top">max pack bytes</th><td>{String(host(d()).max_pack_bytes ?? "—")}</td></tr>
-                <tr><th class="w-48 align-top">cache budget</th><td>{String(host(d()).cache_budget_bytes ?? "—")}</td></tr>
-                <tr><th class="w-48 align-top">roles</th><td>{(host(d()).roles ?? []).join(", ") || "—"}</td></tr>
+                <tr><th class="w-48 align-top">max pack bytes</th><td>{host(d()).max_pack_bytes ? fmtBytes(host(d()).max_pack_bytes) : "—"}</td></tr>
+                <tr><th class="w-48 align-top">cache budget</th><td>{host(d()).cache_budget_bytes ? fmtBytes(host(d()).cache_budget_bytes) : "—"}</td></tr>
+                <tr><th class="w-48 align-top">roles</th><td>{asList(host(d()).roles).join(", ") || "—"}</td></tr>
               </tbody>
             </table>
           </section>
@@ -96,7 +100,7 @@ function ScheduledTab(props) {
             <h3 class="mb-2 font-semibold">Upstream follow</h3>
             <p>
               {d().upstream?.git ? `${d().upstream.git}` : "no upstream configured"}{" "}
-              {d().upstream?.follow
+              {d().upstream?.git && d().upstream?.follow
                 ? <span class="chip">{`following every ${d().upstream.follow_interval_secs ?? "?"}s`}</span>
                 : <span class="chip !bg-amber-100 !text-amber-800 dark:!bg-amber-900/60 dark:!text-amber-300">not following</span>}
               <Show when={d().upstream?.last_round}>
@@ -106,7 +110,7 @@ function ScheduledTab(props) {
           </section>
           <section class="card mt-4 p-4">
             <h3 class="mb-2 font-semibold">Effective values</h3>
-            <table class="grid kv">
+            <table class="data-table kv">
               <tbody>
                 <For each={d().fields ?? []}>
                   {(f) => (
@@ -220,7 +224,7 @@ function PolicyTab(props) {
         {(d) => (
           <section class="card mt-4 p-4">
             <h3 class="mb-2 font-semibold">{`Dry run: ${d().allowed ?? 0} allowed / ${d().denied ?? 0} denied of ${d().pushes?.length ?? 0}`}</h3>
-            <table class="grid">
+            <table class="data-table">
               <thead>
                 <tr><th>seq</th><th>principal</th><th>atomic</th><th>refs</th></tr>
               </thead>

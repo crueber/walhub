@@ -119,7 +119,7 @@ function TrailerTable(props) {
       <summary class="pill cursor-pointer select-none" title="Commit trailers (machine-readable footer lines)">
         {props.groups.reduce((n, g) => n + g.trailers.length, 0)} trailers
       </summary>
-      <table class="grid trailers-table mt-2">
+      <table class="data-table trailers-table mt-2">
         <tbody>
           <For each={props.groups}>
             {({ group, trailers }) => (

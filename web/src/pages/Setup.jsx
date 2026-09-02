@@ -45,11 +45,20 @@ function FieldInput(props) {
   return (
     <Switch>
       <Match when={type() === "bool"}>
-        <input
-          type="checkbox"
-          checked={/^(true|1|on|yes)$/i.test(props.value() ?? "")}
-          onChange={(e) => set(e.currentTarget.checked ? "true" : "false")}
-        />
+        <button
+          type="button"
+          role="switch"
+          aria-checked={/^(true|1|on|yes)$/i.test(props.value() ?? "")}
+          class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors
+                 bg-zinc-300 dark:bg-zinc-700"
+          classList={{ "!bg-emerald-600": /^(true|1|on|yes)$/i.test(props.value() ?? "") }}
+          onClick={() => set(/^(true|1|on|yes)$/i.test(props.value() ?? "") ? "false" : "true")}
+        >
+          <span
+            class="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform"
+            classList={{ "translate-x-6": /^(true|1|on|yes)$/i.test(props.value() ?? ""), "translate-x-1": !/^(true|1|on|yes)$/i.test(props.value() ?? "") }}
+          />
+        </button>
       </Match>
       <Match when={type() === "enum"}>
         <select class="input md:w-72" onChange={(e) => set(e.currentTarget.value)}>
@@ -205,7 +214,7 @@ export default function Setup() {
           <Show when={(getData().errors ?? []).length > 0}>
             <section class="card errors-card p-4">
               <h3 class="mb-2 font-semibold">Current validation errors (from the server)</h3>
-              <table class="grid">
+              <table class="data-table">
                 <thead>
                   <tr><th>section</th><th>key</th><th>message</th><th>value</th></tr>
                 </thead>

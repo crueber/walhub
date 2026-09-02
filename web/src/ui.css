@@ -36,9 +36,11 @@
            dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600; }
 
   /* Tables */
-  .grid { @apply w-full text-sm; }
-  .grid th { @apply border-b border-zinc-200 px-3 py-2 text-left font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400; }
-  .grid td { @apply border-b border-zinc-100 px-3 py-1.5 dark:border-zinc-800/60; }
+  .data-table { @apply w-full text-sm; }
+  /* inside a horizontal-scroll wrapper, keep rows single-line */
+  .overflow-x-auto .data-table th, .overflow-x-auto .data-table td { @apply whitespace-nowrap; }
+  .data-table th { @apply border-b border-zinc-200 px-3 py-2 text-left font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400; }
+  .data-table td { @apply border-b border-zinc-100 px-3 py-1.5 dark:border-zinc-800/60; }
 
   /* Text helpers */
   .muted { @apply text-zinc-500 dark:text-zinc-400; }

@@ -284,7 +284,7 @@ export class ReposClient {
    * The fetch wrapper proper (§1.2): send → on 401 or opaque redirect,
    * single-flight popup auth → retry exactly once → dispatch by content type.
    */
-  async _call(path, { method = "GET", headers, body, signal, onProgress, sse = true } = {}) {
+  async _call(path, { method = "GET", headers, body, signal, onProgress, sse = true, raw = false } = {}) {
     const req = this._request(path, { method, headers, body, sse });
     const controller = this._controller(signal);
     let res = await this._send(req, controller);
@@ -298,9 +298,9 @@ export class ReposClient {
       controller.abort();
       const retryController = this._controller(signal);
       res = await this._send(req, retryController);
-      return this._dispatch(res, { url: req.url, onProgress, signal: retryController.signal });
+      return raw ? this._textResponse(res, req.url) : this._dispatch(res, { url: req.url, onProgress, signal: retryController.signal });
     }
-    return this._dispatch(res, { url: req.url, onProgress, signal: controller.signal });
+    return raw ? this._textResponse(res, req.url) : this._dispatch(res, { url: req.url, onProgress, signal: controller.signal });
   }
 
   /** Route a response by content type (§1.4); non-2xx → ReposError. */
@@ -319,6 +319,16 @@ export class ReposClient {
       return this._envelope(res, { url, onProgress, signal });
     }
     return this._jsonResponse(res, url);
+  }
+
+  /** Raw-text path (application/toml endpoints): resolve the body as text. */
+  async _textResponse(res, url) {
+    if (!res.ok && res.status !== 0) {
+      let text = "";
+      try { text = await res.text(); } catch { /* unreadable */ }
+      throw new ReposError(res.status, text.trim() || `HTTP ${res.status}`, url);
+    }
+    return res.text();
   }
 
   /** Plain-JSON path: parse and resolve; empty body → null. */

@@ -31,11 +31,11 @@ function StatusChip(props) {
 
 function KV(props) {
   return (
-    <table class="grid kv">
+    <div class="overflow-x-auto"><table class="data-table kv">
       <tbody>
         <For each={props.rows}>{([label, value]) => <tr><th class="w-40 align-top">{label}</th><td>{value}</td></tr>}</For>
       </tbody>
-    </table>
+    </table></div>
   );
 }
 
@@ -352,7 +352,7 @@ export default function Wal() {
 
               <OpsBox ctx={ctx} onLog={onLog} />
 
-              <div class="grid gap-4 md:grid-cols-2">
+              <div class="data-table gap-4 md:grid-cols-2">
                 <Card
                   title="Manifest"
                   body={
@@ -410,7 +410,7 @@ export default function Wal() {
                     <p class="muted mb-2 text-sm">
                       built {byStatus().built?.length ?? 0} · skipped {byStatus().skipped?.length ?? 0} · too-small {byStatus().too_small?.length ?? 0} · unavailable {byStatus().unavailable?.length ?? 0}
                     </p>
-                    <table class="grid plan-table">
+                    <div class="overflow-x-auto"><table class="data-table plan-table">
                       <thead>
                         <tr><th>strategy</th><th>slot</th><th>status</th><th>detail</th><th>bundle</th></tr>
                       </thead>
@@ -427,7 +427,7 @@ export default function Wal() {
                           )}
                         </For>
                       </tbody>
-                    </table>
+                    </table></div>
                   </>
                 }
               />
@@ -439,7 +439,7 @@ export default function Wal() {
                     when={(o().compactions ?? []).length > 0}
                     fallback={<p class="muted text-sm">no compactions recorded</p>}
                   >
-                    <table class="grid">
+                    <div class="overflow-x-auto"><table class="data-table">
                       <thead>
                         <tr><th>at_seq</th><th>at</th><th>tier</th><th>packs</th></tr>
                       </thead>
@@ -455,7 +455,7 @@ export default function Wal() {
                           )}
                         </For>
                       </tbody>
-                    </table>
+                    </table></div>
                   </Show>
                 }
               />
@@ -464,7 +464,7 @@ export default function Wal() {
                 title="WAL segments"
                 body={
                   <>
-                    <table class="grid segments-table">
+                    <div class="overflow-x-auto"><table class="data-table segments-table">
                       <thead>
                         <tr><th>seq</th><th>pack</th><th>entries</th></tr>
                       </thead>
@@ -479,7 +479,7 @@ export default function Wal() {
                           )}
                         </For>
                       </tbody>
-                    </table>
+                    </table></div>
                     <Show when={segments().length > 5}>
                       <button type="button" class="pill mt-2 cursor-pointer" onClick={() => setShowAll(!getShowAll())}>
                         {getShowAll() ? "newest 5" : "all"}

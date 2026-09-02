@@ -7,6 +7,7 @@ package server
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/config"
+	"git.packden.us/crueber/walhub/web"
 )
 
 func setupMergeServer(t *testing.T, dataDir string) (*Server, http.Handler) {
@@ -317,4 +319,68 @@ func TestSetupOpenWheneverAuthNone(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The built SPA assets must be served with the right caching class: hashed
+// vite bundles immutable, the shell no-cache (D-WEB-6). Regression for the
+// coverage gap after the SolidJS cutover.
+func TestServeUIAssetsCaching(t *testing.T) {
+	s, h := setupMergeServer(t, t.TempDir())
+	s.cfg.Server.Auth.Mode = "none"
+	s.cfg.Server.Auth.AnonymousRead = true
+	s.boot.Mode = "normal"
+
+	// find a real hashed bundle in the embed (make web ran before tests)
+	entries, err := webFilesGlob("dist/assets")
+	if err != nil || len(entries) == 0 {
+		t.Skipf("no built assets (run make web): %v", err)
+	}
+	jsName := ""
+	for _, e := range entries {
+		if strings.HasSuffix(e, ".js") {
+			jsName = strings.TrimPrefix(e, "dist/")
+			break
+		}
+	}
+	if jsName == "" {
+		t.Skip("no js asset built")
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://x/_ui/"+jsName, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("asset = %d", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+		t.Fatalf("hashed asset cache-control = %q, want immutable", cc)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/javascript; charset=utf-8" {
+		t.Fatalf("hashed asset content-type = %q", ct)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://x/_ui/index.html", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("index = %d", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("shell cache-control = %q, want no-cache", cc)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://x/_ui/nope.js", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown asset = %d", rec.Code)
+	}
+}
+
+func webFilesGlob(dir string) ([]string, error) {
+	var out []string
+	err := fs.WalkDir(web.FilesFS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasPrefix(p, dir+"/") {
+			out = append(out, p)
+		}
+		return nil
+	})
+	return out, err
 }

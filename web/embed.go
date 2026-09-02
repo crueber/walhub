@@ -4,7 +4,13 @@
 // toolchain. Only the BUILT artifacts ship in the binary — sources stay out.
 package web
 
-import "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
 //go:embed all:dist
 var Files embed.FS
+
+// FilesFS exposes the embedded tree as fs.FS for tests that enumerate assets.
+func FilesFS() fs.FS { return Files }

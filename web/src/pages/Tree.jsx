@@ -47,7 +47,7 @@ export default function Tree() {
             <>
               <Breadcrumb full={ctx.full} path={t().path ?? ""} head={shortRef(t().ref)} />
               <p class="muted mb-2 text-xs">{String(t().sha).slice(0, 12)} · {(t().entries ?? []).length} entries</p>
-              <table class="grid tree-table">
+              <table class="data-table tree-table">
                 <thead>
                   <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24">size</th></tr>
                 </thead>
