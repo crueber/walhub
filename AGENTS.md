@@ -76,7 +76,7 @@ contracts, exactly like `14_extensibility.md`.
     save is validated, written atomically to `<data-dir>/walhub.toml`, and lists restart-required keys.
 11. **Tests are the definition of done.** Backend: near-100% coverage, enforced — every `internal/...`
     package holds ≥ 95% statement coverage in CI (`make cover`), table-driven httptest for every handler,
-    `-race` mandatory. Frontend: vanilla JS tested with Node's built-in `node --test` (logic modules
+    `-race` mandatory. Frontend: JS tested with Node's built-in `node --test` (logic modules
     headless-testable, DOM kept thin). Never merge with skipped tests; never weaken a budget assertion to
     make it pass.
 12. **Documents change with the code.** Every doc has a `Decisions & deviations from the Rust design`
@@ -107,6 +107,49 @@ contracts, exactly like `14_extensibility.md`.
   web/). Wire/bucket identifiers (header names `X-Walgit-*`, config key names, bucket key paths, protobuf
   package `walgit.v1`) keep their Rust-era names — they are wire contracts, not branding.
 
+### Field lessons (each one shipped a real failure — do not relearn them)
+
+- **Env overlay keys are exact paths.** `WALHUB__STORE__S3__ENDPOINT`, never `WALHUB__STORE__ENDPOINT` —
+  a missing segment is recorded as an unknown key and silently ignored; `walhub config dump` (or
+  `check`) is how you catch it. rustfs/MinIO need `store.s3.force_path_style = true` (virtual-host
+  addressing 403s); healthchecks pin `127.0.0.1` (busybox `localhost` = `::1`, rustfs binds IPv4);
+  pnpm 11 needs `allowBuilds: { esbuild: true }` in `web/pnpm-workspace.yaml` (the package.json
+  `pnpm` field is dead). The compose examples encode all of this.
+- **`--data-dir` flag syncing must preserve the env overlay.** It re-points only the flag-derived
+  paths (`DataDir`, `Store.Root`, `Cache.Dir`); re-deriving `FirstRunDefaults` there silently
+  discarded every `WALHUB__*` override on zero-config boots (shipped and reverted once).
+- **Setup values round-trip through the overrides channel.** The setup API accepts exactly the
+  spellings the TOML file accepts: sizes (`64MiB`), `d`/`w` durations, floats, unsigned counters,
+  and `[[name]]` TOML fragments for struct slices (`bundles.strategy`, `server.auth.tokens`) decoded
+  by the field's toml name. `configCoerce` must use the shared `config` parsers — a UI save failing
+  "not an int"/"unsupported type" means the coerce path regressed.
+- **Schema lookups are by key name, never by section group.** Group layout changes (auth was split
+  out of `server`); `effectiveValue`/`restartKeys` and any new schema consumer match keys directly,
+  or `requires_restart` and diffs silently pollute with keys that did not change.
+- **Server values render in the spec spelling** (`64GiB`, `1h` — `fmtSpecSize`/`fmtSpecDuration`);
+  the setup page's editable values and its per-field examples (`FIELDS[].ex/note`) share one
+  spelling, and every example is tested to validate (client) and accepted by `/api/v1/setup/test`
+  (server).
+- **`node --test`: pass files or globs, never a directory.** Node 22 executes a directory positional
+  as a module (`Cannot find module …/web/test`); Node 24 accepts both. All entry points (`make
+  test-web`, Woodpecker, the GH workflow) use `web/test/unit/*.test.js`.
+- **Tests that spawn git pin their identity.** Annotated tags and `commit-tree` need an
+  author/committer; runners and containers have no global git config. `TestMain` in `internal/git`
+  and `internal/maintain` sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*` for spawned subprocesses only.
+  Reproduce environment gaps with `env -i PATH=… HOME=/tmp/nohome go test …`.
+- **Fresh clones compile.** `web/dist/.keep` is tracked because `go:embed all:dist` fails on a
+  missing directory — never gitignore it away, and build the web BEFORE `go test` in CI (the embed
+  shell is what `/setup` 200s on).
+- **GHCR publishing is the GitHub workflow's job.** Every push to the GitHub mirror
+  (`github.com/crueber/walhub`, auto-pushed from this Forgejo origin) runs
+  `.github/workflows/docker.yml`: test job → buildx publish of `ghcr.io/crueber/walhub`
+  (`latest`/`main`/semver/`sha-*`, linux/amd64). The test gate means a broken main publishes
+  nothing. README "Run with docker compose" documents pulling.
+- **Canonical host redirect bites headless UI drives.** `canonicalBrowserHost`
+  (`docs/go/06_server_http.md §2.2 #2`) 302s browser-looking loopback GETs from `127.0.0.1:<port>`
+  to `walgit.localhost:<port>` — curl fails the browser test and never redirects, so "curl says 200"
+  proves nothing about a browser path. Drive the UI against the canonical host (or expect the hop).
+
 ## 3. Quick orientation (what runs where)
 
 ```
@@ -128,6 +171,12 @@ web/                SolidJS SPA (JSX, no TypeScript; solid-js + @solidjs/router;
                     on it. The binary embeds dist/: the SPA shell at / and every UI route, hashed
                     assets at /_ui/assets/* (immutable), the bundle at /repos.js (module MIME is
                     load-bearing); /setup is a SPA route (open in setup-only mode too)
+Dockerfile          three-stage image (web build → static Go binary → alpine+git runtime, nonroot)
+compose*.y(ml)      compose.standalone.yml = walhub alone (filesystem store); compose.yaml = walhub +
+                    rustfs + create-bucket (the S3 rig, also `make dev-store`); both build from source
+.github/workflows   docker.yml on the GitHub mirror: test job → publish ghcr.io/crueber/walhub
+.woodpecker/        the Forgejo-origin CI pipeline (vet → web → test → js-test → … → image)
+```
 
 ## 4. Verification ladder (what to run before you say "done")
 
@@ -143,5 +192,7 @@ web/                SolidJS SPA (JSX, no TypeScript; solid-js + @solidjs/router;
    setup): load `/`, a repo page, and `/setup` in actual Chromium and check the console. Module
    scripts are MIME-enforced and import-map driven — "curl says 200" has shipped a blank page before
    (the uiAsset stub incident, 2026-09-01). A headless-Chrome CDP drive counts; a DOM-level fetch
-   smoke does not.
+   smoke does not. In this workspace the browser daemon is the hub-managed `chrome-cdp` process on
+   :9222 — drive it over the CDP WebSocket (navigate, evaluate, screenshot); remember the canonical
+   host redirect (§2 field lessons) when pointing it at a loopback port.
 9. If you appended a decision: the doc's "Decisions & deviations" section updated in the same commit.
