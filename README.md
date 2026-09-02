@@ -7,24 +7,22 @@ objects in a bucket (filesystem, S3, or GCS). Instances are disposable; wipe one
 but warmth.
 
 <p align="center">
-  <img src="docs/img/repo-overview.png" width="820" alt="Repository overview — refs, file tree, clone">
+  <a href="docs/img/repo-overview.png"><img src="docs/img/repo-overview.png" width="32%" alt="Repository overview: refs, file tree, clone"></a>
+  <a href="docs/img/code-view.png"><img src="docs/img/code-view.png" width="32%" alt="Blob view with syntax highlighting"></a>
+  <a href="docs/img/setup.png"><img src="docs/img/setup.png" width="32%" alt="Setup: labels left, fields right, working examples under every label"></a>
 </p>
-<p align="center">
-  <img src="docs/img/code-view.png" width="820" alt="Blob view with syntax highlighting">
-</p>
-<p align="center">
-  <img src="docs/img/setup.png" width="820" alt="Setup — every field with a working example, labels left, values right">
-</p>
+
+<p align="center"><sub>Browse repositories, read code, configure everything. Click any screenshot to view it full size.</sub></p>
 
 ## Inspired by walgit
 
-walhub exists because of **Tobi Lütke's fantastic [walgit](https://github.com/tobi/walgit)** — it
-proved a git host can put everything on an object store, and it is the inspiration for this project.
-Thank you, Tobi.
+walhub exists because of **Tobi Lütke's fantastic [walgit](https://github.com/tobi/walgit)**. It
+proved that a git host can put everything on an object store, and it is the direct inspiration for
+this project. Thank you, Tobi.
 
-We are trying to remain **object-protocol compliant** with walgit — the bucket key layout, the
-protobuf wire encoding, and git wire behavior — while building in a deliberately different visual
-direction. The UI you see above is ours.
+We aim to stay **object-protocol compliant** with walgit: the bucket key layout, the protobuf wire
+encoding, and git wire behavior all follow walgit's formats. The visual direction is our own, and
+as the screenshots above show, it looks quite different.
 
 ## Quick start
 
