@@ -2,11 +2,29 @@
 
 A git host in Go: **git over smart HTTP (v0/v2), LFS, bundle-uri, a JSON API with SSE, and a web UI — where the object store is the only database.**
 
-walhub is a Go rewrite of [walgit](https://github.com/crueber/walgit), built from the spec in
-[`docs/MASTER_RUST_SPEC.md`](docs/MASTER_RUST_SPEC.md) (behavior, normative) and
-[`docs/go/*.md`](docs/go/README.md) (the Go implementation spec). It serves repositories whose entire
-state — refs, packs, config, policy, events, web UI — lives as objects in a bucket (filesystem, S3, or
-GCS). Instances are disposable; wipe one and you lose nothing but warmth.
+It serves repositories whose entire state — refs, packs, config, policy, events, web UI — lives as
+objects in a bucket (filesystem, S3, or GCS). Instances are disposable; wipe one and you lose nothing
+but warmth.
+
+<p align="center">
+  <img src="docs/img/repo-overview.png" width="820" alt="Repository overview — refs, file tree, clone">
+</p>
+<p align="center">
+  <img src="docs/img/code-view.png" width="820" alt="Blob view with syntax highlighting">
+</p>
+<p align="center">
+  <img src="docs/img/setup.png" width="820" alt="Setup — every field with a working example, labels left, values right">
+</p>
+
+## Inspired by walgit
+
+walhub exists because of **Tobi Lütke's fantastic [walgit](https://github.com/tobi/walgit)** — it
+proved a git host can put everything on an object store, and it is the inspiration for this project.
+Thank you, Tobi.
+
+We are trying to remain **object-protocol compliant** with walgit — the bucket key layout, the
+protobuf wire encoding, and git wire behavior — while building in a deliberately different visual
+direction. The UI you see above is ours.
 
 ## Quick start
 
@@ -78,11 +96,6 @@ the same standalone shape as above, built from source instead of pulled.
 | Subsystems | `internal/{bundle,events,maintain,policy,setup,config}` | bundle-uri scheduler, webhook bridge, maintainer loop, push policy rule language, bootstrap, config |
 | Frontend | `web/` | SolidJS SPA + Tailwind v4 (CSS-first) and a dependency-free `repos.js` SDK; vite + esbuild build both into `web/dist/` for embedding |
 
-Design laws (short form — full text in [`AGENTS.md`](AGENTS.md)): dependency budget is law; the bucket
-is the repository and the manifest CAS is the only commit point; no LIST on hot paths; round trips are
-the cost model; no silent waiting (long work is a narrated task); every concurrent design carries a
-`### Concurrency` subsection; documents change with the code.
-
 ## Development
 
 ```sh
@@ -99,18 +112,6 @@ Backend: Go 1.27 (module `git.packden.us/crueber/walhub`), exactly three third-p
 Actions (`.github/workflows/docker.yml`) tests the mirror and publishes the image to GHCR on
 every push. The container build is `Dockerfile`, with compose examples in
 `compose.standalone.yml` (filesystem store) and `compose.yaml` (S3-backed via rustfs).
-
-**Before you say "done"**, run the verification ladder in [`AGENTS.md §4`](AGENTS.md) — and if you
-touched `web/` or static serving, load the UI in a real browser: module scripts are MIME-enforced, so
-"curl says 200" has never been sufficient.
-
-## Documentation
-
-- [`AGENTS.md`](AGENTS.md) — the operating manual (humans and agents): laws, working rules, verification ladder.
-- [`docs/go/`](docs/go/README.md) — the Go implementation spec, one self-sufficient doc per package; each ends with its own decisions ledger.
-- [`docs/MASTER_RUST_SPEC.md`](docs/MASTER_RUST_SPEC.md) — the behavior baseline from the Rust reference.
-- [`DEVIATIONS.md`](DEVIATIONS.md) — every deliberate divergence from the Rust design, deduplicated.
-- [`docs/features/`](docs/features/README.md) — planned collaboration layer (orgs/permissions, issues, PRs, review, checks, notifications, releases), bucket-native, WAL stays git-only.
 
 ## License
 
