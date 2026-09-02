@@ -1,0 +1,72 @@
+# .github/workflows/docker.yml — publish the OCI image to GHCR on every push
+# to main (the git.packden.us Forgejo origin auto-pushes here) and on version
+# tags. linux/amd64 only for now; add linux/arm64 to `platforms` when needed
+# (QEMU makes the Go stage slow).
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # The merge gate runs on the Forgejo origin (Woodpecker); this is the
+  # compile/test smoke for what actually lands on the GitHub mirror. The web
+  # build comes first: go test embeds web/dist (same order as the pipeline).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: build the web (embedded dist)
+        run: pnpm --dir web install --frozen-lockfile && make web
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: vet + fast Go tests
+        run: go vet ./... && go test -short -count=1 ./...
+      - name: headless JS tests
+        run: node --test web/test/
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/crueber/walhub
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: WALHUB_BUILD_SHA=${{ github.sha }}
