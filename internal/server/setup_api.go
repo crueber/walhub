@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -82,6 +83,8 @@ func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
 // top-level field, key = "<section>.<field>[.<subfield>…]". Nested section
 // structs (server.auth.*) flatten into dotted keys — they are real editable
 // settings, not one opaque row. Types: string|int|bool|duration|list.
+// The auth subsection is split into its own card: the setup UI treats auth
+// as a first-class section whose fields depend on server.auth.mode.
 func buildSchemaGroups(effective, def *config.Config) []setupSchemaGroup {
 	rv, dv := reflect.ValueOf(*effective), reflect.ValueOf(*def)
 	rt := rv.Type()
@@ -94,9 +97,28 @@ func buildSchemaGroups(effective, def *config.Config) []setupSchemaGroup {
 		}
 		g := setupSchemaGroup{Section: section, Keys: []setupSchemaEntry{}}
 		appendSchemaKeys(&g, section+".", rv.Field(i), dv.Field(i))
-		if len(g.Keys) > 0 {
-			groups = append(groups, g)
+		if len(g.Keys) == 0 {
+			continue
 		}
+		if section == "server" {
+			serverKeys := []setupSchemaEntry{}
+			authKeys := []setupSchemaEntry{}
+			for _, k := range g.Keys {
+				if strings.HasPrefix(k.Key, "server.auth.") {
+					authKeys = append(authKeys, k)
+				} else {
+					serverKeys = append(serverKeys, k)
+				}
+			}
+			if len(serverKeys) > 0 {
+				groups = append(groups, setupSchemaGroup{Section: "server", Keys: serverKeys})
+			}
+			if len(authKeys) > 0 {
+				groups = append(groups, setupSchemaGroup{Section: "auth", Keys: authKeys})
+			}
+			continue
+		}
+		groups = append(groups, g)
 	}
 	return groups
 }
@@ -411,6 +433,100 @@ func (s *Server) setupTest(w http.ResponseWriter, r *http.Request) {
 	writeJSONBody(w, http.StatusOK, map[string]any{"errors": []setupError{}})
 }
 
+// setupAuthTest answers POST /api/v1/setup/auth/test: probe the OIDC
+// discovery document of the issuer in the FORM (not the saved config) so the
+// auth card's Test button validates what the operator typed. Fails with 422
+// {errors} when discovery is unreachable, malformed, or disagrees with the
+// configured issuer (an OIDC discovery document MUST name its own issuer).
+func (s *Server) setupAuthTest(w http.ResponseWriter, r *http.Request) {
+	if !s.setupAccess(w, r) {
+		return
+	}
+	var req struct {
+		Issuer      string `json:"issuer"`
+		ClientID    string `json:"client_id"`
+		RedirectURI string `json:"redirect_uri"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil || json.Unmarshal(body, &req) != nil {
+		writeJSONBody(w, http.StatusUnprocessableEntity, map[string]any{
+			"errors": []setupError{{Message: "body must be JSON {issuer, client_id, redirect_uri}"}},
+		})
+		return
+	}
+	issuer := strings.TrimRight(strings.TrimSpace(req.Issuer), "/")
+	errs := []setupError{}
+	if issuer == "" {
+		errs = append(errs, setupError{Key: "server.auth.issuer", Message: "issuer is required (e.g. https://id.example.com)"})
+	}
+	if uri := strings.TrimSpace(req.RedirectURI); uri != "" && !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
+		errs = append(errs, setupError{Key: "redirect_uri", Message: fmt.Sprintf("redirect_uri %q must be an http(s) URL", uri)})
+	}
+	if len(errs) > 0 {
+		writeJSONBody(w, http.StatusUnprocessableEntity, map[string]any{"errors": errs})
+		return
+	}
+
+	doc := struct {
+		Issuer                 string   `json:"issuer"`
+		AuthorizationEndpoint  string   `json:"authorization_endpoint"`
+		TokenEndpoint          string   `json:"token_endpoint"`
+		JWKSURI                string   `json:"jwks_uri"`
+		ScopesSupported        []string `json:"scopes_supported"`
+		IDTokenSigningAlgValue []string `json:"id_token_signing_alg_values_supported"`
+	}{}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(issuer + "/.well-known/openid-configuration")
+	if err != nil {
+		writeJSONBody(w, http.StatusUnprocessableEntity, map[string]any{
+			"errors": []setupError{{Key: "server.auth.issuer", Message: fmt.Sprintf("discovery fetch failed: %v", err)}},
+		})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeJSONBody(w, http.StatusUnprocessableEntity, map[string]any{
+			"errors": []setupError{{Key: "server.auth.issuer", Message: fmt.Sprintf("discovery returned %d from %s/.well-known/openid-configuration", resp.StatusCode, issuer)}},
+		})
+		return
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
+		writeJSONBody(w, http.StatusUnprocessableEntity, map[string]any{
+			"errors": []setupError{{Key: "server.auth.issuer", Message: fmt.Sprintf("discovery response is not a valid OIDC discovery document: %v", err)}},
+		})
+		return
+	}
+	if doc.Issuer != issuer {
+		errs = append(errs, setupError{Key: "server.auth.issuer", Message: fmt.Sprintf("discovery issuer %q does not match the configured issuer %q — use the exact value the document names", doc.Issuer, issuer)})
+	}
+	for _, m := range []struct {
+		field, what string
+	}{
+		{doc.AuthorizationEndpoint, "authorization_endpoint"},
+		{doc.TokenEndpoint, "token_endpoint"},
+		{doc.JWKSURI, "jwks_uri"},
+	} {
+		if m.field == "" {
+			errs = append(errs, setupError{Key: "server.auth.issuer", Message: fmt.Sprintf("discovery document is missing %s (required by OIDC Discovery)", m.what)})
+		}
+	}
+	if len(errs) > 0 {
+		writeJSONBody(w, http.StatusUnprocessableEntity, map[string]any{"errors": errs})
+		return
+	}
+	writeJSONBody(w, http.StatusOK, map[string]any{
+		"ok":                     true,
+		"issuer":                 doc.Issuer,
+		"authorization_endpoint": doc.AuthorizationEndpoint,
+		"token_endpoint":         doc.TokenEndpoint,
+		"jwks_uri":               doc.JWKSURI,
+		"scopes_supported":       doc.ScopesSupported,
+		"signing_algs":           doc.IDTokenSigningAlgValue,
+		"redirect_uri":           strings.TrimSpace(req.RedirectURI),
+		"client_id_present":      strings.TrimSpace(req.ClientID) != "",
+	})
+}
+
 // setupPut answers PUT /api/v1/setup: validate + atomically write
 // <data-dir>/walhub.toml via config.SaveSetup, then respond
 // 200 {saved, requires_restart, errors} (§3.4).
@@ -464,17 +580,10 @@ func restartKeys(effective, candidate *config.Config) []string {
 	}
 	return out
 }
-
 func effectiveValue(c *config.Config, key string) any {
-	parts := strings.SplitN(key, ".", 2)
-	if len(parts) != 2 {
-		return nil
-	}
-	groups := buildSchemaGroups(c, c)
-	for _, g := range groups {
-		if g.Section != parts[0] {
-			continue
-		}
+	// Keys are unique across the schema (the auth subsection lives in its own
+	// group, so a section-prefix lookup would miss server.auth.*).
+	for _, g := range buildSchemaGroups(c, c) {
 		for _, k := range g.Keys {
 			if k.Key == key {
 				return k.Value

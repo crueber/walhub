@@ -43,6 +43,7 @@
                     /* keep the example legible while typing — never hidden */ white-space: pre-wrap; }
   .setup-ex { @apply font-mono text-[11px] text-zinc-600 dark:text-zinc-300; }
   .setup-note { @apply block text-[11px] text-zinc-400 dark:text-zinc-500; }
+  .setup-callout { @apply mb-3 rounded-lg border border-sky-300 bg-sky-50 p-3 dark:border-sky-900 dark:bg-sky-950/50; }
 
   /* Tables */
   .data-table { @apply w-full text-sm; }

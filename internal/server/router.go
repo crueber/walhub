@@ -144,6 +144,7 @@ func (s *Server) setupAPIRouter() http.Handler {
 	m.HandleFunc("GET /api/v1/setup", s.setupGet)
 	m.HandleFunc("POST /api/v1/setup/test", s.setupTest)
 	m.HandleFunc("PUT /api/v1/setup", s.setupPut)
+	m.HandleFunc("POST /api/v1/setup/auth/test", s.setupAuthTest)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		plainStatus(w, http.StatusNotFound, "not found")
 	})

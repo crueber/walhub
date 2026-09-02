@@ -4,9 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   validateSetup, normalizeSetup, isRestartLikely, parseDuration, parseSize, FIELDS,
-  fmtSpecDuration, fmtSpecSize, strategiesToToml,
+  fmtSpecDuration, fmtSpecSize, tomlFragment, fieldAppliesToMode,
 } from "../../src/lib/setup.js";
-
 const errs = (values) => validateSetup(values);
 const fatals = (values) => validateSetup(values).filter((e) => e.severity === "error");
 const warns = (values) => validateSetup(values).filter((e) => e.severity === "warn");
@@ -269,17 +268,39 @@ test("fmtSpecSize renders byte counts in the spec spelling", () => {
   assert.equal(fmtSpecSize(null), "");
 });
 
-test("strategiesToToml renders the parsed strategies as an editable fragment", () => {
-  const fragment = strategiesToToml([
+test("tomlFragment renders parsed struct lists as editable fragments", () => {
+  const fragment = tomlFragment([
     { name: "weekly", kind: "full", schedule: "0 0 23 * * 0", keep: 2, backfill_max: 1 },
     { name: "daily", kind: "incremental", base: "weekly", schedule: "0 0 23 * * *", chain: true },
-  ]);
+  ], "strategy", ["name", "kind", "base", "schedule", "keep", "backfill_max", "chain"]);
   // keys are normalized to toml spellings; presence asserted, order is not
   assert.match(fragment, /\[\[strategy\]\]\nname = "weekly"[\s\S]*kind = "full"[\s\S]*schedule = "0 0 23 \* \* 0"[\s\S]*keep = 2/);
   assert.match(fragment, /\[\[strategy\]\]\nname = "daily"[\s\S]*base = "weekly"[\s\S]*chain = true/);
-  assert.equal(strategiesToToml([]), "");
-  assert.equal(strategiesToToml(null), "");
-  // the example + the rendered fragment both validate (toml is server-checked)
-  const parsed = fragment.split("\n\n").length;
-  assert.equal(parsed, 2);
+  assert.equal(tomlFragment([], "strategy"), "");
+  assert.equal(tomlFragment(null, "strategy"), "");
+  // unknown Go spellings normalize to the known keys instead of leaking
+  const KEYS = ["name", "kind", "base", "schedule", "keep", "backfill_max", "chain"];
+  assert.doesNotMatch(tomlFragment([{ Name: "x", Kind: "full" }], "strategy", KEYS), /Name = /);
+  assert.equal(tomlFragment([{ Name: "x", Kind: "full" }], "strategy", KEYS), '[[strategy]]\nname = "x"\nkind = "full"');
+});
+
+test("fieldAppliesToMode gates auth fields by server.auth.mode", () => {
+  for (const f of FIELDS) {
+    if (!f.key.startsWith("server.auth.")) {
+      assert.equal(fieldAppliesToMode(f, "none"), true, `${f.key} must be unconditional`);
+      continue;
+    }
+    if (f.key === "server.auth.mode") assert.equal(fieldAppliesToMode(f, "none"), true);
+    if (f.modes) {
+      assert.ok(f.modes.every((m) => ["none", "token", "oidc"].includes(m)), `${f.key}: bad modes`);
+      assert.equal(fieldAppliesToMode(f, "none"), false, `${f.key} must hide in none mode`);
+      assert.equal(fieldAppliesToMode(f, f.modes[0]), true, `${f.key} must show in ${f.modes[0]}`);
+    }
+  }
+  // grounded spot checks against the validator's per-mode requirements
+  const byKey = new Map(FIELDS.map((f) => [f.key, f]));
+  assert.deepEqual(byKey.get("server.auth.issuer").modes, ["oidc"]);
+  assert.deepEqual(byKey.get("server.auth.tokens").modes, ["token", "oidc"]);
+  assert.deepEqual(byKey.get("server.auth.anonymous_read").modes, ["token", "oidc"]);
+  assert.deepEqual(byKey.get("server.auth.trusted_forwarders").modes, ["token", "oidc"]);
 });

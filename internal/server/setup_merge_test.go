@@ -7,6 +7,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -431,4 +432,120 @@ func webFilesGlob(dir string) ([]string, error) {
 		return nil
 	})
 	return out, err
+}
+
+// The auth subsection is its own schema group (the setup page's auth card),
+// immediately after server, and the server group no longer lists auth keys.
+func TestSetupSchemaSplitsAuthGroup(t *testing.T) {
+	s, _ := setupMergeServer(t, t.TempDir())
+	groups := buildSchemaGroups(s.cfg, config.Defaults())
+	if len(groups) < 3 || groups[0].Section != "server" || groups[1].Section != "auth" || groups[2].Section != "store" {
+		sections := make([]string, len(groups))
+		for i, g := range groups {
+			sections[i] = g.Section
+		}
+		t.Fatalf("group sections = %v, want [server auth store ...]", sections)
+	}
+	for _, k := range groups[0].Keys {
+		if strings.HasPrefix(k.Key, "server.auth.") {
+			t.Fatalf("server group still carries auth key %q", k.Key)
+		}
+	}
+	foundMode := false
+	for _, k := range groups[1].Keys {
+		if !strings.HasPrefix(k.Key, "server.auth.") {
+			t.Fatalf("auth group carries non-auth key %q", k.Key)
+		}
+		if k.Key == "server.auth.mode" {
+			foundMode = true
+		}
+	}
+	if !foundMode {
+		t.Fatal("auth group is missing server.auth.mode")
+	}
+}
+
+// POST /api/v1/setup/auth/test probes the OIDC discovery document of the
+// issuer in the request: ok, issuer mismatch, unreachable, and missing
+// required endpoints.
+func TestSetupAuthTestDiscovery(t *testing.T) {
+	doc := map[string]any{
+		"issuer":                 "", // filled per case
+		"authorization_endpoint": "https://id.example.com/authorize",
+		"token_endpoint":         "https://id.example.com/token",
+		"jwks_uri":               "https://id.example.com/jwks",
+	}
+	var served map[string]any
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		json.NewEncoder(w).Encode(served)
+	}))
+	defer idp.Close()
+
+	post := func(s *Server, body string) (int, map[string]any) {
+		req := httptest.NewRequest("POST", "/api/v1/setup/auth/test", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		s.setupAuthTest(rec, req)
+		var out map[string]any
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	errMsgs := func(out map[string]any) []string {
+		var msgs []string
+		for _, e := range out["errors"].([]any) {
+			m, _ := e.(map[string]any)["message"].(string)
+			msgs = append(msgs, m)
+		}
+		return msgs
+	}
+
+	s, _ := setupMergeServer(t, t.TempDir())
+
+	// ok: discovery document whose issuer matches the configured value.
+	served = map[string]any{"issuer": idp.URL, "authorization_endpoint": doc["authorization_endpoint"],
+		"token_endpoint": doc["token_endpoint"], "jwks_uri": doc["jwks_uri"]}
+	code, out := post(s, fmt.Sprintf(`{"issuer": %q, "client_id": "walhub-web", "redirect_uri": "http://localhost:8080/_auth/callback"}`, idp.URL))
+	if code != http.StatusOK || out["ok"] != true {
+		t.Fatalf("ok case = %d %v", code, out)
+	}
+	if out["authorization_endpoint"] != "https://id.example.com/authorize" {
+		t.Fatalf("endpoints missing from the response: %v", out)
+	}
+
+	// issuer mismatch: the document names a different issuer → 422.
+	served["issuer"] = "https://elsewhere.example.com"
+	code, out = post(s, fmt.Sprintf(`{"issuer": %q}`, idp.URL))
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch case = %d %v", code, out)
+	}
+	if msgs := errMsgs(out); len(msgs) != 1 || !strings.Contains(msgs[0], "does not match") {
+		t.Fatalf("mismatch messages = %v", msgs)
+	}
+
+	// missing required endpoint → 422.
+	served["issuer"] = idp.URL
+	delete(served, "jwks_uri")
+	code, out = post(s, fmt.Sprintf(`{"issuer": %q}`, idp.URL))
+	if code != http.StatusUnprocessableEntity || !strings.Contains(strings.Join(errMsgs(out), "; "), "jwks_uri") {
+		t.Fatalf("missing-endpoint case = %d %v", code, out)
+	}
+
+	// unreachable issuer → 422 with a fetch failure message.
+	code, out = post(s, `{"issuer": "http://127.0.0.1:1"}`)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(strings.Join(errMsgs(out), "; "), "discovery fetch failed") {
+		t.Fatalf("unreachable case = %d %v", code, out)
+	}
+
+	// missing issuer → 422, keyed to server.auth.issuer.
+	code, out = post(s, `{}`)
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing-issuer case = %d %v", code, out)
+	}
+	if keys, _ := out["errors"].([]any); len(keys) == 0 || keys[0].(map[string]any)["key"] != "server.auth.issuer" {
+		t.Fatalf("missing-issuer errors = %v", out)
+	}
 }

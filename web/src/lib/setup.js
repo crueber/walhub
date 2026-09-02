@@ -100,33 +100,41 @@ function s0(v) {
 }
 
 const STRATEGY_KEYS = ["name", "kind", "base", "schedule", "keep", "backfill_max", "chain", "filter", "refs", "min_commits"];
+const TOKEN_KEYS = ["principal", "token", "token_env", "write", "admin"];
 
-/** Render the server's parsed strategies as the [[strategy]] TOML fragment the
-    textarea edits (round-trips through the overrides channel). */
-export function strategiesToToml(list) {
+/** Render the server's parsed array-of-struct values (bundles.strategy,
+    server.auth.tokens) as the [[name]] TOML fragment the textarea edits —
+    `name` is the field's toml name, `known` its struct's key order. Keys are
+    normalized to the TOML spellings (the schema surfaces Go field names) and
+    round-trip through the overrides channel. */
+export function tomlFragment(list, name, known = []) {
   if (!Array.isArray(list) || list.length === 0) return "";
   const val = (v) => {
     if (typeof v === "string") return JSON.stringify(v);
     if (Array.isArray(v)) return `[${v.map((x) => JSON.stringify(String(x))).join(", ")}]`;
     return String(v);
   };
+  const norm = (k) => known.find((s) => s.replace(/_/g, "").toLowerCase() === k.replace(/_/g, "").toLowerCase()) ?? k;
   return list
     .map((t) => {
-      // The schema surfaces Go field names (no json tags); render the TOML
-      // spellings the server decodes (case/underscore-insensitive match).
-      const norm = (k) => STRATEGY_KEYS.find((s) => s.replace(/_/g, "").toLowerCase() === k.replace(/_/g, "").toLowerCase()) ?? k;
       const entries = Object.entries(t).map(([k, v]) => [norm(k), v]);
       entries.sort(([a], [b]) => {
-        const ia = STRATEGY_KEYS.indexOf(a), ib = STRATEGY_KEYS.indexOf(b);
-        return (ia === -1 ? STRATEGY_KEYS.length : ia) - (ib === -1 ? STRATEGY_KEYS.length : ib) || a.localeCompare(b);
+        const ia = known.indexOf(a), ib = known.indexOf(b);
+        return (ia === -1 ? known.length : ia) - (ib === -1 ? known.length : ib) || a.localeCompare(b);
       });
       const body = entries
-        .filter(([, v]) => v !== undefined && v !== null && v !== "" && v !== false && v !== 0)
+        .filter(([k, v]) => v !== undefined && v !== null && v !== "" && v !== false && v !== 0 && known.includes(k))
         .map(([k, v]) => `${k} = ${val(v)}`)
         .join("\n");
-      return `[[strategy]]\n${body}`;
+      return `[[${name}]]\n${body}`;
     })
     .join("\n\n");
+}
+
+/** Whether a field row applies to the effective server.auth.mode — FIELDS
+    entries without `modes` are unconditional. */
+export function fieldAppliesToMode(field, mode) {
+  return !field?.modes || field.modes.includes(mode);
 }
 
 // --- field metadata: type + enum + example per 11_config_cli.md §2 ------------
@@ -156,20 +164,21 @@ export const FIELDS = [
   { key: "server.tls.key", type: "string", ex: "/etc/walhub/tls/privkey.pem" },
   { key: "server.tls.hostnames", type: "list", ex: "git.example.com, walhub.local" },
   { key: "server.auth.mode", type: "enum", enum: ["none", "token", "oidc"], ex: "token", note: "oidc additionally needs issuer, an allowlist, and anonymous_read=false" },
-  { key: "server.auth.anonymous_read", type: "bool", ex: "false" },
-  { key: "server.auth.session_secret", type: "string", ex: "b3f1c0a9d8e27f645c31b0a98d7e6f5c4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d", note: "any random ≥ 32 bytes (openssl rand -hex 32); rotating revokes sessions" },
-  { key: "server.auth.session_ttl", type: "duration", ex: "12h" },
-  { key: "server.auth.access_token_ttl", type: "duration", ex: "24h" },
-  { key: "server.auth.issuer", type: "url", ex: "https://id.example.com", note: "oidc mode only" },
-  { key: "server.auth.allowed_domains", type: "list", ex: "example.com" },
-  { key: "server.auth.allowed_emails", type: "list", ex: "alice@example.com" },
-  { key: "server.auth.write_domains", type: "list", ex: "example.com" },
-  { key: "server.auth.oauth_client_id", type: "string", ex: "walhub-web", note: "client_id and client_secret go together" },
-  { key: "server.auth.oauth_client_secret", type: "string", ex: "client-secret-from-the-issuer" },
-  { key: "server.auth.audiences", type: "list", ex: "walhub-web" },
-  { key: "server.auth.trusted_forwarders", type: "list", ex: "edge.internal" },
-  { key: "server.auth.admin_emails", type: "list", ex: "admin@example.com" },
-  { key: "server.auth.admin_domains", type: "list", ex: "example.com" },
+  { key: "server.auth.anonymous_read", type: "bool", ex: "false", modes: ["token", "oidc"], note: "must be false in oidc mode" },
+  { key: "server.auth.tokens", type: "toml", modes: ["token", "oidc"], tomlKeys: TOKEN_KEYS, ex: '[[tokens]]\nprincipal = "ci"\ntoken_env = "WALHUB_CI_TOKEN"\nwrite = true', note: "robots/static credentials — one [[tokens]] table each; admin = true grants admin" },
+  { key: "server.auth.session_secret", type: "string", ex: "b3f1c0a9d8e27f645c31b0a98d7e6f5c4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d", modes: ["oidc"], note: "any random ≥ 32 bytes (openssl rand -hex 32); rotating revokes sessions" },
+  { key: "server.auth.session_ttl", type: "duration", ex: "12h", modes: ["oidc"] },
+  { key: "server.auth.access_token_ttl", type: "duration", ex: "24h", modes: ["oidc"] },
+  { key: "server.auth.issuer", type: "url", ex: "https://id.example.com", modes: ["oidc"], note: "discovery at <issuer>/.well-known/openid-configuration" },
+  { key: "server.auth.allowed_domains", type: "list", ex: "example.com", modes: ["oidc"] },
+  { key: "server.auth.allowed_emails", type: "list", ex: "alice@example.com", modes: ["oidc"] },
+  { key: "server.auth.write_domains", type: "list", ex: "example.com", modes: ["oidc"], note: "omit = every admitted identity may write" },
+  { key: "server.auth.oauth_client_id", type: "string", ex: "walhub-web", modes: ["oidc"], note: "client_id and client_secret go together" },
+  { key: "server.auth.oauth_client_secret", type: "string", ex: "client-secret-from-the-issuer", modes: ["oidc"] },
+  { key: "server.auth.audiences", type: "list", ex: "walhub-web", modes: ["oidc"] },
+  { key: "server.auth.trusted_forwarders", type: "list", ex: "edge.internal", modes: ["token", "oidc"] },
+  { key: "server.auth.admin_emails", type: "list", ex: "admin@example.com", modes: ["oidc"] },
+  { key: "server.auth.admin_domains", type: "list", ex: "example.com", modes: ["oidc"] },
   // store
   { key: "store.backend", type: "enum", enum: ["s3", "gcs", "memory", "filesystem"], ex: "filesystem", note: "s3/gcs also need store.bucket and their subsection" },
   { key: "store.bucket", type: "string", ex: "walhub-test" },
@@ -232,7 +241,7 @@ export const FIELDS = [
   { key: "placement.serve_exclude", type: "globs", ex: "secret/*" },
   { key: "placement.maintain", type: "globs", ex: "*" },
   { key: "placement.maintain_exclude", type: "globs", ex: "archive/*" },
-  // compaction
+  { key: "bundles.strategy", type: "toml", tomlKeys: STRATEGY_KEYS, ex: '[[strategy]]\nname = "weekly"\nkind = "full"\nschedule = "0 0 23 * * 0"\nkeep = 2', note: "TOML array of [[strategy]] — replaces the built-in weekly/daily/hourly set" },
   { key: "compaction.enabled", type: "bool", ex: "true" },
   { key: "compaction.factor", type: "float", min: 1, ex: "4" },
   { key: "compaction.trigger_packs", type: "int", min: 2, ex: "8" },

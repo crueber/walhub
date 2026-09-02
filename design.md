@@ -65,7 +65,11 @@ are used consistently:
   the control (`for`/`id`, `aria-labelledby` for the bool switch). `.setup-examples` (+ `.setup-ex`,
   `.setup-note`) renders the field's working example under the label — it is real markup, never a
   placeholder, so it stays visible while typing; examples live in `lib/setup.js` `FIELDS[].ex/note`
-  and are tested to validate (web/test/unit/setup-form.test.js).
+  and are tested to validate (web/test/unit/setup-form.test.js). **Auth is its own card** after
+  `server`; auth rows are mode-conditional via `FIELDS[].modes` (`fieldAppliesToMode`), the card
+  shows the copyable OIDC redirect URI (`<public_url|origin>/_auth/callback`) in oidc mode, and
+  its **Test OIDC setup** button probes `<issuer>/.well-known/openid-configuration` via
+  `POST /api/v1/setup/auth/test` (issuer mismatch / missing endpoints / unreachable → 422).
 - `.data-table` — **the table class. Never name anything `.grid`** — it collides with Tailwind's
   `display: grid` utility and silently breaks the table (this shipped once).
 - `.code-view`, `.markdown-body`, `.diff-add/.diff-del/.diff-hunk`, `.tok-*` — rendering surfaces.
