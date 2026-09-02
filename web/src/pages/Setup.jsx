@@ -1,0 +1,289 @@
+// web/src/pages/Setup.jsx — §2.10 Setup UI (route /setup): schema-grouped cards
+// with effective values, client validation mirroring the server (lib/setup.js,
+// debounced per-keystroke hints), Validate → POST /api/v1/setup/test,
+// Save → PUT /api/v1/setup, restart-required hints, setup-only-mode error banner.
+// Dogfood exception (§6): plain fetch for the three /api/v1/setup* endpoints —
+// the SDK surface does not include them. WALHUB_SETUP_TOKEN hosts take the
+// token as a query param (?token=…) — read once, never stored.
+
+import { createSignal, onCleanup, For, Show, Switch, Match } from "solid-js";
+import { reportError } from "../lib/data.js";
+import { validateSetup, normalizeSetup, isRestartLikely, FIELDS } from "../lib/setup.js";
+
+const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
+
+async function getSetup(token) {
+  const res = await fetch(`/api/v1/setup${token ? `?token=${encodeURIComponent(token)}` : ""}`, { credentials: "same-origin" });
+  if (res.status === 403) {
+    const body = await res.text();
+    return { access: "denied", detail: body };
+  }
+  if (!res.ok) throw new Error(`GET /api/v1/setup: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+async function postSetup(method, payload, token) {
+  const res = await fetch(`/api/v1/setup${method === "PUT" ? "" : "/test"}${token ? `?token=${encodeURIComponent(token)}` : ""}`, {
+    method,
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = res.headers.get("content-type")?.includes("json") ? await res.json() : { errors: [{ key: "", message: await res.text() }] };
+  return { status: res.status, body };
+}
+
+// The server sends typed values (bool, arrays); the form edits strings.
+function initialText(row) {
+  const v = row.value;
+  return v === null || v === undefined ? "" : Array.isArray(v) ? v.join(", ") : String(v);
+}
+
+function FieldInput(props) {
+  const type = () => props.field?.type ?? "string";
+  const set = (v) => props.onInput(props.k, v);
+  return (
+    <Switch>
+      <Match when={type() === "bool"}>
+        <input
+          type="checkbox"
+          checked={/^(true|1|on|yes)$/i.test(props.value() ?? "")}
+          onChange={(e) => set(e.currentTarget.checked ? "true" : "false")}
+        />
+      </Match>
+      <Match when={type() === "enum"}>
+        <select class="input md:w-72" onChange={(e) => set(e.currentTarget.value)}>
+          <option value="" selected={!props.value()}>(default)</option>
+          <For each={props.field?.enum ?? []}>
+            {(v) => <option value={v} selected={props.value() === v}>{v}</option>}
+          </For>
+        </select>
+      </Match>
+      <Match when={type() === "toml"}>
+        <textarea
+          class="input font-mono text-xs"
+          rows="4"
+          spellcheck={false}
+          placeholder="TOML only — validated server-side"
+          value={props.value() ?? ""}
+          onInput={(e) => set(e.currentTarget.value)}
+        />
+      </Match>
+      <Match when={type() === "list" || type() === "globs"}>
+        <input
+          class="input md:max-w-md"
+          type="text"
+          value={Array.isArray(props.value()) ? props.value().join(", ") : (props.value() ?? "")}
+          onInput={(e) => set(e.currentTarget.value)}
+        />
+      </Match>
+      <Match when={type() === "int" || type() === "float"}>
+        <input class="input md:max-w-md" type="number" step="any" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+      </Match>
+      <Match when={type() === "duration"}>
+        <input class="input md:max-w-md" type="text" placeholder="e.g. 5m, 1h, 0" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+      </Match>
+      <Match when={type() === "size"}>
+        <input class="input md:max-w-md" type="text" placeholder="e.g. 64MiB, 0B" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+      </Match>
+      <Match when={true}>
+        <input class="input md:max-w-md" type={props.field?.secret ? "password" : "text"} value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+      </Match>
+    </Switch>
+  );
+}
+
+export default function Setup() {
+  // WALHUB_SETUP_TOKEN hosts: query param on the three calls, never stored.
+  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+
+  const [getData, setData] = createSignal(null);
+  const [getValues, setValues] = createSignal({});
+  const [getErrors, setErrors] = createSignal([]);
+  const [getResult, setResult] = createSignal(null); // {kind: "test"|"save", status, body, hint?}
+  let debounce = 0;
+
+  onCleanup(() => clearTimeout(debounce));
+
+  const onInput = (key, value) => {
+    setValues((v) => ({ ...v, [key]: value }));
+    clearTimeout(debounce);
+    debounce = setTimeout(() => setErrors(validateSetup(getValues())), 250); // per-keystroke inline hints (debounced 250 ms)
+  };
+
+  const validateErrors = () => {
+    const all = validateSetup(getValues());
+    setErrors(all);
+    return all.filter((e) => e.severity === "error");
+  };
+
+  async function doValidate() {
+    const errors = validateErrors();
+    if (errors.length) {
+      setResult({ kind: "test", status: "client", body: { errors } });
+      return;
+    }
+    try {
+      const { status, body } = await postSetup("POST", normalizeSetup(getValues()), token);
+      setResult({ kind: "test", status, body });
+    } catch (e) { reportError(e, "setup/test"); }
+  }
+
+  async function doSave() {
+    const errors = validateErrors();
+    if (errors.length) { setResult({ kind: "save", status: "client", body: { errors } }); return; }
+    try {
+      const test = await postSetup("POST", normalizeSetup(getValues()), token);
+      if (test.status !== 200) { setResult({ kind: "save", status: test.status, body: test.body }); return; } // gate: validate, then write
+      const { status, body } = await postSetup("PUT", normalizeSetup(getValues()), token);
+      setResult({ kind: "save", status, body });
+      if (status === 200) {
+        const changed = Object.keys(normalizeSetup(getValues()).overrides);
+        const hints = (body.requires_restart ?? []).filter(isRestartLikely);
+        setResult({ kind: "save", status, body, hint: hints.length
+          ? `written to <data-dir>/walhub.toml — restart required for: ${changed.filter((k) => isRestartLikely(k)).join(", ")} (server list authoritative)`
+          : `written to <data-dir>/walhub.toml` });
+      }
+    } catch (e) { reportError(e, "setup save"); }
+  }
+
+  getSetup(token)
+    .then(setData)
+    .catch((e) => { reportError(e, "setup"); setData({ access: "error", detail: String(e.message ?? e) }); });
+
+  // Unedited keys fall back to the server's effective value for the row.
+  const rowFor = (key) => {
+    for (const g of getData()?.groups ?? []) {
+      const row = (g.keys ?? []).find((k) => k.key === key);
+      if (row) return row;
+    }
+    return null;
+  };
+  const getValue = (key) => {
+    const v = getValues()[key];
+    if (v !== undefined) return v;
+    const row = rowFor(key);
+    return row ? initialText(row) : "";
+  };
+
+  const restricted = () => {
+    const access = getData()?.access;
+    return access === "denied" || access === "admin_required" || access === "token_required" || access === "error";
+  };
+
+  return (
+    <div class="setup-page space-y-4">
+      <h2 class="text-xl font-semibold">Setup</h2>
+      <Show when={getData()} fallback={<p class="muted">loading configuration schema…</p>}>
+        <Show
+          when={!restricted()}
+          fallback={
+            <section class="card space-y-2 p-4">
+              <h3 class="font-semibold">Access restricted</h3>
+              <p class="text-sm">This host requires an admin principal or a setup token to view or change configuration.</p>
+              <Show when={getData()?.detail}>
+                <pre class="code-view whitespace-pre-wrap p-3">{getData().detail}</pre>
+              </Show>
+              <p class="muted text-sm">
+                Authenticate, then reload this page. Hosts with WALHUB_SETUP_TOKEN take the token as a query
+                parameter (?token=…) on the GET/POST/PUT — it is never stored.
+              </p>
+            </section>
+          }
+        >
+          {/* setup-only mode banner: config invalid → only /setup, /healthz, /readyz answer */}
+          <Show when={getData().file_state === "invalid"}>
+            <div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/60 dark:text-red-200">
+              <strong class="font-semibold">Setup-only mode — the config file is invalid.</strong>
+              <p class="mt-1">
+                Until a fixed config is saved AND the server restarted, only /setup, /healthz and /readyz answer;
+                everything else returns 503. Fix the errors below, Validate, Save, restart.
+              </p>
+            </div>
+          </Show>
+
+          <Show when={(getData().errors ?? []).length > 0}>
+            <section class="card errors-card p-4">
+              <h3 class="mb-2 font-semibold">Current validation errors (from the server)</h3>
+              <table class="grid">
+                <thead>
+                  <tr><th>section</th><th>key</th><th>message</th><th>value</th></tr>
+                </thead>
+                <tbody>
+                  <For each={getData().errors}>
+                    {(e) => (
+                      <tr>
+                        <td class="muted">{(e.key ?? "").split(".")[0] ?? ""}</td>
+                        <td><code class="font-mono text-xs">{e.key ?? ""}</code></td>
+                        <td>{e.message ?? ""}</td>
+                        <td><code class="font-mono text-xs">{JSON.stringify(e.value ?? "")}</code></td>
+                      </tr>
+                    )}
+                  </For>
+                </tbody>
+              </table>
+              <p class="muted mt-2 text-sm">Nothing is disabled — fix the values and re-validate.</p>
+            </section>
+          </Show>
+
+          <div class="btn-row setup-actions flex gap-2">
+            <button type="button" class="btn" onClick={doValidate}>Validate</button>
+            <button type="button" class="btn primary" onClick={doSave}>Save</button>
+          </div>
+
+          <Show when={getResult()}>
+            {(r) => (
+              <>
+                <pre class="code-view p-3">{JSON.stringify(r(), null, 2)}</pre>
+                <Show when={r().hint}>
+                  <p class="warn-line">{r().hint}</p>
+                </Show>
+              </>
+            )}
+          </Show>
+
+          {/* schema-grouped cards */}
+          <For each={getData().groups ?? []}>
+            {(g) => {
+              const section = g.section ?? "config";
+              return (
+                <section class="card setup-section p-4" data-section={section}>
+                  <h3 class="mb-2 font-semibold">{section}</h3>
+                  <For each={g.keys ?? []}>
+                    {(k) => {
+                      const field = FIELD_BY_KEY.get(k.key) ?? { type: k.type ?? "string" };
+                      const fromFile = k.value !== k.default;
+                      return (
+                        <div
+                          class="setup-key border-b border-zinc-100 py-3 last:border-b-0 dark:border-zinc-800/60"
+                          data-key={k.key}
+                        >
+                          <label class="setup-label mb-1 flex flex-wrap items-center gap-2">
+                            <code class="font-mono text-sm">{k.key}</code>
+                            <Show when={fromFile} fallback={<span class="muted text-xs">default</span>}>
+                              <span class="chip">file</span>
+                            </Show>
+                            <Show when={k.doc}>
+                              <span class="muted doc text-xs">{k.doc}</span>
+                            </Show>
+                          </label>
+                          <FieldInput field={field} k={k.key} value={() => getValue(k.key)} onInput={onInput} />
+                          {/* inline error hints under each key (client rules mirror the server's) */}
+                          <div class="key-errors">
+                            <For each={getErrors().filter((e) => e.key === k.key)}>
+                              {(e) => <p class={e.severity === "warn" ? "warn-line" : "err-line"}>{e.message}</p>}
+                            </For>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  </For>
+                </section>
+              );
+            }}
+          </For>
+        </Show>
+      </Show>
+    </div>
+  );
+}

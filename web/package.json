@@ -3,9 +3,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:sdk": "esbuild sdk/src/index.js --bundle --format=esm --target=es2022 --minify --outfile=dist/repos.js"
+    "build:ui": "vite build",
+    "build:sdk": "esbuild sdk/src/index.js --bundle --format=esm --target=es2022 --minify --outfile=dist/repos.js",
+    "build": "pnpm run build:ui && pnpm run build:sdk"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "@tailwindcss/vite": "^4.3.3",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.2",
+    "vite-plugin-solid": "^2.11.14"
+  },
+  "dependencies": {
+    "@solidjs/router": "^1.0.0",
+    "solid-js": "^1.9.15"
   }
 }

@@ -18,14 +18,19 @@ contracts, exactly like `14_extensibility.md`.
 ## 1. The laws (violating any of these is a rejected change)
 
 1. **Dependency budget is law.** Backend third-party modules: `github.com/go-chi/chi/v5` (the router),
-   `github.com/BurntSushi/toml` (config), `golang.org/x/net` (h2c). Frontend: **zero** npm runtime
-   dependencies — the UI and SDK are vanilla standard ECMAScript modules (no TypeScript, no framework).
-   The ONE dev-time tool exception: `esbuild` (devDependency) bundles the modular SDK sources
-   (`web/sdk/src/*.js`) into the shipped `web/dist/repos.js` — the SPA itself has no build step. Anything
-   else needs a written amendment in the relevant doc's "Decisions & deviations" section BEFORE the code
-   lands. Hand-roll instead: S3 SigV4, GCS JSON API, protobuf wire codec, JWKS/JWT verification, SSE,
-   Prometheus text exposition, LRU caches, singleflight, CLI dispatch, CORS and all other middleware
-   (chi core only — no chi/cors, no chi/middleware packages).
+   `github.com/BurntSushi/toml` (config), `golang.org/x/net` (h2c). Frontend (amended 2026-09-02 by
+   explicit user request — the user directed the SolidJS SPA + Tailwind replacement of the vanilla-ESM
+   UI; agents must treat this as approved, see `DEVIATIONS.md` D-WEB-6): runtime npm dependencies are
+   exactly **`solid-js` + `@solidjs/router`**; state management is Solid's own signals/stores + context
+   (NO additional state library); styling is **Tailwind CSS v4** (CSS-first `@import "tailwindcss"`,
+   `@tailwindcss/vite` plugin, no config file, no CDN, dark mode by default). Still NO TypeScript
+   (plain JSX/JS). Dev-time tooling: `vite` + `vite-plugin-solid` + `@tailwindcss/vite` build the SPA
+   into `web/dist/`, and `esbuild` (unchanged) bundles the modular SDK (`web/sdk/src/*.js`) into the
+   shipped `web/dist/repos.js` — the SDK itself stays dependency-free. Anything else needs a written
+   amendment in the relevant doc's "Decisions & deviations" section BEFORE the code lands. Hand-roll
+   instead: S3 SigV4, GCS JSON API, protobuf wire codec, JWKS/JWT verification, SSE, Prometheus text
+   exposition, LRU caches, singleflight, CLI dispatch, CORS and all other middleware (chi core only —
+   no chi/cors, no chi/middleware packages).
 2. **git is a subprocess, always.** Every git operation shells out to the `git` binary with the exact argv
    specified in `docs/go/04_git.md`. Never link a Go git library. Never deviate from the specified argv
    without updating the doc in the same change.
@@ -117,11 +122,12 @@ internal/events     WAL → webhook bridge (cursor, delivery, wake-ups)
 internal/maintain   maintainer loop: checkpoints, bundles, compaction, fsck/repair, follow
 internal/config     walhub.toml (optional) + WALHUB__ env overrides, per-repo settings, validation
 internal/policy     push policy rule language (protect/history/size effects)
-web/                vanilla-ESM SPA + modular SDK (zero npm runtime deps); the SDK is esbuild-bundled
-                    to web/dist/repos.js by `make web` (a `make build` dependency) and the whole tree is
-                    embedded raw: UI at /_ui/…, bundle at /repos.js (text/javascript — module MIME is
-                    load-bearing), standalone setup page at /setup
-```
+web/                SolidJS SPA (JSX, no TypeScript; solid-js + @solidjs/router; Tailwind v4, dark by
+                    default) built by vite into web/dist/, plus the dependency-free modular SDK esbuild-
+                    bundled to web/dist/repos.js — `make web` runs both builds and `make build` depends
+                    on it. The binary embeds dist/: the SPA shell at / and every UI route, hashed
+                    assets at /_ui/assets/* (immutable), the bundle at /repos.js (module MIME is
+                    load-bearing); /setup is a SPA route (open in setup-only mode too)
 
 ## 4. Verification ladder (what to run before you say "done")
 

@@ -4,7 +4,7 @@
 // controller before opening a fresh one; the returned cancel() tears down on
 // unmount. Errors set state "error", never thrown into the page.
 
-import { createSignal } from "./reactive.js";
+import { createSignal } from "solid-js";
 
 /**
  * mountStream(open, onFrame) → { run, cancel, state }.

@@ -82,14 +82,12 @@ func TestSDKReposJS(t *testing.T) {
 // /repos.js bundle, the /_ui module tree, and the standalone setup page
 // (regression: uiAsset/setupAsset were hardcoded stubs, blanking every page).
 func TestUIAssetResolvers(t *testing.T) {
-	b, ok := webAsset("index.html")
-	if !ok || !strings.Contains(string(b), `importmap`) || !strings.Contains(string(b), `/_ui/src/main.js`) {
-		t.Fatalf("embedded index.html missing or wrong: ok=%v len=%d", ok, len(b))
+	b, ok := webAsset("dist/index.html")
+	if !ok || !strings.Contains(string(b), `id="root"`) || !strings.Contains(string(b), `/_ui/assets/`) {
+		t.Fatalf("embedded dist/index.html missing or wrong: ok=%v len=%d (run make web)", ok, len(b))
 	}
-	for _, name := range []string{"src/main.js", "src/pages/owners.js", "sdk/src/index.js", "css/base.css"} {
-		if b, ok := uiAsset(name); !ok || len(b) == 0 {
-			t.Fatalf("uiAsset(%q) must resolve from the embed", name)
-		}
+	if b, ok := uiAsset("index.html"); !ok || !strings.Contains(string(b), "root") {
+		t.Fatal("uiAsset must serve the built shell")
 	}
 	if _, ok := uiAsset("../go.mod"); ok {
 		t.Fatal("uiAsset must refuse traversal-style names")
@@ -97,14 +95,11 @@ func TestUIAssetResolvers(t *testing.T) {
 	if _, ok := uiAsset("etc/passwd"); ok {
 		t.Fatal("uiAsset must refuse paths outside the UI tree")
 	}
-	if b, ok := setupAsset("setup.js"); !ok || !strings.Contains(string(b), "export function mount") {
-		t.Fatalf("setup.js must be the real setup page module, got %d bytes", len(b))
+	if _, ok := uiAsset("src/main.js"); ok {
+		t.Fatal("raw source lanes must 404 after the vite cutover (D-WEB-6)")
 	}
-	if b, ok := setupAsset("lib/reactive.js"); !ok || !strings.Contains(string(b), "export") {
-		t.Fatalf("setup page lib/ imports must resolve, got %d bytes", len(b))
-	}
-	if _, ok := setupAsset("nope.js"); ok {
-		t.Fatal("setupAsset must 404 unknown names")
+	if _, ok := uiAsset("assets/../../go.mod"); ok {
+		t.Fatal("traversal via assets/ prefix must fail")
 	}
 }
 
@@ -185,8 +180,8 @@ func TestSPAHome(t *testing.T) {
 	}
 	// HTML shell.
 	rec := do("http://x/", true)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `/_ui/src/main.js`) {
-		t.Fatalf("html home must serve the real SPA shell: %d %.120s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `/_ui/assets/`) || !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Fatalf("html home must serve the built SPA shell: %d %.160s", rec.Code, rec.Body.String())
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("home content-type = %q", ct)
@@ -288,15 +283,6 @@ func TestServeUIAssets(t *testing.T) {
 	if !hasSuffixFold("App.JS", ".js") || hasSuffixFold("app.js", ".css") {
 		t.Fatal("hasSuffixFold truth table broken")
 	}
-	if b, ok := setupAsset("setup.js"); !ok || !strings.Contains(string(b), "walhub") {
-		t.Fatal("setup.js must resolve")
-	}
-	if b, ok := setupAsset("setup.css"); !ok || !strings.Contains(string(b), "banner") {
-		t.Fatal("setup.css must resolve")
-	}
-	if _, ok := setupAsset("nope"); ok {
-		t.Fatal("unknown asset must miss")
-	}
 	if _, ok := uiAsset("app.js"); ok {
 		t.Fatal("uiAsset is a stub and must miss")
 	}
@@ -310,28 +296,8 @@ func TestSetupUIAndAssets(t *testing.T) {
 		Boot: BootState{Mode: "defaults"}})
 	rec := httptest.NewRecorder()
 	s.setupUI(rec, httptest.NewRequest("GET", "/setup", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "walhub setup") {
-		t.Fatalf("setup page = %d", rec.Code)
-	}
-	// auth none → warning banner.
-	s.cfg.Server.Auth.Mode = "none"
-	rec = httptest.NewRecorder()
-	s.setupUI(rec, httptest.NewRequest("GET", "/setup", nil))
-	if !strings.Contains(rec.Body.String(), "banner") {
-		t.Fatal("auth-none banner missing")
-	}
-	// Assets.
-	for _, name := range []string{"setup.js", "setup.css"} {
-		rec = httptest.NewRecorder()
-		s.setupUIAssets(rec, httptest.NewRequest("GET", "/setup/assets/"+name, nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s = %d", name, rec.Code)
-		}
-	}
-	rec = httptest.NewRecorder()
-	s.setupUIAssets(rec, httptest.NewRequest("GET", "/setup/assets/nope", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("missing setup asset = %d", rec.Code)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "id=\"root\"") {
+		t.Fatalf("setup page = %d, want the SPA shell (D-WEB-6)", rec.Code)
 	}
 	// Gated: normal mode + auth token → admin required. Anonymous is
 	// authenticated-with-no-error in token mode → 403 admin access required.

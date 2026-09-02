@@ -196,10 +196,10 @@ func (s *Server) repoPage(id interface{ String() string }) http.HandlerFunc {
 	}
 }
 
-// serveSPA answers every UI route with the embedded SPA shell (web/index.html:
-// import map + raw ES modules — no-cache + ETag, §3.3/D-WEB-3).
+// serveSPA answers every UI route with the built SPA shell (dist/index.html:
+// vite entry loading the hashed SolidJS bundle — no-cache + ETag, D-WEB-6).
 func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
-	b, ok := webAsset("index.html")
+	b, ok := webAsset("dist/index.html")
 	if !ok {
 		plainStatus(w, http.StatusInternalServerError, "ui shell missing — run make build")
 		return
@@ -286,11 +286,17 @@ func hostSlug(host string) string {
 	return string(b)
 }
 
-// serveUIAssets answers /_ui/* assets (gated; precompressed, pass through
-// untouched) (§3.3). The SPA asset FS is embedded at packaging time.
+// serveUIAssets answers /_ui/* assets (§3.3 + D-WEB-6): content-hashed
+// vite bundles → immutable; anything else → no-cache + ETag.
 func (s *Server) serveUIAssets(w http.ResponseWriter, r *http.Request) {
 	name := stringsTrimPrefix(r.URL.Path, "/_ui/")
 	if b, ok := uiAsset(name); ok {
+		immutable := strings.HasPrefix(name, "assets/") // vite hashes these filenames
+		if immutable {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		switch {
 		case hasSuffixFold(name, ".js"):
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
@@ -358,31 +364,12 @@ func webAsset(name string) ([]byte, bool) {
 	return b, true
 }
 
-// uiAsset maps /_ui/<name> to the embedded UI tree (12_web_ui.md §1.0: the
-// import map points at /_ui/sdk/src/index.js, /_ui/src/…, /_ui/css/…).
+// uiAsset maps /_ui/<name> to the built UI tree (D-WEB-6: vite output — the
+// shell at dist/index.html and content-hashed bundles under dist/assets/).
 func uiAsset(name string) ([]byte, bool) {
 	switch {
-	case name == "index.html" ||
-		strings.HasPrefix(name, "dist/") ||
-		strings.HasPrefix(name, "sdk/") ||
-		strings.HasPrefix(name, "src/") ||
-		strings.HasPrefix(name, "css/"):
-		return webAsset(name)
-	}
-	return nil, false
-}
-
-// setupAsset maps /setup/assets/<name> to the standalone setup page's files:
-// the page entry (src/pages/setup.js), its CSS, and the lib/ modules its bare
-// specifiers import (resolved by the page's import map → /setup/assets/lib/…).
-func setupAsset(name string) ([]byte, bool) {
-	switch {
-	case name == "setup.js":
-		return webAsset("src/pages/setup.js")
-	case name == "setup.css":
-		return webAsset("css/setup.css")
-	case strings.HasPrefix(name, "lib/"):
-		return webAsset("src/" + name)
+	case name == "index.html" || strings.HasPrefix(name, "assets/"):
+		return webAsset("dist/" + name)
 	}
 	return nil, false
 }

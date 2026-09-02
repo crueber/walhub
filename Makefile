@@ -8,8 +8,8 @@ T15 := $(shell command -v timeout >/dev/null 2>&1 && echo "timeout 900" || echo 
 
 .DEFAULT_GOAL := help
 
-web: ## bundle the SDK from submodules: esbuild sdk/src/index.js → dist/repos.js
-	pnpm --dir web run build:sdk
+web: ## build the UI: vite (SolidJS+Tailwind → dist/) then esbuild (SDK → dist/repos.js)
+	pnpm --dir web run build
 
 build: web ## compile everything (the SDK bundle is a build dependency)
 	$(GO) build -trimpath -buildvcs=auto -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/walhub
@@ -17,18 +17,18 @@ build: web ## compile everything (the SDK bundle is a build dependency)
 fmt: ## format Go sources
 	gofmt -w $$(gofmt -l .)
 
-vet: ## the Go "-D warnings" gate: gofmt clean, go vet, go build
+vet: web ## the Go "-D warnings" gate: gofmt clean, go vet, go build
 	test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 	$(GO) vet ./...
 	$(GO) build ./...
 
 test: test-go test-web ## fast tier = Go fast tests + web tests
-test-go: ## fast Go tier: hermetic, < 1 min, watchdog-wrapped
+test-go: web ## fast Go tier: hermetic, < 1 min, watchdog-wrapped
 	$(T5) $(GO) test -short -count=1 ./...
 test-web: ## headless JS logic tests + fetch smoke (node --test, imports source)
 	node --test web/test/
 
-race: ## full fast tier under the race detector
+race: web ## full fast tier under the race detector
 	$(T15) $(GO) test -race -short -count=1 ./...
 
 cover: ## coverage gate: >= 95% statements, every internal/... package (per-leaf profiles; e2e harness glue excluded)
@@ -62,7 +62,8 @@ dev-store-stop:
 	docker compose down
 
 clean: ## remove build artifacts
-	rm -rf $(BINARY) .cover web/dist/repos.js
+	rm -rf $(BINARY) .cover web/dist
+	mkdir -p web/dist && touch web/dist/.keep
 
 ci: vet test race cover ## everything that must be green before a merge
 

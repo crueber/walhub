@@ -48,68 +48,13 @@ func subtleMatch(want, got string) bool {
 	return v == 0
 }
 
-// setupUI serves the setup page (plain ESM page, D2): groups ALL config keys
-// by section with current effective values, validates, saves via the API.
+// setupUI answers GET /setup with the SPA shell (D-WEB-6: /setup is a SPA
+// route). The SHELL is gated by the §3.4 access rules; the app then renders
+// the access-restricted card when the API refuses. The API itself keeps its
+// own setupAccess gating (setup_api.go).
 func (s *Server) setupUI(w http.ResponseWriter, r *http.Request) {
 	if !s.setupAccess(w, r) {
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	banner := ""
-	if s.cfg.Server.Auth.Mode == "none" {
-		banner = `<div class="banner">auth mode is "none" — anyone on the network has write+admin.
-Pick a real auth mode below (recommended fix).</div>`
-	}
-	body := strings.Replace(setupPageHTML, `<div class="banner-slot"></div>`, banner, 1)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(body))
+	s.serveSPA(w, r)
 }
-
-// setupUIAssets serves the setup page's ESM/CSS from the embedded FS
-// (precompressed, like /_ui).
-func (s *Server) setupUIAssets(w http.ResponseWriter, r *http.Request) {
-	if !s.setupAccess(w, r) {
-		return
-	}
-	name := strings.TrimPrefix(r.URL.Path, "/setup/assets/")
-	name = strings.TrimSuffix(name, ".gz")
-	b, ok := setupAsset(name)
-	if !ok {
-		plainStatus(w, http.StatusNotFound, "not found")
-		return
-	}
-	switch {
-	case strings.HasSuffix(name, ".js"):
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	case strings.HasSuffix(name, ".css"):
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	default:
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b)
-}
-
-// setupPageHTML is the standalone shell for the real setup page module
-// (web/src/pages/setup.js): the import map resolves its bare `lib/…`
-// specifiers to /setup/assets/lib/…, served by setupUIAssets.
-const setupPageHTML = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>walhub setup</title>
-  <script type="importmap">{"imports":{"lib/":"/setup/assets/lib/"}}</script>
-  <link rel="stylesheet" href="/setup/assets/setup.css">
-</head>
-<body>
-  <h1>walhub setup</h1>
-  <div class="banner-slot"></div>
-  <main id="app"></main>
-  <script type="module">
-    import { mount } from "/setup/assets/setup.js";
-    mount(document.getElementById("app"));
-  </script>
-</body></html>`

@@ -1,27 +1,14 @@
 <!doctype html>
-<!-- walhub SPA shell — vanilla ES modules, no build step (docs/go/12_web_ui.md §2). -->
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>walhub</title>
-  <script type="importmap">{"imports":{"repos":"/_ui/sdk/src/index.js","ui/":"/_ui/src/","lib/":"/_ui/src/lib/"}}</script>
-  <link rel="stylesheet" href="/_ui/css/base.css">
-  <link rel="stylesheet" href="/_ui/css/repo.css">
-  <link rel="stylesheet" href="/_ui/css/wal.css">
-  <link rel="stylesheet" href="/_ui/css/setup.css">
-  <script type="module" src="/_ui/src/main.js"></script>
-</head>
-<body>
-  <div id="progress" class="progress" aria-hidden="true"><div class="progress-bar"></div></div>
-  <header class="site-header">
-    <a class="brand" href="/">walhub</a>
-    <nav class="site-nav">
-      <a href="/" data-nav>owners</a>
-      <a href="/api" data-nav>API</a>
-    </nav>
-  </header>
-  <main id="app" class="app"></main>
-  <div id="tray" class="tray" aria-live="polite"></div>
-</body>
+<!-- walhub SPA shell — SolidJS + Tailwind v4 (D-WEB-6). Dark mode by default:
+     the .dark class ships on <html>; lib/store.js syncs the persisted choice. -->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>walhub</title>
+    <script type="module" src="/src/index.jsx"></script>
+  </head>
+  <body class="min-h-screen bg-zinc-100 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-200 antialiased">
+    <div id="root"></div>
+  </body>
 </html>

@@ -92,16 +92,17 @@ func (s *Server) mount(r chi.Router) {
 
 	r.Post("/_events/notify", s.eventsNotify) // handler-authenticated (09_events.md)
 
-	// Gated group: SPA shell + assets + setup.json + metrics (§3.1).
+	// SPA assets (D-WEB-6): static, content-hashed, no secrets — auth is the
+	// API's job; the shell must load everywhere so /setup can render its
+	// access-restricted card. gzip applies to the text assets.
 	r.Route("/_ui", func(g chi.Router) {
-		g.Use(s.requireAuth)
-		g.Handle("/*", http.HandlerFunc(s.serveUIAssets))
+		g.Handle("/*", s.compress(http.HandlerFunc(s.serveUIAssets)))
 	})
 	r.Get("/services/setup.json", s.gated(s.setupJSON))
 	r.Get("/metrics", s.gated(s.metricsHandler))
 
-	// Setup UI shell + assets (§3.4) — open per the §3.4 access rules.
-	r.Mount("/setup", s.setupUIRouter())
+	// Setup page (§3.4) — a SPA route; the shell loads everywhere.
+	r.Get("/setup", s.setupUI)
 
 	// SPA shell.
 	r.Get("/", s.gated(s.spaHome))
@@ -119,7 +120,10 @@ func (s *Server) mountSetupOnly(r chi.Router) {
 	r.Get("/healthz", s.healthz)
 	r.Get("/readyz", s.readyz)
 	r.Mount("/api/v1/setup", s.setupAPIRouter())
-	r.Mount("/setup", s.setupUIRouter())
+	r.Get("/setup", s.setupUI) // SPA shell; assets below are open
+	r.Route("/_ui", func(g chi.Router) {
+		g.Handle("/*", s.compress(http.HandlerFunc(s.serveUIAssets)))
+	})
 	r.Get("/services/public/install.sh", s.installSh)
 	r.Get("/services/public/ca.pem", s.caPem)
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -143,15 +147,6 @@ func (s *Server) setupAPIRouter() http.Handler {
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		plainStatus(w, http.StatusNotFound, "not found")
 	})
-	return m
-}
-
-// setupUIRouter serves the setup page + its assets.
-func (s *Server) setupUIRouter() http.Handler {
-	m := http.NewServeMux()
-	m.HandleFunc("GET /setup", s.setupUI) // URL.Path keeps the full path under chi
-	m.HandleFunc("GET /setup/", s.setupUI)
-	m.HandleFunc("GET /setup/assets/", s.setupUIAssets)
 	return m
 }
 

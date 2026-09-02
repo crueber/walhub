@@ -1,9 +1,9 @@
 // web/src/lib/data.js — the §2.4 data layer: promise-cache with TTL revalidation,
 // sha-addressed forever-cache, LRU cap, global error tray state and top-progress
-// counter. Signal-only: the DOM (progress bar element, tray element) is wired in
-// main.js via effects; this module stays importable without a DOM.
+// counter. Solid signals power it; App.jsx wires the progress bar + tray effects.
+// D-WEB-6 (2026-09-02): same API on Solid primitives after the vanilla-ESM port.
 
-import { createSignal, createEffect } from "./reactive.js";
+import { createSignal, createEffect } from "solid-js";
 
 export const DEFAULT_TTL = 5_000; // revalidation window for ref-dependent data
 const MAX_ENTRIES = 400; // LRU cap
@@ -71,6 +71,7 @@ function evict() {
 }
 
 function start(key, entry, fn) {
+  entry.refetch = fn;
   entry.promise = trackPending(
     (async () => {
       try {
@@ -90,22 +91,38 @@ function start(key, entry, fn) {
   );
 }
 
-/**
- * useData(key, fn, ttl?) → [get]. A promise-cache entry keyed by string;
- * TTL revalidation (default 5s; pass Infinity for sha-addressed payloads).
- * Background refresh keeps stale data on screen; failures go to the tray.
- */
-export function useData(key, fn, ttl = DEFAULT_TTL) {
+function ensureEntry(key) {
   let entry = cache.get(key);
   if (!entry) {
-    entry = { signal: createSignal(undefined), promise: null, value: undefined, at: 0, error: null };
+    entry = { signal: createSignal(undefined), promise: null, value: undefined, at: 0, error: null, refetch: null };
     cache.set(key, entry);
   }
+  return entry;
+}
+
+function startIfStale(key, entry, fn, ttl) {
   touch(key, entry);
   evict();
   const fresh = entry.at > 0 && (ttl === Infinity || Date.now() - entry.at <= ttl);
   if (!entry.promise && !fresh) start(key, entry, fn);
-  return entry.signal;
+}
+
+/**
+ * useData(key, fn, ttl?) → [get]. A promise-cache entry keyed by string;
+ * TTL revalidation (default 5s; pass Infinity for sha-addressed payloads).
+ * The key may be a GETTER (reactive): when it changes, the returned getter
+ * re-points at the new entry — same-route param changes never go stale.
+ */
+export function useData(key, fn, ttl = DEFAULT_TTL) {
+  const keyOf = () => (typeof key === "function" ? key() : key);
+  const [getEntry, setEntry] = createSignal(undefined);
+  createEffect(() => {
+    const k = keyOf();
+    const entry = ensureEntry(k);
+    startIfStale(k, entry, fn, ttl);
+    setEntry(entry);
+  });
+  return [() => getEntry()?.signal[0]()];
 }
 
 /** Force a refetch of one key (e.g. after a mutating call). */
@@ -116,10 +133,7 @@ export function invalidate(key) {
 
 /** Internal: remember fn so invalidate() can refetch. */
 export function useDataRefetchable(key, fn, ttl) {
-  const entry = cache.get(key);
-  const signal = useData(key, fn, ttl);
-  if (entry) entry.refetch = fn;
-  return signal;
+  return useData(key, fn, ttl);
 }
 
 // --- §9.2 the resolve → sha-addressed chain ----------------------------------
@@ -157,19 +171,22 @@ function shaFetcher(owner, name, kind, r) {
  * with ttl = Infinity (immutable). The chain IS the idiom.
  */
 export function useResolved(owner, name, rest, kind) {
-  const repo = `${owner}/${name}`;
-  const [getResolve] = useDataRefetchable(
-    `resolve:${repo}/${rest}`,
-    () => repos.repo(repo).resolve(rest),
-    RESOLVE_TTL
-  );
+  const v = (x) => (typeof x === "function" ? x() : x);
   const [getOut, setOut] = createSignal(undefined);
   createEffect(() => {
-    const r = getResolve();
+    const o = v(owner), n = v(name), rv = v(rest) ?? "";
+    const repo = `${o}/${n}`;
+    // Step 1: resolve (ref-dependent, 5s SWR).
+    const rKey = `resolve:${repo}/${rv}`;
+    const rEntry = ensureEntry(rKey);
+    startIfStale(rKey, rEntry, () => repos.repo(repo).resolve(rv), RESOLVE_TTL);
+    const r = rEntry.signal[0]();
     if (!r || !r.sha) return setOut(undefined);
-    const key = `sha:${r.sha}:${kind}:${r.path ?? ""}`;
-    const [getSha] = useDataRefetchable(key, shaFetcher(owner, name, kind, r), SHA_TTL);
-    const out = getSha();
+    // Step 2: sha-addressed payload (immutable).
+    const sKey = `sha:${r.sha}:${kind}:${r.path ?? ""}`;
+    const sEntry = ensureEntry(sKey);
+    startIfStale(sKey, sEntry, shaFetcher(o, n, kind, r), SHA_TTL);
+    const out = sEntry.signal[0]();
     // Sha-addressed payloads are ref-free by design (§2.4); the UI builds
     // URLs from the ref the user resolved, so attach it here.
     setOut(out && !out.ref ? { ...out, ref: r.ref } : out);

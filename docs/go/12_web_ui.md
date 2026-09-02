@@ -2,6 +2,16 @@
 
 > Source: MASTER_RUST_SPEC.md §10 (web UI + SDK), §8.8/§8.9 (auth flows and setup recipes consumed by the UI), §9 (wire contract) · Status: normative for the walhub Go implementation.
 
+> **SUPERSEDED IN PART (2026-09-02, explicit user request — DEVIATIONS.md D-WEB-6):** the SPA is now
+> **SolidJS + `@solidjs/router`** (plain JSX, no TypeScript) with Tailwind CSS v4 (CSS-first, dark mode
+> by default, no CDN) built by **vite** (`vite-plugin-solid` + `@tailwindcss/vite`) into `web/dist/`.
+> §1.0's import-map/raw-module serving, §2.1's hand-rolled reactive core, §2.3's hand-rolled router and
+> §3's raw-module caching class are superseded; state management is Solid signals/stores + context.
+> Still normative and unchanged: the dogfood rule (§6 — the SDK is the only way the SPA talks to the
+> server), the hand-rolled pure modules (diff parser §2.8, markdown-lite, sanitizer, highlighter,
+> §5 testing tier for them), the SSE ownership/cancellation rules (§2.5), and the `/repos.js` SDK
+> contract (§1.1). The old vanilla sources were deleted in the same change (pre-1.0 rule).
+
 The UI is two artifacts in `web/`, served directly by the same Go binary — **standard ECMAScript, no TypeScript, no framework, zero runtime npm dependencies**. One dev-time exception: the SDK is bundled from submodules by esbuild (§1.0) — the SPA itself has no build step:
 
 | Artifact | Path | Language | Dependencies |
@@ -378,6 +388,7 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
 
 ## Decisions & deviations from the Rust design
 
+- **SolidJS + Tailwind v4 SPA (2026-09-02, explicit user request — supersedes the two vanilla decisions above; DEVIATIONS.md D-WEB-6).** The user reversed the vanilla-ESM direction: runtime deps exactly `solid-js` + `@solidjs/router`; state via Solid signals/stores/context; Tailwind v4 CSS-first with `@custom-variant dark` and dark as the default theme (class on `<html>`, persisted, no CDN — system font stack); vite + vite-plugin-solid + @tailwindcss/vite build `web/src/**` (JSX, no TypeScript) into `web/dist/` (hashed assets immutable, `index.html` no-cache + ETag — reverts D-WEB-3's caching class for built assets). The SDK remains dependency-free and esbuild-bundled; `/repos.js`, `/repos.mjs`-absence, and the dogfood rule are untouched. Pure modules (diff, markdown-lite, sanitizer, highlighter, setup validation, SSE frame parsing) carried over unchanged.
 - **SPA framework: vanilla standard ECMAScript replaces SolidJS** (D2, explicit user decision — itself a supersession of the earlier SolidJS-over-React decision; wire contract untouched — the SDK defines the wire, the framework does not). Native ES modules + import map, `<template>` + a ~40-line hand-rolled reactive core (§2.1), hand-rolled router. No state library, no JSX, no VDOM.
 - **Superseded — dependency set `solid-js`, `@solidjs/router`, `marked` (+ dev: `vite`, `vite-plugin-solid`, `typescript`)**: the npm budget is now **zero runtime dependencies; exactly one devDependency (`esbuild`, §1.0)**. `solid-js`/`@solidjs/router` are replaced by the §2.1 reactive core + hand-rolled router; `marked` by hand-rolled markdown-lite (§2.1) with unchanged preview-fidelity stance and the same allowlist sanitizer.
 - **Superseded (again) — "there is no build"**: a build step returns, scoped tightly (user decision): the SDK is authored as submodules and bundled by **esbuild** (the single devDependency) into `web/dist/repos.js`; the SPA remains unbuilt raw ES modules; runtime npm budget stays zero.

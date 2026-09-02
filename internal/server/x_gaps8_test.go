@@ -700,12 +700,17 @@ func TestErrorsAsWrappedNonWal(t *testing.T) {
 
 // --- misc small branches -------------------------------------------------------------------
 
-func TestSetupUIAssetsGated(t *testing.T) {
-	s, _ := newTestServer(t, nil)
+func TestSetupUIAssetsGone(t *testing.T) {
+	// D-WEB-6: the standalone setup assets died with the vanilla page; /setup
+	// is a SPA route (open in defaults mode, the API keeps its own gating).
+	cfg := config.Defaults()
+	cfg.DataDir = t.TempDir()
+	s := New(Options{Config: cfg, Store: newFakeStore(), Engine: &fakeEngine{},
+		Boot: BootState{Mode: "defaults"}})
 	rec := httptest.NewRecorder()
-	s.setupUIAssets(rec, httptest.NewRequest("GET", "/setup/assets/setup.js", nil))
-	if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
-		t.Fatalf("gated asset = %d", rec.Code)
+	s.setupUI(rec, httptest.NewRequest("GET", "/setup", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "id=\"root\"") {
+		t.Fatalf("setup page = %d, want the SPA shell", rec.Code)
 	}
 }
 

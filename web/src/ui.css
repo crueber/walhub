@@ -1,0 +1,75 @@
+/* web/src/ui.css — Tailwind v4, CSS-first (D-WEB-6): no tailwind.config, no CDN.
+   Dark is the DEFAULT theme: `.dark` ships on <html> and lib/store.js toggles it.
+   Light styling is the base layer; `dark:` variants carry the dark theme. */
+
+@import "tailwindcss";
+
+/* Class-based dark variant (the shipped default), not prefers-color-scheme:
+   the toggle is a deliberate user choice persisted in localStorage. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer components {
+  /* Panels and chrome */
+  .card { @apply rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900/70; }
+  .site-header { @apply border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80; }
+  .brand { @apply font-semibold tracking-tight text-emerald-700 dark:text-emerald-400; }
+  .site-nav a { @apply text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100; }
+
+  /* Controls */
+  .btn { @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors
+         border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100
+         dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700; }
+  .btn.primary { @apply border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-500 dark:border-emerald-500 dark:bg-emerald-600 dark:hover:bg-emerald-500; }
+  .pill { @apply inline-flex items-center rounded-full border border-zinc-300 bg-zinc-50 px-2.5 py-0.5 text-xs
+          dark:border-zinc-700 dark:bg-zinc-800/80; }
+  .chip { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
+          bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300; }
+
+  /* Forms */
+  .input { @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900
+           placeholder:text-zinc-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500
+           dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600; }
+
+  /* Tables */
+  .grid { @apply w-full text-sm; }
+  .grid th { @apply border-b border-zinc-200 px-3 py-2 text-left font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400; }
+  .grid td { @apply border-b border-zinc-100 px-3 py-1.5 dark:border-zinc-800/60; }
+
+  /* Text helpers */
+  .muted { @apply text-zinc-500 dark:text-zinc-400; }
+  .tabular { @apply tabular-nums; }
+  .err-line { @apply mt-1 text-xs text-red-600 dark:text-red-400; }
+  .warn-line { @apply mt-1 text-xs text-amber-600 dark:text-amber-400; }
+
+  /* Progress bar + error tray */
+  .progress { @apply fixed inset-x-0 top-0 z-50 h-0.5; }
+  .progress-bar { @apply h-full bg-emerald-500 transition-all duration-300; }
+  .tray { @apply fixed bottom-4 right-4 z-50 flex w-96 flex-col gap-2; }
+  .tray-entry { @apply flex items-start gap-2 rounded-lg border border-red-300 bg-white p-3 text-sm shadow-sm
+                dark:border-red-900 dark:bg-zinc-900/70; }
+
+  /* Code + markdown rendering */
+  .markdown-body { @apply text-sm leading-relaxed; }
+  .markdown-body h1, .markdown-body h2, .markdown-body h3 { @apply mt-4 mb-2 font-semibold text-zinc-900 dark:text-zinc-100; }
+  .markdown-body h1 { @apply text-lg; } .markdown-body h2 { @apply text-base; }
+  .markdown-body p { @apply my-2; }
+  .markdown-body ul, .markdown-body ol { @apply my-2 list-disc pl-6; }
+  .markdown-body ol { @apply list-decimal; }
+  .markdown-body code { @apply rounded bg-zinc-100 px-1 py-px font-mono text-[0.85em] dark:bg-zinc-800; }
+  .markdown-body a { @apply text-emerald-700 underline dark:text-emerald-400; }
+  .markdown-body blockquote { @apply my-2 border-l-4 border-zinc-300 pl-3 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400; }
+  .code-view { @apply overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 font-mono text-xs leading-5 dark:border-zinc-800 dark:bg-zinc-950; }
+  /* highlighter tokens (lib/highlight.js spans) */
+  .tok-kw { @apply text-violet-700 dark:text-violet-400; }
+  .tok-str { @apply text-emerald-700 dark:text-emerald-400; }
+  .tok-com { @apply text-zinc-400 dark:text-zinc-500 italic; }
+  .tok-num { @apply text-amber-700 dark:text-amber-400; }
+  .diff-add { @apply bg-emerald-50 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200; }
+  .diff-del { @apply bg-red-50 text-red-900 dark:bg-red-950/60 dark:text-red-200; }
+  .diff-hunk { @apply bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500; }
+}
