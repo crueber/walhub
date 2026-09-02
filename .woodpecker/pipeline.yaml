@@ -25,7 +25,7 @@ steps:
 
   js-test:
     image: node:22-alpine
-    commands: [node --test web/test/]
+    commands: [node --test web/test/unit/*.test.js]
     depends_on: [test]
 
   cover:

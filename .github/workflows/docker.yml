@@ -38,7 +38,7 @@ jobs:
       - name: vet + fast Go tests
         run: go vet ./... && go test -short -count=1 ./...
       - name: headless JS tests
-        run: node --test web/test/
+        run: node --test "web/test/unit/*.test.js"
 
   publish:
     needs: test

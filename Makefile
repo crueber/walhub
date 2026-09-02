@@ -26,7 +26,7 @@ test: test-go test-web ## fast tier = Go fast tests + web tests
 test-go: web ## fast Go tier: hermetic, < 1 min, watchdog-wrapped
 	$(T5) $(GO) test -short -count=1 ./...
 test-web: ## headless JS logic tests + fetch smoke (node --test, imports source)
-	node --test web/test/
+	node --test web/test/unit/*.test.js
 
 race: web ## full fast tier under the race detector
 	$(T15) $(GO) test -race -short -count=1 ./...
