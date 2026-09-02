@@ -265,7 +265,9 @@ func (s *S3) mapStatus(key string, resp *http.Response) error {
 	case code == http.StatusTooManyRequests || code >= 500:
 		return NewRetryable(key, fmt.Errorf("s3 %d: %s", code, s.errorCode(resp)))
 	default:
-		return NewOther(key, fmt.Errorf("s3 %d", code))
+		// 403 and friends: carry the S3 error <Code> so operators can tell a
+		// signature problem from an ACL/credential one.
+		return NewOther(key, fmt.Errorf("s3 %d: %s", code, s.errorCode(resp)))
 	}
 }
 

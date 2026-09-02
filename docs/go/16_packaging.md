@@ -35,7 +35,7 @@ An operator MUST be able to build, containerize, deploy (one box or a fleet), an
 ### 1.3 Version identity
 
 - Resolution order for the reported build sha:
-  1. `-ldflags -X main.buildSHA=<12-hex>` (set by Makefile/CI/Containerfile from `git rev-parse --short=12 HEAD`),
+  1. `-ldflags -X main.buildSHA=<12-hex>` (set by Makefile/CI/Dockerfile from `git rev-parse --short=12 HEAD`),
   2. `runtime/debug.ReadBuildInfo` `vcs.revision` (populated by `-buildvcs=stamp`),
   3. `"dev"`.
 - `walhub version` prints the sha plus the full `debug.BuildInfo` (module versions, Go version, settings). `serve` logs the same identity once at startup. The exact command table lives in 11_config_cli.md; the mechanism is specified here because it is a build artifact.
@@ -46,11 +46,12 @@ Exactly ONE external binary at runtime: `git` (≥ 2.47 server-side, ≥ 2.46 fo
 
 ## 2. Container image
 
-Three-stage `Containerfile` at the repo root: node runs the one web build (esbuild SDK bundle) → Go builds the static binary → alpine runtime with git. (Rust used debian-slim + tini; see deviations.)
+`Dockerfile` at the repo root (three stages): node runs the ONE web build (`pnpm run build` — vite SPA + esbuild SDK, D-WEB-6) → Go builds the static binary (`golang:1.27-alpine` per go.mod) → alpine runtime with git. (Rust used debian-slim + tini; see deviations.)
 
 ```dockerfile
-# Containerfile — one binary in front of a store. Zero config by default: filesystem store in the data dir.
-#   podman build -t walhub -f Containerfile .
+# Dockerfile — one binary in front of a store. Zero config by default: filesystem store in the data dir.
+#   docker build -t walhub .
+#   docker run --rm -p 8080:8080 walhub     # → open http://host:8080/setup
 #   podman run --rm -p 8080:8080 walhub     # → open http://host:8080/setup
 
 # ---- 1. Web: the ONE build step — esbuild bundles web/sdk/src → dist/repos.js ----
@@ -289,46 +290,63 @@ Hazards at the packaging boundary (playbook: 13_concurrency.md):
 
 ## 7. Local rig
 
-### 7.1 `compose.yaml` (repo root) — rustfs, the bucket-backend contract fixture
+### 7.1 Compose examples (repo root) — two stacks, both verified end to end
 
-rustfs is NOT part of the zero-config dev loop anymore (D4/D5: `make dev` needs no bucket); this rig exists so `make test-s3` and CI's `s3-contract` job have a real S3-compatible endpoint. The yaml and the fixed dev keys are unchanged.
+Two example compose files ship at the repo root:
+
+- **`compose.standalone.yml`** — walhub ALONE: filesystem store on a named
+  volume, port 8080, healthcheck. First boot is zero-config (auth `none` +
+  loud warning); `/setup` writes `walhub.toml` into the volume for later boots.
+- **`compose.yaml`** — the **bucket-backed stack**: rustfs (S3-compatible, the
+  same fixture `make dev-store` and CI's s3-contract use) + a one-shot
+  `create-bucket` job + walhub configured for the S3 store entirely through
+  the `WALHUB__STORE__*` env overlay (no config file). `make dev-store`
+  starts only the rustfs service from this file.
 
 ```yaml
-# S3-compatible store for local dev. Console on :9001. Fixed dev keys — never in production.
+# compose.yaml (abridged — the shipped file is the source of truth)
+name: walhub-rustfs
 services:
   rustfs:
     image: rustfs/rustfs:latest
-    ports: ["9000:9000", "9001:9001"]
     environment:
-      RUSTFS_ACCESS_KEY: walgit-dev
+      RUSTFS_ACCESS_KEY: walgit-dev        # DEV KEYS — never production
       RUSTFS_SECRET_KEY: walgit-dev-secret
       RUSTFS_ADDRESS: "0.0.0.0:9000"
       RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
       RUSTFS_VOLUMES: /data
-    volumes: [rustfs-data:/data]
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-  create-bucket:                 # one-shot, idempotent
-    image: amazon/aws-cli:latest
+    healthcheck: { test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/minio/health/live"], interval: 5s, retries: 10 }
+  create-bucket:
+    image: amazon/aws-cli:latest           # idempotent s3 mb s3://walhub-test
+    depends_on: { rustfs: { condition: service_healthy } }
+  walhub:
+    build: .
     depends_on:
       rustfs: { condition: service_healthy }
+      create-bucket: { condition: service_completed_successfully }
     environment:
+      WALHUB__STORE__BACKEND: s3
+      WALHUB__STORE__S3__ENDPOINT: http://rustfs:9000   # NESTED keys: store.s3.endpoint
+      WALHUB__STORE__S3__REGION: us-east-1
+      WALHUB__STORE__S3__FORCE_PATH_STYLE: "true"        # required for rustfs/MinIO
+      WALHUB__STORE__BUCKET: walhub-test
       AWS_ACCESS_KEY_ID: walgit-dev
       AWS_SECRET_ACCESS_KEY: walgit-dev-secret
-      AWS_DEFAULT_REGION: us-east-1
-    entrypoint: []
-    command: >
-      sh -c "aws --endpoint-url http://rustfs:9000 s3 mb s3://walgit-test 2>/dev/null || true &&
-             aws --endpoint-url http://rustfs:9000 s3 ls"
-    restart: "no"
-volumes:
-  rustfs-data: {}
+    ports: ["8080:8080"]
 ```
 
-### 7.2 `Makefile` (repo root) — the ONLY task runner (D3)
+**Env-overlay gotchas encoded here** (each one broke a real boot):
+- Nested config (`store.s3.endpoint`) needs EVERY segment in the env name —
+  `WALHUB__STORE__ENDPOINT` is silently recorded as an unknown key and ignored.
+- rustfs/MinIO require `force_path_style: true`; bucket-virtual-host addressing
+  403s (`InvalidAccessKeyId`-class errors against the wrong host).
+- Healthchecks pin `127.0.0.1` — `localhost` resolves to `::1` in busybox and
+  rustfs binds IPv4 only.
+- pnpm 11 refuses dependency build scripts unless `pnpm-workspace.yaml`
+  declares `allowBuilds: { esbuild: true }` (the web stage's `pnpm install`
+  fails otherwise).
+
+```## 7.2 `Makefile` (repo root) — the ONLY task runner (D3)
 
 ```make
 BINARY  := walhub
@@ -381,7 +399,7 @@ test-s3:                        ## store contract against local rustfs (needs de
 	go test -tags s3 ./internal/store/... -run TestS3Contract
 
 image:                          ## two-stage build with the real sha
-	podman build --build-arg WALHUB_BUILD_SHA=$(SHA) -t walhub -f Containerfile .
+	docker build --build-arg WALHUB_BUILD_SHA=$(SHA) -t walhub .
 
 clean:
 	rm -f $(BINARY) cover.out
@@ -488,7 +506,7 @@ curl -fsSL https://git.packden.us/crueber/walhub/raw/branch/main/scripts/install
 - **Startup git version check is fatal (exit 1) below 2.47** — the Rust spec declares ≥ 2.47 required for server features; failing fast with a message beats mysterious wire breakage.
 - **Header names stay `X-Walgit-*` (including the `walgit_session` cookie in the auth cache key) and the token prefix stays `wgt_`** — the nginx contract and users' stored credentials are the edge-compat surface; renaming would silently invalidate deployed edge configs and credential helpers.
 - **Dev-rig rustfs keys/bucket keep the Rust values (`walgit-dev` / `walgit-dev-secret`, bucket `walgit-test`)** — muscle-memory continuity for contributors coming from the Rust rig; local-only credentials.
-- **Nix flake packaging not ported** — the flake was a Rust toolchain convenience; Go's static cross-build plus the Containerfile covers the same ground without a second packaging system (revisit only on demand).
+- **Nix flake packaging not ported** — the flake was a Rust toolchain convenience; Go's static cross-build plus the Dockerfile covers the same ground without a second packaging system (revisit only on demand).
 - **CI is a Makefile + Woodpecker pipeline, not GitHub Actions** — the repo lives on Forgejo; Woodpecker's services block covers the rustfs contract job.
 - **`install.sh` is served from the Forgejo raw URL** — the Rust edge example leaves the installer out of the open-route set; keeping it repo-hosted avoids inventing a new public server route in the Go rewrite.
 - **Divergence (2026-08-31), applied in this revision:**

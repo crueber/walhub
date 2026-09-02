@@ -1,0 +1,36 @@
+# compose.standalone.yml — walhub ALONE: filesystem store, zero external services.
+#
+#   docker compose -f compose.standalone.yml up -d --build
+#   open http://localhost:8080/setup    # configure auth, store, everything
+#
+# Repositories live in the walhub-data volume (the server's filesystem store
+# under /var/lib/walhub/store). No object store, no database — the only
+# durable state is the mounted volume, so backups are `docker run --rm -v
+# walhub-standalone_walhub-data:/data alpine tar cz -C /data` of that volume.
+#
+# First boot is zero-config (auth "none" on 0.0.0.0:8080 with a loud warning);
+# /setup writes <data-dir>/walhub.toml for every later boot. To pre-configure
+# instead, mount a config file:
+#   volumes:
+#     - walhub-data:/var/lib/walhub
+#     - ./walhub.toml:/var/lib/walhub/walhub.toml:ro
+# (server.listen inside it must stay 0.0.0.0:8080 to be reachable.)
+
+name: walhub-standalone
+
+services:
+  walhub:
+    build: .
+    image: walhub:local
+    ports: ["8080:8080"]
+    volumes: [walhub-data:/var/lib/walhub]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  walhub-data: {}

@@ -53,7 +53,7 @@ e2e: ## smart-HTTP end-to-end against the real git binary
 	$(T15) $(GO) test -count=1 ./internal/e2e/...
 
 image: ## build the OCI image
-	podman build -t walhub -f Containerfile .
+	docker build -t walhub .
 
 dev-store: ## start rustfs (S3-compatible) for bucket-contract tests
 	docker compose up -d rustfs

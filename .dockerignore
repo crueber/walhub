@@ -1,0 +1,23 @@
+# Keep the image builds hermetic and small: host toolchains, caches, and
+# build outputs never enter the build context. .git is INTENTIONALLY kept so
+# `-buildvcs=auto` can stamp the binary.
+.gitignore
+.dockerignore
+Dockerfile
+compose.yaml
+compose.standalone.yml
+design.md
+README.md
+.cover
+.woodpecker
+bin/
+tmp/
+testdata/
+docs/
+deploy/
+internal/e2e/
+web/node_modules
+web/dist
+!web/dist/.keep
+web/test
+**/*_test.go

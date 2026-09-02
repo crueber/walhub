@@ -61,7 +61,7 @@ make image     # OCI image
 
 Backend: Go 1.25+ (module `git.packden.us/crueber/walhub`), exactly three third-party modules
 (chi, BurntSushi/toml, x/net). Frontend: any Node for tests; `pnpm --dir web install` for the esbuild
-dev step. CI is Woodpecker (`.woodpecker/`); the container build is `Containerfile`.
+dev step. CI is Woodpecker (`.woodpecker/`); the container build is `Dockerfile` with compose examples in `compose.standalone.yml` (filesystem store) and `compose.yaml` (S3-backed via rustfs).
 
 **Before you say "done"**, run the verification ladder in [`AGENTS.md §4`](AGENTS.md) — and if you
 touched `web/` or static serving, load the UI in a real browser: module scripts are MIME-enforced, so

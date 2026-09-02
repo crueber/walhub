@@ -1,9 +1,24 @@
-# S3-compatible store for local dev. Console on :9001. Fixed dev keys — never in production.
-#   make dev-store   (docker compose up -d rustfs && docker compose run --rm create-bucket)
+# compose.yaml — walhub + rustfs: the bucket-backed stack (DEVELOPMENT example).
+#
+#   docker compose up -d --build        # build the image and start everything
+#   open http://localhost:8080/setup    # configure; git push auto-creates repos
+#
+# rustfs is an S3-compatible object store (the same fixture `make dev-store`
+# and the CI s3-contract job use). The fixed keys below are DEV KEYS — never
+# point this stack at anything you care about.
+#
+# walhub is configured entirely through the WALHUB__STORE__* env overlay
+# (docs/go/11_config_cli.md §3.2); no config file is mounted, so the server
+# boots zero-config (auth "none" + loud warning) with the S3 store overridden.
+# For a real deployment: set auth (WALHUB__SERVER__AUTH__MODE=token/oidc),
+# mount a config file, and use real credentials.
+
+name: walhub-rustfs
+
 services:
   rustfs:
     image: rustfs/rustfs:latest
-    ports: ["9000:9000", "9001:9001"]
+    ports: ["9000:9000", "9001:9001"] # S3 API / web console
     environment:
       RUSTFS_ACCESS_KEY: walgit-dev
       RUSTFS_SECRET_KEY: walgit-dev-secret
@@ -12,11 +27,13 @@ services:
       RUSTFS_VOLUMES: /data
     volumes: [rustfs-data:/data]
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/minio/health/live"]
       interval: 5s
       timeout: 3s
       retries: 10
-  create-bucket:                 # one-shot, idempotent
+
+  # One-shot, idempotent bucket creation.
+  create-bucket:
     image: amazon/aws-cli:latest
     depends_on:
       rustfs: { condition: service_healthy }
@@ -26,8 +43,38 @@ services:
       AWS_DEFAULT_REGION: us-east-1
     entrypoint: []
     command: >
-      sh -c "aws --endpoint-url http://rustfs:9000 s3 mb s3://walgit-test 2>/dev/null || true &&
+      sh -c "aws --endpoint-url http://rustfs:9000 s3 mb s3://walhub-test 2>/dev/null || true &&
              aws --endpoint-url http://rustfs:9000 s3 ls"
     restart: "no"
+
+  walhub:
+    build: .
+    image: walhub:local
+    depends_on:
+      rustfs: { condition: service_healthy }
+      create-bucket: { condition: service_completed_successfully }
+    environment:
+      # S3 store on rustfs (WALHUB__SECTION__KEY env overlay, docs/go/11 §3.2).
+      WALHUB__STORE__BACKEND: s3
+      WALHUB__STORE__S3__ENDPOINT: http://rustfs:9000
+      WALHUB__STORE__S3__REGION: us-east-1
+      WALHUB__STORE__BUCKET: walhub-test
+      # rustfs/MinIO require path-style addressing (docs/go/03_store_backends.md §2).
+      WALHUB__STORE__S3__FORCE_PATH_STYLE: "true"
+      AWS_ACCESS_KEY_ID: walgit-dev
+      AWS_SECRET_ACCESS_KEY: walgit-dev-secret
+      # First-run friendliness: auth "none" with a loud warning until you
+      # configure real auth through /setup (AGENTS.md law 10).
+    ports: ["8080:8080"]
+    volumes: [walhub-data:/var/lib/walhub]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
 volumes:
   rustfs-data: {}
+  walhub-data: {}

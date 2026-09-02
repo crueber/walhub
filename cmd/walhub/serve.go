@@ -55,13 +55,17 @@ func runServe(ctx context.Context, c *cli, args []string) int {
 		return serveHTTP(ctx, cfg, boot, dataDir, nil)
 	}
 	// The --data-dir flag is authoritative over the XDG/env default (§3.1.1):
-	// re-sync the loaded config so first-run paths and setup saves live in the
-	// directory the operator actually named.
-	if fileState == stateAbsent {
-		cfg = config.FirstRunDefaults(dataDir)
-		applyPortOverride(cfg) // PORT lockstep re-applied on the re-derived config
-	} else {
-		cfg.DataDir = dataDir
+	// re-point the flag-derived PATHS so first-run store/cache and setup saves
+	// live in the directory the operator named. The loaded config keeps every
+	// file/env value (backend, auth, …) — re-deriving FirstRunDefaults here
+	// would silently discard the WALHUB__* overlay.
+	envDataDir := config.ResolveDataDir(os.Getenv)
+	cfg.DataDir = dataDir
+	if cfg.Store.Root == filepath.Join(envDataDir, "store") {
+		cfg.Store.Root = filepath.Join(dataDir, "store")
+	}
+	if cfg.Cache.Dir == filepath.Join(envDataDir, "cache") {
+		cfg.Cache.Dir = filepath.Join(dataDir, "cache")
 	}
 	bootMode := "normal"
 	if fileState == stateAbsent {
