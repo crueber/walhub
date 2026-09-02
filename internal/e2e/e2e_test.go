@@ -392,6 +392,89 @@ type delivery struct {
 	DelivID string
 }
 
+// TestE2E_SetupEditsExistingFile: setup is open without credentials while
+// auth is none — INCLUDING normal running mode — and a save EDITS the
+// current walhub.toml instead of replacing it with defaults.
+func TestE2E_SetupEditsExistingFile(t *testing.T) {
+	bin := buildWALHub(t)
+	dataDir := t.TempDir()
+	writeWALHubConfig(t, dataDir, "bogus_key = 1\n")
+	port := freePort(t)
+	s := startServer(t, bin, dataDir, port)
+	t.Cleanup(s.stop)
+
+	// First save (from setup-only mode): the shape we expect to survive.
+	overrides := map[string]any{
+		"server.listen":              fmt.Sprintf("0.0.0.0:%d", port),
+		"server.auto_create_on_push": true,
+		"server.request_timeout":     "90m",
+		"store.backend":              "filesystem",
+		"store.root":                 filepath.Join(dataDir, "store"),
+		"cache.dir":                  filepath.Join(dataDir, "cache"),
+	}
+	payload, _ := json.Marshal(map[string]any{"overrides": overrides})
+	status, body := httpRequest(t, http.MethodPut, s.base+"/api/v1/setup", payload)
+	if status < 200 || status > 299 {
+		t.Fatalf("initial PUT = %d (body %s)", status, body)
+	}
+
+	// Restart into normal mode, then edit ONE key with NO credentials
+	// (auth.mode is none — setup must stay available at any time).
+	s.stop()
+	s2 := startServer(t, bin, dataDir, port)
+	t.Cleanup(s2.stop)
+	edit, _ := json.Marshal(map[string]any{"overrides": map[string]any{
+		"server.request_timeout": "2h",
+	}})
+	status, body = httpRequest(t, http.MethodPut, s2.base+"/api/v1/setup", edit)
+	if status < 200 || status > 299 {
+		t.Fatalf("edit PUT = %d (body %s)", status, body)
+	}
+
+	// The file kept every untouched key and gained the edited one.
+	raw, err := os.ReadFile(filepath.Join(dataDir, "walhub.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Server struct {
+			Listen           string `toml:"listen"`
+			AutoCreateOnPush bool   `toml:"auto_create_on_push"`
+			RequestTimeout   string `toml:"request_timeout"`
+			Auth             struct {
+				Mode string `toml:"mode"`
+			} `toml:"auth"`
+		} `toml:"server"`
+		Store struct {
+			Backend string `toml:"backend"`
+			Root    string `toml:"root"`
+		} `toml:"store"`
+	}
+	if _, perr := toml.Decode(string(raw), &decoded); perr != nil {
+		t.Fatalf("config not valid TOML: %v\n%s", perr, raw)
+	}
+	if decoded.Server.Listen != fmt.Sprintf("0.0.0.0:%d", port) ||
+		!decoded.Server.AutoCreateOnPush ||
+		decoded.Server.Auth.Mode != "none" ||
+		decoded.Store.Backend != "filesystem" ||
+		decoded.Store.Root != filepath.Join(dataDir, "store") {
+		t.Fatalf("untouched keys lost:\n%s", raw)
+	}
+	if d, perr := time.ParseDuration(decoded.Server.RequestTimeout); perr != nil || d != 2*time.Hour {
+		t.Fatalf("request_timeout = %q, want a 2h duration (not nanoseconds)\n%s", decoded.Server.RequestTimeout, raw)
+	}
+
+	// And the edited config still boots.
+	s2.stop()
+	s3 := startServer(t, bin, dataDir, port)
+	t.Cleanup(s3.stop)
+	var ready map[string]any
+	getJSON(t, s3.base+"/readyz", &ready)
+	if ready["status"] != "ready" {
+		t.Fatalf("readyz after edit restart = %v, want ready", ready)
+	}
+}
+
 func TestE2E_EventsWebhookDelivery(t *testing.T) {
 	requireModernGit(t)
 	g := newGitClient(t)

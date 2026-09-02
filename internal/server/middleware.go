@@ -354,7 +354,8 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Add("Vary", "Origin")
-		allowed := originAllowed(s.cfg.Server.CorsOrigins, origin) || s.isCanonicalOrigin(origin)
+		allowed := originAllowed(s.cfg.Server.CorsOrigins, origin) || s.isCanonicalOrigin(origin) ||
+			sameOriginHost(origin, r.Host)
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			if !allowed {
 				w.WriteHeader(http.StatusForbidden)
@@ -388,6 +389,24 @@ func (s *Server) cors(next http.Handler) http.Handler {
 func (s *Server) isCanonicalOrigin(origin string) bool {
 	pub := s.cfg.Server.PublicURL
 	return pub != "" && (origin == pub || strings.TrimSuffix(origin, "/") == strings.TrimSuffix(pub, "/"))
+}
+
+// sameOriginHost reports whether the Origin header refers to the request's
+// own host:port. Browsers attach Origin to EVERY state-changing request,
+// same-origin ones included — refusing those would break every UI write
+// (first-run setup save included). Scheme is not compared: it is not
+// recoverable from r.Host and a same-host scheme flip is a deployment
+// choice (TLS termination), not an attacker's tool.
+func sameOriginHost(origin, host string) bool {
+	i := strings.Index(origin, "://")
+	if i < 0 {
+		return false
+	}
+	o := origin[i+3:]
+	if j := strings.IndexAny(o, "/?"); j >= 0 {
+		o = o[:j]
+	}
+	return strings.EqualFold(o, host)
 }
 
 // --- #7 refreshSession ---------------------------------------------------------------

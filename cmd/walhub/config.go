@@ -68,6 +68,23 @@ func defaultConfigPaths(c *cli) []string {
 	return []string{filepath.Join(dd, config.ConfigFileName), filepath.Join(dd, config.ConfigAliasName)}
 }
 
+// configCandidates are the §3.1 candidate config paths in priority order: the
+// explicit --config / pointer file when set, else the data-dir files. serve
+// passes them in BootState so the setup API edits on top of the file that was
+// actually loaded (§3.4).
+func configCandidates(c *cli) []string {
+	explicit := c.configPath
+	if explicit == "" {
+		if ptr, ok := config.ConfigFilePointer(os.Getenv); ok {
+			explicit = ptr
+		}
+	}
+	if explicit != "" {
+		return []string{explicit}
+	}
+	return defaultConfigPaths(c)
+}
+
 // dataDirFor resolves the data dir for a command.
 func dataDirFor(c *cli) string {
 	if c.dataDir != "" {

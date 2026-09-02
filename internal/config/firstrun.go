@@ -23,6 +23,42 @@ func FirstRunDefaults(dataDir string) *Config {
 	return c
 }
 
+// LoadSetupBase returns the file-visible base config that setup edits on top
+// of (§3.4): compiled-in defaults ⊕ the first existing candidate file — no env
+// overlay, no PORT lockstep (those stay env-side and are never baked into the
+// file). Candidates are checked in priority order (an explicit --config path
+// first, then the data-dir files, mirroring the §3.1 ladder). With no
+// candidate present the zero-config first-run shape is the base, so a first
+// save cannot silently swap the filesystem store for the s3 default or move
+// the listener off 0.0.0.0. An unparseable file returns the error; the caller
+// falls back to FirstRunDefaults (the file's own errors surface separately
+// through the boot state).
+func LoadSetupBase(dataDir string, candidates []string) (*Config, error) {
+	c := Defaults()
+	loaded := false
+	for _, path := range candidates {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		if err := decodeFile(path, c); err != nil {
+			return nil, err
+		}
+		loaded = true
+		break
+	}
+	if !loaded {
+		c = FirstRunDefaults(dataDir)
+	}
+	c.DataDir = dataDir
+	return c, nil
+}
+
 // ResolveDataDir resolves the data dir (11_config_cli.md §3.1.1): the
 // WALHUB_DATA_DIR env var, else /var/lib/walhub in a container context
 // (/.dockerenv present or KUBERNETES_SERVICE_HOST set), else the XDG default

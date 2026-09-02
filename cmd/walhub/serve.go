@@ -49,10 +49,19 @@ func runServe(ctx context.Context, c *cli, args []string) int {
 		// INVALID config → SETUP-ONLY MODE (§3.4): only /setup, /healthz,
 		// /readyz, /services/public answer; the setup UI displays the errors.
 		fmt.Fprintf(os.Stderr, "walhub: config invalid — entering setup-only mode: %v\n", err)
-		boot := server.BootState{Mode: "setup_only", Errors: []string{err.Error()}}
+		boot := server.BootState{Mode: "setup_only", Errors: []string{err.Error()}, ConfigPaths: configCandidates(c)}
 		cfg = config.FirstRunDefaults(dataDir)
 		applyPortOverride(cfg) // setup-only still honors the PORT lockstep
 		return serveHTTP(ctx, cfg, boot, dataDir, nil)
+	}
+	// The --data-dir flag is authoritative over the XDG/env default (§3.1.1):
+	// re-sync the loaded config so first-run paths and setup saves live in the
+	// directory the operator actually named.
+	if fileState == stateAbsent {
+		cfg = config.FirstRunDefaults(dataDir)
+		applyPortOverride(cfg) // PORT lockstep re-applied on the re-derived config
+	} else {
+		cfg.DataDir = dataDir
 	}
 	bootMode := "normal"
 	if fileState == stateAbsent {
@@ -68,7 +77,7 @@ func runServe(ctx context.Context, c *cli, args []string) int {
 		fmt.Fprintf(os.Stderr, "walhub: store: %v\n", err)
 		return exitErr
 	}
-	return serveHTTP(ctx, cfg, server.BootState{Mode: bootMode}, dataDir, st)
+	return serveHTTP(ctx, cfg, server.BootState{Mode: bootMode, ConfigPaths: configCandidates(c)}, dataDir, st)
 }
 
 // serveHTTP assembles AppState and runs the listener until drain completes.

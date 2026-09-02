@@ -91,6 +91,10 @@ type BootState struct {
 	// "setup_only" (config file present but INVALID).
 	Mode   string // "normal" | "defaults" | "setup_only"
 	Errors []string
+	// ConfigPaths are the candidate config-file paths in boot priority order
+	// (explicit --config / pointer first, then the data-dir files) — the setup
+	// API edits on top of the first existing one (§3.4).
+	ConfigPaths []string
 }
 
 // InSetupOnly reports SETUP-ONLY MODE (§3.4).

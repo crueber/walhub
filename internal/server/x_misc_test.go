@@ -338,7 +338,7 @@ func TestParseSetupBodyTOMLAndErrors(t *testing.T) {
 listen = "127.0.0.1:9999"
 auto_create_on_push = true
 `))
-	c, err := parseSetupBody(req)
+	c, err := parseSetupBody(req, config.Defaults())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ auto_create_on_push = true
 	// JSON overrides with non-string values.
 	req = httptest.NewRequest("PUT", "/api/v1/setup",
 		strings.NewReader(`{"overrides": {"server.auto_create_on_push": true, "server.max_push_bytes": 1000, "server.cors_origins": "a.com,b.com"}}`))
-	c, err = parseSetupBody(req)
+	c, err = parseSetupBody(req, config.Defaults())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,40 +358,40 @@ auto_create_on_push = true
 	}
 	// Section-less key → error.
 	req = httptest.NewRequest("PUT", "/api/v1/setup", strings.NewReader(`{"overrides": {"listen": "x"}}`))
-	if _, err := parseSetupBody(req); err == nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err == nil {
 		t.Fatal("bare key must fail")
 	}
 	// Unknown section/key → error.
 	req = httptest.NewRequest("PUT", "/api/v1/setup", strings.NewReader(`{"overrides": {"nope.key": "1"}}`))
-	if _, err := parseSetupBody(req); err == nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err == nil {
 		t.Fatal("unknown section must fail")
 	}
 	req = httptest.NewRequest("PUT", "/api/v1/setup", strings.NewReader(`{"overrides": {"server.nope": "1"}}`))
-	if _, err := parseSetupBody(req); err == nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err == nil {
 		t.Fatal("unknown key must fail")
 	}
 	// Malformed JSON.
 	req = httptest.NewRequest("PUT", "/api/v1/setup", strings.NewReader(`{"overrides": `))
-	if _, err := parseSetupBody(req); err == nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err == nil {
 		t.Fatal("bad json must fail")
 	}
 	// A top-level non-table value is rejected.
 	req = httptest.NewRequest("PUT", "/api/v1/setup", strings.NewReader("server = 5\n"))
-	if _, err := parseSetupBody(req); err == nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err == nil {
 		t.Fatal("non-table section must fail")
 	}
 	// configCoerce errors: bad bool, bad int; string list parses.
 	req = httptest.NewRequest("PUT", "/api/v1/setup", strings.NewReader(`{"overrides": {"server.auto_create_on_push": "notabool"}}`))
-	if _, err := parseSetupBody(req); err == nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err == nil {
 		t.Fatal("bad bool must fail")
 	}
 	req = httptest.NewRequest("PUT", "/api/v1/setup", strings.NewReader(`{"overrides": {"server.max_push_bytes": "NaN"}}`))
-	if _, err := parseSetupBody(req); err == nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err == nil {
 		t.Fatal("bad int must fail")
 	}
 	req = httptest.NewRequest("PUT", "/api/v1/setup",
 		strings.NewReader(`{"overrides": {"server.cors_origins": "a.test,b.test"}}`))
-	if _, err := parseSetupBody(req); err != nil {
+	if _, err := parseSetupBody(req, config.Defaults()); err != nil {
 		t.Fatalf("string list must parse: %v", err)
 	}
 }
