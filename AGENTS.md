@@ -3,8 +3,12 @@
 **What this repo is:** the implementation workspace for **walhub** — a Go rewrite of the walgit git host.
 `docs/MASTER_RUST_SPEC.md` specifies the system's behavior completely (it describes the Rust reference
 implementation and is normative for behavior); `docs/go/*.md` specify how to build it in Go. When you are
-asked to implement, review, or extend walhub, this file tells you how to work. Reading order:
-`docs/go/README.md` → `docs/go/01_overview.md` → your task's doc → `docs/go/13_concurrency.md`.
+asked to implement, review, or extend walhub, this file tells you how to work — and the same rules bind
+human contributors; humans additionally start at [`README.md`](README.md) for setup and day-to-day
+workflow. Reading order: `docs/go/README.md` → `docs/go/01_overview.md` → your task's doc →
+`docs/go/13_concurrency.md`. Work on the collaboration layer (issues, PRs, review, checks,
+notifications, orgs) additionally starts at `docs/features/README.md` — its primitives are frozen
+contracts, exactly like `14_extensibility.md`.
 
 > **Pre-1.0, no backwards compatibility within walhub.** Change the shape and delete the old shape in the
 > same change — no aliases, shims, deprecated flags, or "still accepted for" branches. The ONE exception is
@@ -74,7 +78,7 @@ asked to implement, review, or extend walhub, this file tells you how to work. R
     section; decisions are appended there with a one-line rationale, never silently overridden. If code and
     doc disagree, fix one of them in the same change — say which and why in the commit.
 
-## 2. Working rules for agents
+## 2. Working rules (agents and humans — the same bar)
 
 - **Read your doc first.** Each `docs/go/NN_*.md` is self-sufficient for its package: interfaces, argv,
   wire shapes, concurrency rules, tests. Cross-references are by file name. Do not guess behavior that the
@@ -113,7 +117,10 @@ internal/events     WAL → webhook bridge (cursor, delivery, wake-ups)
 internal/maintain   maintainer loop: checkpoints, bundles, compaction, fsck/repair, follow
 internal/config     walhub.toml (optional) + WALHUB__ env overrides, per-repo settings, validation
 internal/policy     push policy rule language (protect/history/size effects)
-web/                vanilla ES-module SPA + SDK (zero npm deps, no build), embedded into the binary
+web/                vanilla-ESM SPA + modular SDK (zero npm runtime deps); the SDK is esbuild-bundled
+                    to web/dist/repos.js by `make web` (a `make build` dependency) and the whole tree is
+                    embedded raw: UI at /_ui/…, bundle at /repos.js (text/javascript — module MIME is
+                    load-bearing), standalone setup page at /setup
 ```
 
 ## 4. Verification ladder (what to run before you say "done")
@@ -126,4 +133,9 @@ web/                vanilla ES-module SPA + SDK (zero npm deps, no build), embed
 5. `make sim` when you touched `internal/wal` or any publish/sync path (budget assertions included).
 6. `make e2e` with real git when you touched `internal/git` or `internal/server` git routes.
 7. `make test-web` (node --test) when you touched `web/`.
-8. If you appended a decision: the doc's "Decisions & deviations" section updated in the same commit.
+8. **Real browser when you touched anything browser-facing** (`web/`, static/UI serving, auth flows,
+   setup): load `/`, a repo page, and `/setup` in actual Chromium and check the console. Module
+   scripts are MIME-enforced and import-map driven — "curl says 200" has shipped a blank page before
+   (the uiAsset stub incident, 2026-09-01). A headless-Chrome CDP drive counts; a DOM-level fetch
+   smoke does not.
+9. If you appended a decision: the doc's "Decisions & deviations" section updated in the same commit.
