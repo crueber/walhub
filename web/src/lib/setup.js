@@ -56,152 +56,231 @@ function isLoopback(host) {
   return host === "::1" || host === "[::1]";
 }
 
-// --- field metadata: type + enum membership per 11_config_cli.md §2 -----------
+/** Format a server duration value (Go compound "1h0m0s", spec "5m", or bare
+    seconds) in the single-suffix spec spelling the form hints use. */
+export function fmtSpecDuration(v) {
+  const s = String(v ?? "").trim();
+  if (s === "") return "";
+  if (/^\d+(?:\.\d+)?(ms|s|m|h|d|w)$/.test(s)) return s; // already spec spelling
+  let total = NaN;
+  if (/^-?\d+(\.\d+)?$/.test(s)) {
+    total = Number(s); // bare = seconds
+  } else {
+    total = 0;
+    const parts = s.matchAll(/(\d+(?:\.\d+)?)(ms|us|µs|[hms])/g);
+    let matched = false;
+    for (const [, n, unit] of parts) {
+      matched = true;
+      total += Number(n) * { h: 3600, m: 60, s: 1, ms: 0.001, us: 1e-6, µs: 1e-6 }[unit];
+    }
+    if (!matched) return s; // unparseable → show as-is
+  }
+  if (!Number.isFinite(total)) return s;
+  const steps = [["w", 604800], ["d", 86400], ["h", 3600], ["m", 60], ["s", 1]];
+  for (const [unit, mul] of steps) {
+    if (total >= mul && Number.isInteger(total / mul)) return `${total / mul}${unit}`;
+  }
+  return `${total}s`;
+}
+
+/** Format a server byte count in the spec spelling ("64GiB"), largest unit
+    that divides evenly; bare bytes otherwise. */
+export function fmtSpecSize(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || s0(v) === "" || !Number.isFinite(n) || n < 0) return s0(v);
+  const steps = [["TiB", 2 ** 40], ["GiB", 2 ** 30], ["MiB", 2 ** 20], ["KiB", 2 ** 10], ["B", 1]];
+  for (const [unit, mul] of steps) {
+    if (n >= mul && Number.isInteger(n / mul)) return `${n / mul}${unit}`;
+  }
+  return `${n}B`;
+}
+
+function s0(v) {
+  return v === null || v === undefined ? "" : String(v);
+}
+
+const STRATEGY_KEYS = ["name", "kind", "base", "schedule", "keep", "backfill_max", "chain", "filter", "refs", "min_commits"];
+
+/** Render the server's parsed strategies as the [[strategy]] TOML fragment the
+    textarea edits (round-trips through the overrides channel). */
+export function strategiesToToml(list) {
+  if (!Array.isArray(list) || list.length === 0) return "";
+  const val = (v) => {
+    if (typeof v === "string") return JSON.stringify(v);
+    if (Array.isArray(v)) return `[${v.map((x) => JSON.stringify(String(x))).join(", ")}]`;
+    return String(v);
+  };
+  return list
+    .map((t) => {
+      // The schema surfaces Go field names (no json tags); render the TOML
+      // spellings the server decodes (case/underscore-insensitive match).
+      const norm = (k) => STRATEGY_KEYS.find((s) => s.replace(/_/g, "").toLowerCase() === k.replace(/_/g, "").toLowerCase()) ?? k;
+      const entries = Object.entries(t).map(([k, v]) => [norm(k), v]);
+      entries.sort(([a], [b]) => {
+        const ia = STRATEGY_KEYS.indexOf(a), ib = STRATEGY_KEYS.indexOf(b);
+        return (ia === -1 ? STRATEGY_KEYS.length : ia) - (ib === -1 ? STRATEGY_KEYS.length : ib) || a.localeCompare(b);
+      });
+      const body = entries
+        .filter(([, v]) => v !== undefined && v !== null && v !== "" && v !== false && v !== 0)
+        .map(([k, v]) => `${k} = ${val(v)}`)
+        .join("\n");
+      return `[[strategy]]\n${body}`;
+    })
+    .join("\n\n");
+}
+
+// --- field metadata: type + enum + example per 11_config_cli.md §2 ------------
+//
+// `ex` is a WORKING example value: it passes validateSetup on its own and is
+// accepted by the server validator in isolation (web/test/unit/setup-form.test.js
+// enforces both). The setup page shows it under the label, always visible —
+// unlike a placeholder it does not vanish while typing. `note` is a short
+// consequence/companion hint for fields whose validity depends on other fields.
 
 export const FIELDS = [
   // server
-  { key: "server.listen", type: "listen" },
-  { key: "server.http2", type: "bool" },
-  { key: "server.max_concurrent_requests", type: "int", min: 1 },
-  { key: "server.max_concurrent_per_repo", type: "int", min: 1 },
-  { key: "server.request_timeout", type: "duration" },
-  { key: "server.drain_timeout", type: "duration" },
-  { key: "server.max_push_bytes", type: "size" },
-  { key: "server.roles", type: "list", enum: ["serve", "maintain", "events"] },
-  { key: "server.auto_create_on_push", type: "bool" },
-  { key: "server.accel_redirect", type: "bool" },
-  { key: "server.public_url", type: "url" },
-  { key: "server.cors_origins", type: "list" },
-  { key: "server.tls.mode", type: "enum", enum: ["off", "self_signed", "files"] },
-  { key: "server.tls.cert", type: "string" },
-  { key: "server.tls.key", type: "string" },
-  { key: "server.tls.hostnames", type: "list" },
-  { key: "server.auth.mode", type: "enum", enum: ["none", "token", "oidc"] },
-  { key: "server.auth.anonymous_read", type: "bool" },
-  { key: "server.auth.session_secret", type: "string" },
-  { key: "server.auth.session_ttl", type: "duration" },
-  { key: "server.auth.access_token_ttl", type: "duration" },
-  { key: "server.auth.issuer", type: "url" },
-  { key: "server.auth.allowed_domains", type: "list" },
-  { key: "server.auth.allowed_emails", type: "list" },
-  { key: "server.auth.write_domains", type: "list" },
-  { key: "server.auth.oauth_client_id", type: "string" },
-  { key: "server.auth.oauth_client_secret", type: "string" },
-  { key: "server.auth.audiences", type: "list" },
-  { key: "server.auth.trusted_forwarders", type: "list" },
-  { key: "server.auth.admin_emails", type: "list" },
-  { key: "server.auth.admin_domains", type: "list" },
+  { key: "server.listen", type: "listen", ex: "0.0.0.0:8080", note: "127.0.0.1:8080 = loopback only" },
+  { key: "server.http2", type: "bool", ex: "true" },
+  { key: "server.max_concurrent_requests", type: "int", min: 1, ex: "512" },
+  { key: "server.max_concurrent_per_repo", type: "int", min: 1, ex: "32" },
+  { key: "server.request_timeout", type: "duration", ex: "1h" },
+  { key: "server.drain_timeout", type: "duration", ex: "30s" },
+  { key: "server.max_push_bytes", type: "size", ex: "2GiB" },
+  { key: "server.roles", type: "list", enum: ["serve", "maintain", "events"], ex: "serve, maintain" },
+  { key: "server.auto_create_on_push", type: "bool", ex: "true" },
+  { key: "server.accel_redirect", type: "bool", ex: "true", note: "only honoured behind an edge that announces accel-redirect" },
+  { key: "server.public_url", type: "url", ex: "https://git.example.com" },
+  { key: "server.cors_origins", type: "list", ex: "https://git.example.com" },
+  { key: "server.tls.mode", type: "enum", enum: ["off", "self_signed", "files"], ex: "self_signed", note: "files also requires tls.cert and tls.key" },
+  { key: "server.tls.cert", type: "string", ex: "/etc/walhub/tls/fullchain.pem" },
+  { key: "server.tls.key", type: "string", ex: "/etc/walhub/tls/privkey.pem" },
+  { key: "server.tls.hostnames", type: "list", ex: "git.example.com, walhub.local" },
+  { key: "server.auth.mode", type: "enum", enum: ["none", "token", "oidc"], ex: "token", note: "oidc additionally needs issuer, an allowlist, and anonymous_read=false" },
+  { key: "server.auth.anonymous_read", type: "bool", ex: "false" },
+  { key: "server.auth.session_secret", type: "string", ex: "b3f1c0a9d8e27f645c31b0a98d7e6f5c4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d", note: "any random ≥ 32 bytes (openssl rand -hex 32); rotating revokes sessions" },
+  { key: "server.auth.session_ttl", type: "duration", ex: "12h" },
+  { key: "server.auth.access_token_ttl", type: "duration", ex: "24h" },
+  { key: "server.auth.issuer", type: "url", ex: "https://id.example.com", note: "oidc mode only" },
+  { key: "server.auth.allowed_domains", type: "list", ex: "example.com" },
+  { key: "server.auth.allowed_emails", type: "list", ex: "alice@example.com" },
+  { key: "server.auth.write_domains", type: "list", ex: "example.com" },
+  { key: "server.auth.oauth_client_id", type: "string", ex: "walhub-web", note: "client_id and client_secret go together" },
+  { key: "server.auth.oauth_client_secret", type: "string", ex: "client-secret-from-the-issuer" },
+  { key: "server.auth.audiences", type: "list", ex: "walhub-web" },
+  { key: "server.auth.trusted_forwarders", type: "list", ex: "edge.internal" },
+  { key: "server.auth.admin_emails", type: "list", ex: "admin@example.com" },
+  { key: "server.auth.admin_domains", type: "list", ex: "example.com" },
   // store
-  { key: "store.backend", type: "enum", enum: ["s3", "gcs", "memory", "filesystem"] },
-  { key: "store.bucket", type: "string" },
-  { key: "store.prefix", type: "string" },
-  { key: "store.root", type: "path" },
-  { key: "store.max_retries", type: "int", min: 0 },
-  { key: "store.multipart_threshold", type: "size" },
-  { key: "store.multipart_part_size", type: "size" },
-  { key: "store.s3.endpoint", type: "url" },
-  { key: "store.s3.region", type: "string" },
-  { key: "store.s3.access_key_env", type: "string" },
-  { key: "store.s3.secret_key_env", type: "string" },
-  { key: "store.s3.force_path_style", type: "bool" },
-  { key: "store.gcs.endpoint", type: "url" },
-  { key: "store.gcs.signing_service_account", type: "string" },
-  { key: "store.gcs.bulk_clients", type: "int", min: 1 },
-  { key: "store.gcs.bulk_concurrency", type: "int", min: 1 },
+  { key: "store.backend", type: "enum", enum: ["s3", "gcs", "memory", "filesystem"], ex: "filesystem", note: "s3/gcs also need store.bucket and their subsection" },
+  { key: "store.bucket", type: "string", ex: "walhub-test" },
+  { key: "store.prefix", type: "string", ex: "walhub/" },
+  { key: "store.root", type: "path", ex: "/var/lib/walhub/store", note: "filesystem backend only" },
+  { key: "store.max_retries", type: "int", min: 0, ex: "3" },
+  { key: "store.multipart_threshold", type: "size", ex: "64MiB" },
+  { key: "store.multipart_part_size", type: "size", ex: "16MiB", note: "must be ≤ multipart_threshold" },
+  { key: "store.s3.endpoint", type: "url", ex: "http://rustfs:9000", note: "rustfs/MinIO style; omit for AWS" },
+  { key: "store.s3.region", type: "string", ex: "us-east-1" },
+  { key: "store.s3.access_key_env", type: "string", ex: "AWS_ACCESS_KEY_ID", note: "names the env var holding the key" },
+  { key: "store.s3.secret_key_env", type: "string", ex: "AWS_SECRET_ACCESS_KEY" },
+  { key: "store.s3.force_path_style", type: "bool", ex: "true", note: "true for rustfs/MinIO; AWS uses virtual-host addressing" },
+  { key: "store.gcs.endpoint", type: "url", ex: "http://localhost:4443", note: "fake-gcs-server in dev; omit for real GCS" },
+  { key: "store.gcs.signing_service_account", type: "string", ex: "signer@project.iam.gserviceaccount.com" },
+  { key: "store.gcs.bulk_clients", type: "int", min: 1, ex: "4" },
+  { key: "store.gcs.bulk_concurrency", type: "int", min: 1, ex: "8" },
   // cache
-  { key: "cache.dir", type: "path" },
-  { key: "cache.mode", type: "enum", enum: ["budget", "disk", "auto"] },
-  { key: "cache.max_bytes", type: "size" },
-  { key: "cache.disk_high_watermark", type: "float", min: 0, max: 1 },
-  { key: "cache.evict_idle_after", type: "duration" },
-  { key: "cache.prewarm", type: "list" },
-  { key: "cache.prewarm_parallelism", type: "int", min: 1 },
-  { key: "cache.prewarm_ready_timeout", type: "duration" },
-  { key: "cache.ref_advert_entries", type: "int", min: 1 },
-  { key: "cache.object_info_entries", type: "int", min: 1 },
-  { key: "cache.bundle_list_entries", type: "int", min: 1 },
-  { key: "cache.remote_block_bytes", type: "size" },
-  { key: "cache.remote_object_bytes", type: "size" },
-  { key: "cache.shared_render_cache", type: "bool" },
-  { key: "cache.store_mount", type: "path" },
+  { key: "cache.dir", type: "path", ex: "/var/cache/walhub" },
+  { key: "cache.mode", type: "enum", enum: ["budget", "disk", "auto"], ex: "budget" },
+  { key: "cache.max_bytes", type: "size", ex: "20GiB", note: "everything on disk must fit this in budget mode" },
+  { key: "cache.disk_high_watermark", type: "float", min: 0, max: 1, ex: "0.9" },
+  { key: "cache.evict_idle_after", type: "duration", ex: "7d" },
+  { key: "cache.prewarm", type: "list", ex: "acme/monorepo" },
+  { key: "cache.prewarm_parallelism", type: "int", min: 1, ex: "4" },
+  { key: "cache.prewarm_ready_timeout", type: "duration", ex: "30s" },
+  { key: "cache.ref_advert_entries", type: "int", min: 1, ex: "4096" },
+  { key: "cache.object_info_entries", type: "int", min: 1, ex: "4096" },
+  { key: "cache.bundle_list_entries", type: "int", min: 1, ex: "128" },
+  { key: "cache.remote_block_bytes", type: "size", ex: "1MiB" },
+  { key: "cache.remote_object_bytes", type: "size", ex: "4MiB" },
+  { key: "cache.shared_render_cache", type: "bool", ex: "true" },
+  { key: "cache.store_mount", type: "path", ex: "/mnt/bucket", note: "read-only mount of the store bucket, if you have one" },
   // wal
-  { key: "wal.batch_window", type: "duration" },
-  { key: "wal.max_batch", type: "int", min: 1 },
-  { key: "wal.push_broker_url", type: "url" },
-  { key: "wal.push_broker_token", type: "string" },
-  { key: "wal.push_broker_buffer_bytes", type: "size" },
-  { key: "wal.snapshot_every_entries", type: "int", min: 1 },
-  { key: "wal.checkpoint_interval", type: "duration" },
-  { key: "wal.checkpoint_tail_bytes", type: "size" },
-  { key: "wal.cas_max_retries", type: "int", min: 1 },
-  { key: "wal.fsck_objects", type: "bool" },
-  { key: "wal.check_connectivity", type: "bool" },
-  { key: "wal.freshness_ttl", type: "duration" },
-  { key: "wal.prefetch_packs", type: "bool" },
-  { key: "wal.prefetch_max_bytes", type: "size" },
-  { key: "wal.remote_objects", type: "bool" },
+  { key: "wal.batch_window", type: "duration", ex: "200ms" },
+  { key: "wal.max_batch", type: "int", min: 1, ex: "64" },
+  { key: "wal.push_broker_url", type: "url", ex: "http://broker:8080", note: "hosts that maintain nothing forward pushes here" },
+  { key: "wal.push_broker_token", type: "string", ex: "broker-shared-secret" },
+  { key: "wal.push_broker_buffer_bytes", type: "size", ex: "32MiB" },
+  { key: "wal.snapshot_every_entries", type: "int", min: 1, ex: "1000" },
+  { key: "wal.checkpoint_interval", type: "duration", ex: "10m" },
+  { key: "wal.checkpoint_tail_bytes", type: "size", ex: "64MiB" },
+  { key: "wal.cas_max_retries", type: "int", min: 1, ex: "5" },
+  { key: "wal.fsck_objects", type: "bool", ex: "true" },
+  { key: "wal.check_connectivity", type: "bool", ex: "true" },
+  { key: "wal.freshness_ttl", type: "duration", ex: "30s" },
+  { key: "wal.prefetch_packs", type: "bool", ex: "true" },
+  { key: "wal.prefetch_max_bytes", type: "size", ex: "64MiB" },
+  { key: "wal.remote_objects", type: "bool", ex: "true" },
   // maintenance
-  { key: "maintenance.interval", type: "duration" },
-  { key: "maintenance.checkpoints", type: "bool" },
-  { key: "maintenance.max_pack_bytes", type: "size" },
-  { key: "maintenance.disk", type: "enum", enum: ["tmpfs", "ssd"] },
-  { key: "maintenance.host", type: "string" },
-  { key: "maintenance.fsck_interval", type: "duration" },
-  { key: "maintenance.follow_interval", type: "duration" },
+  { key: "maintenance.interval", type: "duration", ex: "1m" },
+  { key: "maintenance.checkpoints", type: "bool", ex: "true" },
+  { key: "maintenance.max_pack_bytes", type: "size", ex: "2GiB" },
+  { key: "maintenance.disk", type: "enum", enum: ["tmpfs", "ssd"], ex: "ssd" },
+  { key: "maintenance.host", type: "string", ex: "build-01" },
+  { key: "maintenance.fsck_interval", type: "duration", ex: "24h" },
+  { key: "maintenance.follow_interval", type: "duration", ex: "5m" },
   // placement
-  { key: "placement.serve", type: "globs" },
-  { key: "placement.serve_exclude", type: "globs" },
-  { key: "placement.maintain", type: "globs" },
-  { key: "placement.maintain_exclude", type: "globs" },
+  { key: "placement.serve", type: "globs", ex: "*, acme/*" },
+  { key: "placement.serve_exclude", type: "globs", ex: "secret/*" },
+  { key: "placement.maintain", type: "globs", ex: "*" },
+  { key: "placement.maintain_exclude", type: "globs", ex: "archive/*" },
   // compaction
-  { key: "compaction.enabled", type: "bool" },
-  { key: "compaction.factor", type: "float", min: 1 },
-  { key: "compaction.trigger_packs", type: "int", min: 2 },
-  { key: "compaction.trigger_bytes", type: "size" },
-  { key: "compaction.lease_ttl", type: "duration" },
-  { key: "compaction.retention_superseded", type: "duration" },
-  { key: "compaction.engine", type: "enum", enum: ["git", "gix"] },
+  { key: "compaction.enabled", type: "bool", ex: "true" },
+  { key: "compaction.factor", type: "float", min: 1, ex: "4" },
+  { key: "compaction.trigger_packs", type: "int", min: 2, ex: "8" },
+  { key: "compaction.trigger_bytes", type: "size", ex: "512MiB" },
+  { key: "compaction.lease_ttl", type: "duration", ex: "10m" },
+  { key: "compaction.retention_superseded", type: "duration", ex: "7d" },
+  { key: "compaction.engine", type: "enum", enum: ["git", "gix"], ex: "git" },
   // bundles
-  { key: "bundles.strategy", type: "toml" },
-  { key: "bundles.min_commits", type: "int", min: 0 },
-  { key: "bundles.min_bytes", type: "size" },
-  { key: "bundles.main_only", type: "bool" },
-  { key: "bundles.extra_refs", type: "list" },
-  { key: "bundles.serve_via", type: "enum", enum: ["proxy", "signed_url"] },
-  { key: "bundles.signed_url_ttl", type: "duration" },
-  { key: "bundles.signed_url_for", type: "list" },
-  { key: "bundles.advertise", type: "bool" },
-  { key: "bundles.advertise_filtered", type: "bool" },
-  { key: "bundles.require", type: "list" },
+  { key: "bundles.strategy", type: "toml", ex: '[[strategy]]\nname = "weekly"\nkind = "full"\nschedule = "0 0 23 * * 0"\nkeep = 2', note: "TOML array of [[strategy]] — replaces the built-in weekly/daily/hourly set" },
+  { key: "bundles.min_commits", type: "int", min: 0, ex: "25" },
+  { key: "bundles.min_bytes", type: "size", ex: "1MiB" },
+  { key: "bundles.main_only", type: "bool", ex: "true" },
+  { key: "bundles.extra_refs", type: "list", ex: "refs/heads/release" },
+  { key: "bundles.serve_via", type: "enum", enum: ["proxy", "signed_url"], ex: "proxy" },
+  { key: "bundles.signed_url_ttl", type: "duration", ex: "15m" },
+  { key: "bundles.signed_url_for", type: "list", ex: "acme/monorepo" },
+  { key: "bundles.advertise", type: "bool", ex: "true" },
+  { key: "bundles.advertise_filtered", type: "bool", ex: "true" },
+  { key: "bundles.require", type: "list", ex: "acme/monorepo", note: "listed repos refuse full clones that skip bundle-uri" },
   // lfs
-  { key: "lfs.enabled", type: "bool" },
-  { key: "lfs.serve_via", type: "enum", enum: ["proxy", "signed_url"] },
-  { key: "lfs.signed_url_ttl", type: "duration" },
-  { key: "lfs.max_object_bytes", type: "size" },
+  { key: "lfs.enabled", type: "bool", ex: "true" },
+  { key: "lfs.serve_via", type: "enum", enum: ["proxy", "signed_url"], ex: "proxy" },
+  { key: "lfs.signed_url_ttl", type: "duration", ex: "15m" },
+  { key: "lfs.max_object_bytes", type: "size", ex: "10GiB" },
   // upstream
-  { key: "upstream.git", type: "url" },
-  { key: "upstream.lfs", type: "url" },
-  { key: "upstream.token_env", type: "string" },
-  { key: "upstream.follow", type: "bool" },
+  { key: "upstream.git", type: "url", ex: "https://github.com/acme/widgets.git", note: "source the follow loop pulls refs from" },
+  { key: "upstream.lfs", type: "url", ex: "https://github.com/acme/widgets.git/info/lfs" },
+  { key: "upstream.token_env", type: "string", ex: "WALHUB_UPSTREAM_TOKEN", note: "names the env var holding the token" },
+  { key: "upstream.follow", type: "bool", ex: "true" },
   // git
-  { key: "git.binary", type: "string" },
-  { key: "git.upload_pack_engine", type: "enum", enum: ["auto", "git", "gix"] },
-  { key: "git.allow_filter", type: "bool" },
-  { key: "git.allow_any_sha1_in_want", type: "bool" },
-  { key: "git.object_format", type: "enum", enum: ["sha1", "sha256"] },
-  { key: "git.commit_graph", type: "bool" },
-  { key: "git.commit_graph_changed_paths", type: "bool" },
-  { key: "git.history_pack", type: "bool" },
-  { key: "git.max_wants", type: "int", min: 0 },
+  { key: "git.binary", type: "string", ex: "/usr/bin/git" },
+  { key: "git.upload_pack_engine", type: "enum", enum: ["auto", "git", "gix"], ex: "auto" },
+  { key: "git.allow_filter", type: "bool", ex: "true" },
+  { key: "git.allow_any_sha1_in_want", type: "bool", ex: "false" },
+  { key: "git.object_format", type: "enum", enum: ["sha1", "sha256"], ex: "sha1" },
+  { key: "git.commit_graph", type: "bool", ex: "true" },
+  { key: "git.commit_graph_changed_paths", type: "bool", ex: "true" },
+  { key: "git.history_pack", type: "bool", ex: "true" },
+  { key: "git.max_wants", type: "int", min: 0, ex: "100000" },
   // telemetry
-  { key: "telemetry.log_format", type: "enum", enum: ["pretty", "json"] },
-  { key: "telemetry.log_filter", type: "string" },
-  { key: "telemetry.metrics", type: "bool" },
-  { key: "telemetry.lock_wait_warn", type: "duration" },
+  { key: "telemetry.log_format", type: "enum", enum: ["pretty", "json"], ex: "json" },
+  { key: "telemetry.log_filter", type: "string", ex: "walhub=debug" },
+  { key: "telemetry.metrics", type: "bool", ex: "true" },
+  { key: "telemetry.lock_wait_warn", type: "duration", ex: "5s" },
   // events
-  { key: "events.webhook_url", type: "url" },
-  { key: "events.webhook_secret", type: "string" },
-  { key: "events.sweep_interval", type: "duration" },
+  { key: "events.webhook_url", type: "url", ex: "http://ci.example.com/hooks/walhub" },
+  { key: "events.webhook_secret", type: "string", ex: "hmac-shared-secret" },
+  { key: "events.sweep_interval", type: "duration", ex: "1m" },
 ];
 
 const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));

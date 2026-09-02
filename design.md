@@ -60,6 +60,12 @@ are used consistently:
 - `.btn` / `.btn.primary` — actions. One `.primary` per view (Save/Run).
 - `.pill` — compact status/selector; `.chip` — tiny label ("file", "default", booleans).
 - `.input` — every text/select/textarea. Width via utilities (`md:w-72`, `md:max-w-md`).
+- `.setup-row` / `.setup-label-col` / `.setup-input-col` — the setup form: label column LEFT,
+  control RIGHT, tight `gap-x-5 gap-y-1` gutter; one column on phones. `.setup-label` is bound to
+  the control (`for`/`id`, `aria-labelledby` for the bool switch). `.setup-examples` (+ `.setup-ex`,
+  `.setup-note`) renders the field's working example under the label — it is real markup, never a
+  placeholder, so it stays visible while typing; examples live in `lib/setup.js` `FIELDS[].ex/note`
+  and are tested to validate (web/test/unit/setup-form.test.js).
 - `.data-table` — **the table class. Never name anything `.grid`** — it collides with Tailwind's
   `display: grid` utility and silently breaks the table (this shipped once).
 - `.code-view`, `.markdown-body`, `.diff-add/.diff-del/.diff-hunk`, `.tok-*` — rendering surfaces.

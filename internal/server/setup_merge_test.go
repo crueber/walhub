@@ -273,6 +273,54 @@ func TestSetupBaseConfigFallsBackOnBadFile(t *testing.T) {
 
 // Duration and byte-size values round-trip: the schema serves "1h0m0s" /
 // plain integers, and Sscanf-style parsing would truncate both.
+// The setup UI sends the same spellings the TOML file accepts: sizes as
+// "64MiB", durations with the d/w suffixes, floats and unsigned counters as
+// plain numbers, and struct slices (bundles.strategy) as a [[strategy]]
+// fragment. Every one must round-trip through the overrides channel — these
+// previously failed with "not an int"/"unsupported type", so the page could
+// not save its own edits.
+func TestSetupPutAcceptsUISpellings(t *testing.T) {
+	dataDir := t.TempDir()
+	s, _ := setupMergeServer(t, dataDir)
+
+	fragment := "[[strategy]]\nname = \"weekly\"\nkind = \"full\"\nschedule = \"0 0 23 * * 0\"\nkeep = 2"
+	body, err := json.Marshal(map[string]any{"overrides": map[string]any{
+		"server.max_push_bytes":      "2GiB",
+		"maintenance.fsck_interval":  "24h",
+		"wal.snapshot_every_entries": 1000,
+		"cache.disk_high_watermark":  "0.9",
+		"bundles.strategy":           fragment,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, resp := putSetup(t, s, string(body))
+	if code != http.StatusOK {
+		t.Fatalf("put = %d %v", code, resp)
+	}
+	after, err := config.LoadSetupBase(dataDir, s.boot.ConfigPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(after.Server.MaxPushBytes) != 2<<30 {
+		t.Fatalf("size coerced wrong: %d", after.Server.MaxPushBytes)
+	}
+	if time.Duration(after.Maintenance.FsckInterval) != 24*time.Hour {
+		t.Fatalf("d/w duration coerced wrong: %v", after.Maintenance.FsckInterval)
+	}
+	if after.WAL.SnapshotEveryEntries != 1000 {
+		t.Fatalf("uint coerced wrong: %d", after.WAL.SnapshotEveryEntries)
+	}
+	if after.Cache.DiskHighWatermark != 0.9 {
+		t.Fatalf("float coerced wrong: %v", after.Cache.DiskHighWatermark)
+	}
+	if len(after.Bundles.Strategy) != 1 || after.Bundles.Strategy[0].Name != "weekly" ||
+		after.Bundles.Strategy[0].Kind != "full" || after.Bundles.Strategy[0].Keep != 2 {
+		t.Fatalf("strategy fragment decoded wrong: %+v", after.Bundles.Strategy)
+	}
+}
+
+// plain integers, and Sscanf-style parsing would truncate both.
 func TestSetupCoerceDurationsAndSizes(t *testing.T) {
 	dataDir := t.TempDir()
 	s, _ := setupMergeServer(t, dataDir)

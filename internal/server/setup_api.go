@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -280,24 +279,25 @@ func setPathSegments(sv reflect.Value, parts []string, raw, path string) error {
 
 func configCoerce(fv reflect.Value, raw, path string) error {
 	raw = strings.TrimSpace(raw)
-	// Named types first: the schema surfaces Duration as "1h0m0s" and
-	// ByteSize as a plain integer — Sscanf("%d") would silently truncate
-	// both ("1h0m0s" → 1ns, "1.07e+09" → 1).
+	// Named types first, via the shared spec parsers: the setup UI sends the
+	// same spellings the TOML file accepts ("64MiB", "7d") — Sscanf("%d") or a
+	// bare time.ParseDuration would reject them ("7d" is not a Go duration).
 	switch fv.Type() {
 	case reflect.TypeOf(config.Duration(0)):
-		if d, err := time.ParseDuration(raw); err == nil {
-			fv.SetInt(int64(d))
-			return nil
-		}
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil { // bare int = seconds (§2 parser rule)
-			fv.SetInt(n * int64(time.Second))
-			return nil
-		}
-		return fmt.Errorf("%s: not a duration", path)
-	case reflect.TypeOf(config.ByteSize(0)):
-		n, err := parseSettingInt(raw)
+		d, err := config.ParseDuration(raw)
 		if err != nil {
-			return fmt.Errorf("%s: not an int", path)
+			return fmt.Errorf("%s: not a duration", path)
+		}
+		fv.SetInt(int64(d))
+		return nil
+	case reflect.TypeOf(config.ByteSize(0)):
+		if n, err := config.ParseByteSize(raw); err == nil {
+			fv.SetInt(int64(n))
+			return nil
+		}
+		n, err := parseSettingInt(raw) // bare bytes / scientific notation
+		if err != nil {
+			return fmt.Errorf("%s: not a size", path)
 		}
 		fv.SetInt(n)
 		return nil
@@ -322,7 +322,42 @@ func configCoerce(fv reflect.Value, raw, path string) error {
 			return fmt.Errorf("%s: %d out of range", path, n)
 		}
 		fv.SetInt(n)
+	case reflect.Uint, reflect.Uint64, reflect.Uint32:
+		n, err := parseSettingInt(raw)
+		if err != nil || n < 0 {
+			return fmt.Errorf("%s: not an int", path)
+		}
+		if fv.OverflowUint(uint64(n)) {
+			return fmt.Errorf("%s: %d out of range", path, n)
+		}
+		fv.SetUint(uint64(n))
+	case reflect.Float32, reflect.Float64:
+		f, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return fmt.Errorf("%s: not a number", path)
+		}
+		fv.SetFloat(f)
 	case reflect.Slice:
+		// Struct slices (bundles.strategy → []BundleStrategy) arrive as a TOML
+		// fragment naming the field: "[[strategy]]\n…". Decode it by the field's
+		// toml name — the last path segment.
+		if fv.Type().Elem().Kind() == reflect.Struct {
+			name := path[strings.LastIndex(path, ".")+1:]
+			var prim map[string]toml.Primitive
+			if _, err := toml.Decode(raw, &prim); err != nil {
+				return fmt.Errorf("%s: not a TOML fragment: %v", path, err)
+			}
+			p, ok := prim[name]
+			if !ok {
+				return fmt.Errorf(`%s: fragment must define [[%s]]`, path, name)
+			}
+			out := reflect.New(fv.Type())
+			if err := toml.PrimitiveDecode(p, out.Interface()); err != nil {
+				return fmt.Errorf("%s: %v", path, err)
+			}
+			fv.Set(out.Elem())
+			return nil
+		}
 		items := strings.Split(raw, ",")
 		out := reflect.MakeSlice(fv.Type(), len(items), len(items))
 		for i := range items {

@@ -8,7 +8,7 @@
 
 import { createSignal, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { reportError } from "../lib/data.js";
-import { validateSetup, normalizeSetup, isRestartLikely, FIELDS } from "../lib/setup.js";
+import { validateSetup, normalizeSetup, isRestartLikely, FIELDS, fmtSpecDuration, fmtSpecSize, strategiesToToml } from "../lib/setup.js";
 
 const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
 
@@ -34,20 +34,32 @@ async function postSetup(method, payload, token) {
 }
 
 // The server sends typed values (bool, arrays); the form edits strings.
-function initialText(row) {
+// Durations and sizes surface in the spec spelling ("1h", "64GiB") so the
+// editable value matches the example under the label — both spellings save.
+function initialText(row, type) {
   const v = row.value;
-  return v === null || v === undefined ? "" : Array.isArray(v) ? v.join(", ") : String(v);
+  if (v === null || v === undefined) return "";
+  if (Array.isArray(v)) {
+    if (type === "toml") return strategiesToToml(v);
+    return v.join(", ");
+  }
+  if (type === "duration") return fmtSpecDuration(v);
+  if (type === "size") return fmtSpecSize(v);
+  return String(v);
 }
 
 function FieldInput(props) {
   const type = () => props.field?.type ?? "string";
   const set = (v) => props.onInput(props.k, v);
+  const id = () => props.id;
   return (
     <Switch>
       <Match when={type() === "bool"}>
         <button
           type="button"
+          id={id()}
           role="switch"
+          aria-labelledby={props.labelId}
           aria-checked={/^(true|1|on|yes)$/i.test(props.value() ?? "")}
           class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors
                  bg-zinc-300 dark:bg-zinc-700"
@@ -61,7 +73,7 @@ function FieldInput(props) {
         </button>
       </Match>
       <Match when={type() === "enum"}>
-        <select class="input md:w-72" onChange={(e) => set(e.currentTarget.value)}>
+        <select id={id()} class="input md:w-72" onChange={(e) => set(e.currentTarget.value)}>
           <option value="" selected={!props.value()}>(default)</option>
           <For each={props.field?.enum ?? []}>
             {(v) => <option value={v} selected={props.value() === v}>{v}</option>}
@@ -70,16 +82,17 @@ function FieldInput(props) {
       </Match>
       <Match when={type() === "toml"}>
         <textarea
+          id={id()}
           class="input font-mono text-xs"
           rows="4"
           spellcheck={false}
-          placeholder="TOML only — validated server-side"
           value={props.value() ?? ""}
           onInput={(e) => set(e.currentTarget.value)}
         />
       </Match>
       <Match when={type() === "list" || type() === "globs"}>
         <input
+          id={id()}
           class="input md:max-w-md"
           type="text"
           value={Array.isArray(props.value()) ? props.value().join(", ") : (props.value() ?? "")}
@@ -87,16 +100,16 @@ function FieldInput(props) {
         />
       </Match>
       <Match when={type() === "int" || type() === "float"}>
-        <input class="input md:max-w-md" type="number" step="any" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+        <input id={id()} class="input md:max-w-md" type="number" step="any" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
       </Match>
       <Match when={type() === "duration"}>
-        <input class="input md:max-w-md" type="text" placeholder="e.g. 5m, 1h, 0" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+        <input id={id()} class="input md:max-w-md" type="text" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
       </Match>
       <Match when={type() === "size"}>
-        <input class="input md:max-w-md" type="text" placeholder="e.g. 64MiB, 0B" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+        <input id={id()} class="input md:max-w-md" type="text" value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
       </Match>
       <Match when={true}>
-        <input class="input md:max-w-md" type={props.field?.secret ? "password" : "text"} value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
+        <input id={id()} class="input md:max-w-md" type={props.field?.secret ? "password" : "text"} value={props.value() ?? ""} onInput={(e) => set(e.currentTarget.value)} />
       </Match>
     </Switch>
   );
@@ -172,7 +185,7 @@ export default function Setup() {
     const v = getValues()[key];
     if (v !== undefined) return v;
     const row = rowFor(key);
-    return row ? initialText(row) : "";
+    return row ? initialText(row, FIELD_BY_KEY.get(key)?.type) : "";
   };
 
   const restricted = () => {
@@ -262,26 +275,44 @@ export default function Setup() {
                     {(k) => {
                       const field = FIELD_BY_KEY.get(k.key) ?? { type: k.type ?? "string" };
                       const fromFile = k.value !== k.default;
+                      const inId = `setup-in-${k.key.replaceAll(".", "--")}`;
+                      const lbId = `setup-lb-${k.key.replaceAll(".", "--")}`;
                       return (
-                        <div
-                          class="setup-key border-b border-zinc-100 py-3 last:border-b-0 dark:border-zinc-800/60"
-                          data-key={k.key}
-                        >
-                          <label class="setup-label mb-1 flex flex-wrap items-center gap-2">
-                            <code class="font-mono text-sm">{k.key}</code>
-                            <Show when={fromFile} fallback={<span class="muted text-xs">default</span>}>
-                              <span class="chip">file</span>
+                        <div class="setup-row" data-key={k.key}>
+                          {/* left: the key, its provenance chip, and a working
+                              example that stays visible while typing */}
+                          <div class="setup-label-col">
+                            <label id={lbId} class="setup-label" for={inId}>
+                              <code class="font-mono text-sm">{k.key}</code>
+                              <Show when={fromFile} fallback={<span class="muted text-xs">default</span>}>
+                                <span class="chip">file</span>
+                              </Show>
+                            </label>
+                            <Show when={field.ex}>
+                              <p class="setup-examples">
+                                <span class="muted">e.g.</span> <span class="setup-ex">{field.ex}</span>
+                                <Show when={field.note}>
+                                  <span class="setup-note">{field.note}</span>
+                                </Show>
+                              </p>
                             </Show>
-                            <Show when={k.doc}>
-                              <span class="muted doc text-xs">{k.doc}</span>
-                            </Show>
-                          </label>
-                          <FieldInput field={field} k={k.key} value={() => getValue(k.key)} onInput={onInput} />
-                          {/* inline error hints under each key (client rules mirror the server's) */}
-                          <div class="key-errors">
-                            <For each={getErrors().filter((e) => e.key === k.key)}>
-                              {(e) => <p class={e.severity === "warn" ? "warn-line" : "err-line"}>{e.message}</p>}
-                            </For>
+                          </div>
+                          {/* right: the control, with the client validator's
+                              inline hints directly under it */}
+                          <div class="setup-input-col">
+                            <FieldInput
+                              field={field}
+                              k={k.key}
+                              id={inId}
+                              labelId={lbId}
+                              value={() => getValue(k.key)}
+                              onInput={onInput}
+                            />
+                            <div class="key-errors">
+                              <For each={getErrors().filter((e) => e.key === k.key)}>
+                                {(e) => <p class={e.severity === "warn" ? "warn-line" : "err-line"}>{e.message}</p>}
+                              </For>
+                            </div>
                           </div>
                         </div>
                       );

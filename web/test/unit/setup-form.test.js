@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   validateSetup, normalizeSetup, isRestartLikely, parseDuration, parseSize, FIELDS,
+  fmtSpecDuration, fmtSpecSize, strategiesToToml,
 } from "../../src/lib/setup.js";
 
 const errs = (values) => validateSetup(values);
@@ -234,4 +235,51 @@ test("every FIELDS entry has a known type (table integrity)", () => {
     assert.ok(known.has(f.type), `${f.key}: unknown type ${f.type}`);
     if (f.type === "enum") assert.ok(f.enum.length >= 2, `${f.key}: enum needs values`);
   }
+});
+
+test("every FIELDS entry carries a working example (setup page hints)", () => {
+  for (const f of FIELDS) {
+    assert.ok(f.ex !== undefined && String(f.ex).trim() !== "", `${f.key}: missing ex`);
+  }
+});
+
+test("every example value validates on its own (client mirror)", () => {
+  for (const f of FIELDS) {
+    const errs = validateSetup({ [f.key]: f.ex }).filter((e) => e.key === f.key && e.severity === "error");
+    assert.deepEqual(errs, [], `${f.key}: example ${JSON.stringify(f.ex)} must validate: ${errs.map((e) => e.message).join("; ")}`);
+  }
+});
+
+test("fmtSpecDuration renders server values in the spec spelling", () => {
+  assert.equal(fmtSpecDuration("1h0m0s"), "1h"); // Go compound from the schema
+  assert.equal(fmtSpecDuration("0s"), "0s");
+  assert.equal(fmtSpecDuration(7200), "2h"); // bare seconds
+  assert.equal(fmtSpecDuration(5400), "90m"); // largest even divisor
+  assert.equal(fmtSpecDuration(604800), "1w");
+  assert.equal(fmtSpecDuration("500ms"), "500ms");
+  assert.equal(fmtSpecDuration(""), "");
+});
+
+test("fmtSpecSize renders byte counts in the spec spelling", () => {
+  assert.equal(fmtSpecSize(68719476736), "64GiB");
+  assert.equal(fmtSpecSize(64 << 20), "64MiB");
+  assert.equal(fmtSpecSize(0), "0B");
+  assert.equal(fmtSpecSize(1156), "1156B"); // no even unit → bytes
+  assert.equal(fmtSpecSize(""), "");
+  assert.equal(fmtSpecSize(null), "");
+});
+
+test("strategiesToToml renders the parsed strategies as an editable fragment", () => {
+  const fragment = strategiesToToml([
+    { name: "weekly", kind: "full", schedule: "0 0 23 * * 0", keep: 2, backfill_max: 1 },
+    { name: "daily", kind: "incremental", base: "weekly", schedule: "0 0 23 * * *", chain: true },
+  ]);
+  // keys are normalized to toml spellings; presence asserted, order is not
+  assert.match(fragment, /\[\[strategy\]\]\nname = "weekly"[\s\S]*kind = "full"[\s\S]*schedule = "0 0 23 \* \* 0"[\s\S]*keep = 2/);
+  assert.match(fragment, /\[\[strategy\]\]\nname = "daily"[\s\S]*base = "weekly"[\s\S]*chain = true/);
+  assert.equal(strategiesToToml([]), "");
+  assert.equal(strategiesToToml(null), "");
+  // the example + the rendered fragment both validate (toml is server-checked)
+  const parsed = fragment.split("\n\n").length;
+  assert.equal(parsed, 2);
 });

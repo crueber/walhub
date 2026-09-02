@@ -34,6 +34,15 @@
   .input { @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900
            placeholder:text-zinc-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500
            dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600; }
+  /* Setup page: label column left, control right, tight gutter so the
+     pairing is unambiguous; stacks to one column on phones. */
+  .setup-row { @apply grid grid-cols-1 gap-x-5 gap-y-1 border-b border-zinc-100 py-3 last:border-b-0
+               dark:border-zinc-800/60 md:grid-cols-[minmax(16rem,34%)_1fr]; }
+  .setup-label { @apply flex flex-wrap items-center gap-2 cursor-pointer; }
+  .setup-examples { @apply mt-0.5 text-xs leading-snug text-zinc-500 break-words dark:text-zinc-400;
+                    /* keep the example legible while typing — never hidden */ white-space: pre-wrap; }
+  .setup-ex { @apply font-mono text-[11px] text-zinc-600 dark:text-zinc-300; }
+  .setup-note { @apply block text-[11px] text-zinc-400 dark:text-zinc-500; }
 
   /* Tables */
   .data-table { @apply w-full text-sm; }
