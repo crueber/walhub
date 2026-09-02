@@ -6,7 +6,7 @@ when: { event: [push, pull_request] }
 
 steps:
   vet:
-    image: golang:1.25
+    image: golang:1.27
     commands: [make vet]
 
   web:
@@ -19,7 +19,7 @@ steps:
 
   # golang image ships git + gcc, so -race works (CGO on for the detector only).
   test:
-    image: golang:1.25
+    image: golang:1.27
     commands: [make race]
     depends_on: [web]
 
@@ -29,22 +29,22 @@ steps:
     depends_on: [test]
 
   cover:
-    image: golang:1.25
+    image: golang:1.27
     commands: [make cover]
     depends_on: [test]
 
   e2e:
-    image: golang:1.25
+    image: golang:1.27
     commands: [make e2e]
     depends_on: [test]
 
   contract:
-    image: golang:1.25
+    image: golang:1.27
     commands: [make contract]
     depends_on: [test]
 
   s3-contract:
-    image: golang:1.25
+    image: golang:1.27
     commands: [make contract-s3]
     depends_on: [test]
     environment:

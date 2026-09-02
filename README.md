@@ -32,6 +32,40 @@ git push -u origin main          # browse it at http://localhost:8080/you/demo
 Auth: `none` (everyone anonymous — dev only), `token` (static bearer/basic tokens), or `oidc`
 (any OpenID Connect issuer, plus walgit-issued `wgt_` access tokens minted in the UI).
 
+## Run with docker compose (prebuilt image)
+
+GitHub Actions publishes the image on every push to [`ghcr.io/crueber/walhub`](https://github.com/crueber/walhub/pkgs/container/walhub)
+— pull it instead of building:
+
+```yaml
+# docker-compose.yml — walhub alone: filesystem store on a named volume
+services:
+  walhub:
+    image: ghcr.io/crueber/walhub:latest   # :main tracks main; vX.Y.Z releases; sha-<sha> per commit
+    ports:
+      - "8080:8080"
+    volumes:
+      - walhub-data:/var/lib/walhub
+    restart: unless-stopped
+
+volumes:
+  walhub-data:
+```
+
+```sh
+docker compose up -d        # update later with: docker compose pull && docker compose up -d
+```
+
+Then open **http://localhost:8080/setup** — the same zero-config first boot as the binary: save a
+config from the setup page and restart the container. Repositories auto-create on push under
+`http://localhost:8080/<owner>/<repo>.git`.
+
+For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml) — the shipped
+stack builds from source; to run it from the published image instead, replace the `walhub`
+service's `build: .` with `image: ghcr.io/crueber/walhub:latest` (the rustfs service and the
+`WALHUB__STORE__*` env stay as they are). [`compose.standalone.yml`](compose.standalone.yml) is
+the same standalone shape as above, built from source instead of pulled.
+
 ## What's in the box
 
 | Area | Where | Notes |
@@ -42,7 +76,7 @@ Auth: `none` (everyone anonymous — dev only), `token` (static bearer/basic tok
 | HTTP | `internal/server` | chi router, hand-rolled middleware (CORS, h2c, compress), auth (none/token/oidc + hand-rolled JWKS), static serving, setup UI |
 | API | `internal/api` | Repo-scoped JSON + SSE envelope, two lanes (bearer / browser), `repos.js` SDK |
 | Subsystems | `internal/{bundle,events,maintain,policy,setup,config}` | bundle-uri scheduler, webhook bridge, maintainer loop, push policy rule language, bootstrap, config |
-| Frontend | `web/` | Vanilla-ESM SPA + modular SDK, **zero npm runtime dependencies**; esbuild (the one devDependency) bundles the SDK into `web/dist/repos.js` |
+| Frontend | `web/` | SolidJS SPA + Tailwind v4 (CSS-first) and a dependency-free `repos.js` SDK; vite + esbuild build both into `web/dist/` for embedding |
 
 Design laws (short form — full text in [`AGENTS.md`](AGENTS.md)): dependency budget is law; the bucket
 is the repository and the manifest CAS is the only commit point; no LIST on hot paths; round trips are
@@ -59,9 +93,12 @@ make test-web  # node --test over the headless JS modules
 make image     # OCI image
 ```
 
-Backend: Go 1.25+ (module `git.packden.us/crueber/walhub`), exactly three third-party modules
-(chi, BurntSushi/toml, x/net). Frontend: any Node for tests; `pnpm --dir web install` for the esbuild
-dev step. CI is Woodpecker (`.woodpecker/`); the container build is `Dockerfile` with compose examples in `compose.standalone.yml` (filesystem store) and `compose.yaml` (S3-backed via rustfs).
+Backend: Go 1.27 (module `git.packden.us/crueber/walhub`), exactly three third-party modules
+(chi, BurntSushi/toml, x/net). Frontend: any Node for tests; pnpm 11 for the vite/esbuild build
+(`pnpm --dir web install`). CI is Woodpecker on the Forgejo origin (`pipeline.yaml`); GitHub
+Actions (`.github/workflows/docker.yml`) tests the mirror and publishes the image to GHCR on
+every push. The container build is `Dockerfile`, with compose examples in
+`compose.standalone.yml` (filesystem store) and `compose.yaml` (S3-backed via rustfs).
 
 **Before you say "done"**, run the verification ladder in [`AGENTS.md §4`](AGENTS.md) — and if you
 touched `web/` or static serving, load the UI in a real browser: module scripts are MIME-enforced, so

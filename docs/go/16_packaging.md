@@ -448,6 +448,12 @@ services:
 
 CI MUST also verify the container contract: after `image`, run `podman run --rm <img> git --version` and fail if < 2.47, plus a `walhub config check --strict` against the example config (catches a baked default that no longer validates).
 
+The GitHub mirror (`github.com/crueber/walhub`, auto-pushed from the Forgejo origin) additionally
+runs `.github/workflows/docker.yml`: a vet + fast-test + headless-JS smoke job, then buildx
+publishes `ghcr.io/crueber/walhub` (linux/amd64; tags `latest` + `main` from main, semver from
+`v*` tags, `sha-<sha>` per commit; GHA layer cache). That workflow is the only GHCR publisher;
+users pull the image per README "Run with docker compose".
+
 ## 9. Onboarding a developer (30-second quickstart)
 
 ```sh
