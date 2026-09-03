@@ -65,7 +65,10 @@ services:
       AWS_SECRET_ACCESS_KEY: walgit-dev-secret
       # First-run friendliness: auth "none" with a loud warning until you
       # configure real auth through /setup (AGENTS.md law 10).
-    ports: ["8080:8080"]
+      # SSH git transport (17_ssh.md): keys via the /keys page; the host key
+      # persists in the data volume (TOFU).
+      WALHUB__SERVER__SSH__LISTEN: 0.0.0.0:2222
+    ports: ["8080:8080", "2222:2222"]
     volumes: [walhub-data:/var/lib/walhub]
     restart: unless-stopped
     healthcheck:

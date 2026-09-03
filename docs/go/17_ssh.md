@@ -122,6 +122,14 @@ max_bytes" on the wire (band-2 + unpack ng) over SSH, as 413 over HTTP.
   with a generated client key and `GIT_SSH_COMMAND` — push → clone → second push → log assertions,
   plus a read-only key clone-then-refused-push case.
 
+## 8. Deployment
+
+The compose stacks publish 2222 and set `WALHUB__SERVER__SSH__LISTEN=0.0.0.0:2222` (the transport
+is opt-in per deploy). The host key lives under `<data-dir>/ssh/` — a volume in both stacks — so
+client TOFU pins survive container replacement. Keys are added through the `/keys` page of the
+running instance (auth "none" manages the anon principal's keys; oidc/token principals manage
+their own). The GHCR image is identical: enable SSH by setting the env var, no rebuild.
+
 ## Decisions & deviations from the Rust design
 
 - **17.1 (2026-09-02) — `golang.org/x/crypto/ssh` is allowed as the fourth backend module.**
