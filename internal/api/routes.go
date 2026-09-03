@@ -39,6 +39,9 @@ func Routes(e *Env) []Route {
 		// --- non-repo twins (§3 lane note: /api/v1 + /api-browser/v1, plus the
 		// /services/api twins for owners; instance is services-only) ----------
 		{Method: "GET", Sub: "/api/v1/me", Template: "/api/v1/me", Handler: h.me, Auth: AuthRead, Expose: true, NonRepo: true},
+		{Method: "GET", Sub: "/api/v1/ssh-keys", Template: "/api/v1/ssh-keys", Handler: h.sshKeysList, Auth: AuthRead, Expose: true, NonRepo: true},
+		{Method: "POST", Sub: "/api/v1/ssh-keys", Template: "/api/v1/ssh-keys", Handler: h.sshKeysAdd, Auth: AuthRead, NonRepo: true},
+		{Method: "DELETE", Sub: "/api/v1/ssh-keys/{fp}", Template: "/api/v1/ssh-keys/{fp}", Handler: h.sshKeysDelete, Auth: AuthRead, NonRepo: true},
 		{Method: "GET", Sub: "/api-browser/v1/me", Handler: h.me, Auth: AuthRead, NonRepo: true},
 		{Method: "GET", Sub: "/api/v1/owners", Template: "/api/v1/owners", Handler: h.owners, Auth: AuthRead, Expose: true, NonRepo: true},
 		{Method: "GET", Sub: "/api-browser/v1/owners", Handler: h.owners, Auth: AuthRead, NonRepo: true},

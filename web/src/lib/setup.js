@@ -179,6 +179,11 @@ export const FIELDS = [
   { key: "server.auth.trusted_forwarders", type: "list", ex: "edge.internal", modes: ["token", "oidc"] },
   { key: "server.auth.admin_emails", type: "list", ex: "admin@example.com", modes: ["oidc"] },
   { key: "server.auth.admin_domains", type: "list", ex: "example.com", modes: ["oidc"] },
+  // server ssh (17_ssh.md) — public keys are user-managed data in the object
+  // store (/api/v1/ssh-keys, the /keys page), not config
+  { key: "server.ssh.listen", type: "listen", ex: "0.0.0.0:2222", note: "empty = the SSH transport is disabled" },
+  { key: "server.ssh.host_key", type: "string", ex: "/var/lib/walhub/ssh/ed25519_host_key", note: "auto-generated there when empty and listen is set" },
+  { key: "server.ssh.host_key_env", type: "string", ex: "WALHUB_SSH_HOST_KEY", note: "names the env var holding the key; overrides host_key" },
   // store
   { key: "store.backend", type: "enum", enum: ["s3", "gcs", "memory", "filesystem"], ex: "filesystem", note: "s3/gcs also need store.bucket and their subsection" },
   { key: "store.bucket", type: "string", ex: "walhub-test" },

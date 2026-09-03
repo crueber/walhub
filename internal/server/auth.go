@@ -853,3 +853,38 @@ func randHex(n int) string {
 	_, _ = rand.Read(b)
 	return b64url(b)
 }
+
+// PrincipalForName resolves a named principal's rights for SSH key auth
+// (17_ssh.md §3): none-mode → the anon-all principal; oidc → the same
+// admission and flags the browser login applies to that email; token → the
+// aggregate of the principal's static tokens (an unknown principal in token
+// mode is denied — its keys were added by credentials since removed).
+func (a *AuthService) PrincipalForName(name string) (auth.Principal, error) {
+	switch a.cfg.Mode {
+	case "none":
+		return auth.None(), nil
+	case "oidc":
+		p, aerr := a.principalFromEmail(name)
+		if aerr != nil {
+			return auth.Principal{}, aerr
+		}
+		return p, nil
+	default: // token
+		var out auth.Principal
+		found := false
+		for _, p := range a.static {
+			if p.Name != name {
+				continue
+			}
+			found = true
+			out.Name = name
+			out.Write = out.Write || p.Write
+			out.Admin = out.Admin || p.Admin
+		}
+		if !found {
+			return auth.Principal{}, &auth.AuthError{Kind: auth.ErrForbidden,
+				Why: "principal has no active credentials"}
+		}
+		return out, nil
+	}
+}

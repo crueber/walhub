@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -277,24 +278,21 @@ func (s *Server) gitService(w http.ResponseWriter, r *http.Request, id git.RepoI
 	s.receivePack(w, r, id, p)
 }
 
-// uploadPack streams the v0/v2 fetch: the body is piped to the git layer and
-// the result streamed out (ctx-bound: client disconnect kills the child).
+// uploadPack streams the v0/v2 fetch: prepare (sync + open), then stream the
+// body through the git layer (ctx-bound: client disconnect kills the child).
+// SSH (§17) shares uploadPackPrepare + the layer call.
 func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, id git.RepoId) {
 	body, ok := s.bodyReader(w, r)
 	if !ok {
 		return
 	}
-	if err := s.engine.Sync(r.Context(), id, wal.LevelServe); err != nil {
-		if isNotFound(err) {
+	repo, err := s.uploadPackPrepare(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, errPushNotFound) {
 			plainStatus(w, http.StatusNotFound, "repository not found")
 			return
 		}
 		plainStatus(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
-	repo, err := s.engine.Repo(r.Context(), id, false, git.Sha1)
-	if err != nil {
-		plainStatus(w, http.StatusNotFound, "repository not found")
 		return
 	}
 	protocol := ""
@@ -391,8 +389,10 @@ func (s *Server) receivePackForward(w http.ResponseWriter, r *http.Request, id g
 	s.receivePackLocal(w, r, id, p)
 }
 
-// receivePackLocal runs the git-layer push pipeline (§4): parse, ingest
-// (bounded), connectivity, then the engine publish (WAL commit).
+// receivePackLocal runs the HTTP push path: read the (possibly gzipped)
+// body, parse the framed request, then hand it to the shared push pipeline
+// (§17) — HTTP maps the pre-pipeline errors onto statuses; git-wire
+// refusals are already on the wire via the pipeline.
 func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git.RepoId, p auth.Principal) {
 	body, ok := s.bodyReader(w, r)
 	if !ok {
@@ -423,57 +423,26 @@ func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git
 		plainStatus(w, http.StatusBadRequest, "malformed push request: "+perr.Error())
 		return
 	}
-	// ParsePushRequest consumed the command section; the remainder is the
-	// raw pack (req.Pack, possibly empty for deletes).
+	var pack io.Reader
 	if len(req.Pack) > 0 {
-		if _, ierr := s.layer.Ingest(r.Context(), repo, bytes.NewReader(req.Pack),
-			int64(s.cfg.Server.MaxPushBytes), req.Has("thin-pack"), true); ierr != nil {
-			band2Failure(w, req, "pack rejected: "+ierr.Error())
-			return
-		}
+		pack = bytes.NewReader(req.Pack)
 	}
-	tips := make([]git.Oid, 0, len(req.Commands))
-	for _, c := range req.Commands {
-		if c.New != repo.ZeroOid() && !isZeroOidStr(c.New) {
-			tips = append(tips, c.New)
-		}
-	}
-	if len(tips) > 0 {
-		if cerr := s.layer.CheckConnectivity(r.Context(), repo, tips); cerr != nil {
-			band2Failure(w, req, "connectivity check failed: "+cerr.Error())
-			return
-		}
-	}
-	res, pubErr := s.engine.Publish(r.Context(), id, req, p.Name, wal.ObjectAccess{Local: repo})
-	gitHeaders(w, "application/x-git-receive-pack-result")
-	w.WriteHeader(http.StatusOK)
-	if pubErr != nil {
-		_, _ = w.Write(git.ErrPkt("walgit: publish failed: " + pubErr.Error()))
-		return
-	}
-	report := git.Report{UnpackOK: true, Sideband: req.Has("side-band-64k")}
-	for _, rr := range res.PerRef {
-		if rr.Err != nil {
-			report.Refs = append(report.Refs, git.RefReport{Ref: rr.Name, OK: false, Reason: rr.Err.Error()})
-		} else {
-			report.Refs = append(report.Refs, git.RefReport{Ref: rr.Name, OK: true})
-		}
-	}
-	_, _ = w.Write(report.EncodeReport())
+	out := &gitResultWriter{w: w}
+	_ = s.pushPipeline(r.Context(), id, p, repo, req, pack, int64(s.cfg.Server.MaxPushBytes), out)
 }
 
 // band2Failure answers a failed receive-pack the §4.3 way: the band-2
 // message, then the negotiated report-status trailer (unpack ng) — git hangs
-// waiting for the report if only the sideband is written (§7 step 6).
-func band2Failure(w http.ResponseWriter, req *git.PushRequest, msg string) {
-	gitHeaders(w, "application/x-git-receive-pack-result")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(git.Band2(msg))
+// waiting for the report if only the sideband is written (§7 step 6). The
+// caller supplies the writer: HTTP (through gitResultWriter, which emits the
+// headers on first byte) or an SSH channel.
+func band2Failure(out io.Writer, req *git.PushRequest, msg string) {
+	_, _ = out.Write(git.Band2(msg))
 	if req == nil || !req.Has("report-status") {
 		return
 	}
 	report := git.Report{UnpackOK: false, UnpackMsg: msg, Sideband: req.Has("side-band-64k")}
-	_, _ = w.Write(report.EncodeReport())
+	_, _ = out.Write(report.EncodeReport())
 }
 
 func isZeroOidStr(s string) bool {

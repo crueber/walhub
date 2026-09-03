@@ -13,16 +13,19 @@ import (
 
 // fakeEngine implements Engine for tests.
 type fakeEngine struct {
-	placement  Placement // zero value lacks Serve; newTestServer enables it
-	bundles    BundleList
-	synced     []wal.SyncLevel
-	published  int
-	exists     bool
-	noCreate   bool // AutoCreate returns false when set
-	pubErr     error
-	pubPerRef  []wal.RefResult
-	syncErr    error
-	repoCreate func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error)
+	placement     Placement // zero value lacks Serve; newTestServer enables it
+	bundles       BundleList
+	synced        []wal.SyncLevel
+	published     int
+	exists        bool
+	noCreate      bool // AutoCreate returns false when set
+	pubErr        error
+	lastPrincipal string
+	pubPerRef     []wal.RefResult
+	syncErr       error
+	repoErr       error
+	placementErr  error
+	repoCreate    func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error)
 }
 
 func (f *fakeEngine) Sync(ctx context.Context, id git.RepoId, level wal.SyncLevel) error {
@@ -37,6 +40,9 @@ func (f *fakeEngine) Sync(ctx context.Context, id git.RepoId, level wal.SyncLeve
 }
 
 func (f *fakeEngine) Repo(ctx context.Context, id git.RepoId, create bool, format git.ObjectFormat) (*git.LocalRepo, error) {
+	if f.repoErr != nil {
+		return nil, f.repoErr
+	}
 	if !f.exists && !create {
 		return nil, wal.ErrNotFound(id.String())
 	}
@@ -48,6 +54,7 @@ type repoRootKey struct{}
 
 func (f *fakeEngine) Publish(ctx context.Context, id git.RepoId, req *git.PushRequest, principal string, access wal.ObjectAccess) (wal.PublishResult, error) {
 	f.published++
+	f.lastPrincipal = principal
 	if f.pubErr != nil {
 		return wal.PublishResult{}, f.pubErr
 	}
@@ -58,6 +65,9 @@ func (f *fakeEngine) Publish(ctx context.Context, id git.RepoId, req *git.PushRe
 }
 
 func (f *fakeEngine) Placement(ctx context.Context, id git.RepoId) (Placement, error) {
+	if f.placementErr != nil {
+		return Placement{}, f.placementErr
+	}
 	return f.placement, nil
 }
 

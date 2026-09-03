@@ -439,6 +439,11 @@ type Env struct {
 	Hostname string
 	Instance string
 
+	// SSHKeys is the user-managed SSH public-key registry (17_ssh.md §3):
+	// implemented by internal/server over the object store. Nil → the
+	// /api/v1/ssh-keys surface answers 503.
+	SSHKeys SSHKeyStore
+
 	// RenderCacheBytes is the rendered-immutable LRU budget
 	// (cache.render_cache_bytes; default 256 MiB — see 07_api.md §14).
 	RenderCacheBytes int64

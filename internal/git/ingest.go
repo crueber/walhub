@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -54,11 +55,93 @@ func nextSuffix() int64 {
 // objects/info/alternates, streamed stdin under max_bytes enforcement, moves
 // idx → rev → pack LAST, and removes the scratch on every exit path.
 func (l *Layer) Ingest(ctx context.Context, repo *LocalRepo, pack io.Reader, maxBytes int64, thin, fsck bool) (*IngestResult, error) {
+	staged, err := l.stagePack(pack, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(staged.path)
+	return l.ingestFed(ctx, repo, ingestFeed{
+		stdin:    staged.reader(),
+		overErr:  func() error { return staged.overErr },
+		waitFeed: true,
+		started:  time.Now(),
+	}, thin, fsck)
+}
+
+// IngestStream is Ingest for transports without body framing (SSH
+// receive-pack, 17_ssh.md §5): git send-pack keeps the channel open until it
+// sees the status report, so reading the pack to EOF (as Ingest's staging
+// does) would deadlock. The pack is piped straight into index-pack — which
+// stops at the pack trailer — and the feed goroutine is released when the
+// child exits rather than awaited. max_bytes is enforced by a capped reader;
+// crossing it fails index-pack and surfaces ErrMaxBytes.
+func (l *Layer) IngestStream(ctx context.Context, repo *LocalRepo, pack io.Reader, maxBytes int64, thin, fsck bool) (*IngestResult, error) {
+	cr := newCapReader(pack, maxBytes)
+	return l.ingestFed(ctx, repo, ingestFeed{
+		stdin:    cr,
+		overErr:  cr.over,
+		waitFeed: false,
+		started:  time.Now(),
+	}, thin, fsck)
+}
+
+// ingestFeed carries what index-pack reads plus how the feed ends.
+type ingestFeed struct {
+	stdin    io.Reader
+	overErr  func() error // nil func → no staged cap; the cap reader reports its own
+	waitFeed bool         // true: await the feed goroutine (a file has an EOF)
+	started  time.Time
+}
+
+// capReader enforces max_bytes while streaming; once crossed, every Read
+// fails with ErrMaxBytes so index-pack aborts and the caller maps the cause.
+// In stream mode (IngestStream) Read runs on the feed goroutine while the
+// caller inspects over() after cmd.Run returns, so the mutable fields are
+// guarded by a mutex.
+type capReader struct {
+	mu      sync.Mutex
+	r       io.Reader
+	max     int64
+	total   int64
+	overErr error
+}
+
+func newCapReader(r io.Reader, max int64) *capReader { return &capReader{r: r, max: max} }
+
+func (c *capReader) over() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.overErr
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.overErr != nil {
+		return 0, c.overErr
+	}
+	if c.max > 0 && c.total >= c.max {
+		c.overErr = ErrMaxBytes
+		return 0, c.overErr
+	}
+	if c.max > 0 {
+		if room := c.max - c.total; int64(len(p)) > room {
+			p = p[:room]
+		}
+	}
+	n, err := c.r.Read(p)
+	c.total += int64(n)
+	return n, err
+}
+
+// ingestFed is the shared pipeline: build the scratch git-dir, run
+// index-pack over the feed, then move idx → rev → pack into the repo.
+func (l *Layer) ingestFed(ctx context.Context, repo *LocalRepo, feed ingestFeed, thin, fsck bool) (*IngestResult, error) {
 	nanos := nextSuffix()
 	scratch := filepath.Join(repo.Path, fmt.Sprintf("walgit-ingest-%d-%d", os.Getpid(), nanos))
 	scratchPack := filepath.Join(scratch, "objects", "pack")
 	tracePath := filepath.Join(os.TempDir(), fmt.Sprintf("walgit-index-pack-%d.jsonl", nanos))
-	started := time.Now()
+	started := feed.started
 
 	defer os.RemoveAll(scratch) // EVERY exit path; also sweeps git tmp_* debris
 	defer l.sweepTmp(scratch)
@@ -85,15 +168,6 @@ func (l *Layer) Ingest(ctx context.Context, repo *LocalRepo, pack io.Reader, max
 		return nil, err
 	}
 
-	// Stream stdin into a temp file with max_bytes enforcement (64 KiB chunks),
-	// aborting with ErrMaxBytes the moment the cap is crossed.
-	staged, err := l.stagePack(pack, maxBytes)
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(staged.path)
-	feedSeconds := staged.feedSecs
-
 	argv := []string{"index-pack", "--stdin", "--keep", "--rev-index", "--threads=0"}
 	if thin {
 		argv = append(argv, "--fix-thin")
@@ -105,21 +179,74 @@ func (l *Layer) Ingest(ctx context.Context, repo *LocalRepo, pack io.Reader, max
 	var out bytes.Buffer
 	ingestCtx, cancel := context.WithTimeout(ctx, l.IngestTTL)
 	defer cancel()
-	stderr, runErr := l.runPooled(ingestCtx, execSpec{
-		argv:   argv,
-		dir:    scratch,
-		env:    []string{"GIT_DIR=" + scratch, "GIT_TRACE2_EVENT=" + tracePath},
-		stdin:  staged.reader(),
-		stdout: &out,
+
+	// The heavy exec runs on the blocking pool; the feed goroutine is bound
+	// to the child's lifetime (see run/IngestStream notes in 17_ssh.md §5).
+	overErr := func() error {
+		if feed.overErr != nil {
+			return feed.overErr()
+		}
+		return nil
+	}
+	var stderr string
+	var runErr error
+	poolErr := l.Pool.Run(ingestCtx, func() error {
+		cmd := exec.CommandContext(ingestCtx, l.Binary, argv...)
+		cmd.Dir = scratch
+		cmd.Env = l.baseEnv("", "GIT_DIR="+scratch, "GIT_TRACE2_EVENT="+tracePath)
+		cmd.Stdout = &out
+		bound := newBounded(8 << 10)
+		cmd.Stderr = bound
+
+		pipe, perr := cmd.StdinPipe()
+		if perr != nil {
+			return &GitError{Kind: GitErrIo, Detail: "stdin pipe: " + perr.Error()}
+		}
+		feedDone := make(chan struct{})
+		if feed.waitFeed {
+			// A staged file has an EOF: the feed finishes on its own.
+			go func() {
+				defer close(feedDone)
+				defer pipe.Close()
+				if _, ferr := io.Copy(pipe, feed.stdin); ferr != nil && !errors.Is(ferr, os.ErrClosed) && !errors.Is(ferr, io.EOF) {
+					// benign: the child exited or the client went away
+				}
+			}()
+			if rerr := cmd.Run(); rerr != nil {
+				runErr = rerr
+			}
+			<-feedDone
+			stderr = bound.String()
+			return runErr
+		}
+		// Stream mode (IngestStream): index-pack stops at the pack trailer and
+		// exits while the client still holds the channel open — do NOT wait for
+		// the feed goroutine; it unwinds on EPIPE/EOF at session close.
+		go func() {
+			defer close(feedDone)
+			defer pipe.Close()
+			if _, ferr := io.Copy(pipe, feed.stdin); ferr != nil && !errors.Is(ferr, os.ErrClosed) {
+				_ = ferr // EPIPE after index-pack exited is the normal stream end
+			}
+		}()
+		runErr = cmd.Run()
+		stderr = bound.String()
+		return runErr
 	})
-	if runErr != nil {
-		if errors.Is(staged.overErr, ErrMaxBytes) {
+	if poolErr != nil || runErr != nil {
+		if errors.Is(overErr(), ErrMaxBytes) {
 			return nil, &GitError{Kind: GitErrPack, Detail: "pack exceeds max_bytes"}
 		}
-		if ctxErr(ingestCtx) {
+		if ctxErr(ingestCtx) || (poolErr != nil && ctxErr(ctx)) {
 			return nil, &GitError{Kind: GitErrIo, Detail: "ingest timed out or cancelled", Cmd: strings.Join(argv, " "), Stderr: stderr}
 		}
-		return nil, &PackRejectedError{Detail: strings.TrimSpace(stderr)}
+		detail := strings.TrimSpace(stderr)
+		if runErr != nil {
+			if ge := new(GitError); errors.As(runErr, &ge) {
+				detail = ge.Detail
+			}
+		}
+		return nil, &PackRejectedError{Detail: detail}
 	}
 
 	// Parse the trailing checksum from index-pack's stdout: take the LAST
@@ -163,7 +290,7 @@ func (l *Layer) Ingest(ctx context.Context, repo *LocalRepo, pack io.Reader, max
 		os.Remove(dstBase + ".pack")
 	}
 
-	trace := l.parseTrace(tracePath, started, feedSeconds)
+	trace := l.parseTrace(tracePath, started, 0)
 	return &IngestResult{Checksum: Oid(checksum), ObjectCount: count, Trace: trace}, nil
 }
 

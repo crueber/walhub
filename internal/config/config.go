@@ -69,6 +69,19 @@ type Server struct {
 	CorsOrigins           []string  `toml:"cors_origins"`
 	TLS                   TLSStruct `toml:"tls"`
 	Auth                  Auth      `toml:"auth"`
+	SSH                   ServerSSH `toml:"ssh"`
+}
+
+// --- Server SSH (17_ssh.md) ---
+
+// ServerSSH is the SSH git transport listener: disabled unless Listen is set.
+// User public keys are NOT config: authenticated users manage their own keys
+// through the UI/API, stored in the object store (17_ssh.md §3). The TOML
+// surface is the server only: listener + host key.
+type ServerSSH struct {
+	Listen     string `toml:"listen"`       // e.g. "0.0.0.0:2222"; empty = disabled
+	HostKey    string `toml:"host_key"`     // path to an OpenSSH/PEM private key
+	HostKeyEnv string `toml:"host_key_env"` // env var NAME holding the private key; overrides host_key
 }
 
 // --- Store ---

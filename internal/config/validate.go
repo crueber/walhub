@@ -8,9 +8,9 @@ import (
 	"strings"
 )
 
-// Validate runs the §5 fail-closed rules over a fully-loaded config. Rule 1
-// (auth-none on a non-loopback bind) is the single warn-only divergence: it
-// returns a warning, not an error. Everything else is exit-2-fatal at boot.
+// Validate runs every §5 rule: exit-2-fatal errors plus at most one warning.
+// auth `none` on a non-loopback bind returns a warning, not an error. Everything
+// else is exit-2-fatal at boot.
 func Validate(c *Config) (warnings []string, errs []error) {
 	if w := checkAuthNoneLoopback(c); w != "" {
 		warnings = append(warnings, w)
@@ -24,7 +24,25 @@ func Validate(c *Config) (warnings []string, errs []error) {
 	errs = append(errs, checkTLS(c)...)
 	errs = append(errs, checkRoles(c)...)
 	errs = append(errs, checkPaths(c)...)
+	errs = append(errs, checkSSH(c)...)
 	return warnings, errs
+}
+
+// checkSSH (17_ssh.md §3): the transport is disabled unless listen is set;
+// user keys are not config (they live in the object store, managed through
+// the UI/API), so only the listener shape is validated here.
+func checkSSH(c *Config) []error {
+	sc := c.Server.SSH
+	if sc.Listen == "" && sc.HostKey == "" && sc.HostKeyEnv == "" {
+		return nil
+	}
+	var errs []error
+	if sc.Listen != "" {
+		if _, _, err := net.SplitHostPort(sc.Listen); err != nil {
+			errs = append(errs, fmt.Errorf("server.ssh.listen %q must be host:port", sc.Listen))
+		}
+	}
+	return errs
 }
 
 // 1. none-mode loopback (DIVERGENCE — warn, not fail).

@@ -53,6 +53,7 @@ readable by walhub and vice versa.
 | [`08_bundles.md`](08_bundles.md) | Slots, chains, backfill, blobless family, lists, D17 forcing | `internal/bundle` |
 | [`09_events.md`](09_events.md) | WAL → webhook bridge: cursor, delivery, wake-ups | `internal/events` |
 | [`10_maintenance.md`](10_maintenance.md) | Maintainer loop, compaction, base rebuild, follow, fsck/repair | `internal/maintain` |
+| [`17_ssh.md`](17_ssh.md) | SSH git transport: x/crypto/ssh listener, key auth, command framing | `internal/sshd` |
 | [`11_config_cli.md`](11_config_cli.md) | Every config key (optional file), per-repo settings, env overrides, CLI reference | `internal/config`, `cmd/walhub` |
 | [`12_web_ui.md`](12_web_ui.md) | Vanilla-ESM SPA + SDK (zero npm deps, no build), **setup UI**, `node --test` suite | `web/` |
 | [`13_concurrency.md`](13_concurrency.md) | **The concurrency playbook** — referenced by every other doc | cross-cutting |

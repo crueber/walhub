@@ -59,6 +59,9 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.cors_origins` | `[]` | exact or one leading `*.`; empty = no cross-origin lane |
 | `server.tls.mode` | `"off"` | `off` \| `self_signed` (generated once under `<cache.dir>/tls/`, served at `/services/public/ca.pem`) \| `files` |
 | `server.tls.cert/key/hostnames` | — | files-mode PEM; self-signed SANs (default localhost, *.localhost, 127.0.0.1, ::1 + public_url host) |
+| `server.ssh.listen` | `""` | SSH git transport bind address; empty = disabled (17_ssh.md) |
+| `server.ssh.host_key` / `host_key_env` | — | OpenSSH/PEM private key: path / env var NAME; auto-generated ed25519 under `<data-dir>/ssh/` when unset |
+| SSH public keys | — | user-managed in the object store via `GET\|POST\|DELETE /api/v1/ssh-keys` and the `/keys` page — not config (17_ssh.md §3) |
 | `server.auth.mode` | `"none"` | `none` \| `token` \| `oidc` |
 | `server.auth.anonymous_read` | `true` | must be false in oidc |
 | `server.auth.tokens[]` | — | `{principal, token \| token_env, write, admin}`; robots allowed in oidc mode too |
@@ -340,6 +343,12 @@ Each rule is a named function in `internal/config/validate.go`; the list is the 
 8. **tls**: `mode ∈ {off,self_signed,files}`; `files` requires cert+key paths; `self_signed` implies nothing else.
 9. **roles**: each role ∈ {serve, maintain, events}; duplicates allowed (idempotent), unknown role → error.
 10. **paths**: `cache.dir` is absolute (Rust requires this for the tls/ sibling) unless backend is `memory`.
+11. **ssh** (17_ssh.md §3): config validation checks `listen` shape only — when `[server.ssh]`
+    is present and `listen` is set, it must be host:port. The host key is a boot-time check in
+    the listener builder, not config validation: `host_key_env` set-but-empty is fatal there
+    (a silent substitution would bypass the client's pinned host key; auto-generation covers the
+    unset case). SSH public keys are user-managed data in the object store (`/api/v1/ssh-keys`),
+    not config — nothing else to validate here.
 
 ## 6. CLI: `walhub`
 

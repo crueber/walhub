@@ -60,6 +60,9 @@ services:
     image: ghcr.io/crueber/walhub:latest   # :main tracks main; vX.Y.Z releases; sha-<sha> per commit
     ports:
       - "8080:8080"
+      - "2222:2222"                        # git over SSH (17_ssh.md)
+    environment:
+      WALHUB__SERVER__SSH__LISTEN: 0.0.0.0:2222
     volumes:
       - walhub-data:/var/lib/walhub
     restart: unless-stopped
@@ -75,6 +78,15 @@ docker compose up -d        # update later with: docker compose pull && docker c
 Then open **http://localhost:8080/setup** — the same zero-config first boot as the binary: save a
 config from the setup page and restart the container. Repositories auto-create on push under
 `http://localhost:8080/<owner>/<repo>.git`.
+
+Git also works over **SSH**: the stack publishes port 2222 and enables the SSH transport
+(`WALHUB__SERVER__SSH__LISTEN`). Add your public key on the **/keys** page, then:
+
+```sh
+git clone ssh://git@localhost:2222/<owner>/<repo>.git
+```
+
+The host key auto-generates into the data volume, so it is stable across container restarts.
 
 For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml) — the shipped
 stack builds from source; to run it from the published image instead, replace the `walhub`

@@ -121,6 +121,7 @@ func TestDiscoveryShape(t *testing.T) {
 	}
 	want := []string{
 		"/api/v1/me",
+		"/api/v1/ssh-keys",
 		"/api/v1/owners",
 		"/api/v1/owners/{owner}/repos",
 		"/{owner}/{repo}/api",

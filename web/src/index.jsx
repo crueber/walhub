@@ -21,6 +21,7 @@ import Wal from "./pages/Wal.jsx";
 import Settings from "./pages/Settings.jsx";
 import Apidocs from "./pages/Apidocs.jsx";
 import Setup from "./pages/Setup.jsx";
+import Keys from "./pages/Keys.jsx";
 
 initData(repos); // the dogfood client, one instance
 
@@ -30,6 +31,7 @@ render(
       <Route path="/" component={Owners} />
       <Route path="/setup" component={Setup} />
       <Route path="/api" component={Apidocs} />
+      <Route path="/keys" component={Keys} />
       <Route path="/:owner" component={Repos} />
       <Route path="/:owner/:name" component={Repo}>
         <Route path="/" component={Tree} />

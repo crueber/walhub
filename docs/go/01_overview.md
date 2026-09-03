@@ -149,6 +149,7 @@ flowchart LR
   subgraph fleet["walhub fleet — one binary (cmd/walhub), roles by config"]
     S["serve role<br/>internal/server + internal/api"]
     M["maintain role<br/>internal/maintain + internal/bundle"]
+    S["ssh transport<br/>internal/sshd"]
     E["events role<br/>internal/events"]
   end
   subgraph core["shared core (per-repo handle)"]
@@ -330,11 +331,12 @@ Go module: `git.packden.us/crueber/walhub`. These paths are normative; every oth
 | `internal/setup` | The setup subsystem (wired into routes by `internal/server`): the config schema description for the UI, validate-for-save, atomic write of `<data-dir>/walhub.toml`, bootstrap-mode detection, the `/setup` UI and `/api/v1/setup` endpoints, and the setup-only mode gate (§9.5, 06_server_http.md) |
 | `internal/api` | The JSON API wire contract, SSE envelope, tasks surface, two-lane auth, render caches |
 | `internal/events` | The WAL → webhook bridge: durable cursor, delivery + HMAC signing, bucket-notification wake-ups, sweep |
+| `internal/sshd` | The SSH git transport: x/crypto/ssh listener, key auth, command parsing (17_ssh.md) |
 | `internal/maintain` | The maintainer loop: checkpoints, compaction, base rebuild, fsck/repair, upstream follow, leases |
 | `web/` | The vanilla-ESM SPA (native import maps, `<template>`, ~40 lines of hand-rolled reactive helpers, no build) + the SDK, authored as submodules in `web/sdk/src/` and esbuild-bundled to `web/dist/repos.js` (the single dev-time build), embedded into the binary; zero runtime npm dependencies |
 
 Cross-cutting: `internal/store`, `internal/wal`, `internal/git` are the frozen core; `internal/server`,
-`internal/api`, `internal/events`, `internal/maintain`, `cmd/walhub` are consumers wired through the
+`internal/api`, `internal/events`, `internal/maintain`, `internal/sshd`, `cmd/walhub` are consumers wired through the
 registries of §9.3.
 
 ---

@@ -5,6 +5,7 @@ import (
 
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -46,11 +47,44 @@ func (r *PushRequest) Has(cap string) bool {
 // object-format mismatch → protocol error (refuse).
 func (l *Layer) ParsePushRequest(repo *LocalRepo, body []byte) (*PushRequest, error) {
 	pr := NewPktReader(bytes.NewReader(body))
+	req, err := l.parsePushCommands(repo, pr)
+	if err != nil {
+		return nil, err
+	}
+	// The remainder of the body is the raw pack (may be absent for deletes).
+	rest, err := io.ReadAll(pr.r)
+	if err != nil {
+		return nil, &GitError{Kind: GitErrProtocol, Detail: "pack read: " + err.Error()}
+	}
+	req.Pack = rest
+	return req, nil
+}
+
+// ParsePushRequestStream parses the command (and push-options) sections from
+// a stream and leaves the reader positioned at the pack start — for
+// transports without body framing (SSH receive-pack, 17_ssh.md §5): the
+// caller streams the remaining bytes through IngestStream. The returned
+// request has Pack == nil; a pure-delete push has no pack bytes at all (the
+// client waits for the report without closing its side).
+func (l *Layer) ParsePushRequestStream(repo *LocalRepo, r io.Reader) (*PushRequest, io.Reader, error) {
+	pr := NewPktReader(r)
+	req, err := l.parsePushCommands(repo, pr)
+	if err != nil {
+		return nil, nil, err
+	}
+	return req, pr.r, nil
+}
+
+// parsePushCommands reads the update commands, capabilities, and push options.
+func (l *Layer) parsePushCommands(repo *LocalRepo, pr *PktReader) (*PushRequest, error) {
 	req := &PushRequest{}
 	first := true
 	for {
 		p, kind, err := pr.Next()
 		if err != nil {
+			if errors.Is(err, ErrMaxBytes) {
+				return nil, err // the request cap is a refusal, not a protocol fault
+			}
 			return nil, &GitError{Kind: GitErrProtocol, Detail: "receive-pack request: " + err.Error()}
 		}
 		if kind == PktKindFlush {
@@ -83,6 +117,9 @@ func (l *Layer) ParsePushRequest(repo *LocalRepo, body []byte) (*PushRequest, er
 		for {
 			p, kind, err := pr.Next()
 			if err != nil {
+				if errors.Is(err, ErrMaxBytes) {
+					return nil, err // the request cap is a refusal, not a protocol fault
+				}
 				return nil, &GitError{Kind: GitErrProtocol, Detail: "push-options: " + err.Error()}
 			}
 			if kind == PktKindFlush {
@@ -93,13 +130,6 @@ func (l *Layer) ParsePushRequest(repo *LocalRepo, body []byte) (*PushRequest, er
 			}
 		}
 	}
-
-	// The remainder of the body is the raw pack (may be absent for deletes).
-	rest, err := io.ReadAll(pr.r)
-	if err != nil {
-		return nil, &GitError{Kind: GitErrProtocol, Detail: "pack read: " + err.Error()}
-	}
-	req.Pack = rest
 	return req, nil
 }
 

@@ -36,13 +36,30 @@ func ErrPkt(msg string) []byte {
 //
 // with GIT_DIR=<repo>, GIT_PROTOCOL=version=2|0, GIT_TERMINAL_PROMPT=0, on
 // Pool.Run. The body is passed through byte-for-byte — walhub never re-encodes
-// client pkt-lines. stderr on non-zero exit → Subprocess error.
+// client pkt-lines. stderr on non-zero exit → Subprocess error. HTTP only:
+// stateless-rpc waits for stdin EOF, which HTTP framing provides.
 func (l *Layer) UploadPack(ctx context.Context, repo *LocalRepo, body io.Reader, out io.Writer, protocol string) error {
+	return l.uploadPack(ctx, repo, body, out, protocol, true)
+}
+
+// UploadPackSSH is UploadPack for the SSH transport (17_ssh.md §4): the same
+// argv WITHOUT --stateless-rpc. Over an interactive SSH channel the client
+// never closes its side, and stateless-rpc waits for stdin EOF before
+// answering — the exact hang this variant exists to avoid.
+func (l *Layer) UploadPackSSH(ctx context.Context, repo *LocalRepo, body io.Reader, out io.Writer, protocol string) error {
+	return l.uploadPack(ctx, repo, body, out, protocol, false)
+}
+
+func (l *Layer) uploadPack(ctx context.Context, repo *LocalRepo, body io.Reader, out io.Writer, protocol string, stateless bool) error {
 	protocolVersion := "version=0"
 	if protocol == "2" || strings.Contains(protocol, "version=2") {
 		protocolVersion = "version=2"
 	}
-	argv := []string{"-c", "uploadpack.allowSidebandAll=true", "upload-pack", "--stateless-rpc", "."}
+	argv := []string{"-c", "uploadpack.allowSidebandAll=true", "upload-pack"}
+	if stateless {
+		argv = append(argv, "--stateless-rpc")
+	}
+	argv = append(argv, ".")
 	uploadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	return l.Pool.Run(uploadCtx, func() error {
