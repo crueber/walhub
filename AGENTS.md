@@ -18,7 +18,9 @@ contracts, exactly like `14_extensibility.md`.
 ## 1. The laws (violating any of these is a rejected change)
 
 1. **Dependency budget is law.** Backend third-party modules: `github.com/go-chi/chi/v5` (the router),
-   `github.com/BurntSushi/toml` (config), `golang.org/x/net` (h2c). Frontend (amended 2026-09-02 by
+   `github.com/BurntSushi/toml` (config), `golang.org/x/net` (h2c), `golang.org/x/crypto` (SSH server
+   transport only — amended 2026-09-02 by explicit user request for SSH git transport; see
+   `docs/go/17_ssh.md` decision 17.1). Frontend (amended 2026-09-02 by
    explicit user request — the user directed the SolidJS SPA + Tailwind replacement of the vanilla-ESM
    UI; agents must treat this as approved, see `DEVIATIONS.md` D-WEB-6): runtime npm dependencies are
    exactly **`solid-js` + `@solidjs/router`**; state management is Solid's own signals/stores + context
@@ -163,6 +165,7 @@ internal/setup      bootstrap + setup: first-run defaults, config schema for the
 internal/bundle     bundle-uri scheduler: slots, chains, lists, D17
 internal/events     WAL → webhook bridge (cursor, delivery, wake-ups)
 internal/maintain   maintainer loop: checkpoints, bundles, compaction, fsck/repair, follow
+internal/sshd       SSH git transport (x/crypto/ssh): sessions, key auth, command parsing
 internal/config     walhub.toml (optional) + WALHUB__ env overrides, per-repo settings, validation
 internal/policy     push policy rule language (protect/history/size effects)
 web/                SolidJS SPA (JSX, no TypeScript; solid-js + @solidjs/router; Tailwind v4, dark by

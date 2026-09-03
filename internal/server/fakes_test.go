@@ -13,16 +13,17 @@ import (
 
 // fakeEngine implements Engine for tests.
 type fakeEngine struct {
-	placement  Placement // zero value lacks Serve; newTestServer enables it
-	bundles    BundleList
-	synced     []wal.SyncLevel
-	published  int
-	exists     bool
-	noCreate   bool // AutoCreate returns false when set
-	pubErr     error
-	pubPerRef  []wal.RefResult
-	syncErr    error
-	repoCreate func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error)
+	placement     Placement // zero value lacks Serve; newTestServer enables it
+	bundles       BundleList
+	synced        []wal.SyncLevel
+	published     int
+	exists        bool
+	noCreate      bool // AutoCreate returns false when set
+	pubErr        error
+	lastPrincipal string
+	pubPerRef     []wal.RefResult
+	syncErr       error
+	repoCreate    func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error)
 }
 
 func (f *fakeEngine) Sync(ctx context.Context, id git.RepoId, level wal.SyncLevel) error {
@@ -48,6 +49,7 @@ type repoRootKey struct{}
 
 func (f *fakeEngine) Publish(ctx context.Context, id git.RepoId, req *git.PushRequest, principal string, access wal.ObjectAccess) (wal.PublishResult, error) {
 	f.published++
+	f.lastPrincipal = principal
 	if f.pubErr != nil {
 		return wal.PublishResult{}, f.pubErr
 	}

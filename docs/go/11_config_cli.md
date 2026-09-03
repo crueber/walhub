@@ -59,6 +59,9 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.cors_origins` | `[]` | exact or one leading `*.`; empty = no cross-origin lane |
 | `server.tls.mode` | `"off"` | `off` \| `self_signed` (generated once under `<cache.dir>/tls/`, served at `/services/public/ca.pem`) \| `files` |
 | `server.tls.cert/key/hostnames` | — | files-mode PEM; self-signed SANs (default localhost, *.localhost, 127.0.0.1, ::1 + public_url host) |
+| `server.ssh.listen` | `""` | SSH git transport bind address; empty = disabled (17_ssh.md) |
+| `server.ssh.host_key` / `host_key_env` | — | OpenSSH/PEM private key: path / env var NAME; auto-generated ed25519 under `<data-dir>/ssh/` when unset |
+| `server.ssh.keys[]` | — | `{principal, key \| key_env, write, admin}`; public keys allowed to clone/fetch (and push with `write`) over SSH |
 | `server.auth.mode` | `"none"` | `none` \| `token` \| `oidc` |
 | `server.auth.anonymous_read` | `true` | must be false in oidc |
 | `server.auth.tokens[]` | — | `{principal, token \| token_env, write, admin}`; robots allowed in oidc mode too |
@@ -340,6 +343,10 @@ Each rule is a named function in `internal/config/validate.go`; the list is the 
 8. **tls**: `mode ∈ {off,self_signed,files}`; `files` requires cert+key paths; `self_signed` implies nothing else.
 9. **roles**: each role ∈ {serve, maintain, events}; duplicates allowed (idempotent), unknown role → error.
 10. **paths**: `cache.dir` is absolute (Rust requires this for the tls/ sibling) unless backend is `memory`.
+11. **ssh** (17_ssh.md §3): when any `[server.ssh]` key is set — `listen` must be host:port; each
+    `keys[]` entry needs a principal and exactly one of key/key_env (env read at boot; unset →
+    error); key lines must parse as authorized_keys; duplicate fingerprints fail. `listen` unset
+    with keys configured still validates (the transport stays disabled).
 
 ## 6. CLI: `walhub`
 

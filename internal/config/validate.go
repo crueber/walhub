@@ -3,14 +3,17 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
+
+	"golang.org/x/crypto/ssh"
 )
 
-// Validate runs the §5 fail-closed rules over a fully-loaded config. Rule 1
-// (auth-none on a non-loopback bind) is the single warn-only divergence: it
-// returns a warning, not an error. Everything else is exit-2-fatal at boot.
+// Validate runs every §5 rule: exit-2-fatal errors plus at most one warning.
+// auth `none` on a non-loopback bind returns a warning, not an error. Everything
+// else is exit-2-fatal at boot.
 func Validate(c *Config) (warnings []string, errs []error) {
 	if w := checkAuthNoneLoopback(c); w != "" {
 		warnings = append(warnings, w)
@@ -24,7 +27,54 @@ func Validate(c *Config) (warnings []string, errs []error) {
 	errs = append(errs, checkTLS(c)...)
 	errs = append(errs, checkRoles(c)...)
 	errs = append(errs, checkPaths(c)...)
+	errs = append(errs, checkSSH(c)...)
 	return warnings, errs
+}
+
+// checkSSH (17_ssh.md §3): the transport is disabled unless listen is set;
+// keys parse as real authorized_keys lines, carry a principal, and resolve
+// their secret from exactly one of key/key_env (the tokens pattern).
+func checkSSH(c *Config) []error {
+	sc := c.Server.SSH
+	if sc.Listen == "" && len(sc.Keys) == 0 && sc.HostKey == "" && sc.HostKeyEnv == "" {
+		return nil
+	}
+	var errs []error
+	if sc.Listen != "" {
+		if _, _, err := net.SplitHostPort(sc.Listen); err != nil {
+			errs = append(errs, fmt.Errorf("server.ssh.listen %q must be host:port", sc.Listen))
+		}
+	}
+	seen := map[string]bool{}
+	for i, k := range sc.Keys {
+		at := fmt.Sprintf("server.ssh.keys[%d]", i)
+		if k.Principal == "" {
+			errs = append(errs, fmt.Errorf("%s.principal is required", at))
+		}
+		if (k.Key == "") == (k.KeyEnv == "") {
+			errs = append(errs, fmt.Errorf("%s: exactly one of key or key_env is required", at))
+			continue
+		}
+		line := k.Key
+		if k.KeyEnv != "" {
+			line = os.Getenv(k.KeyEnv)
+			if line == "" {
+				errs = append(errs, fmt.Errorf("%s: key_env %q is not set", at, k.KeyEnv))
+				continue
+			}
+		}
+		pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(line)))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: not a valid authorized_keys line: %v", at, err))
+			continue
+		}
+		fp := ssh.FingerprintSHA256(pub)
+		if seen[fp] {
+			errs = append(errs, fmt.Errorf("%s: duplicate key (already configured: %s)", at, fp))
+		}
+		seen[fp] = true
+	}
+	return errs
 }
 
 // 1. none-mode loopback (DIVERGENCE — warn, not fail).

@@ -18,8 +18,10 @@ func (l *Layer) ApplyRefTxn(ctx, repo *Repo, txn []RefUpdate, checkOld bool) err
 func (l *Layer) Snapshot(repo *Repo) (*RefSnapshot, error)
 func (l *Layer) Advertisement(repo *Repo, svc Service, v2 bool, version string) ([]byte, error)
 func (l *Layer) LsRefs(repo *Repo, args LsRefsArgs) ([]byte, error)
-func (l *Layer) RunUploadPack(ctx, repo *Repo, body io.Reader, out io.Writer, protocol string) error
-func (l *Layer) Repack / CommitGraph / HistoryPack / CreateBundle / BundleHeader ...
+func (l *Layer) UploadPack(ctx, repo *Repo, body io.Reader, out io.Writer, protocol string) error   // --stateless-rpc (HTTP framing)
+func (l *Layer) UploadPackSSH(ctx, repo *Repo, body io.Reader, out io.Writer, protocol string) error  // no --stateless-rpc (17_ssh.md §2)
+func (l *Layer) ParsePushRequestStream(repo *Repo, r io.Reader) (*PushRequest, io.Reader, error)      // commands only; pack stays a stream (17_ssh.md §5)
+func (l *Layer) IngestStream(ctx, repo *Repo, pack io.Reader, maxBytes int64, thin, fsck bool) (*IngestResult, error) // pack piped into index-pack (17_ssh.md §5)
 ```
 
 Errors are sentinel-wrapped values the callers map: `ErrMaxBytes`, `ErrPackRejected`, `ErrMissingObject`,

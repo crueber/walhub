@@ -48,7 +48,8 @@ type Server struct {
 	drain   *DrainState
 
 	inflight  Inflight
-	cacheRoot string // cache.dir; LFS spool + TLS files live under it
+	cacheRoot string
+	dataDir   string // cache.dir; LFS spool + TLS files live under it
 
 	version  string // build sha: build-time env → git short sha → "dev"
 	instance string // name[/id] per MASTER_RUST_SPEC §3.4
@@ -129,6 +130,7 @@ func New(o Options) *Server {
 		notify:    o.Notifier,
 		Now:       o.Now,
 		cacheRoot: o.CacheRoot,
+		dataDir:   o.DataDir,
 	}
 	s.inflight.high = int64(o.Config.Server.MaxConcurrentRequests)
 	s.sem = NewRepoSemaphores(o.Config.Server.MaxConcurrentPerRepo)

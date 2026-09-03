@@ -101,6 +101,7 @@ function s0(v) {
 
 const STRATEGY_KEYS = ["name", "kind", "base", "schedule", "keep", "backfill_max", "chain", "filter", "refs", "min_commits"];
 const TOKEN_KEYS = ["principal", "token", "token_env", "write", "admin"];
+const SSH_KEYS = ["principal", "key", "key_env", "write", "admin"];
 
 /** Render the server's parsed array-of-struct values (bundles.strategy,
     server.auth.tokens) as the [[name]] TOML fragment the textarea edits —
@@ -179,6 +180,11 @@ export const FIELDS = [
   { key: "server.auth.trusted_forwarders", type: "list", ex: "edge.internal", modes: ["token", "oidc"] },
   { key: "server.auth.admin_emails", type: "list", ex: "admin@example.com", modes: ["oidc"] },
   { key: "server.auth.admin_domains", type: "list", ex: "example.com", modes: ["oidc"] },
+  // server ssh (17_ssh.md)
+  { key: "server.ssh.listen", type: "listen", ex: "0.0.0.0:2222", note: "empty = the SSH transport is disabled" },
+  { key: "server.ssh.host_key", type: "string", ex: "/var/lib/walhub/ssh/ed25519_host_key", note: "auto-generated there when empty and listen is set" },
+  { key: "server.ssh.host_key_env", type: "string", ex: "WALHUB_SSH_HOST_KEY", note: "names the env var holding the key; overrides host_key" },
+  { key: "server.ssh.keys", type: "toml", tomlKeys: SSH_KEYS, ex: '[[keys]]\nprincipal = "ada"\nkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII/VO93dFREgk2CscLYyCKH4ZjDpD8XYGB/X8ReU2QWx ada@laptop"\nwrite = true', note: "public keys that may push/pull over SSH; admin = true grants admin" },
   // store
   { key: "store.backend", type: "enum", enum: ["s3", "gcs", "memory", "filesystem"], ex: "filesystem", note: "s3/gcs also need store.bucket and their subsection" },
   { key: "store.bucket", type: "string", ex: "walhub-test" },

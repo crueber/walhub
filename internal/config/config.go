@@ -69,6 +69,27 @@ type Server struct {
 	CorsOrigins           []string  `toml:"cors_origins"`
 	TLS                   TLSStruct `toml:"tls"`
 	Auth                  Auth      `toml:"auth"`
+	SSH                   ServerSSH `toml:"ssh"`
+}
+
+// --- Server SSH (17_ssh.md) ---
+
+// ServerSSH is the SSH git transport: disabled unless Listen is set. Keys are
+// a credential class of their own (like auth.tokens): each maps a public key
+// to a principal with write/admin flags.
+type ServerSSH struct {
+	Listen     string   `toml:"listen"`       // e.g. ":2222"; empty = disabled
+	HostKey    string   `toml:"host_key"`     // path to an OpenSSH/PEM private key
+	HostKeyEnv string   `toml:"host_key_env"` // env var NAME holding the private key; overrides host_key
+	Keys       []SshKey `toml:"keys"`
+}
+
+type SshKey struct {
+	Principal string `toml:"principal"`
+	Key       string `toml:"key"`     // authorized_keys line (exactly one of key/key_env)
+	KeyEnv    string `toml:"key_env"` // env var NAME holding the authorized_keys line
+	Write     bool   `toml:"write"`
+	Admin     bool   `toml:"admin"`
 }
 
 // --- Store ---
