@@ -1,10 +1,15 @@
+//go:build evidence
+
 // Package keybench is the performance-evidence harness for the SSH key
-// registry (docs/EVIDENCE.md E1). Skipped unless WALHUB_EVIDENCE=1: the 1M-key
-// run takes ~40s and ~2 GB of memory-store objects, so it never runs in CI.
+// registry (docs/EVIDENCE.md E1). It is a harness, not a unit test: the
+// `evidence` build tag keeps it out of `go test ./...`, `go vet ./...` and
+// CI entirely (Law 11 is about skipped tests; a tag-gated file is never
+// compiled in, so nothing is ever reported skipped). The 1M-key run takes
+// ~40s and ~2 GB of memory-store objects.
 //
 // Reproduce:
 //
-//	WALHUB_EVIDENCE=1 go test ./internal/devtools/keybench/ -run TestSSHKeyRegistryScale -v -timeout 30m
+//	go test -tags evidence ./internal/devtools/keybench/ -run TestSSHKeyRegistryScale -v -timeout 30m
 //
 // The output rows are markdown-ready and are what E1's tables quote.
 package keybench
@@ -16,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -35,12 +39,6 @@ import (
 // isolate the registry's algorithmic shape from network RTT; over S3/GCS add
 // one GET of latency per lookup and per list entry (see E1 in the evidence doc).
 func TestSSHKeyRegistryScale(t *testing.T) {
-	if os.Getenv("WALHUB_EVIDENCE") != "1" {
-		t.Skip("set WALHUB_EVIDENCE=1 to run the evidence benchmark (~40s, ~2GB RAM)")
-	}
-	if testing.Short() {
-		t.Skip("long evidence run")
-	}
 	for _, n := range []int{10_000, 1_000_000} {
 		t.Run(fmt.Sprintf("keys=%d", n), func(t *testing.T) {
 			start := time.Now()

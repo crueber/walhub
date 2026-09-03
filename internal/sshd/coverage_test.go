@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,14 +26,21 @@ func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Disca
 
 // execCapture runs a command and records what the transport received.
 type captureTransport struct {
+	protosMu        sync.Mutex
 	protos          []string
 	block           chan struct{}
 	entered         chan struct{}
 	failAfterCancel bool
 }
 
+func (c *captureTransport) recordProto(p string) {
+	c.protosMu.Lock()
+	defer c.protosMu.Unlock()
+	c.protos = append(c.protos, p)
+}
+
 func (c *captureTransport) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
-	c.protos = append(c.protos, protocol)
+	c.recordProto(protocol)
 	if c.entered != nil {
 		close(c.entered)
 	}
@@ -173,6 +181,107 @@ func TestMaxSessionsRefuses(t *testing.T) {
 		t.Fatalf("second session = %v %q, want limiter refusal", err, errBuf.String())
 	}
 	close(tr.block)
+}
+
+// releaseQueue blocks each exec in its own channel so a test can finish
+type releaseQueue struct {
+	mu    sync.Mutex
+	hold_ []chan struct{}
+}
+
+func (q *releaseQueue) hold() <-chan struct{} {
+	ch := make(chan struct{})
+	q.mu.Lock()
+	q.hold_ = append(q.hold_, ch)
+	q.mu.Unlock()
+	return ch
+}
+
+func (q *releaseQueue) releaseOne() {
+	q.mu.Lock()
+	ch := q.hold_[0]
+	q.hold_ = q.hold_[1:]
+	q.mu.Unlock()
+	close(ch)
+}
+
+func (q *releaseQueue) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
+	<-q.hold()
+	fmt.Fprint(stdout, "0000")
+	return nil
+}
+
+func (q *releaseQueue) SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error {
+	return nil
+}
+
+// TestSessionCapIsPerConnection pins the limiter's scope and leak-freedom: the
+// 16-session cap is per connection (a server-global pre-check used to
+// serialize unrelated connections), and a refused attempt must not burn a slot
+// on that connection (the counter used to leak upward per rejection).
+func TestSessionCapIsPerConnection(t *testing.T) {
+	tr := &releaseQueue{}
+	key, signer := testKeyEntry(t, "ada", true)
+	srv, err := New(Config{
+		Listen:      "127.0.0.1:0",
+		HostKey:     testHostKey(t),
+		KeyLookup:   staticLookup(map[string]KeyEntry{fpOf(signer): key}),
+		MaxSessions: 64,
+		Log:         discardLogger(),
+	}, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = srv.ListenAndServe(ctx) }()
+	addr := waitAddr(t, srv)
+	run := func(sess *gossh.Session) {
+		sess.Stderr = io.Discard
+		go func() { _ = sess.Run("git-upload-pack '/a/b.git'") }()
+	}
+
+	c1 := dialTestClient(t, addr.String(), signer)
+	var held []*gossh.Session
+	t.Cleanup(func() {
+		for _, s := range held {
+			_ = s.Close()
+		}
+	})
+	for i := 0; i < maxSessionsPerConn; i++ {
+		sess, err := c1.NewSession()
+		if err != nil {
+			t.Fatalf("session %d: %v", i+1, err)
+		}
+		held = append(held, sess)
+		run(sess)
+	}
+
+	// 17th on the same connection: the channel open is refused.
+	if over, err := c1.NewSession(); err == nil {
+		defer over.Close()
+		t.Fatal("17th session opened, want per-conn refusal")
+	}
+
+	// A second connection is unaffected by the first's cap.
+	c2 := dialTestClient(t, addr.String(), signer)
+	sess, err := c2.NewSession()
+	if err != nil {
+		t.Fatalf("second connection blocked by first: %v", err)
+	}
+	held = append(held, sess)
+	run(sess)
+
+	// Finish one session, then the same connection must admit a new one: the
+	// refused attempt above must not have leaked its increment.
+	tr.releaseOne()
+	time.Sleep(50 * time.Millisecond) // let the server observe the exit
+	again, err := c1.NewSession()
+	if err != nil {
+		t.Fatalf("rejected attempt burned a slot: %v", err)
+	}
+	held = append(held, again)
+	run(again)
 }
 
 // waitAddr polls until the server's listener is up and returns its address.

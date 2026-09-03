@@ -15,10 +15,11 @@ import (
 
 // Sentinel errors the registry returns; the handlers map them onto statuses.
 var (
-	ErrKeyNotFound   = errors.New("ssh key not found")
-	ErrKeyDuplicate  = errors.New("ssh key already registered")
-	ErrKeyForbidden  = errors.New("ssh key belongs to another principal")
-	ErrKeyBadKeyLine = errors.New("not a valid authorized_keys line")
+	ErrKeyNotFound     = errors.New("ssh key not found")
+	ErrKeyDuplicate    = errors.New("ssh key already registered")
+	ErrKeyForbidden    = errors.New("ssh key belongs to another principal")
+	ErrKeyBadKeyLine   = errors.New("not a valid authorized_keys line")
+	ErrKeyBadPrincipal = errors.New("invalid principal name")
 )
 
 // SSHKeyStore is the consumer-side seam the server implements (14_extensibility.md):
@@ -93,10 +94,8 @@ func (h *handlers) sshKeysAdd(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrKeyDuplicate):
 			writePlain(w, http.StatusConflict, err.Error())
-		case errors.Is(err, ErrKeyBadKeyLine):
+		case errors.Is(err, ErrKeyBadKeyLine), errors.Is(err, ErrKeyBadPrincipal):
 			writePlain(w, http.StatusBadRequest, err.Error())
-		default:
-			writePlain(w, http.StatusInternalServerError, err.Error())
 		}
 		return
 	}

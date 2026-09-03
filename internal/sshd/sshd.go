@@ -239,26 +239,15 @@ func (s *Server) handleConn(ctx context.Context, sshCfg *gossh.ServerConfig, c n
 // channels (17_ssh.md §6).
 const maxSessionsPerConn = 16
 
-// liveSessions reports the total number of open session channels.
-func (s *Server) liveSessions() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n := 0
-	for _, v := range s.live {
-		n += v
-	}
-	return n
-}
-
 // handleSession runs one session channel: exec requests only. PTY, shell,
 // and subsystem requests are refused — this host runs git, not shells.
 func (s *Server) handleSession(ctx context.Context, sconn *gossh.ServerConn, newCh gossh.NewChannel) {
-	if s.liveSessions() >= maxSessionsPerConn {
-		_ = newCh.Reject(gossh.Prohibited, "walhub: too many sessions on this connection")
-		return
-	}
+	// The cap is per connection, checked under the same lock that increments:
+	// a server-wide pre-check here would serialize unrelated connections.
 	s.mu.Lock()
-	if s.live[sconn]++; s.live[sconn] > maxSessionsPerConn {
+	s.live[sconn]++
+	if s.live[sconn] > maxSessionsPerConn {
+		s.live[sconn]--
 		s.mu.Unlock()
 		_ = newCh.Reject(gossh.Prohibited, "walhub: too many sessions on this connection")
 		return

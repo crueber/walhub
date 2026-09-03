@@ -116,6 +116,11 @@ func (r *SSHKeyRegistry) Get(ctx context.Context, principal, id string) (api.Ssh
 // Add parses and registers a new key for the principal. Duplicate
 // fingerprints are refused (the fingerprint is the identity, 409 at the API).
 func (r *SSHKeyRegistry) Add(ctx context.Context, principal, keyLine, title string) (api.SshKeyRecord, error) {
+	// The principal names the listing prefix `ssh-keys/u/<principal>/<fp>`;
+	// a name that is not a single path segment would escape its own listing.
+	if principal == "" || strings.ContainsAny(principal, "/ \t\r\n") {
+		return api.SshKeyRecord{}, fmt.Errorf("%w: principal must be one non-empty path segment", api.ErrKeyBadPrincipal)
+	}
 	pub, _, _, _, err := gossh.ParseAuthorizedKey([]byte(strings.TrimSpace(keyLine)))
 	if err != nil {
 		return api.SshKeyRecord{}, fmt.Errorf("%w: %v", api.ErrKeyBadKeyLine, err)

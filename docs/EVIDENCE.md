@@ -39,8 +39,9 @@ requested or when a review questions a hot path).
 list). What happens to (a) SSH auth, (b) the keys page, and (c) writes when the
 host accumulates 10,000 keys — and 1,000,000?
 
-**Method.** Harness: `internal/devtools/keybench` (`WALHUB_EVIDENCE=1 go test
-./internal/devtools/keybench/ -run TestSSHKeyRegistryScale -v -timeout 30m`).
+**Method.** Harness: `internal/devtools/keybench` (`go test -tags evidence
+./internal/devtools/keybench/ -run TestSSHKeyRegistryScale -v -timeout 30m`;
+the `evidence` build tag is what keeps the harness out of CI and `go vet`).
 Real ed25519 keypairs (1 per key — distinct fingerprints), registered through
 the real `Add` path over the **memory store**, keys spread over 100 principals
 (the population shape: many users, a handful of keys each — the benchmark's

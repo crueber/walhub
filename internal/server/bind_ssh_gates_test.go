@@ -225,6 +225,62 @@ func TestSSHReceivePackOverMaxPushBytes(t *testing.T) {
 	}
 }
 
+// TestSSHCommandSectionOverCap: a cap hit inside the command section is a
+// push refusal on the git wire (band-2 + unpack ng), not a transport error —
+// the pack path's refusal shape, mapped for the command path.
+func TestSSHCommandSectionOverCap(t *testing.T) {
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}}
+	s := sshGateServer(t, eng, func(c *config.Config) {
+		c.Server.MaxPushBytes = 10 // smaller than the first command's pkt-line
+	})
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+	zero := strings.Repeat("0", 40)
+	oid := "1111111111111111111111111111111111111111"
+	body := git.Pkt(zero + " " + oid + " refs/heads/main\x00report-status side-band-64k\n")
+	body = append(body, git.Flush()...)
+	body = append(body, []byte("PACK")...) // pack bytes never reached
+	var out strings.Builder
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+		t.Fatalf("command-cap hit must report on the wire, not error: %v", err)
+	}
+	wire := out.String()
+	if !strings.Contains(wire, "push exceeds max_push_bytes") || !strings.Contains(wire, "unpack ng") {
+		t.Fatalf("want band-2 + unpack ng for a command-section cap hit; wire = %q", wire)
+	}
+	if eng.published != 0 {
+		t.Fatalf("refused push must not publish; publishes = %d", eng.published)
+	}
+}
+
+// TestSSHCommandsConsumeWholeCap: when the command section alone reaches
+// max_push_bytes, the pack allowance is zero — refuse on the wire rather than
+// hand IngestStream a negative allowance (which capReader treats as unlimited).
+func TestSSHCommandsConsumeWholeCap(t *testing.T) {
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}}
+	zero := strings.Repeat("0", 40)
+	oid := "1111111111111111111111111111111111111111"
+	cmds := git.Pkt(zero + " " + oid + " refs/heads/main\x00report-status side-band-64k\n")
+	cmds = append(cmds, git.Flush()...)
+	s := sshGateServer(t, eng, func(c *config.Config) {
+		c.Server.MaxPushBytes = config.ByteSize(len(cmds)) // the commands alone consume it
+	})
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+	body := append(append([]byte{}, cmds...), []byte("PACK\x00\x00\x00\x02")...)
+	var out strings.Builder
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+		t.Fatalf("zero-remaining push must refuse on the wire, not error: %v", err)
+	}
+	wire := out.String()
+	if !strings.Contains(wire, "push exceeds max_push_bytes") || !strings.Contains(wire, "unpack ng") {
+		t.Fatalf("want band-2 + unpack ng when commands consume the cap; wire = %q", wire)
+	}
+	if eng.published != 0 {
+		t.Fatalf("refused push must not publish; publishes = %d", eng.published)
+	}
+}
+
 func TestSSHPlacementMaintainOnlyRefused(t *testing.T) {
 	// split placement: this host MAINTAINS the repo but does not SERVE it —
 	// the HTTP routes 503 here, and SSH must refuse identically (§4.3).

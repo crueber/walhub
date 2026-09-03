@@ -5,6 +5,7 @@ import (
 
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -81,6 +82,9 @@ func (l *Layer) parsePushCommands(repo *LocalRepo, pr *PktReader) (*PushRequest,
 	for {
 		p, kind, err := pr.Next()
 		if err != nil {
+			if errors.Is(err, ErrMaxBytes) {
+				return nil, err // the request cap is a refusal, not a protocol fault
+			}
 			return nil, &GitError{Kind: GitErrProtocol, Detail: "receive-pack request: " + err.Error()}
 		}
 		if kind == PktKindFlush {
@@ -113,6 +117,9 @@ func (l *Layer) parsePushCommands(repo *LocalRepo, pr *PktReader) (*PushRequest,
 		for {
 			p, kind, err := pr.Next()
 			if err != nil {
+				if errors.Is(err, ErrMaxBytes) {
+					return nil, err // the request cap is a refusal, not a protocol fault
+				}
 				return nil, &GitError{Kind: GitErrProtocol, Detail: "push-options: " + err.Error()}
 			}
 			if kind == PktKindFlush {

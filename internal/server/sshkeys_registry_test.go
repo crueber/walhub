@@ -104,6 +104,18 @@ func TestRegistryMalformedKey(t *testing.T) {
 	}
 }
 
+func TestRegistryBadPrincipalName(t *testing.T) {
+	// The principal names the ssh-keys/u/ listing prefix: not a single path
+	// segment → refused before any store write.
+	r, ctx := registryFor(t, nil)
+	for _, name := range []string{"", "ada/lovelace", "a/b/c", " "} {
+		_, err := r.Add(ctx, name, registryTestKey, "")
+		if !errors.Is(err, api.ErrKeyBadPrincipal) {
+			t.Fatalf("principal %q = %v, want ErrKeyBadPrincipal", name, err)
+		}
+	}
+}
+
 func TestRegistryLookupResolvesPrincipalRights(t *testing.T) {
 	// none mode: the anon-all principal
 	r, ctx := registryFor(t, nil)

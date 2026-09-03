@@ -93,17 +93,13 @@ type ingestFeed struct {
 	started  time.Time
 }
 
-// NewMaxBytesReader bounds a stream at max bytes: reads past the cap fail
-// with ErrMaxBytes (sticky). The SSH receive path wraps the client channel
-// with it — max_push_bytes is enforced across the whole request (17_ssh.md
-// §5), and the same ErrMaxBytes drives the "pack exceeds max_bytes" refusal.
-func NewMaxBytesReader(r io.Reader, max int64) io.Reader {
-	return newCapReader(r, max)
-}
-
 // capReader enforces max_bytes while streaming; once crossed, every Read
 // fails with ErrMaxBytes so index-pack aborts and the caller maps the cause.
+// In stream mode (IngestStream) Read runs on the feed goroutine while the
+// caller inspects over() after cmd.Run returns, so the mutable fields are
+// guarded by a mutex.
 type capReader struct {
+	mu      sync.Mutex
 	r       io.Reader
 	max     int64
 	total   int64
@@ -113,13 +109,14 @@ type capReader struct {
 func newCapReader(r io.Reader, max int64) *capReader { return &capReader{r: r, max: max} }
 
 func (c *capReader) over() error {
-	if c.overErr != nil {
-		return c.overErr
-	}
-	return nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.overErr
 }
 
 func (c *capReader) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.overErr != nil {
 		return 0, c.overErr
 	}
@@ -128,10 +125,7 @@ func (c *capReader) Read(p []byte) (int, error) {
 		return 0, c.overErr
 	}
 	if c.max > 0 {
-		if room := c.max - c.total; room <= 0 {
-			c.overErr = ErrMaxBytes
-			return 0, c.overErr
-		} else if int64(len(p)) > room {
+		if room := c.max - c.total; int64(len(p)) > room {
 			p = p[:room]
 		}
 	}

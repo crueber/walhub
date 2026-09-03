@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,6 +93,12 @@ func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal st
 		return err
 	}
 	defer rel()
+	// Write/Admin are deliberately left unset on this principal: the key's
+	// rights are resolved at auth time (KeyLookup → PrincipalForName) and
+	// enforced pre-dispatch by the sshd exec gate, while Publish below takes
+	// only the NAME. A future change that reads p.Write/p.Admin here would
+	// silently deny every SSH push, so the flags stay visibly unset
+	// (17_ssh.md §3).
 	p := auth.Principal{Name: principal}
 
 	create := s.cfg.Server.AutoCreateOnPush || s.engine.AutoCreate(ctx, id)
@@ -125,9 +132,29 @@ func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal st
 
 	req, packReader, perr := s.layer.ParsePushRequestStream(repo, lr)
 	if perr != nil {
+		// A cap hit inside the command section is a push refusal, not a
+		// transport error: answer on the git wire the way the pack path does
+		// (band-2 + the negotiated unpack-ng trailer), so git prints the
+		// reason instead of dying on stderr.
+		if errors.Is(perr, git.ErrMaxBytes) {
+			if req == nil {
+				// The cap fired inside the first command pkt, so the
+				// client's capability line never parsed. Our advertisement
+				// offers report-status + side-band-64k, and git requests
+				// both whenever they are offered, so answer with that
+				// negotiated shape rather than a bare band-2 that would
+				// leave git waiting for a report.
+				req = &git.PushRequest{Caps: []string{"report-status", "side-band-64k"}}
+			}
+			band2Failure(stdout, req, fmt.Sprintf("push exceeds max_push_bytes (%d)", s.cfg.Server.MaxPushBytes))
+			return nil
+		}
 		return fmt.Errorf("malformed push request: %w", perr)
 	}
 	remaining := int64(s.cfg.Server.MaxPushBytes) - lr.n
+	if remaining < 0 {
+		remaining = 0
+	}
 	// A pure-delete push sends no pack bytes at all: the client waits for the
 	// report with the channel open, so the reader must never be touched.
 	allDeletes := true
@@ -139,6 +166,14 @@ func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal st
 	}
 	var pack io.Reader
 	if !allDeletes {
+		if remaining <= 0 {
+			// The command section alone consumed the whole request cap: the
+			// pack allowance is zero. IngestStream treats max <= 0 as
+			// unlimited, so refuse here rather than hand it a capped-nothing
+			// that would become an uncapped stream.
+			band2Failure(stdout, req, fmt.Sprintf("push exceeds max_push_bytes (%d)", s.cfg.Server.MaxPushBytes))
+			return nil
+		}
 		// IngestStream enforces the remaining allowance: a pack over it fails
 		// with ErrMaxBytes → "pack exceeds max_bytes" on the wire (§5).
 		pack = packReader

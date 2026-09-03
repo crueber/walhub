@@ -49,28 +49,35 @@ git-receive-pack  '<owner/repo[.git]>'
 
 ## 3. Config and auth
 
+The TOML surface is the server only — keys are user-managed data in the object store:
+
 ```toml
 [server.ssh]
 listen = ""            # e.g. "0.0.0.0:2222"; empty = disabled (default)
 host_key = ""          # path to an OpenSSH/PEM private key
 host_key_env = ""      # env var NAME holding the private key; overrides host_key
-[[server.ssh.keys]]
-principal = "ada"
-key = "ssh-ed25519 AAAA... ada@laptop"   # authorized_keys line; exactly one of key/key_env
-key_env = ""
-write = true
-admin = false
 ```
 
-- Validation (`11_config_cli.md §5`): `listen` must be host:port when set; each key needs a
-  principal and exactly one of key/key_env (resolved at boot — a set-but-unreadable env is fatal);
-  key lines must parse as authorized_keys (`ssh.ParseAuthorizedKey`); duplicate fingerprints fail.
-- Host key resolution: `host_key_env` → `host_key` path → auto-generated ed25519 key persisted at
-  `<data-dir>/ssh/ed25519_host_key` (0600, dir 0700). Auto-generation keeps zero-config SSH boots
-  whole; clients pin the key on first connect (TOFU), like `ssh-keygen -A`.
-- Keys are a credential class of their own (like `auth.tokens`): each maps a public key to a
-  principal with write/admin flags. They work in every auth mode. The matched principal travels in
-  the transport call; push requires the key's `write` flag (enforced in the session handler).
+- Validation (`11_config_cli.md §5`): `listen` must be host:port when set. `host_key_env`
+  resolves at boot — a set-but-unreadable env is fatal (a boot-time substitution would
+  silently bypass the client's pinned host key).
+- Host key resolution: `host_key_env` → `host_key` path → auto-generated ed25519 key persisted
+  at `<data-dir>/ssh/ed25519_host_key` (0600, dir 0700). Auto-generation keeps zero-config SSH
+  boots whole; clients pin the key on first connect (TOFU), like `ssh-keygen -A`.
+- **Public keys live in the store, not the config** (`SSHKeyRegistry`, `internal/server/sshkeys.go`):
+  `ssh-keys/k/<fingerprint-id>` is the auth record (one GET by fingerprint at every handshake —
+  no LIST on the auth path) and `ssh-keys/u/<principal>/<fingerprint-id>` is the user's listing
+  entry. Registering writes both (409 + listing rollback on a duplicate fingerprint); deleting
+  frees the fingerprint for re-registration. Principals must be a single path segment.
+- Rights are resolved **at SSH-auth time** by `PrincipalForName` (`internal/server/auth.go`),
+  mode-aware like every other auth path: `none` → the anon-all principal (anyone may register a
+  key; pushes ride the anon rights); `oidc` → the same admission and write/admin rules browser
+  login applies to that email; `token` → the aggregate of the principal's static tokens (a
+  principal whose credentials are gone is denied at lookup). The resolved write flag gates
+  receive-pack in the exec dispatch; the transport receives only the principal NAME.
+- Self-service is `GET|POST|DELETE /api/v1/ssh-keys` (read-gated identity API, `06_api.md`) and
+  the `/keys` page in the SPA: a no-write principal can register a read-only key — its rights
+  are still whatever its principal has, evaluated per connection at auth time.
 - The transport is disabled unless `listen` is set, and disabled in setup-only mode (no engine).
 
 ## 4. Transport seam
@@ -91,25 +98,28 @@ and the per-repo semaphore (`MaxConcurrentPerRepo`) is taken exactly as the HTTP
 then the shared pipeline. `pushPipeline` is the transport-agnostic push core used by both the HTTP
 handler and SSH; HTTP maps pre-pipeline errors onto 4xx/5xx statuses, SSH maps them onto stderr
 text and exit code 1. Sentinel errors (`sshd.ErrNotFound`, `ErrUnavailable`) are the mapping
-vocabulary; max_push_bytes is enforced across the whole request and reported as "pack exceeds
-max_bytes" on the wire (band-2 + unpack ng) over SSH, as 413 over HTTP.
+vocabulary; max_push_bytes is enforced across the whole request: a cap hit in the pack reports
+"pack exceeds max_bytes" and a cap hit in the command section reports "push exceeds max_push_bytes",
+both on the wire (band-2 + unpack ng) over SSH, as 413 over HTTP.
 
 ## 5. Git layer additions
 
 - `Layer.UploadPackSSH` — UploadPack without `--stateless-rpc` (see §2).
-- `Layer.ParsePushRequestStream` — command/options section parse leaving the reader at the pack
-  start (`ParsePushRequest` remains the framed/HTTP form).
 - `Layer.IngestStream` — pack piped straight into `index-pack` (no staging file): index-pack stops
   at the pack trailer, so the feed ends at child exit. `Ingest` (staged) is unchanged for HTTP.
 
 ## 6. Security
 
 - Strictly two verbs; no option-bearing argv; no interactive anything.
-- `MaxSessions` (default 64) caps concurrent exec sessions; each session's git subprocess runs on
-  the blocking pool like HTTP; x/crypto channel windowing bounds output buffering.
+- `MaxSessions` (default 64) caps concurrent exec sessions process-wide; sessions on one
+  connection are additionally capped at 16 (`maxSessionsPerConn`), checked under the same lock
+  that counts them — the cap is per connection, a refused attempt frees its slot, and unrelated
+  connections never block each other. Each session's git subprocess runs on the blocking pool
+  like HTTP; x/crypto channel windowing bounds output buffering.
 - Auth failures log the key fingerprint at warn (scan visibility) and fail the handshake.
 - The SSH listener shares the process drain: sessions started during drain are refused by the
   transport gates; the listener itself closes with the process context.
+
 
 ## 7. Tests
 
