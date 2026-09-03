@@ -44,6 +44,7 @@ export default function App(props) {
               owners
             </A>
             <A href="/api">API</A>
+            <A href="/keys">keys</A>
             <A href="/setup">setup</A>
           </nav>
           <div class="ml-auto flex items-center gap-2">

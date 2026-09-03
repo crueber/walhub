@@ -134,6 +134,13 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		Notifier:  wake,
 	})
 
+	// the SSH key registry backs both the sshd auth lookup and the
+	// /api/v1/ssh-keys surface (17_ssh.md §3); setup-only has no store, so
+	// the keys surface stays down until a valid config boots
+	if apiEnv != nil {
+		apiEnv.SSHKeys = srv.SSHKeyRegistry()
+	}
+
 	// ---- background loops (§10.4 step 6), gated by server.roles ---------------
 	drainCtx, cancelDrain := context.WithCancel(context.Background())
 	defer cancelDrain()

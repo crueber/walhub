@@ -24,7 +24,6 @@
 package sshd
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -63,13 +62,12 @@ type Transport interface {
 	SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
-// KeyEntry is one configured public key: the resolved authorized_keys line
-// plus the principal and flags it grants.
+// KeyEntry is the resolved identity for one public key: the principal and
+// the flags its credential carries.
 type KeyEntry struct {
 	Principal string
 	Write     bool
 	Admin     bool
-	Line      string // authorized_keys line ("ssh-ed25519 AAAA... comment")
 }
 
 // Config is the listener construction input.
@@ -80,7 +78,10 @@ type Config struct {
 	// there (auto-generation keeps zero-config boots whole).
 	HostKey     []byte
 	HostKeyPath string
-	Keys        []KeyEntry
+	// KeyLookup resolves a public-key fingerprint to its principal at auth
+	// time — keys are user-managed in the object store (17_ssh.md §3), so the
+	// lookup is one store GET behind this callback, not config.
+	KeyLookup func(ctx context.Context, fingerprint string) (KeyEntry, error)
 	// MaxSessions bounds concurrent git exec sessions (0 = 64).
 	MaxSessions int
 	Log         *slog.Logger
@@ -93,10 +94,8 @@ type Server struct {
 	tr       Transport
 	log      *slog.Logger
 	signer   gossh.Signer
-	keys     []parsedKey
 	sessions chan struct{}
 	maxSess  int
-	sshCfg   *gossh.ServerConfig
 
 	mu    sync.Mutex
 	ln    net.Listener
@@ -104,14 +103,13 @@ type Server struct {
 	live  map[*gossh.ServerConn]int
 }
 
-type parsedKey struct {
-	entry KeyEntry
-	pub   gossh.PublicKey
-}
-
-// New parses the configured keys and host key; any parse error is fatal at
-// boot (fail closed), not a per-connection surprise.
+// New validates the construction input; the host key is resolved here (a
+// misconfigured key fails at boot), while key lookup stays per-connection
+// (it needs the connection context and hits the object store).
 func New(cfg Config, tr Transport) (*Server, error) {
+	if cfg.KeyLookup == nil {
+		return nil, fmt.Errorf("sshd: KeyLookup is required")
+	}
 	s := &Server{
 		cfg:     cfg,
 		tr:      tr,
@@ -127,20 +125,11 @@ func New(cfg Config, tr Transport) (*Server, error) {
 	if s.log == nil {
 		s.log = slog.Default()
 	}
-	for i, k := range cfg.Keys {
-		pub, _, _, _, err := gossh.ParseAuthorizedKey([]byte(k.Line))
-		if err != nil {
-			return nil, fmt.Errorf("server.ssh.keys[%d]: not a valid authorized_keys line: %w", i, err)
-		}
-		s.keys = append(s.keys, parsedKey{entry: k, pub: pub})
-	}
 	signer, err := hostSigner(cfg)
 	if err != nil {
 		return nil, err
 	}
 	s.signer = signer
-	s.sshCfg = &gossh.ServerConfig{PublicKeyCallback: s.publicKeyCallback}
-	s.sshCfg.AddHostKey(signer)
 	return s, nil
 }
 
@@ -154,32 +143,35 @@ func (s *Server) Addr() net.Addr {
 	return s.ln.Addr()
 }
 
-// publicKeyCallback matches the offered key against the configured keys and
-// grants the principal's flags through Permissions extensions. A non-match
-// ends the handshake with a clean permission-denied (a (nil, nil) return
-// would invite key retries the client cannot satisfy).
-func (s *Server) publicKeyCallback(meta gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
-	for _, k := range s.keys {
-		if bytes.Equal(key.Marshal(), k.pub.Marshal()) {
-			p := k.entry
-			ext := map[string]string{"principal": p.Principal}
-			if p.Write {
-				ext["write"] = "1"
-			}
-			if p.Admin {
-				ext["admin"] = "1"
-			}
-			s.log.Info("ssh key accepted", "principal", p.Principal,
-				"fingerprint", gossh.FingerprintSHA256(key), "remote", meta.RemoteAddr())
-			return &gossh.Permissions{Extensions: ext}, nil
-		}
-	}
-	s.log.Warn("ssh key refused", "fingerprint", gossh.FingerprintSHA256(key), "remote", meta.RemoteAddr())
-	return nil, fmt.Errorf("walhub: unknown public key %s", gossh.FingerprintSHA256(key))
-}
-
 // ListenAndServe blocks until the context is canceled or the listener fails.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	if s.cfg.KeyLookup == nil {
+		return fmt.Errorf("sshd: KeyLookup is required")
+	}
+	sshCfg := &gossh.ServerConfig{
+		PublicKeyCallback: func(meta gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
+			// The key's principal and flags come from the store-backed registry
+			// (17_ssh.md §3): one lookup by fingerprint. An unknown key ends the
+			// handshake with a clean permission-denied.
+			fp := gossh.FingerprintSHA256(key)
+			entry, err := s.cfg.KeyLookup(ctx, fp)
+			if err != nil || entry.Principal == "" {
+				s.log.Warn("ssh key refused", "fingerprint", fp, "remote", meta.RemoteAddr())
+				return nil, fmt.Errorf("walhub: unknown public key %s", fp)
+			}
+			ext := map[string]string{"principal": entry.Principal}
+			if entry.Write {
+				ext["write"] = "1"
+			}
+			if entry.Admin {
+				ext["admin"] = "1"
+			}
+			s.log.Info("ssh key accepted", "principal", entry.Principal, "fingerprint", fp, "remote", meta.RemoteAddr())
+			return &gossh.Permissions{Extensions: ext}, nil
+		},
+	}
+	sshCfg.AddHostKey(s.signer)
+
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("ssh listen %s: %w", s.cfg.Listen, err)
@@ -198,7 +190,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.mu.Unlock()
 	}()
 
-	s.log.Info("ssh listening", "addr", s.cfg.Listen, "keys", len(s.keys))
+	s.log.Info("ssh listening", "addr", s.cfg.Listen)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -207,14 +199,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			}
 			return fmt.Errorf("ssh accept: %w", err)
 		}
-		go s.handleConn(ctx, c)
+		go s.handleConn(ctx, sshCfg, c)
 	}
 }
 
 // handleConn runs one SSH connection: handshake with public-key auth, then
 // serve session channels until the client disconnects.
-func (s *Server) handleConn(ctx context.Context, c net.Conn) {
-	sconn, chans, reqs, err := gossh.NewServerConn(c, s.sshCfg)
+func (s *Server) handleConn(ctx context.Context, sshCfg *gossh.ServerConfig, c net.Conn) {
+	sconn, chans, reqs, err := gossh.NewServerConn(c, sshCfg)
 	if err != nil {
 		s.log.Debug("ssh handshake failed", "remote", c.RemoteAddr(), "err", err)
 		return

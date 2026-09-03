@@ -127,9 +127,6 @@ func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal st
 	if perr != nil {
 		return fmt.Errorf("malformed push request: %w", perr)
 	}
-	if lr.n > int64(s.cfg.Server.MaxPushBytes) {
-		return fmt.Errorf("push exceeds max_push_bytes (%d > %d bytes)", lr.n, s.cfg.Server.MaxPushBytes)
-	}
 	remaining := int64(s.cfg.Server.MaxPushBytes) - lr.n
 	// A pure-delete push sends no pack bytes at all: the client waits for the
 	// report with the channel open, so the reader must never be touched.
@@ -248,24 +245,18 @@ func (g *gitResultWriter) Write(p []byte) (int, error) {
 // resolution order: host_key_env → host_key path → auto-generated ed25519
 // under <data-dir>/ssh/ (persisted, so clients can pin it). Errors are
 // boot-fatal: a configured SSH that cannot come up must not boot silently.
+// Key auth goes through the store-backed registry (sshkeys.go): keys are
+// user-managed via the UI/API, not config.
 func (s *Server) SSH() (*sshd.Server, error) {
 	sc := s.cfg.Server.SSH
 	if sc.Listen == "" || s.engine == nil {
 		return nil, nil
 	}
-	keys := make([]sshd.KeyEntry, 0, len(sc.Keys))
-	for _, k := range sc.Keys {
-		line := k.Key
-		if k.KeyEnv != "" {
-			line = os.Getenv(k.KeyEnv)
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return nil, fmt.Errorf("server.ssh.keys[%q]: no key material (key or a set key_env is required)", k.Principal)
-		}
-		keys = append(keys, sshd.KeyEntry{Principal: k.Principal, Write: k.Write, Admin: k.Admin, Line: line})
+	cfg := sshd.Config{
+		Listen:    sc.Listen,
+		KeyLookup: s.SSHKeyRegistry().LookupByFingerprint,
+		Log:       s.log,
 	}
-	cfg := sshd.Config{Listen: sc.Listen, Keys: keys, Log: s.log}
 	if sc.HostKeyEnv != "" {
 		raw := os.Getenv(sc.HostKeyEnv)
 		if strings.TrimSpace(raw) == "" {
@@ -279,4 +270,10 @@ func (s *Server) SSH() (*sshd.Server, error) {
 		}
 	}
 	return sshd.New(cfg, s)
+}
+
+// SSHKeyRegistry builds the store-backed key registry for this server: the
+// same instance serves the sshd auth lookup and the /api/v1/ssh-keys surface.
+func (s *Server) SSHKeyRegistry() *SSHKeyRegistry {
+	return &SSHKeyRegistry{st: s.store, auth: s.authSvc, log: s.log}
 }

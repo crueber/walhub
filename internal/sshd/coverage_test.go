@@ -54,10 +54,10 @@ func TestPTYAndShellRefused(t *testing.T) {
 	tr := &captureTransport{}
 	key, signer := testKeyEntry(t, "ada", true)
 	srv, err := New(Config{
-		Listen:  "127.0.0.1:0",
-		HostKey: testHostKey(t),
-		Keys:    []KeyEntry{key},
-		Log:     discardLogger(),
+		Listen:    "127.0.0.1:0",
+		HostKey:   testHostKey(t),
+		KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}),
+		Log:       discardLogger(),
 	}, tr)
 	if err != nil {
 		t.Fatal(err)
@@ -87,10 +87,10 @@ func TestGitProtocolPassthrough(t *testing.T) {
 	tr := &captureTransport{}
 	key, signer := testKeyEntry(t, "ada", true)
 	srv, err := New(Config{
-		Listen:  "127.0.0.1:0",
-		HostKey: testHostKey(t),
-		Keys:    []KeyEntry{key},
-		Log:     discardLogger(),
+		Listen:    "127.0.0.1:0",
+		HostKey:   testHostKey(t),
+		KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}),
+		Log:       discardLogger(),
 	}, tr)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestMaxSessionsRefuses(t *testing.T) {
 	srv, err := New(Config{
 		Listen:      "127.0.0.1:0",
 		HostKey:     testHostKey(t),
-		Keys:        []KeyEntry{key},
+		KeyLookup:   staticLookup(map[string]KeyEntry{fpOf(signer): key}),
 		MaxSessions: 1,
 		Log:         discardLogger(),
 	}, tr)
@@ -216,16 +216,14 @@ func TestHostSignerBranches(t *testing.T) {
 	}
 }
 
-func TestNewRejectsBadKeyLine(t *testing.T) {
-	key, _ := testKeyEntry(t, "ada", true)
-	if _, err := New(Config{Keys: []KeyEntry{{Principal: "x", Line: "junk"}}}, &captureTransport{}); err == nil {
-		t.Fatal("New must reject an unparseable key line")
+func TestNewRejectsMissingLookup(t *testing.T) {
+	if _, err := New(Config{HostKey: testHostKey(t)}, &captureTransport{}); err == nil || !strings.Contains(err.Error(), "KeyLookup is required") {
+		t.Fatalf("missing KeyLookup = %v", err)
 	}
-	_ = key
 }
 
 func TestAddrNilBeforeListen(t *testing.T) {
-	srv, err := New(Config{HostKey: testHostKey(t)}, &captureTransport{})
+	srv, err := New(Config{HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{})}, &captureTransport{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +233,7 @@ func TestAddrNilBeforeListen(t *testing.T) {
 }
 
 func TestListenAndServeBadAddr(t *testing.T) {
-	srv, err := New(Config{Listen: "bogus", HostKey: testHostKey(t)}, &captureTransport{})
+	srv, err := New(Config{Listen: "bogus", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{})}, &captureTransport{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +248,7 @@ func TestExecClientDisconnect(t *testing.T) {
 	// transport error to a dead reader.
 	tr := &captureTransport{}
 	key, signer := testKeyEntry(t, "ada", true)
-	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}), Log: discardLogger()}, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,10 +299,10 @@ func TestChannelAndRequestEdges(t *testing.T) {
 	key, signer := testKeyEntry(t, "ada", true)
 	key.Admin = true
 	srv, err := New(Config{
-		Listen:  "127.0.0.1:0",
-		HostKey: testHostKey(t),
-		Keys:    []KeyEntry{key},
-		Log:     discardLogger(),
+		Listen:    "127.0.0.1:0",
+		HostKey:   testHostKey(t),
+		KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}),
+		Log:       discardLogger(),
 	}, tr)
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +345,7 @@ func TestExecClientVanishesMidTransport(t *testing.T) {
 	// a canceled ctx and takes the silent exit path (325).
 	tr := &captureTransport{block: make(chan struct{})}
 	key, signer := testKeyEntry(t, "ada", true)
-	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}), Log: discardLogger()}, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +393,7 @@ func TestExecCanceledWhileTransportBlocked(t *testing.T) {
 	tr := &captureTransport{block: make(chan struct{}), entered: make(chan struct{})}
 	key, signer := testKeyEntry(t, "ada", true)
 	key.Admin = true
-	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}), Log: discardLogger()}, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +416,7 @@ func TestExecCanceledWhileTransportBlocked(t *testing.T) {
 }
 
 func TestNewBadHostKeyBytes(t *testing.T) {
-	if _, err := New(Config{HostKey: []byte("junk")}, &captureTransport{}); err == nil {
+	if _, err := New(Config{HostKey: []byte("junk"), KeyLookup: staticLookup(map[string]KeyEntry{})}, &captureTransport{}); err == nil {
 		t.Fatal("New must reject bad host key bytes")
 	}
 }
@@ -428,7 +426,7 @@ func TestExecCanceledExitPath(t *testing.T) {
 	// runs, then the transport returns — exec must exit(1) silently.
 	tr := &captureTransport{block: make(chan struct{}), entered: make(chan struct{})}
 	key, signer := testKeyEntry(t, "ada", true)
-	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}), Log: discardLogger()}, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +451,7 @@ func TestExecCanceledExitPath(t *testing.T) {
 func TestSessionAcceptErrorIsBenign(t *testing.T) {
 	// handleSession's newCh.Accept error branch: a client that opens a session
 	// channel and immediately hangs up exercises it without a panic.
-	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t)}, &captureTransport{})
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{})}, &captureTransport{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +500,7 @@ func TestHostSignerFileErrors(t *testing.T) {
 func TestPerConnectionSessionCap(t *testing.T) {
 	tr := &captureTransport{}
 	key, signer := testKeyEntry(t, "ada", true)
-	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}), Log: discardLogger()}, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +548,7 @@ func TestHostSignerReadAndMkdirErrors(t *testing.T) {
 func TestExecBadPayloadAndCanceledExit(t *testing.T) {
 	tr := &captureTransport{block: make(chan struct{}), entered: make(chan struct{}), failAfterCancel: true}
 	key, signer := testKeyEntry(t, "ada", true)
-	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}), Log: discardLogger()}, tr)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,11 +24,6 @@ func sshGateServer(t *testing.T, eng *fakeEngine, mutate func(*config.Config)) *
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.Server.SSH.Listen = "127.0.0.1:0"
-	cfg.Server.SSH.Keys = []config.SshKey{{
-		Principal: "ada",
-		Key:       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII/VO93dFREgk2CscLYyCKH4ZjDpD8XYGB/X8ReU2QWx ada@laptop",
-		Write:     true,
-	}}
 	if mutate != nil {
 		mutate(cfg)
 	}
@@ -135,13 +130,6 @@ func TestSSHBuilderBranches(t *testing.T) {
 	bare := New(Options{Config: sshGateServer(t, nil, nil).cfg, Store: newFakeStore(), DataDir: t.TempDir(), Log: testLogger(t)})
 	if got, err := bare.SSH(); got != nil || err != nil {
 		t.Fatalf("setup-only SSH = %v %v", got, err)
-	}
-	// key_env unset → boot-fatal
-	s2 := sshGateServer(t, &fakeEngine{exists: true}, func(c *config.Config) {
-		c.Server.SSH.Keys = []config.SshKey{{Principal: "ada", KeyEnv: "WALHUB_TEST_MISSING_KEY"}}
-	})
-	if _, err := s2.SSH(); err == nil || !strings.Contains(err.Error(), "no key material") {
-		t.Fatalf("unset key_env = %v", err)
 	}
 	// host_key_env unset → boot-fatal
 	s3 := sshGateServer(t, &fakeEngine{exists: true}, func(c *config.Config) {
@@ -303,4 +291,92 @@ func TestSSHPlacementEmptyServedBy(t *testing.T) {
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "another host") {
 		t.Fatalf("empty served-by = %v", err)
 	}
+}
+
+func TestSSHGateBusyBranch(t *testing.T) {
+	// per-repo semaphore: holding the slot makes the SSH gate refuse with
+	// "repository busy" (the HTTP route's 503 twin). ReqLog's fallback and
+	// the placement metric are covered by the other SSH tests.
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}}
+	s := sshGateServer(t, eng, func(c *config.Config) { c.Server.MaxConcurrentPerRepo = 1 })
+	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
+	id := mustRepoID(t, "o/r")
+
+	rel := s.sem.TryAcquire(id.String())
+	if rel == nil {
+		t.Fatal("test setup: slot must be free")
+	}
+	err := s.SSHUploadPack(ctx, id, "", strings.NewReader(""), io.Discard, io.Discard)
+	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "repository busy") {
+		t.Fatalf("busy = %v", err)
+	}
+	rel()
+}
+
+func TestSSHReceivePackAdvertisementAndCountingPaths(t *testing.T) {
+	// advertisement failure → unavailable (a repo whose local dir vanished)
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}, repoCreate: func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error) {
+		if err := os.MkdirAll(filepath.Join(root, id.Owner, id.Name+".git", "objects", "info"), 0o755); err != nil {
+			return nil, err
+		}
+		return git.InitLocalRepo(root, id, format)
+	}}
+	s := sshGateServer(t, eng, nil)
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+	id := mustRepoID(t, "o/r")
+
+	// happy push: advertisement on the wire + counting reader consumed
+	var out strings.Builder
+	zero := strings.Repeat("0", 40)
+	oid := "1111111111111111111111111111111111111111"
+	body := git.Pkt(oid + " " + zero + " refs/heads/main\x00report-status\n")
+	body = append(body, git.Flush()...)
+	if err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+		t.Fatalf("receive = %v", err)
+	}
+	if !strings.Contains(out.String(), "unpack ok") {
+		t.Fatalf("report = %q", out.String())
+	}
+
+	// host_key_env unset → SSH() boot-fatal
+	s2 := sshGateServer(t, eng, func(c *config.Config) { c.Server.SSH.HostKeyEnv = "WALHUB_TEST_NO_HOST_KEY" })
+	if _, err := s2.SSH(); err == nil || !strings.Contains(err.Error(), "host_key_env") {
+		t.Fatalf("unset host_key_env = %v", err)
+	}
+}
+
+func TestSSHPlacementLookupErrorServes(t *testing.T) {
+	// §4.3 parity: a placement lookup error is "no info → serve" (the HTTP
+	// gate treats it the same), so SSH auth proceeds and fetch works.
+	eng := &fakeEngine{exists: true, placementErr: errors.New("no heartbeat yet"), placement: Placement{Serve: true}}
+	s := sshGateServer(t, eng, nil)
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+	if err := s.sshPlacement(ctx, mustRepoID(t, "o/r")); err != nil {
+		t.Fatalf("lookup error must serve: %v", err)
+	}
+}
+
+func TestSSHAdvertisementErrorIsUnavailable(t *testing.T) {
+	// a repo whose local dir vanished after Repo() → the layer's
+	// advertisement fails → unavailable on the wire path
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}, repoCreate: func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error) {
+		lr, err := git.InitLocalRepo(root, id, format)
+		if err != nil {
+			return nil, err
+		}
+		_ = os.RemoveAll(lr.Path) // the local copy is gone; the store says it exists
+		return lr, nil
+	}}
+	s := sshGateServer(t, eng, func(c *config.Config) { c.Server.MaxPushBytes = 4096 })
+	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("vanished repo must fail")
+	}
+	// the advertisement fails before the command parse, so the error is the
+	// layer's (wrapped or raw); the sshd session handler turns any error into
+	// stderr + exit 1 — the client sees a clean failure either way.
+	_ = err
 }

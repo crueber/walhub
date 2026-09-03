@@ -24,6 +24,7 @@ type fakeEngine struct {
 	pubPerRef     []wal.RefResult
 	syncErr       error
 	repoErr       error
+	placementErr  error
 	repoCreate    func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error)
 }
 
@@ -64,6 +65,9 @@ func (f *fakeEngine) Publish(ctx context.Context, id git.RepoId, req *git.PushRe
 }
 
 func (f *fakeEngine) Placement(ctx context.Context, id git.RepoId) (Placement, error) {
+	if f.placementErr != nil {
+		return Placement{}, f.placementErr
+	}
 	return f.placement, nil
 }
 

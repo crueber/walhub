@@ -76,8 +76,7 @@ func testKeyEntry(t *testing.T, principal string, write bool) (KeyEntry, gossh.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	line := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(signer.PublicKey())))
-	return KeyEntry{Principal: principal, Write: write, Line: line}, signer
+	return KeyEntry{Principal: principal, Write: write}, signer
 }
 
 func testHostKey(t *testing.T) []byte {
@@ -237,10 +236,10 @@ func TestExecDispatchAndAuth(t *testing.T) {
 	key, signer := testKeyEntry(t, "ada", true)
 	roKey, roSigner := testKeyEntry(t, "robot", false)
 	addr := startTestServer(t, tr, Config{
-		Listen:  "127.0.0.1:0",
-		HostKey: testHostKey(t),
-		Keys:    []KeyEntry{key, roKey},
-		Log:     slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Listen:    "127.0.0.1:0",
+		HostKey:   testHostKey(t),
+		KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key, fpOf(roSigner): roKey}),
+		Log:       slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	cl := dialTestClient(t, addr, signer)
 
@@ -286,13 +285,12 @@ func TestExecDispatchAndAuth(t *testing.T) {
 
 func TestUnknownKeyRefused(t *testing.T) {
 	tr := &testTransport{}
-	key, _ := testKeyEntry(t, "ada", true)
 	otherSigner := testKeySigner(t)
 	addr := startTestServer(t, tr, Config{
-		Listen:  "127.0.0.1:0",
-		HostKey: testHostKey(t),
-		Keys:    []KeyEntry{key},
-		Log:     slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Listen:    "127.0.0.1:0",
+		HostKey:   testHostKey(t),
+		KeyLookup: staticLookup(map[string]KeyEntry{}), // no keys registered
+		Log:       slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	_, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
 		User:            "git",
@@ -312,10 +310,10 @@ func TestTransportErrorsMapToStderr(t *testing.T) {
 	tr := &testTransport{uploadErr: fmt.Errorf("%w: acme/x", ErrNotFound)}
 	key, signer := testKeyEntry(t, "ada", true)
 	addr := startTestServer(t, tr, Config{
-		Listen:  "127.0.0.1:0",
-		HostKey: testHostKey(t),
-		Keys:    []KeyEntry{key},
-		Log:     slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Listen:    "127.0.0.1:0",
+		HostKey:   testHostKey(t),
+		KeyLookup: staticLookup(map[string]KeyEntry{fpOf(signer): key}),
+		Log:       slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	cl := dialTestClient(t, addr, signer)
 	_, errText, code := runExec(t, cl, "git-upload-pack '/acme/x.git'")
@@ -360,7 +358,7 @@ func TestMaxSessions(t *testing.T) {
 	addr := startTestServer(t, tr, Config{
 		Listen:      "127.0.0.1:0",
 		HostKey:     testHostKey(t),
-		Keys:        []KeyEntry{key},
+		KeyLookup:   staticLookup(map[string]KeyEntry{fpOf(signer): key}),
 		MaxSessions: -1, // normalizes to the 64 default; this test only proves the path runs
 		Log:         slog.New(slog.DiscardHandler),
 	})
@@ -382,4 +380,20 @@ func testKeySigner(t *testing.T) gossh.Signer {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// fpOf is the fingerprint the sshd auth callback matches on.
+func fpOf(signer gossh.Signer) string {
+	return gossh.FingerprintSHA256(signer.PublicKey())
+}
+
+// staticLookup is the store registry's stand-in for these unit tests: it
+// resolves the fingerprints of the given signers to their entries.
+func staticLookup(m map[string]KeyEntry) func(context.Context, string) (KeyEntry, error) {
+	return func(_ context.Context, fingerprint string) (KeyEntry, error) {
+		if e, ok := m[fingerprint]; ok {
+			return e, nil
+		}
+		return KeyEntry{}, errors.New("unknown key")
+	}
 }
