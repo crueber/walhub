@@ -93,6 +93,14 @@ type ingestFeed struct {
 	started  time.Time
 }
 
+// NewMaxBytesReader bounds a stream at max bytes: reads past the cap fail
+// with ErrMaxBytes (sticky). The SSH receive path wraps the client channel
+// with it — max_push_bytes is enforced across the whole request (17_ssh.md
+// §5), and the same ErrMaxBytes drives the "pack exceeds max_bytes" refusal.
+func NewMaxBytesReader(r io.Reader, max int64) io.Reader {
+	return newCapReader(r, max)
+}
+
 // capReader enforces max_bytes while streaming; once crossed, every Read
 // fails with ErrMaxBytes so index-pack aborts and the caller maps the cause.
 type capReader struct {
@@ -214,6 +222,7 @@ func (l *Layer) ingestFed(ctx context.Context, repo *LocalRepo, feed ingestFeed,
 				runErr = rerr
 			}
 			<-feedDone
+			stderr = bound.String()
 			return runErr
 		}
 		// Stream mode (IngestStream): index-pack stops at the pack trailer and
@@ -227,6 +236,7 @@ func (l *Layer) ingestFed(ctx context.Context, repo *LocalRepo, feed ingestFeed,
 			}
 		}()
 		runErr = cmd.Run()
+		stderr = bound.String()
 		return runErr
 	})
 	if poolErr != nil || runErr != nil {

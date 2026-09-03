@@ -23,6 +23,7 @@ type fakeEngine struct {
 	lastPrincipal string
 	pubPerRef     []wal.RefResult
 	syncErr       error
+	repoErr       error
 	repoCreate    func(root string, id git.RepoId, format git.ObjectFormat) (*git.LocalRepo, error)
 }
 
@@ -38,6 +39,9 @@ func (f *fakeEngine) Sync(ctx context.Context, id git.RepoId, level wal.SyncLeve
 }
 
 func (f *fakeEngine) Repo(ctx context.Context, id git.RepoId, create bool, format git.ObjectFormat) (*git.LocalRepo, error) {
+	if f.repoErr != nil {
+		return nil, f.repoErr
+	}
 	if !f.exists && !create {
 		return nil, wal.ErrNotFound(id.String())
 	}

@@ -42,7 +42,13 @@ func hostSigner(cfg Config) (gossh.Signer, error) {
 		return s, nil
 	}
 	if cfg.HostKeyPath != "" {
-		if raw, err := os.ReadFile(cfg.HostKeyPath); err == nil {
+		raw, rerr := os.ReadFile(cfg.HostKeyPath)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			// A configured but unreadable host key must fail the boot —
+			// silently regenerating would break every client's TOFU pin.
+			return nil, fmt.Errorf("server.ssh host key %s: %w", cfg.HostKeyPath, rerr)
+		}
+		if rerr == nil {
 			s, err := gossh.ParsePrivateKey(raw)
 			if err != nil {
 				return nil, fmt.Errorf("server.ssh host key %s: %w", cfg.HostKeyPath, err)
@@ -58,18 +64,14 @@ func hostSigner(cfg Config) (gossh.Signer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("server.ssh host key marshal: %w", err)
 		}
-		raw := pem.EncodeToMemory(block)
+		genRaw := pem.EncodeToMemory(block)
 		if err := os.MkdirAll(filepath.Dir(cfg.HostKeyPath), 0o700); err != nil {
 			return nil, fmt.Errorf("server.ssh host key dir: %w", err)
 		}
-		if err := os.WriteFile(cfg.HostKeyPath, raw, 0o600); err != nil {
+		if err := os.WriteFile(cfg.HostKeyPath, genRaw, 0o600); err != nil {
 			return nil, fmt.Errorf("server.ssh host key write: %w", err)
 		}
-		s, err := gossh.ParsePrivateKey(raw)
-		if err != nil {
-			return nil, fmt.Errorf("server.ssh host key %s: %w", cfg.HostKeyPath, err)
-		}
-		return s, nil
+		return gossh.ParsePrivateKey(genRaw)
 	}
 	// No path configured at all: ephemeral in-memory key. Clients will see a
 	// new host key per boot — acceptable for tests, discouraged in production

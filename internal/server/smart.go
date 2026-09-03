@@ -428,7 +428,7 @@ func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git
 		pack = bytes.NewReader(req.Pack)
 	}
 	out := &gitResultWriter{w: w}
-	_ = s.pushPipeline(r.Context(), id, p, repo, req, pack, out)
+	_ = s.pushPipeline(r.Context(), id, p, repo, req, pack, int64(s.cfg.Server.MaxPushBytes), out)
 }
 
 // band2Failure answers a failed receive-pack the §4.3 way: the band-2

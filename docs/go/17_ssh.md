@@ -85,11 +85,14 @@ type Transport interface {
 }
 ```
 
-Implemented by `internal/server` (`bind_ssh.go`): gates first (drain §12, placement §4.3 — a repo
-not served here is refused before any sync), then the shared pipeline. `pushPipeline` is the
-transport-agnostic push core used by both the HTTP handler and SSH; HTTP maps pre-pipeline errors
-onto 4xx/5xx statuses, SSH maps them onto stderr text and exit code 1. Sentinel errors
-(`sshd.ErrNotFound`, `ErrUnavailable`, `ErrDenied`) are the mapping vocabulary.
+Implemented by `internal/server` (`bind_ssh.go`): gates first with HTTP parity — drain refuses at
+phase 2 only (§12), placement serves only `pl.Serve` with no-info-serves on lookup errors (§4.3),
+and the per-repo semaphore (`MaxConcurrentPerRepo`) is taken exactly as the HTTP route takes it —
+then the shared pipeline. `pushPipeline` is the transport-agnostic push core used by both the HTTP
+handler and SSH; HTTP maps pre-pipeline errors onto 4xx/5xx statuses, SSH maps them onto stderr
+text and exit code 1. Sentinel errors (`sshd.ErrNotFound`, `ErrUnavailable`) are the mapping
+vocabulary; max_push_bytes is enforced across the whole request and reported as "pack exceeds
+max_bytes" on the wire (band-2 + unpack ng) over SSH, as 413 over HTTP.
 
 ## 5. Git layer additions
 

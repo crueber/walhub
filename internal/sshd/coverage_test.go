@@ -6,6 +6,7 @@ package sshd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,15 +18,17 @@ import (
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/git"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // execCapture runs a command and records what the transport received.
 type captureTransport struct {
-	protos  []string
-	block   chan struct{}
-	entered chan struct{}
+	protos          []string
+	block           chan struct{}
+	entered         chan struct{}
+	failAfterCancel bool
 }
 
 func (c *captureTransport) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -35,6 +38,9 @@ func (c *captureTransport) SSHUploadPack(ctx context.Context, id git.RepoId, pro
 	}
 	if c.block != nil {
 		<-c.block
+	}
+	if c.failAfterCancel && ctx.Err() != nil {
+		return errors.New("canceled")
 	}
 	fmt.Fprint(stdout, "0000")
 	return nil
@@ -460,4 +466,120 @@ func TestSessionAcceptErrorIsBenign(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close() // raw disconnect: handshake error path in handleConn
+}
+
+func TestHostSignerFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	// a garbage host key file → parse error, never regeneration
+	bad := filepath.Join(dir, "bad")
+	if err := os.WriteFile(bad, []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostSigner(Config{HostKeyPath: bad}); err == nil || !strings.Contains(err.Error(), bad) {
+		t.Fatalf("garbage file = %v", err)
+	}
+	// an unwritable directory → generation persist fails
+	ro := filepath.Join(dir, "ro")
+	if err := os.Mkdir(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostSigner(Config{HostKeyPath: filepath.Join(ro, "hostkey")}); err == nil {
+		t.Fatal("unwritable dir must fail")
+	}
+	// a read-only directory with the key missing → write fails
+	wr := filepath.Join(dir, "wr")
+	if err := os.Mkdir(wr, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(wr, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostSigner(Config{HostKeyPath: filepath.Join(wr, "hostkey")}); err == nil {
+		t.Fatal("read-only dir must fail the write")
+	}
+}
+
+func TestPerConnectionSessionCap(t *testing.T) {
+	tr := &captureTransport{}
+	key, signer := testKeyEntry(t, "ada", true)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = srv.ListenAndServe(ctx) }()
+	waitAddr(t, srv)
+	cl := dialTestClient(t, srv.Addr().String(), signer)
+
+	// 16 session channels open and park (no exec); the 17th is rejected.
+	opened := 0
+	var sessions []*gossh.Session
+	for i := 0; i < 17; i++ {
+		sess, err := cl.NewSession()
+		if err != nil {
+			break // the 17th open fails (channel rejected)
+		}
+		sessions = append(sessions, sess)
+		opened++
+	}
+	if opened != 16 {
+		t.Fatalf("opened = %d sessions, want exactly 16 then a refusal", opened)
+	}
+	for _, s := range sessions {
+		s.Close()
+	}
+}
+
+func TestHostSignerReadAndMkdirErrors(t *testing.T) {
+	dir := t.TempDir()
+	// HostKeyPath is a DIRECTORY: os.ReadFile → EISDIR (not NotExist) → fatal
+	if _, err := hostSigner(Config{HostKeyPath: dir}); err == nil || !strings.Contains(err.Error(), dir) {
+		t.Fatalf("directory host key path = %v", err)
+	}
+	// HostKeyPath under a FILE: MkdirAll fails
+	fileAsDir := filepath.Join(dir, "file")
+	if err := os.WriteFile(fileAsDir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostSigner(Config{HostKeyPath: filepath.Join(fileAsDir, "hostkey")}); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("read error under a file = %v", err)
+	}
+}
+
+func TestExecBadPayloadAndCanceledExit(t *testing.T) {
+	tr := &captureTransport{block: make(chan struct{}), entered: make(chan struct{}), failAfterCancel: true}
+	key, signer := testKeyEntry(t, "ada", true)
+	srv, err := New(Config{Listen: "127.0.0.1:0", HostKey: testHostKey(t), Keys: []KeyEntry{key}, Log: discardLogger()}, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = srv.ListenAndServe(ctx) }()
+	waitAddr(t, srv)
+	cl := dialTestClient(t, srv.Addr().String(), signer)
+
+	// malformed exec payload → request replied false
+	sess, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := sess.SendRequest("exec", true, []byte{0xff, 0xff, 0xff, 0xff})
+	if err != nil || ok {
+		t.Fatalf("bad exec payload = ok %v err %v", ok, err)
+	}
+	sess.Close()
+
+	// transport erroring after the ctx cancels: exec takes the silent exit
+	sess2, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		<-tr.entered
+		cancel()
+	}()
+	_ = sess2.Run("git-upload-pack '/a/b.git'")
+	close(tr.block)
 }

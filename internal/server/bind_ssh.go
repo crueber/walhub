@@ -8,7 +8,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,32 +27,53 @@ import (
 var (
 	errPushNotFound    = sshd.ErrNotFound
 	errPushUnavailable = sshd.ErrUnavailable
-	errPushTooLarge    = errors.New("push exceeds max_push_bytes")
 )
 
-// sshPlacement applies the §4.3 placement gate: a repo not served here is
-// refused before any sync work (HTTP answers 503; SSH reports unavailable).
+// sshPlacement applies the §4.3 placement gate with HTTP parity: no
+// placement info → serve; refuse unless pl.Serve (a Maintain-only host does
+// not serve object work over SSH any more than over HTTP).
 func (s *Server) sshPlacement(ctx context.Context, id git.RepoId) error {
 	pl, err := s.engine.Placement(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errPushUnavailable, err)
+		return nil // no placement info → serve (same as HTTP placementOK)
 	}
-	if !pl.Serve && !pl.Maintain {
-		return fmt.Errorf("%w: %s is served by %s; retry shortly",
-			errPushUnavailable, id.String(), pl.ServedBy)
+	if pl.Serve {
+		return nil
 	}
-	return nil
+	host := pl.ServedBy
+	if host == "" {
+		host = "another host"
+	}
+	s.metrics.Counter("walgit_not_served_here_total", "requests refused by placement").
+		Inc("service", "ssh")
+	return fmt.Errorf("%w: %s is served by %s; retry shortly", errPushUnavailable, id.String(), host)
+}
+
+// sshGate applies the shared transport gates: new work is refused at drain
+// phase 2 (HTTP serves through phase 1, §12) and the per-repo semaphore caps
+// concurrent git work exactly as the HTTP route does.
+func (s *Server) sshGate(ctx context.Context, id git.RepoId) (func(), error) {
+	if s.drain.Phase2() {
+		return nil, fmt.Errorf("%w: draining; retry shortly", errPushUnavailable)
+	}
+	if err := s.sshPlacement(ctx, id); err != nil {
+		return nil, err
+	}
+	rel := s.sem.TryAcquire(id.String())
+	if rel == nil {
+		return nil, fmt.Errorf("%w: repository busy", errPushUnavailable)
+	}
+	return rel, nil
 }
 
 // SSHUploadPack implements sshd.Transport: gates → sync → open → the git
 // layer's upload-pack streaming (protocol v0 or v2 via GIT_PROTOCOL).
 func (s *Server) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
-	if s.drain.Draining() {
-		return fmt.Errorf("%w: draining; retry shortly", errPushUnavailable)
-	}
-	if err := s.sshPlacement(ctx, id); err != nil {
+	rel, err := s.sshGate(ctx, id)
+	if err != nil {
 		return err
 	}
+	defer rel()
 	repo, err := s.uploadPackPrepare(ctx, id)
 	if err != nil {
 		return err
@@ -67,12 +87,11 @@ func (s *Server) SSHUploadPack(ctx context.Context, id git.RepoId, protocol stri
 // without body framing: git send-pack never closes its side before the
 // report, so nothing here reads the channel to EOF.
 func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error {
-	if s.drain.Draining() {
-		return fmt.Errorf("%w: draining; retry shortly", errPushUnavailable)
-	}
-	if err := s.sshPlacement(ctx, id); err != nil {
+	rel, err := s.sshGate(ctx, id)
+	if err != nil {
 		return err
 	}
+	defer rel()
 	p := auth.Principal{Name: principal}
 
 	create := s.cfg.Server.AutoCreateOnPush || s.engine.AutoCreate(ctx, id)
@@ -99,14 +118,19 @@ func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal st
 	}
 	s.log.Debug("ssh receive: advertisement on the wire", "repo", id.String())
 
-	// The limit caps the whole request (commands + pack); the pack itself is
-	// re-capped inside IngestStream.
-	lr := io.LimitReader(stdin, int64(s.cfg.Server.MaxPushBytes)+1)
+	// The cap covers the whole request (commands + pack): a counting reader
+	// tracks consumption, the parse is bounded by it, and the pack's remaining
+	// allowance is what IngestStream enforces (17_ssh.md §5).
+	lr := &countingReader{r: stdin, max: int64(s.cfg.Server.MaxPushBytes)}
 
 	req, packReader, perr := s.layer.ParsePushRequestStream(repo, lr)
 	if perr != nil {
 		return fmt.Errorf("malformed push request: %w", perr)
 	}
+	if lr.n > int64(s.cfg.Server.MaxPushBytes) {
+		return fmt.Errorf("push exceeds max_push_bytes (%d > %d bytes)", lr.n, s.cfg.Server.MaxPushBytes)
+	}
+	remaining := int64(s.cfg.Server.MaxPushBytes) - lr.n
 	// A pure-delete push sends no pack bytes at all: the client waits for the
 	// report with the channel open, so the reader must never be touched.
 	allDeletes := true
@@ -118,9 +142,11 @@ func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal st
 	}
 	var pack io.Reader
 	if !allDeletes {
+		// IngestStream enforces the remaining allowance: a pack over it fails
+		// with ErrMaxBytes → "pack exceeds max_bytes" on the wire (§5).
 		pack = packReader
 	}
-	return s.pushPipeline(ctx, id, p, repo, req, pack, stdout)
+	return s.pushPipeline(ctx, id, p, repo, req, pack, remaining, stdout)
 }
 
 // uploadPackPrepare resolves a repo to Serve level for upload-pack, mapping
@@ -146,10 +172,10 @@ func (s *Server) uploadPackPrepare(ctx context.Context, id git.RepoId) (*git.Loc
 // pack, check connectivity, publish to the WAL, and write the report-status
 // result to out. Mid-pipeline refusals are git-wire responses (nil error);
 // HTTP (receivePackLocal §3.3) and SSH (§17) both land here.
-func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Principal, repo *git.LocalRepo, req *git.PushRequest, pack io.Reader, out io.Writer) error {
+func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Principal, repo *git.LocalRepo, req *git.PushRequest, pack io.Reader, packMax int64, out io.Writer) error {
 	if pack != nil {
 		if _, ierr := s.layer.IngestStream(ctx, repo, pack,
-			int64(s.cfg.Server.MaxPushBytes), req.Has("thin-pack"), true); ierr != nil {
+			packMax, req.Has("thin-pack"), true); ierr != nil {
 			band2Failure(out, req, "pack rejected: "+ierr.Error())
 			return nil
 		}
@@ -181,6 +207,24 @@ func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Princip
 	}
 	_, _ = out.Write(report.EncodeReport())
 	return nil
+}
+
+// countingReader tracks how many bytes the request has consumed; the cap is
+// checked by the caller after the command section (the pack's allowance goes
+// to IngestStream, whose cap fires with "pack exceeds max_bytes" on the wire).
+type countingReader struct {
+	r   io.Reader
+	n   int64
+	max int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	if c.max > 0 && c.n >= c.max {
+		return 0, git.ErrMaxBytes
+	}
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // gitResultWriter emits the §4.1 git headers and the 200 status on the first

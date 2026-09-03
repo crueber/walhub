@@ -5,10 +5,12 @@ package server
 // construction branches, against the fake engine.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,13 +66,21 @@ func TestSSHTransportDrainGate(t *testing.T) {
 	s := sshGateServer(t, &fakeEngine{exists: true, placement: Placement{Serve: true}}, nil)
 	drainCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s.Drain().Begin1(drainCtx, context.Background())
+	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
 
-	err := s.SSHUploadPack(context.Background(), mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard)
+	// phase 1: HTTP keeps serving — SSH must too (§12 parity)
+	s.Drain().Begin1(drainCtx, context.Background())
+	if err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard); errors.Is(err, sshd.ErrUnavailable) {
+		t.Fatalf("phase-1 upload must still serve: %v", err)
+	}
+
+	// phase 2: new git work refused on both transports
+	s.Drain().Begin2()
+	err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "draining") {
 		t.Fatalf("drained upload = %v", err)
 	}
-	err = s.SSHReceivePack(context.Background(), mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard)
+	err = s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "draining") {
 		t.Fatalf("drained receive = %v", err)
 	}
@@ -149,5 +159,148 @@ func TestSSHBuilderBranches(t *testing.T) {
 	// auto host key persisted under the data dir
 	if _, err := os.Stat(filepath.Join(s4.dataDir, "ssh", "ed25519_host_key")); err != nil {
 		t.Fatalf("auto host key missing: %v", err)
+	}
+}
+
+func TestSSHReceivePackOverMaxPushBytes(t *testing.T) {
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}}
+	s := sshGateServer(t, eng, func(c *config.Config) {
+		c.Server.MaxPushBytes = 200 // commands parse; the pack exceeds it
+	})
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+
+	// a real pack larger than max_push_bytes: commands parse, IngestStream's
+	// cap fails -> band-2 + unpack-ng report on stdout, nil err.
+	fixture := t.TempDir()
+	mk := func(argv ...string) {
+		cmd := exec.Command("git", argv...)
+		cmd.Dir = fixture
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if o, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(argv, " "), err, o)
+		}
+	}
+	mk("init", "-q", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(fixture, "big.txt"), bytes.Repeat([]byte("over the cap "), 200), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mk("add", ".")
+	mk("commit", "-q", "-m", "big")
+	var pack bytes.Buffer
+	packCmd := exec.Command("git", "pack-objects", "--stdout", "--revs")
+	packCmd.Dir = fixture
+	packCmd.Stdin = strings.NewReader("HEAD\n")
+	packCmd.Stdout = &pack
+	if err := packCmd.Run(); err != nil {
+		t.Fatalf("pack-objects: %v", err)
+	}
+	if pack.Len() <= 200 {
+		t.Fatalf("fixture pack too small: %d", pack.Len())
+	}
+
+	zero := strings.Repeat("0", 40)
+	oid := "1111111111111111111111111111111111111111"
+	body := git.Pkt(zero + " " + oid + " refs/heads/main\x00report-status side-band-64k\n")
+	body = append(body, git.Flush()...)
+	body = append(body, pack.Bytes()...)
+
+	var out strings.Builder
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+		t.Fatalf("over-cap receive must report on the wire, not error: %v", err)
+	}
+	wire := out.String()
+	if !strings.Contains(wire, "pack exceeds max_bytes") {
+		t.Fatalf("band-2 must name the cap; wire (%d bytes) = %q", len(wire), wire)
+	}
+	if !strings.Contains(wire, "unpack ng") {
+		t.Fatalf("report-status trailer missing: %q", wire)
+	}
+	if eng.published != 0 {
+		t.Fatalf("over-cap push must not publish; publishes = %d", eng.published)
+	}
+}
+
+func TestSSHPlacementMaintainOnlyRefused(t *testing.T) {
+	// split placement: this host MAINTAINS the repo but does not SERVE it —
+	// the HTTP routes 503 here, and SSH must refuse identically (§4.3).
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: false, Maintain: true, ServedBy: "elsewhere"}}
+	s := sshGateServer(t, eng, nil)
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+
+	if err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
+		t.Fatalf("maintain-only fetch = %v, want unavailable", err)
+	}
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
+		t.Fatalf("maintain-only push = %v, want unavailable", err)
+	}
+}
+
+func TestSSHCountingReaderCap(t *testing.T) {
+	// a counting reader errors once the consumed total reaches the cap
+	cr := &countingReader{r: strings.NewReader("abcdef"), max: 2}
+	for i := 0; i < 2; i++ {
+		if _, err := cr.Read(make([]byte, 1)); err != nil {
+			t.Fatalf("in-cap read %d: %v", i, err)
+		}
+	}
+	_, err := cr.Read(make([]byte, 1))
+	if err == nil || !errors.Is(err, git.ErrMaxBytes) {
+		t.Fatalf("past-cap read = %v", err)
+	}
+	// sticky
+	if _, err := cr.Read(make([]byte, 1)); !errors.Is(err, git.ErrMaxBytes) {
+		t.Fatalf("sticky read = %v", err)
+	}
+}
+
+func TestSSHReceivePackMalformedCommand(t *testing.T) {
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}}
+	s := sshGateServer(t, eng, nil)
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader("zzzz"), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "malformed push request") {
+		t.Fatalf("malformed command = %v", err)
+	}
+}
+
+func TestSSHGateSemAndRepoErr(t *testing.T) {
+	// per-repo semaphore busy → unavailable ("repository busy")
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: true}}
+	s := sshGateServer(t, eng, func(c *config.Config) { c.Server.MaxConcurrentPerRepo = 1 })
+	root := t.TempDir()
+	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
+	id := mustRepoID(t, "o/r")
+
+	rel := s.sem.TryAcquire(id.String())
+	if rel == nil {
+		t.Fatal("test setup: slot must be free")
+	}
+	if err := s.SSHUploadPack(ctx, id, "", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "repository busy") {
+		t.Fatalf("busy upload = %v", err)
+	}
+	rel()
+
+	// Repo open error (non-not-found) → unavailable
+	eng.repoErr = errors.New("cache dir gone")
+	if err := s.SSHUploadPack(ctx, id, "", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
+		t.Fatalf("repo error = %v", err)
+	}
+	err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(""), io.Discard, io.Discard)
+	if !errors.Is(err, sshd.ErrUnavailable) {
+		t.Fatalf("receive repo error = %v", err)
+	}
+}
+
+func TestSSHPlacementEmptyServedBy(t *testing.T) {
+	eng := &fakeEngine{exists: true, placement: Placement{Serve: false, ServedBy: ""}}
+	s := sshGateServer(t, eng, nil)
+	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
+	err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard)
+	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "another host") {
+		t.Fatalf("empty served-by = %v", err)
 	}
 }

@@ -42,7 +42,6 @@ import (
 var (
 	ErrNotFound    = errors.New("repository not found")
 	ErrUnavailable = errors.New("service unavailable")
-	ErrDenied      = errors.New("access denied")
 )
 
 // Principal is the authenticated identity for one connection, resolved from
@@ -102,6 +101,7 @@ type Server struct {
 	mu    sync.Mutex
 	ln    net.Listener
 	conns map[gossh.Conn]struct{}
+	live  map[*gossh.ServerConn]int
 }
 
 type parsedKey struct {
@@ -117,6 +117,7 @@ func New(cfg Config, tr Transport) (*Server, error) {
 		tr:      tr,
 		log:     cfg.Log,
 		conns:   map[gossh.Conn]struct{}{},
+		live:    map[*gossh.ServerConn]int{},
 		maxSess: cfg.MaxSessions,
 	}
 	if s.maxSess <= 0 {
@@ -220,10 +221,12 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	}
 	s.mu.Lock()
 	s.conns[sconn] = struct{}{}
+	s.live[sconn] = 0
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		delete(s.conns, sconn)
+		delete(s.live, sconn)
 		s.mu.Unlock()
 		sconn.Close()
 	}()
@@ -239,13 +242,48 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	}
 }
 
+// maxSessionsPerConn bounds live session channels on one connection: an
+// authenticated principal must not farm parked goroutines via never-exec'd
+// channels (17_ssh.md §6).
+const maxSessionsPerConn = 16
+
+// liveSessions reports the total number of open session channels.
+func (s *Server) liveSessions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, v := range s.live {
+		n += v
+	}
+	return n
+}
+
 // handleSession runs one session channel: exec requests only. PTY, shell,
 // and subsystem requests are refused — this host runs git, not shells.
 func (s *Server) handleSession(ctx context.Context, sconn *gossh.ServerConn, newCh gossh.NewChannel) {
-	ch, reqs, err := newCh.Accept()
-	if err != nil {
+	if s.liveSessions() >= maxSessionsPerConn {
+		_ = newCh.Reject(gossh.Prohibited, "walhub: too many sessions on this connection")
 		return
 	}
+	s.mu.Lock()
+	if s.live[sconn]++; s.live[sconn] > maxSessionsPerConn {
+		s.mu.Unlock()
+		_ = newCh.Reject(gossh.Prohibited, "walhub: too many sessions on this connection")
+		return
+	}
+	s.mu.Unlock()
+	ch, reqs, err := newCh.Accept()
+	if err != nil {
+		s.mu.Lock()
+		s.live[sconn]--
+		s.mu.Unlock()
+		return
+	}
+	defer func() {
+		s.mu.Lock()
+		s.live[sconn]--
+		s.mu.Unlock()
+	}()
 	defer ch.Close()
 
 	var principal Principal
