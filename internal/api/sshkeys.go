@@ -96,6 +96,8 @@ func (h *handlers) sshKeysAdd(w http.ResponseWriter, r *http.Request) {
 			writePlain(w, http.StatusConflict, err.Error())
 		case errors.Is(err, ErrKeyBadKeyLine), errors.Is(err, ErrKeyBadPrincipal):
 			writePlain(w, http.StatusBadRequest, err.Error())
+		default:
+			writePlain(w, http.StatusInternalServerError, err.Error())
 		}
 		return
 	}

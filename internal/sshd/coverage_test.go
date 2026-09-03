@@ -275,10 +275,20 @@ func TestSessionCapIsPerConnection(t *testing.T) {
 	// Finish one session, then the same connection must admit a new one: the
 	// refused attempt above must not have leaked its increment.
 	tr.releaseOne()
-	time.Sleep(50 * time.Millisecond) // let the server observe the exit
-	again, err := c1.NewSession()
-	if err != nil {
-		t.Fatalf("rejected attempt burned a slot: %v", err)
+	// The server observes the channel close asynchronously; poll with a
+	// deadline instead of assuming a fixed sleep (loaded CI runners vary).
+	var again *gossh.Session
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		again, err = c1.NewSession()
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rejected attempt burned a slot: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	held = append(held, again)
 	run(again)

@@ -105,6 +105,9 @@ both on the wire (band-2 + unpack ng) over SSH, as 413 over HTTP.
 ## 5. Git layer additions
 
 - `Layer.UploadPackSSH` — UploadPack without `--stateless-rpc` (see §2).
+- `Layer.ParsePushRequestStream` — command/options section parse leaving the reader at the pack
+  start (`ParsePushRequest` remains the framed/HTTP form); a cap hit propagates `ErrMaxBytes`
+  unwrapped so transports can refuse on the wire (§4).
 - `Layer.IngestStream` — pack piped straight into `index-pack` (no staging file): index-pack stops
   at the pack trailer, so the feed ends at child exit. `Ingest` (staged) is unchanged for HTTP.
 
@@ -119,7 +122,6 @@ both on the wire (band-2 + unpack ng) over SSH, as 413 over HTTP.
 - Auth failures log the key fingerprint at warn (scan visibility) and fail the handshake.
 - The SSH listener shares the process drain: sessions started during drain are refused by the
   transport gates; the listener itself closes with the process context.
-
 
 ## 7. Tests
 

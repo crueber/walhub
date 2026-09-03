@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -98,6 +99,22 @@ func TestSSHKeysAPINoneMode(t *testing.T) {
 		t.Fatalf("bad key = %d %s", w.Code, w.Body.String())
 	}
 	stub.addErr = nil
+
+	// bad principal → 400
+	stub.addErr = ErrKeyBadPrincipal
+	w = f.do("POST", "/api/v1/ssh-keys", strings.NewReader(`{"key": "`+validKeyLine+`"}`), nil, nil)
+	if w.Code != 400 {
+		t.Fatalf("bad principal = %d", w.Code)
+	}
+	stub.addErr = nil
+
+	// any other Add error (store put failure, rollback failure) → 500, never
+	// a silent 200 (the default branch is the store-failure mapping)
+	stub.addErr = errors.New("put failed")
+	w = f.do("POST", "/api/v1/ssh-keys", strings.NewReader(`{"key": "`+validKeyLine+`"}`), nil, nil)
+	if w.Code != 500 {
+		t.Fatalf("store failure = %d %s", w.Code, w.Body.String())
+	}
 
 	// empty key → 400 before the registry
 	w = f.do("POST", "/api/v1/ssh-keys", strings.NewReader(`{"key": "  "}`), nil, nil)
