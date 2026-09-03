@@ -37,6 +37,16 @@ type SSHKeyRegistry struct {
 	log  *slog.Logger
 }
 
+// NewSSHKeyRegistry builds a registry over the given store and auth service
+// (the auth service resolves a key's principal rights at lookup time,
+// mode-aware — see PrincipalForName).
+func NewSSHKeyRegistry(st store.ObjectStore, auth *AuthService, log *slog.Logger) *SSHKeyRegistry {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &SSHKeyRegistry{st: st, auth: auth, log: log}
+}
+
 // fpID folds a fingerprint into a path-safe object id.
 func fpID(fingerprint string) string {
 	r := strings.NewReplacer("SHA256:", "", "+", "-", "/", "_", " ", "")

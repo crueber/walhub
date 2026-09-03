@@ -109,6 +109,12 @@ contracts, exactly like `14_extensibility.md`.
   web/). Wire/bucket identifiers (header names `X-Walgit-*`, config key names, bucket key paths, protobuf
   package `walgit.v1`) keep their Rust-era names — they are wire contracts, not branding.
 
+Performance claims (scale, latency shape) are **evidence-backed**: measured
+entries with reproduction harnesses live in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
+A transport/storage feature that makes a hot-path claim gets an entry there —
+measured on the real code path, named backend, both population sizes, harness
+committed to `internal/devtools/`.
+
 ### Field lessons (each one shipped a real failure — do not relearn them)
 
 - **Env overlay keys are exact paths.** `WALHUB__STORE__S3__ENDPOINT`, never `WALHUB__STORE__ENDPOINT` —

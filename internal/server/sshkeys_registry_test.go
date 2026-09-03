@@ -260,3 +260,93 @@ func TestRegistryListTornEntry(t *testing.T) {
 		t.Fatalf("list with torn entry = %v %v (%d)", keys, err, len(keys))
 	}
 }
+
+func TestNewSSHKeyRegistryDefaultsLogger(t *testing.T) {
+	// a nil logger falls back to the default (45.3,46.1)
+	r := NewSSHKeyRegistry(store.NewMemory(), nil, nil)
+	if r == nil || r.log == nil {
+		t.Fatal("nil logger must default")
+	}
+}
+
+// sshKeyErrStore injects store-level errors into the registry's error branches.
+type sshKeyErrStore struct {
+	store.ObjectStore
+	failList   bool
+	failGet    bool
+	failPut    bool
+	failDelete bool
+}
+
+func (f *sshKeyErrStore) Get(ctx context.Context, key string, opts store.GetOptions) (store.GetResult, error) {
+	if f.failGet {
+		return nil, errors.New("get failed")
+	}
+	return f.ObjectStore.Get(ctx, key, opts)
+}
+
+func (f *sshKeyErrStore) Put(ctx context.Context, key string, body store.PutBody, opts store.PutOptions) (store.ObjectMeta, error) {
+	if f.failPut {
+		return store.ObjectMeta{}, errors.New("put failed")
+	}
+	return f.ObjectStore.Put(ctx, key, body, opts)
+}
+
+func (f *sshKeyErrStore) Delete(ctx context.Context, key string, ifVersion store.Version) error {
+	if f.failDelete {
+		return errors.New("delete failed")
+	}
+	return f.ObjectStore.Delete(ctx, key, ifVersion)
+}
+
+func (f *sshKeyErrStore) List(ctx context.Context, prefix, startAfter string, fn func(store.ObjectMeta) error) error {
+	if f.failList {
+		return errors.New("list failed")
+	}
+	return f.ObjectStore.List(ctx, prefix, startAfter, fn)
+}
+
+func TestRegistryStoreErrors(t *testing.T) {
+	mem := store.NewMemory()
+	fs := &sshKeyErrStore{ObjectStore: mem}
+	a := NewAuthService(&config.Auth{Mode: "none"}, nil)
+	r := &SSHKeyRegistry{st: fs, auth: a, log: discardLogger()}
+	ctx := context.Background()
+
+	// Add: k-doc put fails → the error surfaces (non-precondition)
+	fs.failPut = true
+	if _, err := r.Add(ctx, "ada", registryTestKey, ""); err == nil {
+		t.Fatal("put failure must surface")
+	}
+	fs.failPut = false
+
+	// Add succeeds, then List: the u-doc Get fails → the listing entry is skipped
+	if _, err := r.Add(ctx, "ada", registryTestKey, "t"); err != nil {
+		t.Fatal(err)
+	}
+	fs.failGet = true
+	if _, err := r.List(ctx, "ada"); err == nil {
+		t.Fatal("list with failing get must surface the error")
+	}
+	fs.failGet = false
+
+	// Delete: k-doc delete fails → error surfaces
+	fs.failDelete = true
+	if err := r.Delete(ctx, "ada", fpID(fingerprintOf(registryTestKey))); err == nil {
+		t.Fatal("delete failure must surface")
+	}
+	fs.failDelete = false
+
+	// List: the store list itself fails → error surfaces
+	fs.failList = true
+	if _, err := r.List(ctx, "ada"); err == nil {
+		t.Fatal("list failure must surface")
+	}
+	fs.failList = false
+
+	// Lookup: the k-doc get fails → not-found (any store error maps to not-found)
+	fs.failGet = true
+	if _, err := r.LookupByFingerprint(ctx, fpID(fingerprintOf(registryTestKey))); err == nil {
+		t.Fatal("lookup with failing get must error")
+	}
+}

@@ -275,5 +275,5 @@ func (s *Server) SSH() (*sshd.Server, error) {
 // SSHKeyRegistry builds the store-backed key registry for this server: the
 // same instance serves the sshd auth lookup and the /api/v1/ssh-keys surface.
 func (s *Server) SSHKeyRegistry() *SSHKeyRegistry {
-	return &SSHKeyRegistry{st: s.store, auth: s.authSvc, log: s.log}
+	return NewSSHKeyRegistry(s.store, s.authSvc, s.log)
 }

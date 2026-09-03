@@ -7,6 +7,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"io"
 	"os"
@@ -18,6 +21,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/sshd"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 func sshGateServer(t *testing.T, eng *fakeEngine, mutate func(*config.Config)) *Server {
@@ -131,12 +135,23 @@ func TestSSHBuilderBranches(t *testing.T) {
 	if got, err := bare.SSH(); got != nil || err != nil {
 		t.Fatalf("setup-only SSH = %v %v", got, err)
 	}
-	// host_key_env unset → boot-fatal
+	// host_key_env set but the env var is empty → boot-fatal (line 263)
+	t.Setenv("WALHUB_TEST_MISSING_HOST_KEY", "")
 	s3 := sshGateServer(t, &fakeEngine{exists: true}, func(c *config.Config) {
 		c.Server.SSH.HostKeyEnv = "WALHUB_TEST_MISSING_HOST_KEY"
 	})
 	if _, err := s3.SSH(); err == nil || !strings.Contains(err.Error(), "host_key_env") {
 		t.Fatalf("unset host_key_env = %v", err)
+	}
+	// host_key_env resolves to key material → the env wins over the path
+	_, hk, _ := ed25519.GenerateKey(rand.Reader)
+	hkBlock, _ := gossh.MarshalPrivateKey(hk, "test")
+	t.Setenv("WALHUB_TEST_GOOD_HOST_KEY", string(pem.EncodeToMemory(hkBlock)))
+	s5 := sshGateServer(t, &fakeEngine{exists: true}, func(c *config.Config) {
+		c.Server.SSH.HostKeyEnv = "WALHUB_TEST_GOOD_HOST_KEY"
+	})
+	if got, err := s5.SSH(); err != nil || got == nil {
+		t.Fatalf("env host key = %v %v", got, err)
 	}
 	// valid: builds and parses the key
 	s4 := sshGateServer(t, &fakeEngine{exists: true}, nil)
