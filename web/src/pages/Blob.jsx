@@ -16,6 +16,7 @@ import { useRepo, shortRef } from "./Repo.jsx";
 function Breadcrumb(props) {
   const parts = () => (props.path ? props.path.split("/") : []);
   return (
+    <Show when={parts().length > 0}>
     <nav class="crumbs mb-2 text-sm">
       <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}`}>root</A>
       <For each={parts()}>
@@ -37,6 +38,7 @@ function Breadcrumb(props) {
         }}
       </For>
     </nav>
+    </Show>
   );
 }
 
