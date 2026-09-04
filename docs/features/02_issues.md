@@ -316,6 +316,15 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
 - Milestone progress is denormalized counters, derived-for-display, never authoritative.
 - Auth gates per P6: label/milestone CRUD and moderation at triage; issue create/comment at read.
 - Compaction task kind `issue-index-compact`, trigger sampled — no timer goroutine invented.
+- **List render is number-descending (issue #48, 2026-09-04):** every list
+  read (`GET …/api/issues` under any state filter) renders newest-first by
+  issue number descending — the merged `open` + `closed_recent` pool is
+  re-sorted by num at read time, so activity recency never reorders the
+  combined list. The index object itself is UNCHANGED (still
+  newest-activity-first per §2); only the render sorts by num, and the SPA
+  re-sorts at display (`web/src/lib/sort.js`) so stale cache windows and
+  SSE refetches agree. The `after=` cursor stays positional in this
+  number-desc display order.
 
 ### Wave B implementation notes (2026-09-04, `internal/issues` landed)
 

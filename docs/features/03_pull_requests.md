@@ -322,6 +322,12 @@ every call goes through the SDK).
 - Fork = fresh manifest referencing the parent's packs; sharing is by construction, and compaction's
   pack removal consults fork-network manifests before deleting.
 - Closing keywords ride 02's cross-ref contract; `merged` events are the PR-side trigger.
+- **PR list render is number-descending (issue #48 scope, 2026-09-04):**
+  `GET …/pulls` renders newest-first by PR number descending under any
+  state filter — the same rule as 02's issue list (merged `open` +
+  `closed_recent` re-sorted by num at read time). The shared index object
+  is UNCHANGED (still newest-activity-first); only the render sorts by
+  num, and the SPA re-sorts at display (`web/src/lib/sort.js`).
 - **Task-table lock rule (09 audit fix): the `Finished` stamp in `taskTable.end`
   takes the RECORD mutex, not just the table mutex** (`internal/pulls/tasks.go`):
   production paths snapshot the live record directly (`StartMerge`/`UpdateBranch`
