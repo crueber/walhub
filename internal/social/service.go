@@ -53,14 +53,23 @@ func (s *Service) Unstar(ctx context.Context, p auth.Principal, owner, repo stri
 	}
 	who := normPrincipal(p.Name)
 	key := StarKey(who, owner, repo)
-	raw, _, err := s.getJSON(ctx, key)
+	raw, ver, err := s.getJSON(ctx, key)
 	if err != nil {
 		return 0, err
 	}
 	if raw == nil {
 		return s.starCount(ctx, owner, repo), nil
 	}
-	if derr := s.Store.Delete(ctx, key, ""); derr != nil && !store.IsNotFound(derr) {
+	// Version-conditional delete: the record is Create/Delete-only (never
+	// rewritten, so no ABA) — success means THIS call removed the star and
+	// owns the single decrement. A 412/404 means a concurrent unstar won
+	// the removal (its decrement stands): recount, do NOT bump again.
+	// (Unconditional deletes report success on absent keys on every
+	// backend, so the version is what makes this exactly-once.)
+	if derr := s.Store.Delete(ctx, key, ver); derr != nil {
+		if store.IsNotFound(derr) || store.IsPreconditionFailed(derr) {
+			return s.starCount(ctx, owner, repo), nil
+		}
 		return 0, derr
 	}
 	return s.bumpStars(ctx, owner, repo, -1)

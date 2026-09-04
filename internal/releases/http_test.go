@@ -241,6 +241,21 @@ func TestAssetHTTPFlow(t *testing.T) {
 	if hrec.Code != 200 || hrec.Body.Len() != 0 {
 		t.Fatalf("HEAD: %d len=%d", hrec.Code, hrec.Body.Len())
 	}
+	// HEAD ignores Range (RFC 7233 §3.1): full 200 headers, no 206.
+	headR := httptest.NewRequest("HEAD", "/o/r/releases/v1/assets/tool", nil)
+	headR.Header.Set("X-Test-Principal", "bob")
+	headR.Header.Set("Range", "bytes=0-3")
+	hrecR := httptest.NewRecorder()
+	x.handler.HandleRepo(hrecR, headR, id, []string{"releases", "v1", "assets", "tool"})
+	if hrecR.Code != 200 || hrecR.Body.Len() != 0 {
+		t.Fatalf("HEAD+Range: %d len=%d", hrecR.Code, hrecR.Body.Len())
+	}
+	if hrecR.Header().Get("Content-Range") != "" {
+		t.Fatalf("HEAD+Range content-range: %q", hrecR.Header().Get("Content-Range"))
+	}
+	if hrecR.Header().Get("Content-Length") != "16" {
+		t.Fatalf("HEAD+Range length: %q", hrecR.Header().Get("Content-Length"))
+	}
 	// Wrong shape / method / auth.
 	if x.handler.HandleRepo(httptest.NewRecorder(), get, id, []string{"releases", "v1"}) {
 		t.Fatal("short sub claimed")

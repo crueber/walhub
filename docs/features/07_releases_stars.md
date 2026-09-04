@@ -297,7 +297,10 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
   re-read-as-update) — retry-safe publishes are what the P8 backfill contract needs; 409 stays
   for asset sha clashes and stale `If-Match` (exact token; `*` = update-only per RFC —
   must-exist, 404 when absent). The public list hides drafts; GET single serves
-  drafts under the read gate. The users starred twin is open (public info per "no private-read
+  drafts under the read gate. `latest` and `autodraft` are reserved single-segment names: a
+  tag literally named `latest` stays creatable/deletable/listed but its single-GET is
+  shadowed by the pointer route — forced by the spec's own §7 route table (`GET …/latest`
+  and `GET …/{tag}` collide there by construction, so no implementation could serve both). The users starred twin is open (public info per "no private-read
   filtering"). Autodraft git argv, named here because 04_git pins feature argv by reference:
   `rev-parse --verify --quiet refs/tags/<tag>^{commit}` (peeled), `merge-base --is-ancestor`
   (§3), `for-each-ref --sort=-creatordate --format=%(refname:strip=2) refs/tags` (previous-tag

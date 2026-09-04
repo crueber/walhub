@@ -545,7 +545,11 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, owner, repo
 		return
 	}
 	rng := r.Header.Get("Range")
-	if rng != "" && r.Method != http.MethodHead {
+	// Range handling is defined for GET only (RFC 7233 §3.1: ignore it
+	// on any other method — HEAD answers full-object headers).
+	if r.Method != http.MethodGet {
+		rng = ""
+	} else if rng != "" {
 		if ir := r.Header.Get("If-Range"); ir != "" && !matchETag(ir, version) {
 			rng = "" // validator differs → full 200
 		}

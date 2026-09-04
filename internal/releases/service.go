@@ -373,12 +373,7 @@ func (s *Service) updateLatestPointer(ctx context.Context, owner, repo, tag, cre
 		if perr != nil {
 			return nil, false, perr
 		}
-		curCreated := ""
-		if traw, _, gerr := s.getJSON(ctx, ReleaseKey(owner, repo, ptr.Tag)); gerr == nil && traw != nil {
-			if tr, perr2 := parseRelease(traw); perr2 == nil {
-				curCreated = tr.CreatedAt
-			}
-		}
+		curCreated := s.pointerTargetCreated(ctx, owner, repo, ptr.Tag)
 		if !newerThan(createdAt, curCreated) {
 			return nil, false, nil // stale publisher — skip, not retry
 		}
@@ -390,20 +385,41 @@ func (s *Service) updateLatestPointer(ctx context.Context, owner, repo, tag, cre
 	})
 }
 
-// repairLatestPointer points the pointer at (tag, createdAt) when it does
-// not already (the self-healing write; idempotent).
+// repairLatestPointer points the pointer at (tag, createdAt) under the
+// SAME monotonic rule as the publish path (skip when the pointer already
+// targets this tag or a strictly newer release — a truncated scan must
+// never park the pointer at an older release). Idempotent.
 func (s *Service) repairLatestPointer(ctx context.Context, owner, repo, tag, createdAt string) {
 	now := s.nowUTC().Format(dateTimeFmt)
 	_, _ = s.casUpdate(ctx, LatestKey(owner, repo), 4, func(cur []byte, ver store.Version) ([]byte, bool, error) {
 		if cur != nil {
-			if ptr, perr := parseLatest(cur); perr == nil && ptr.Tag == tag {
-				return nil, false, nil
+			if ptr, perr := parseLatest(cur); perr == nil {
+				if ptr.Tag == tag {
+					return nil, false, nil
+				}
+				if !newerThan(createdAt, s.pointerTargetCreated(ctx, owner, repo, ptr.Tag)) {
+					return nil, false, nil // scan found an older release — skip, not retry
+				}
 			}
+			// Unparseable pointer: fall through and overwrite (the
+			// self-healing write replaces corruption, same as absent).
 		}
 		ptr := &LatestPointer{Tag: tag, CreatedAt: createdAt, UpdatedAt: now}
 		raw, _ := json.Marshal(ptr)
 		return raw, true, nil
 	})
+}
+
+// pointerTargetCreated returns the created_at of the release the pointer
+// targets ("" when the target is missing/unreadable — a dangling pointer
+// always loses the monotonic compare, so repair proceeds).
+func (s *Service) pointerTargetCreated(ctx context.Context, owner, repo, tag string) string {
+	if traw, _, gerr := s.getJSON(ctx, ReleaseKey(owner, repo, tag)); gerr == nil && traw != nil {
+		if tr, perr := parseRelease(traw); perr == nil {
+			return tr.CreatedAt
+		}
+	}
+	return ""
 }
 
 // newerThan compares RFC 3339 timestamps (lexical fallback for

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 func TestTagEncodingRoundTrip(t *testing.T) {
@@ -252,6 +253,58 @@ func TestDeleteReleaseRepairsLatest(t *testing.T) {
 	}
 	if _, _, err := x.svc.GetRelease(ctx(), "o", "r", writer(), "v1"); !isErr(err, ErrNotFound) {
 		t.Fatalf("deleted get: %v", err)
+	}
+}
+
+func TestRepairLatestPointerMonotonic(t *testing.T) {
+	x := newHarness(t)
+	grantWrite(x)
+	grantMaintain(x)
+	x.git.tags["v1"] = strings.Repeat("1", 40)
+	x.git.tags["v2"] = strings.Repeat("2", 40)
+	v1, _ := mustPut(t, x, writer(), "v1", ReleaseInput{})
+	x.svc.Now = func() time.Time { return x.now.Add(time.Hour) }
+	v2, _ := mustPut(t, x, writer(), "v2", ReleaseInput{})
+	readPtr := func() LatestPointer {
+		t.Helper()
+		raw, _, _ := x.svc.getJSON(ctx(), LatestKey("o", "r"))
+		var ptr LatestPointer
+		if err := json.Unmarshal(raw, &ptr); err != nil {
+			t.Fatalf("pointer decode: %v", err)
+		}
+		return ptr
+	}
+	if got := readPtr(); got.Tag != "v2" {
+		t.Fatalf("setup pointer: %+v", got)
+	}
+	// A repair naming the OLDER release must not move the pointer off v2
+	// (a truncated scan must never downgrade the badge).
+	x.svc.repairLatestPointer(ctx(), "o", "r", "v1", v1.CreatedAt)
+	if got := readPtr(); got.Tag != "v2" {
+		t.Fatalf("repair downgraded pointer: %+v", got)
+	}
+	// Deleting the older release keeps the pointer on the newer one.
+	if err := x.svc.DeleteRelease(ctx(), "o", "r", writer(), "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPtr(); got.Tag != "v2" {
+		t.Fatalf("delete repair moved pointer: %+v", got)
+	}
+	// A repair naming a STRICTLY newer release moves it.
+	x.svc.repairLatestPointer(ctx(), "o", "r", "v9", x.now.Add(2*time.Hour).Format(dateTimeFmt))
+	if got := readPtr(); got.Tag != "v9" {
+		t.Fatalf("repair skipped newer: %+v", got)
+	}
+	// A corrupt pointer heals on repair (overwrite, same as absent).
+	_, ver, _ := x.svc.getJSON(ctx(), LatestKey("o", "r"))
+	if _, err := x.svc.Store.Put(ctx(), LatestKey("o", "r"),
+		store.PutBody{Bytes: []byte("{corrupt")},
+		store.PutOptions{Mode: store.PutUpdate, IfVersion: ver}); err != nil {
+		t.Fatalf("corrupt setup: %v", err)
+	}
+	x.svc.repairLatestPointer(ctx(), "o", "r", "v2", v2.CreatedAt)
+	if got := readPtr(); got.Tag != "v2" {
+		t.Fatalf("corrupt pointer not healed: %+v", got)
 	}
 }
 

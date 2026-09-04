@@ -1,11 +1,14 @@
 package social
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 func TestStarUnstarIdempotent(t *testing.T) {
@@ -68,6 +71,62 @@ func TestStarConcurrentConverge(t *testing.T) {
 	d, err := x.svc.Counts(ctx(), jane(), "o", "r")
 	if err != nil || d.Stars != 2 {
 		t.Fatalf("converge: %+v %v", d, err)
+	}
+}
+
+// unstarGate forces the check-then-act race to overlap: Deletes on the
+// star record wait until both unstarrs have read the record. On a correct
+// implementation exactly one version-conditional Delete wins and the
+// counter decrements exactly once.
+type unstarGate struct {
+	store.ObjectStore
+	key  string
+	gets atomic.Int64
+	open chan struct{}
+	once sync.Once
+}
+
+func (g *unstarGate) Get(ctx context.Context, key string, opts store.GetOptions) (store.GetResult, error) {
+	if key == g.key && g.gets.Add(1) == 2 {
+		g.once.Do(func() { close(g.open) })
+	}
+	return g.ObjectStore.Get(ctx, key, opts)
+}
+
+func (g *unstarGate) Delete(ctx context.Context, key string, ver store.Version) error {
+	if key == g.key {
+		<-g.open
+	}
+	return g.ObjectStore.Delete(ctx, key, ver)
+}
+
+func TestUnstarConcurrentSingleDecrement(t *testing.T) {
+	x := newHarness(t)
+	if _, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil {
+		t.Fatal(err)
+	}
+	// One record, count 2 (counter ahead — the drift a crash window or a
+	// lost fan-out could leave): two overlapping unstarrs must decrement
+	// exactly once, since only one conditional Delete removes the record.
+	if _, err := x.svc.bumpStars(ctx(), "o", "r", +1); err != nil {
+		t.Fatal(err)
+	}
+	key := StarKey("jane", "o", "r")
+	x.svc.Store = &unstarGate{ObjectStore: x.svc.Store, key: key, open: make(chan struct{})}
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := x.svc.Unstar(ctx(), jane(), "o", "r"); err != nil {
+				t.Errorf("unstar: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	d, err := x.svc.Counts(ctx(), jane(), "o", "r")
+	if err != nil || d.Stars != 1 {
+		t.Fatalf("concurrent unstar decremented %d, want exactly 1: %+v %v", 2-d.Stars, d, err)
 	}
 }
 
