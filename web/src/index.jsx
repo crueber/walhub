@@ -23,6 +23,9 @@ import Issue from "./pages/Issue.jsx";
 import Pulls from "./pages/Pulls.jsx";
 import Pull from "./pages/Pull.jsx";
 import Checks from "./pages/Checks.jsx";
+import Releases from "./pages/Releases.jsx";
+import Release from "./pages/Release.jsx";
+import ReleaseNew from "./pages/ReleaseNew.jsx";
 import Notifications from "./pages/Notifications.jsx";
 import Labels from "./pages/Labels.jsx";
 import Milestones from "./pages/Milestones.jsx";
@@ -57,6 +60,9 @@ render(
         <Route path="/pulls" component={Pulls} />
         <Route path="/pull/:num" component={Pull} />
         <Route path="/checks" component={Checks} />
+        <Route path="/releases" component={Releases} />
+        <Route path="/releases/new" component={ReleaseNew} />
+        <Route path="/releases/:tag" component={Release} />
         <Route path="/labels" component={Labels} />
         <Route path="/milestones" component={Milestones} />
         <Route path="/wal" component={Wal} />

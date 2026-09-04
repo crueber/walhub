@@ -620,6 +620,18 @@ func (s *Service) runFork(ctx context.Context, owner, repo, targetOwner, name st
 		return err
 	}
 	rec.notice("listed in %s", ForksKey(owner, repo))
+	// Social counter (07 §6): the parent's social.json forks field is 07's
+	// shape — incremented here, at completion, through the ForksCounter
+	// seam (nil-safe). Best-effort by design: the fork objects above are
+	// committed, and the counter is denormalized display state — a
+	// shortfall is narrated, never fatal to the task.
+	if s.Forks != nil {
+		if ferr := s.Forks.IncForks(ctx, owner, repo); ferr != nil {
+			rec.notice("social forks counter shortfall: %s", ferr)
+		} else {
+			rec.notice("incremented social.json forks")
+		}
+	}
 	// Manifest sharing (§7: already-on-bucket mode — skip pack uploads,
 	// verify closure, fresh refs snapshot + checkpoint, Create manifest).
 	// No ForkExecutor is wired in this wave (the wal-level manifest copy

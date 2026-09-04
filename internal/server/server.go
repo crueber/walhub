@@ -50,6 +50,11 @@ type Server struct {
 	// readGate is the identity require_read hook (01 §4.1); nil → legacy.
 	readGate ReadGate
 
+	// repoExtras fronts repoDispatch with feature repo-subpath surfaces
+	// (repo_extra.go: the 14.3 routing note for non-lane families like
+	// release asset bytes); nil → core switch only.
+	repoExtras []RepoRoutes
+
 	inflight  Inflight
 	cacheRoot string
 	dataDir   string // cache.dir; LFS spool + TLS files live under it

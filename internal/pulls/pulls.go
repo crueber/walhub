@@ -144,6 +144,15 @@ type IssueCloser interface {
 	ApplyClosingReferences(ctx context.Context, owner, repo string, prNum int, mergedSHA, actor string, texts []string) ([]int, error)
 }
 
+// ForksCounter is the 07-provided seam the fork task calls at completion:
+// IncForks CAS-increments the parent's social.json forks counter (07 §6).
+// Satisfied by *social.Service; nil skips the increment (pre-07 or tests).
+type ForksCounter interface {
+	// IncForks increments the forks counter of owner/repo (CAS loop,
+	// field-scoped — converges with concurrent star/watch mutations).
+	IncForks(ctx context.Context, owner, repo string) error
+}
+
 // Service is the pulls store client: numbering (shared P2), threads (shared
 // P3), the shared index (P4), pr.json sidecars, mergeable.json caches,
 // forks, git mergeability/merge execution, and the WAL ref publishes.
@@ -166,7 +175,10 @@ type Service struct {
 	// see checks.go). Wired in composition (cmd/walhub); nil fails
 	// closed only when a rule carries require_checks.
 	Checks ChecksGate
-	Now    func() time.Time
+	// Forks is the 07-provided fork counter (docs/features/07 §6).
+	// Wired in composition (cmd/walhub); nil skips the increment.
+	Forks ForksCounter
+	Now   func() time.Time
 
 	// ServerID is the committer identity for merge commits
 	// ("walhub <server.identity_email>", default "walhub@localhost").

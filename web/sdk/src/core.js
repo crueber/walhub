@@ -21,6 +21,8 @@ import { attachPulls } from "./pulls.js";
 import { attachReviews } from "./reviews.js";
 import { attachChecks } from "./checks.js";
 import { attachNotifications, attachNotifyRepo } from "./notifications.js";
+import { attachReleases } from "./releases.js";
+import { attachSocial, attachSocialTop } from "./social.js";
 import { attachOrgs } from "./orgs.js";
 import { attachUsers } from "./users.js";
 import { openAuthPopup, canAuthenticate } from "./auth.js";
@@ -158,6 +160,7 @@ export class ReposClient {
     attachOrgs(this);
     attachInvites(this);
     attachNotifications(this);
+    attachSocialTop(this);
   }
 
   /**
@@ -197,6 +200,8 @@ export class ReposClient {
     attachReviews(r);
     attachChecks(r);
     attachNotifyRepo(r);
+    attachReleases(r);
+    attachSocial(r);
     return r;
   }
 

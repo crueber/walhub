@@ -32,6 +32,7 @@ requested or when a review questions a hot path).
 | E5 | 2026-09-04 | Review summary + required-reviews gate (`internal/review`) | What does a review-summary recompute cost, what does the merge-time gate scan cost, and why can't either explode? | Recompute linear in review/thread count (9 GETs + 1 PUT + 2 LISTs at 5 reviews/2 threads; 122 + 1 + 2 at 100/20); gate scan linear in review count (8 + 0 + 1 at 5; 103 + 0 + 1 at 100), own deadline, never trusts the summary. Cannot explode: scans are prefix-bounded to one PR's low-volume collaboration subtree, no git on any path, no cross-PR fan-out. |
 | E6 | 2026-09-04 | Check report path + combined view + required-checks gate (`internal/checks`) | What does one CI report cost, what does the combined view cost, and why can't either explode as context count grows? | First report 2 GETs + 2 PUTs + 1 LIST; re-report 4 GETs + 3 PUTs + 1 LIST (1 context); combined 1 LIST + 1 GET per context, 0 PUTs; gate = policy GET + 1 LIST + 1 GET per context under a 15 s deadline. Cannot explode: every scan is prefix-bounded to one sha, reports are CI-rate, no git on any read path, index writes are best-effort. |
 | E7 | 2026-09-04 | Notification fan-out + webhook delivery loop (`internal/notify`) | What is the write amplification of one emission, what does the unread dedup save on replay, and what does a delivery pass cost? | One emission = 2 GETs + 2 PUTs per recipient + 3 GETs + 2 PUTs fixed (thread, watchers, seq reservation, activity); deduped replay writes flat (2 PUTs, zero notification/index writes at any recipient count; probes are 3+n GETs); delivery pass = 1 LIST + ~3 GETs + 1 PUT per event + 1 cursor CAS, idle pass writes nothing. Cannot explode: 100-recipient sync cap with task fallback, 5 s budget, per-hook cursors. |
+| E8 | 2026-09-04 | Release latest-pointer, autodraft, asset streaming (`internal/releases`, `internal/social`) | Is the latest badge O(1), what does a publish/list/autodraft cost, is the asset upload memory-bounded, and are star/fork writes constant? | Latest hot read flat (2 GETs at 5 and 200 releases); publish 3 GETs + 2 PUTs; list 1 LIST + 1 GET per release; autodraft 1 probe per candidate (≤100) with zero LIST; 1 MiB upload 2 GETs + 2 PUTs with an empty spool dir and zero-write 413s; star 2+2, fork bump 1+1. Cannot explode: pointer monotonicity skips stale publishers, scans/lists are prefix-bounded and capped, git probes run under the package pool. |
 
 ---
 
@@ -538,3 +539,84 @@ pathological mention storms is the sync cap + budget, not a redesign.
 recipient and a 5-op fixed cost; deduped replays write flat (2 PUTs at
 any population, probes 3+n GETs); delivery is
 one cursor CAS per pass with zero-write idles. No redesign required.
+
+---
+
+## E8 — Release latest-pointer, autodraft, asset streaming, social counters (2026-09-04)
+
+**Area:** releases, assets, stars, watches (`internal/releases`,
+`internal/social`). Spec: `docs/features/07_releases_stars.md` §§1–7.
+
+**Method.** Harnesses: `internal/releases/evidence_test.go`
+(`TestEvidenceLatestHotRead`, `TestEvidencePublishCost`,
+`TestEvidenceListCost`, `TestEvidenceAutodraftCost`,
+`TestEvidenceAssetStreamingCap`;
+`go test ./internal/releases/ -run TestEvidence -v`) and
+`internal/social/evidence_test.go` (`TestEvidenceSocialCosts`;
+`go test ./internal/social/ -run TestEvidence -v`). Real service paths
+over the **memory store** wrapped in op-counting decorators (same shape
+as E3/E7 — budgets count store round-trips, the AGENTS law 6 cost
+model); git calls run against scripted fakes with call counts (argv is
+covered against real git by `TestSubprocessGitReal`). Populations: 5
+vs 200 releases, 5 vs 50 merged PRs, 3 vs 60 stars — normal and an
+order of magnitude beyond, so flat-vs-growing is visible in the table.
+
+**Results.**
+
+| path | small population | large population | shape |
+|---|---|---|---|
+| latest hot read (pointer verifies) | 5 releases: 2 GETs | 200 releases: 2 GETs | **flat** — pointer GET + target GET, 0 LIST |
+| publish (create-published + monotonic pointer) | 3 GETs, 2 PUTs | — | header CAS (1+1) + pointer CAS (2+1: pointer read, target-date read, write) |
+| list page (n=50) | 5 releases: 1 LIST + 5 GETs | 200 releases: 1 LIST + 200 GETs | 1 LIST + 1 header GET per release (cap 1 000) |
+| autodraft | 5 PRs: 12 GETs, 5 git probes | 50 PRs: 102 GETs, 50 git probes | 1 index + 2 per candidate, 1 ancestry probe per candidate (cap 100), 0 LIST |
+| 1 MiB asset upload (4 MiB cap) | 2 GETs, 2 PUTs | — | header probe + bytes Create + header CAS; spool dir empty after |
+| over-cap upload (declared + streamed) | 413, 0 PUTs | — | rejected before any store write |
+| star | 2 GETs, 2 PUTs | — | record probe + Create + counter CAS |
+| unstar | 2 GETs, 1 PUT, 1 DELETE | — | record probe + Delete + counter CAS |
+| fork increment | 1 GET, 1 PUT | — | counter CAS only |
+| starred list (n=50) | 3 stars: 1 LIST + 3 GETs | 60 stars: 1 LIST + 60 GETs | 1 LIST + 1 GET per record, `more` past the page |
+
+**Analysis.**
+
+- **Latest is O(1) by construction and monotonic by CAS.** The hot
+  read is 2 GETs at any population (pointer + target, zero LIST —
+  the repo-home "Latest" badge never scans). Publishers CAS the
+  pointer only when strictly newer (`created_at` compare inside the
+  loop), so concurrent publishers converge regardless of CAS order;
+  a stale/dangling pointer self-heals through the bounded scan
+  (≤ 100 bodies) and lazily repairs — correctness never depends on
+  the pointer.
+- **Autodraft git usage is one probe per candidate, capped at 100,**
+  under the package pool (never bare on request goroutines): 5
+  probes at 5 PRs, 50 at 50 (only `merge-base --is-ancestor` against
+  the tag, plus the since side when bounded). Store cost is 1 index
+  GET + 2 per candidate (thread + sidecar), zero LIST — the shared
+  index window is the candidate source (P4 hot window; pre-window
+  merges fall out of scope by documented decision, same class as
+  P4). A 100-PR backfill is 200 short argv runs, not a task.
+- **Asset uploads never buffer in memory.** The 1 MiB upload costs 2
+  GETs + 2 PUTs with zero bytes retained in-process (spool to
+  `cache.dir/release-spool`, sha256-verified before the Create,
+  spool removed after — the harness asserts an empty spool dir).
+  Declared-over-cap 413s before reading the body; lying lengths
+  trip the streaming cap; both write nothing (0 PUTs at rejection).
+  Bytes-first-then-header means a crash leaves orphan bytes
+  (harmless, Create-only) and never a dangling header entry — the
+  clash resolver verifies stored bytes on the failure path only.
+- **Social writes are constant and idempotent.** Star/unstar converge
+  on the record Create/Delete (412 = already there — no double
+  count); the counter CAS is field-scoped (stars/forks move,
+  `watcher_list` passes through for 06's fan-out). Fork completion
+  is one counter CAS (1 GET + 1 PUT) on the parent.
+
+**Over the network (S3/GCS/filesystem).** Same shape with per-op RTT:
+the hot paths are small-JSON control-plane ops at human rate; the
+only bulk transfer is the asset byte stream itself (spooled, hashed,
+single PUT). The levers are the asset cap (operator-set,
+`releases.max_asset_bytes`) and the 100-PR autodraft bound — no
+redesign required.
+
+**Verdict.** Latest reads flat (2 GETs); publish/list/autodraft are
+linear with slope ≤ 2 per item and zero LIST on every path except
+the paged list (1 LIST by design); uploads are streaming with a
+hard cap; social writes are constant. No redesign required.

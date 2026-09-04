@@ -95,6 +95,7 @@ const TABS = [
   { id: "issues", label: "Issues", href: (full) => `/${full}/issues` },
   { id: "pulls", label: "Pulls", href: (full) => `/${full}/pulls` },
   { id: "checks", label: "Checks", href: (full) => `/${full}/checks` },
+  { id: "releases", label: "Releases", href: (full) => `/${full}/releases` },
   { id: "wal", label: "WAL", href: (full) => `/${full}/wal` },
   { id: "settings", label: "Settings", href: (full) => `/${full}/settings` },
 ];
@@ -105,6 +106,7 @@ function activeTab(pathname) {
   if (/\/issues|\/labels|\/milestones/.test(pathname)) return "issues";
   if (/\/pulls|\/pull\//.test(pathname)) return "pulls";
   if (/\/checks/.test(pathname)) return "checks";
+  if (/\/releases/.test(pathname)) return "releases";
   if (/\/commits|\/commit\//.test(pathname)) return "commits";
   return "code";
 }
@@ -235,6 +237,50 @@ function RefPicker(props) {
         </div>
       </Show>
     </div>
+  );
+}
+
+// --- star toggle (07 §8): optimistic flip, reconcile on error -------------
+
+function StarToggle(props) {
+  const [getSocial, setSocial] = createSignal(null);
+  const load = async () => {
+    try {
+      const res = await props.repo.social.get();
+      setSocial(res);
+    } catch {
+      setSocial(null); // anonymous or unreadable: hide the toggle
+    }
+  };
+  load();
+  const flip = async () => {
+    const cur = getSocial();
+    if (!cur) return;
+    const starred = !cur.viewer?.starred;
+    setSocial({ ...cur, stars: (cur.stars ?? 0) + (starred ? 1 : -1), viewer: { ...cur.viewer, starred } }); // optimistic
+    try {
+      const res = starred ? await props.repo.star.set() : await props.repo.star.remove();
+      setSocial({ ...cur, stars: res.stars ?? cur.stars, viewer: { ...cur.viewer, starred } });
+    } catch (e) {
+      setSocial(cur); // reconcile on error
+      reportError(e, "star");
+    }
+  };
+  return (
+    <Show when={getSocial()}>
+      {(s) => (
+        <button
+          type="button"
+          class="btn px-2 py-1 text-sm"
+          classList={{ primary: s().viewer?.starred }}
+          onClick={flip}
+          title={s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
+          aria-pressed={s().viewer?.starred}
+        >
+          ★ {s().viewer?.starred ? "starred" : "star"} · {s().stars ?? 0}
+        </button>
+      )}
+    </Show>
   );
 }
 
@@ -394,6 +440,7 @@ export default function Repo(props) {
             )}
           </Show>
           <div class="ml-auto flex items-center gap-2">
+            <StarToggle repo={repoClient} />
             <WatchToggle repo={repoClient} />
             <TasksOverlay repo={repoClient} />
             <RefPicker full={full()} repo={repoClient} />

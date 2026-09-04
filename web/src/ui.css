@@ -25,6 +25,9 @@
          border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100
          dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700; }
   .btn.primary { @apply border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-500 dark:border-emerald-500 dark:bg-emerald-600 dark:hover:bg-emerald-500; }
+  .btn.danger { @apply border-red-300 bg-red-50 text-red-700 hover:bg-red-100
+          dark:border-red-800 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-900/60; }
+  .btn-active { @apply border-emerald-600 font-semibold text-emerald-700 dark:border-emerald-500 dark:text-emerald-400; }
   .pill { @apply inline-flex items-center rounded-full border border-zinc-300 bg-zinc-50 px-2.5 py-0.5 text-xs
           dark:border-zinc-700 dark:bg-zinc-800/80; }
   .chip { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
@@ -33,6 +36,10 @@
           bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300; }
   .chip-closed { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
           bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-300; }
+  .chip-draft { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
+          bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300; }
+  .chip-prerelease { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
+          bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-300; }
 
   /* Forms */
   .input { @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900
