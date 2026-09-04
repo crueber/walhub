@@ -25,8 +25,10 @@ import (
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/events"
 	"git.packden.us/crueber/walhub/internal/git"
+	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/maintain"
 	"git.packden.us/crueber/walhub/internal/server"
+	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 	"git.packden.us/crueber/walhub/internal/wal"
 )
@@ -93,6 +95,8 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var reg *wal.Registry
 	var engine *server.WalEngine
 	var apiEnv *api.Env
+	var ident *identity.Service
+	var identHandler *identity.Handler
 	if !setupOnly {
 		wal.SetWarnLogger(func(format string, args ...any) { log.Warn(fmt.Sprintf(format, args...)) })
 		reg = wal.NewRegistry(ctx, st, cfg)
@@ -100,6 +104,17 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		apiEnv = api.NewEnv(st, &repoRegistry{reg: reg, st: st}, cfg, engine, version(), hostname())
 		apiEnv.Tasks = &opsTasks{reg: reg, eng: engine}
 		apiEnv.Instance = reg.InstanceID()
+		// Wave A identity (docs/features/01): the access.json/org/team
+		// surface (Seam 1, both lanes), the require_read gate (Seam 3
+		// expansion wired into dry-run via GroupExpander), and the
+		// access-bootstrap op (Seam 5).
+		ident = identity.New(st, cfg)
+		identHandler = &identity.Handler{Svc: ident}
+		apiEnv.Access = ident
+		apiEnv.GroupExpander = ident.PolicyExpander()
+		if ot, ok := apiEnv.Tasks.(*opsTasks); ok {
+			ot.ident = ident
+		}
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --
@@ -132,7 +147,16 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		Boot:      boot,
 		Log:       log,
 		Notifier:  wake,
+		ReadGate:  readGateOf(ident),
 	})
+	if identHandler != nil {
+		// Chain the identity surface in front of the core api mux (Seam 1);
+		// authentication resolves through the server chain (Seam 2).
+		identHandler.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
+			return srv.Auth().Authenticate(r, cfg)
+		}
+		srv.ChainExtra(identHandler)
+	}
 
 	// the SSH key registry backs both the sshd auth lookup and the
 	// /api/v1/ssh-keys surface (17_ssh.md §3); setup-only has no store, so
@@ -235,6 +259,15 @@ func newAPI(env *api.Env) server.RouteProvider {
 		return nil
 	}
 	return server.NewAPIProvider(env)
+}
+
+// readGateOf adapts the identity service to the server ReadGate seam
+// (nil in setup-only mode → legacy read gating).
+func readGateOf(ident *identity.Service) server.ReadGate {
+	if ident == nil {
+		return nil
+	}
+	return ident
 }
 
 // appCtxer adapts the process context to http.Server BaseContext.
@@ -499,15 +532,21 @@ func (r *repoRegistry) Delete(ctx context.Context, id git.RepoId) error {
 
 // opsTasks binds the api.Tasks seam onto wal.TaskTable and the engine ops.
 type opsTasks struct {
-	reg *wal.Registry
-	eng *server.WalEngine
+	reg   *wal.Registry
+	eng   *server.WalEngine
+	ident *identity.Service
 }
 
 func (t *opsTasks) Ops() []api.OpSpec {
-	return []api.OpSpec{
+	ops := []api.OpSpec{
 		{Op: "sync"},
 		{Op: "checkpoint", Params: []api.OpParam{{Name: "trigger"}}},
 	}
+	if t.ident != nil {
+		// Seam 5: the access-bootstrap migration (docs/features/01 §10).
+		ops = append(ops, api.OpSpec{Op: "access-bootstrap"})
+	}
+	return ops
 }
 
 func (t *opsTasks) List(ctx context.Context, id git.RepoId) ([]api.TaskRecord, []api.TaskRecord, error) {
@@ -622,9 +661,29 @@ func (t *opsTasks) opFn(id git.RepoId, op string, params map[string]string) func
 			}
 			return h.WriteCheckpoint(ctx, wal.CheckpointTrigger(trigger))
 		}
+	case "access-bootstrap":
+		if t.ident == nil {
+			return nil
+		}
+		return func(ctx context.Context, task *wal.Task) error {
+			created, err := t.ident.BootstrapRepo(ctx, id.Owner, id.Name)
+			if err != nil {
+				return err
+			}
+			task.Notice(bootstrapSummary(id.String(), created))
+			return nil
+		}
 	default:
 		return nil
 	}
+}
+
+// bootstrapSummary narrates the access-bootstrap outcome (Seam 5 task).
+func bootstrapSummary(repo string, created bool) string {
+	if created {
+		return "access-bootstrap " + repo + ": materialized"
+	}
+	return "access-bootstrap " + repo + ": already present"
 }
 
 func replayProgress(in []wal.Progress) []api.Progress {

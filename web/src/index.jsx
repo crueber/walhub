@@ -19,6 +19,7 @@ import Commits from "./pages/Commits.jsx";
 import Commit from "./pages/Commit.jsx";
 import Wal from "./pages/Wal.jsx";
 import Settings from "./pages/Settings.jsx";
+import Org from "./pages/Org.jsx";
 import Apidocs from "./pages/Apidocs.jsx";
 import Setup from "./pages/Setup.jsx";
 import Keys from "./pages/Keys.jsx";
@@ -33,6 +34,7 @@ render(
       <Route path="/api" component={Apidocs} />
       <Route path="/keys" component={Keys} />
       <Route path="/:owner" component={Repos} />
+      <Route path="/:org/settings" component={Org} />
       <Route path="/:owner/:name" component={Repo}>
         <Route path="/" component={Tree} />
         <Route path="/tree/*rest" component={Tree} />

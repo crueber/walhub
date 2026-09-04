@@ -57,6 +57,28 @@
  *
  * @typedef {{min_seq: number, entries: {seq: number, revision: number, author: string,
  *   message: string, at: string, toml: string}[]}} SettingsHistory
+ *
+ * @typedef {{version: number, principal: string, display_name: string, bio: string,
+ *   created_at: string, updated_at: string}} Profile
+ *
+ * @typedef {{version: number, org: string, display_name: string, description: string,
+ *   created_at: string, updated_at: string}} Org
+ *
+ * @typedef {{principal: string, role: "owner"|"member", joined_at: string}} Member
+ *
+ * @typedef {{version: number, members: Member[], updated_at: string}} Members
+ *
+ * @typedef {{version: number, org: string, slug: string, name: string, description: string,
+ *   members: string[], created_at: string, updated_at: string}} Team
+ *
+ * @typedef {{subject: string, role: "read"|"triage"|"write"|"maintain"|"admin"}} AccessBinding
+ *
+ * @typedef {{version: number, visibility: "public"|"private",
+ *   role_bindings: AccessBinding[]}} AccessDoc
+ *
+ * @typedef {{id: string, kind: "org"|"repo", org: string, repo: string, role: string,
+ *   subject: string, invited_by: string, state: string, created_at: string,
+ *   expires_at: string}} Invitation
  */
 
 export {};

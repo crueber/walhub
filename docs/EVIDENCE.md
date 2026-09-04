@@ -26,6 +26,7 @@ requested or when a review questions a hot path).
 | # | Date | Area | Question | Verdict |
 |---|---|---|---|---|
 | E1 | 2026-09-03 | SSH key registry (`internal/server/sshkeys.go`) | 10k vs 1M registered keys: what happens to auth, the keys page, and writes? | Auth flat (O(1) per handshake); keys page linear in per-user keys; writes constant. Scale-safe to 1M+. |
+| E2 | 2026-09-04 | Identity authz read path (`internal/identity`) | What does one role resolution cost, and can it explode with team count? | O(1) per request: 1 conditional access.json GET + 1 per referenced team; steady state transfers zero bodies (304-class). Cannot explode: bounded binding list, exact-key probes, no LIST. |
 
 ---
 
@@ -106,3 +107,66 @@ population size; the UI path is bounded by per-user key counts; writes are
 constant. The 10k → 1M jump costs storage footprint and housekeeping, not
 user-visible latency. No redesign required; the UI-list self-sufficiency
 change is the documented lever if keys-per-principal ever grows large.
+
+---
+
+## E2 — Identity authz read path: conditional GET per request + LRU (2026-09-04)
+
+**Area:** identity + permissions, role resolution (`internal/identity` —
+`access.go` LRU, `gate.go` CheckRead/Resolve). Spec: `features/01` §4/§4.1.
+
+**Question:** every read request (git `info/refs`, upload-pack, LFS reads,
+repo-scoped API reads) resolves the caller's role. What does one resolution
+cost in store round trips, what does steady state transfer, and can the
+query count explode as teams/bindings grow?
+
+**Method.** Harness: `TestAuthzReadPath` in
+`internal/identity/evidence_test.go` (`go test ./internal/identity/ -run
+TestAuthzReadPath -v`; the access-LRU hit/miss counters log per run). Real
+`Service.Resolve`/`CheckRead` over the **memory store** wrapped in a
+counting decorator (total GETs, conditional vs full, bodies transferred vs
+304-class `NotModified`). Memory store isolates the resolution algorithm's
+shape from network RTT; the backend contract (`IfNoneMatch` → `NotModified`,
+pinned by the store contract suite on every backend) makes the shape
+backend-independent — over the network each probe is one sub-second
+control-plane GET and each hit transfers no body. Fixture: one private repo
+with 3 bindings (direct + 2 team refs), two teams, one org.
+
+**Results.**
+
+| path | store GETs | bodies transferred | shape |
+|---|---|---|---|
+| cold resolve (nothing cached) | 3 (access.json + 2 teams) | 3 | O(bindings): 1 + teams referenced |
+| warm resolve ×50 (steady state) | 150 (3/request) | **0** | flat — every probe 304-class |
+| after one team edit | 3 | 1 (the changed team) | lazy invalidation, then flat again |
+| anonymous public read | 1 (access.json only) | 1 cold / 0 warm | no team probes for anon |
+
+**Analysis.**
+
+- **O(1) per request, and it cannot explode.** A resolution is exactly one
+  conditional GET of `access.json` plus one conditional GET per *referenced*
+  team — bounded by the binding list length, which is itself bounded
+  (validated subjects, sorted array, human-rate writes; a repo with ten
+  thousand bindings would be an operator error, not a scaling law). Every
+  probe is an exact key. There is no LIST anywhere on this path
+  (team/org enumeration lives on collaboration pages and admin sweeps only).
+- **Steady state transfers nothing.** Entries are stamped by the store CAS
+  version; revalidation is a 304-class probe. The harness's 50 warm
+  resolutions cost 150 probes and 0 bodies — the LRU counters read
+  `hits=50 misses=1` for the access object. A changed version invalidates
+  lazily (exactly the ref→sha LRU pattern, 07 §5): one body on the next
+  probe, then flat again. Staleness is bounded by one request, never a TTL.
+- **Writes stay off the path.** Resolution never writes (synthesis is
+  read-only; materialization is the idempotent `access-bootstrap` op and the
+  CAS PUT path). Revocation latency is one in-flight request by design.
+
+**Over the network (S3/GCS/filesystem).** Same shape with per-probe RTT:
+one extra sub-second control-plane GET per `info/refs` for anonymous hot
+clones of public repos (01 §4.1 budget), never a LIST, never a body on
+revalidation. Bulk/control-plane transport separation is untouched — these
+are control-plane keys (`.json`) on the control-plane path.
+
+**Verdict.** The authz read path is constant per request at any population
+size: bounded probes, exact keys, zero steady-state bytes. No redesign
+required; if binding lists ever grew large the lever is a per-team roster
+projection, not a new index.

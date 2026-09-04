@@ -64,7 +64,7 @@ func (h *handlers) opStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op := r.PathValue("op")
-	spec := findOp(op)
+	spec := h.findOpSpec(op)
 	if spec == nil {
 		writePlain(w, http.StatusNotFound, "unknown op: "+op)
 		return
@@ -116,6 +116,21 @@ func findOp(op string) *OpSpec {
 		}
 	}
 	return nil
+}
+
+// findOpSpec resolves an op against the Tasks-provided table first (Seam 5
+// extension kinds), then the frozen table — starting is the union, so a
+// listed extension op is always startable and frozen ops keep working.
+func (h *handlers) findOpSpec(op string) *OpSpec {
+	if h.env.Tasks != nil {
+		for _, s := range h.env.Tasks.Ops() {
+			if s.Op == op {
+				spec := s
+				return &spec
+			}
+		}
+	}
+	return findOp(op)
 }
 
 // --- tasks (§12.3) ---------------------------------------------------------------------

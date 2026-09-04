@@ -211,6 +211,15 @@ func Dispatch(e *Env, w http.ResponseWriter, r *http.Request) {
 		if !e.gate(w, r2, rt.Auth) {
 			return
 		}
+		// The identity require_read hook (01 §4.1): every repo-scoped read
+		// endpoint consults access.json visibility + role resolution after
+		// the flag gate. Nil Access → legacy behavior, unchanged.
+		if !rt.NonRepo && rt.Auth == AuthRead && e.Access != nil {
+			if aerr := e.Access.CheckRead(r2.Context(), id.Owner, id.Name, e.PrincipalOf(r2)); aerr != nil {
+				mapAccessErr(w, aerr)
+				return
+			}
+		}
 		rt.Handler(w, r2)
 		return
 	}

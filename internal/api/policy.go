@@ -199,10 +199,11 @@ type dryRunResult struct {
 }
 
 type dryRunBody struct {
-	Pushes  int            `json:"pushes"`
-	Allowed int            `json:"allowed"`
-	Denied  int            `json:"denied"`
-	Results []dryRunResult `json:"results"`
+	Pushes   int            `json:"pushes"`
+	Allowed  int            `json:"allowed"`
+	Denied   int            `json:"denied"`
+	Results  []dryRunResult `json:"results"`
+	Warnings []string       `json:"warnings,omitempty"`
 }
 
 func (h *handlers) policyDryRun(w http.ResponseWriter, r *http.Request) {
@@ -224,12 +225,19 @@ func (h *handlers) policyDryRun(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Seam 3 load-time expansion (01 §6): team:/role: spellings resolve
+	// against identity state before pure evaluation; unresolvable refs warn
+	// and match nothing (fail-closed for protect bypass semantics).
+	var warnings []string
+	if h.env.GroupExpander != nil {
+		doc, warnings = policy.ExpandDocument(ctx, doc, h.env.GroupExpander)
+	}
 	pushes, err := h.env.Repo.PushHistory(ctx, id, last)
 	if err != nil {
 		mapViewErr(w, err)
 		return
 	}
-	out := dryRunBody{Results: []dryRunResult{}}
+	out := dryRunBody{Results: []dryRunResult{}, Warnings: warnings}
 	for _, p := range pushes {
 		res := dryRunResult{
 			Seq:       p.Seq,

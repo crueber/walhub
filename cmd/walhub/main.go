@@ -66,6 +66,7 @@ var subcommands = []command{
 	{"repo info", "print manifest stats for a repo", runRepoInfo},
 	{"repo policy", "read/save/clear the repo policy document", runRepoPolicy},
 	{"repo settings", "per-repo settings (D24) surface", runRepoSettings},
+	{"access", "read/replace the repo access.json role bindings", runAccess},
 	{"wal ls", "log table for a repo", runWalLs},
 	{"wal show", "one log entry, full", runWalShow},
 	{"wal materialize", "build a standalone repo at a point in time", runWalMaterialize},
@@ -180,8 +181,9 @@ Commands:
   repo create REPO [--object-format F]   register a repository
   repo list                              list repositories
   repo info REPO                         manifest stats
-  repo policy get|set --file F|clear REPO
-  repo settings show|set|clear|history REPO
+   repo policy get|set --file F|clear REPO
+   repo settings show|set|clear|history REPO
+   access get REPO | access put --file F REPO
   wal ls REPO [--from N] [--to N]        log table
   wal show REPO SEQ                      one entry, full
   wal materialize REPO --at-seq N --out DIR
