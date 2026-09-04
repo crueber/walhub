@@ -10,10 +10,13 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, patchCached, reportError } from "../lib/data.js";
+import { TTL } from "../lib/collab.js";
+import { toggleLabel, labelColorMap } from "../lib/labels.js";
+import LabelPicker, { LabelChip } from "../components/LabelPicker.jsx";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
-import { useRole } from "../components/perms.jsx";
+import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { REACTIONS, reactionEmoji, summaryEntries, adjustSummary } from "../lib/reactions.js";
 
 function eventText(ev) {
@@ -52,6 +55,13 @@ export default function Issue() {
   const [getView] = useData(key, () => ctx.repoClient.issues.get(num()));
   const { role } = useRole(ctx.full, ctx.repoClient);
   const canComment = () => role() !== null;
+  const canTriage = () => roleAtLeast(role(), "triage");
+  // Repo label set for the sidebar picker + chip colors (08 §6
+  // `labels:{o}/{r}`, 30 s TTL; the page owns the cache per the
+  // LabelPicker contract — the component only renders props).
+  const [getLabelSet] = useData(() => `labels:${ctx.full}`, () => ctx.repoClient.labels.list(), TTL.labels);
+  const allLabels = () => getLabelSet()?.labels ?? [];
+  const colorMap = () => labelColorMap(allLabels());
   const [getOlder, setOlder] = createSignal(false);
   // Older event windows accumulate here (the view holds the newest page;
   // both are newest-first, so concatenation stays ordered).
@@ -180,6 +190,32 @@ export default function Issue() {
     }
   };
 
+  // Sidebar label toggle (#45): one PATCH with the full next set per
+  // toggle (one event per 02 §7), optimistic patchCached paint + guarded
+  // invalidate reconcile — the same bump pattern as the reaction chips
+  // above. One in-flight mutation per label name: a double-click computes
+  // the same array twice (idempotent), and the button disables while its
+  // key is busy so the pair cannot happen from one client.
+  const [getLabelBusy, setLabelBusy] = createSignal(new Set());
+  const toggleLabelApply = async (name) => {
+    const k = String(name).toLowerCase();
+    if (getLabelBusy().has(k)) return;
+    setLabelBusy((prev) => new Set(prev).add(k));
+    const next = toggleLabel(thread()?.labels ?? [], name);
+    patchCached(key(), (view) => ({ ...view, thread: { ...view.thread, labels: next } }));
+    try {
+      await ctx.repoClient.issues.patch(num(), { labels: next });
+    } catch (err) {
+      reportError(err, "issue-labels");
+    }
+    reload();
+    setLabelBusy((prev) => {
+      const nx = new Set(prev);
+      nx.delete(k);
+      return nx;
+    });
+  };
+
   const loadOlder = async () => {
     const all = events();
     if (!all.length || getOlder()) return;
@@ -296,12 +332,16 @@ export default function Issue() {
                   <span class="muted text-xs">close / reopen from the comment box</span>
                 </Show>
               </div>
-              <div class="card grid gap-1 p-3 text-sm">
+              <div class="card grid gap-2 p-3 text-sm">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Labels</span>
-                <For each={t().labels ?? []} fallback={<span class="muted text-xs">none</span>}>
-                  {(l) => <span class="chip w-fit">{l}</span>}
-                </For>
-                <span class="muted text-xs">label / milestone edits live on their pages (triage)</span>
+                <div class="flex flex-wrap gap-1">
+                  <For each={t().labels ?? []} fallback={<span class="muted text-xs">none</span>}>
+                    {(l) => <LabelChip name={l} map={colorMap()} />}
+                  </For>
+                </div>
+                <Show when={canTriage()}>
+                  <LabelPicker all={allLabels()} applied={t().labels ?? []} busy={getLabelBusy()} onToggle={toggleLabelApply} />
+                </Show>
               </div>
               <div class="card grid gap-1 p-3 text-sm">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Assignees</span>
