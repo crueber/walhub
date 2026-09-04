@@ -56,7 +56,7 @@ the repo header (07, optimistic update + rollback), "New issue"/"New pull reques
 | Component | Purpose | Contract |
 |---|---|---|
 | `ThreadTimeline` | Renders a P3 event log (issue thread, PR conversation, review thread). One row per event kind: opened, commented, labeled, unlabeled, state-changed, assigned, referenced, review-posted, check-reported, merged, closed, reopened | Input: header + seq window of events (`{after_seq, n}`); compensating events render as normal rows (never rewrite history); comment bodies via markdown-lite + sanitizer; `aria-live="polite"` region so SSE-appended rows announce; dedup key `(num, event_seq)` |
-| `CommentComposer` | New-comment editor | markdown-lite preview (`lib/markdown.js` + `lib/sanitize.js`); **mentions autocomplete**: `@` opens a popup fed by `useData("assignables:{o}/{r}")` (repo collaborators ∪ org members, endpoint per 01); submits via the feature's comment endpoint → `{event_seq}` |
+| `CommentComposer` | New-comment editor | markdown-lite preview (`lib/markdown.js` + `lib/sanitize.js`); **mentions autocomplete**: `@` opens a popup fed by `useData("assignables:{o}/{r}")` (repo collaborators ∪ org members, endpoint per 01); submits via the feature's comment endpoint → `{event_seq}`; optional close controls (`closeLabel`+`onClose`, `onCommentAndClose`+`commentAndCloseLabel`) share one right-aligned action row — the issue thread uses them for Close/Reopen + Comment-and-Close, the PR page omits them |
 | `LabelPicker` | Apply/remove labels on an issue/PR | Source: `labels:{o}/{r}` cache; each toggle = one PATCH (one event per 02); triage+ only |
 | `AssigneePicker` | Same, for assignees | Source: `assignables:{o}/{r}`; triage+ only |
 | `DiffPage` | Renders a PR/commit diff | Feeds `parsePatchFiles` (12 §2.8 grammar) the `text/plain` unified patch; per-file unified/split toggle, file anchors by `stats[].path`; **line-thread anchoring**: anchor key `(path, side: old\|new, line)`; per-line comment forms create threads via `reviews.threadCreate`; threads whose anchor no longer exists on the current head's diff render collapsed with an "outdated" flag |
@@ -346,6 +346,16 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
 - **Cache-frames-not-patch for lists; append-only for timelines** — lists stay simple TTL caches; timelines use `(num, seq)` dedup so SSE and pagination compose.
 - **Watch is a subscription verb owned by 06 (`client.watch.{get,set}`), not 07's `repo.social`** — both docs named `PUT/DELETE …/api/watch`; reconciled to 06 (subscriptions/notifications domain). `repo.social.get()` still returns `viewer.watching` for the header toggle's state; star stays in `repo.social`.
 - **Hide for absent roles, disable for forbidden states** — anonymous users see no chrome they cannot use; authenticated users see what exists and learn why it is off.
+- **Issue close actions live under the composer (2026-09-04, issue #33).** The sidebar STATE card
+  keeps a read-only state badge (+ a "close / reopen from the comment box" hint); Close/Reopen and
+  Comment-and-Close render in the composer's right-aligned action row (Close/Reopen always when the
+  composer shows, Comment-and-Close only while open). Gating is unchanged: the controls show exactly
+  when the composer shows (any resolved role) and the server stays authoritative (state PATCH is
+  author-or-triage, 403s surface in the error tray) — `GET …/api/permissions` returns `{role}` with
+  no viewer identity, so the client cannot detect authorship; no new endpoint for that. Comment-and-Close
+  is two sequential calls (comment POST when the body is non-empty, then state PATCH) — there is no
+  atomic comment+close endpoint, so a comment-posted/close-failed split keeps the text and the plain
+  Close button finishes the job.
 - **English-only v1, no i18n scaffolding** — additive later, zero cost now.
 - **Releases/stars SDK per 07's submodule plan** (`releases.js`, `social.js`) — absorbed verbatim to avoid conflicting paths.
 
