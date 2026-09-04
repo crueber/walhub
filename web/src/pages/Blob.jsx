@@ -44,7 +44,11 @@ function Breadcrumb(props) {
 
 export default function Blob() {
   const ctx = useRepo();
-  const [getBlob] = useResolved(ctx.owner, ctx.name, ctx.rest ?? "", "blob");
+  // Getters, not setup-time values: @solidjs/router reuses this component on
+  // blob→blob navigations, and useResolved captures plain values at setup —
+  // static args would freeze the view on the first path (same class as #38;
+  // Tree.jsx already passes getters).
+  const [getBlob] = useResolved(() => ctx.owner, () => ctx.name, () => ctx.rest ?? "", "blob");
   const [getView, setView] = createSignal("preview");
 
   return (

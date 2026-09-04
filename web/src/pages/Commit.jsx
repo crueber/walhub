@@ -188,8 +188,11 @@ function CheckDetails(props) {
 }
 
 function CommitDetail(props) {
+  // Reactive key: @solidjs/router reuses this route component when only
+  // :sha changes, so the key must be a getter — a setup-time string would
+  // freeze the view on the first sha (#38).
   const [getCommit] = useData(
-    `commit:${props.full}:${props.sha}`,
+    () => `commit:${props.full}:${props.sha}`,
     () => props.repoClient.commit(props.sha),
     SHA_TTL,
   );
@@ -307,11 +310,14 @@ function CommitDetail(props) {
 export default function Commit() {
   const ctx = useRepo();
   // Keyed on repo+sha: @solidjs/router reuses this component when only :sha
-  // changes (parent links, body sha links), and the fetch is keyed at setup —
-  // so a sha change must recreate the detail view.
+  // changes (parent links, body sha links), so a sha change must recreate
+  // the detail view (resets per-file unified/split toggles with it). The
+  // keyed child MUST take the key as its argument: Show returns a no-arg
+  // closure as-is (same reference), so `keyed` + `{() => …}` never remounts
+  // and the page sticks on the first sha (#38).
   return (
     <Show when={`${ctx.full}:${ctx.sha}`} keyed>
-      {() => <CommitDetail full={ctx.full} sha={ctx.sha} repoClient={ctx.repoClient} />}
+      {(_key) => <CommitDetail full={ctx.full} sha={ctx.sha} repoClient={ctx.repoClient} />}
     </Show>
   );
 }
