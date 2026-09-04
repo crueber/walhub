@@ -9,12 +9,12 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
-import { useData, invalidate, reportError } from "../lib/data.js";
+import { useData, invalidate, patchCached, reportError } from "../lib/data.js";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole } from "../components/perms.jsx";
-import { REACTIONS, reactionEmoji, summaryEntries, reactionChangedText } from "../lib/reactions.js";
+import { REACTIONS, reactionEmoji, summaryEntries, adjustSummary } from "../lib/reactions.js";
 
 function eventText(ev) {
   switch (ev.type) {
@@ -35,8 +35,8 @@ function eventText(ev) {
       return `referenced by #${ev.source?.num ?? "?"}`;
     case "cross_referenced":
       return `referenced from ${ev.source?.repo ?? "?"}#${ev.source?.num ?? "?"}`;
-    case "reaction_changed":
-      return reactionChangedText(ev);
+    // No reaction_changed case: those events fold into the per-comment
+    // summary chips below (#42b) and never reach the timeline.
     case "closed_by_pr":
       return `closed by #${ev.pr_num} (${ev.keyword})`;
     default:
@@ -71,7 +71,12 @@ export default function Issue() {
 
   const thread = () => getView()?.thread;
   const summary = () => thread()?.reaction_summary ?? {};
-  const events = () => [...(getView()?.events ?? []), ...getExtra()];
+  // Reaction activity folds into the per-comment summary chips
+  // (GitHub-style, #42b): reaction_changed events never render as
+  // timeline rows — the summary counts are the whole surface. The cursor
+  // stays valid: after_seq is a seq cursor, not a count, so filtering
+  // interleaved rows cannot skip older events.
+  const events = () => [...(getView()?.events ?? []), ...getExtra()].filter((ev) => ev.type !== "reaction_changed");
   const more = () => (getExtraMore() === undefined ? getView()?.events_more : getExtraMore());
 
   const comment = async (body) => {
@@ -92,31 +97,79 @@ export default function Issue() {
     reload();
   };
 
-  const react = async (seq, content) => {
+  // One in-flight reaction mutation per (seq, content): the picker and
+  // the chips share these keys, so a double-click (or Enter-repeat) can
+  // never double-fire — and the server dedups sequential duplicate adds
+  // per (actor, target, content) anyway (02 §8). Buttons disable while
+  // their key is busy; both are native <button>s (keyboard free) with a
+  // theme-agnostic disabled treatment.
+  const [getBusy, setBusy] = createSignal(new Set());
+  const busyKey = (seq, content) => `${seq}:${content}`;
+  const isBusy = (seq, content) => getBusy().has(busyKey(seq, content));
+  const withBusy = async (seq, content, fn) => {
+    const k = busyKey(seq, content);
+    if (getBusy().has(k)) return;
+    setBusy((prev) => new Set(prev).add(k));
     try {
-      await ctx.repoClient.issues.reactions.add(num(), { target_event_seq: seq, content });
-      reload();
-    } catch (err) {
-      reportError(err, "issue-react");
+      await fn();
+    } finally {
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(k);
+        return next;
+      });
     }
   };
 
-  // Summary chips toggle: remove when the clicker reacted, add when they
-  // did not (the summary carries no per-user state, so a remove-404 falls
-  // back to add — GitHub semantics; only a double failure reports).
-  const toggleReaction = async (seq, content) => {
-    try {
-      await ctx.repoClient.issues.reactions.remove(num(), seq, content);
-    } catch (err) {
+  // Optimistic summary step on the cached thread view (#42a): the chip
+  // paints synchronously via the generation-safe patchCached path, and the
+  // guarded invalidate() refetch reconciles the guess (or rolls it back
+  // when the mutation fails). Never bypasses the #41 ordering guard.
+  const bump = (seq, content, delta) =>
+    patchCached(key(), (view) => ({
+      ...view,
+      thread: {
+        ...view.thread,
+        reaction_summary: adjustSummary(view.thread?.reaction_summary, seq, content, delta),
+      },
+    }));
+
+  const react = (seq, content) =>
+    withBusy(seq, content, async () => {
+      bump(seq, content, +1);
       try {
         await ctx.repoClient.issues.reactions.add(num(), { target_event_seq: seq, content });
-      } catch (addErr) {
-        reportError(addErr, "issue-react");
-        return;
+      } catch (err) {
+        reportError(err, "issue-react");
       }
-    }
-    reload();
-  };
+      reload();
+    });
+
+  // Summary chips toggle (#36): remove when the clicker already reacted,
+  // add when they did not. The summary carries no per-user state, so a
+  // remove-404 falls back to add (GitHub semantics); any other remove
+  // failure just reports — only a double failure reports, never a silent
+  // no-op. The optimistic guess follows the same path (−1, then +2 on the
+  // 404 fallback to undo the guess and apply the add).
+  const toggleReaction = (seq, content) =>
+    withBusy(seq, content, async () => {
+      bump(seq, content, -1);
+      try {
+        await ctx.repoClient.issues.reactions.remove(num(), seq, content);
+      } catch (err) {
+        if (err?.notFound || err?.status === 404) {
+          bump(seq, content, +2);
+          try {
+            await ctx.repoClient.issues.reactions.add(num(), { target_event_seq: seq, content });
+          } catch (addErr) {
+            reportError(addErr, "issue-react");
+          }
+        } else {
+          reportError(err, "issue-react");
+        }
+      }
+      reload();
+    });
 
   const patch = async (fields) => {
     try {
@@ -174,9 +227,10 @@ export default function Issue() {
                         {(r) => (
                           <button
                             type="button"
-                            class="chip hover:border-zinc-400"
+                            class="chip hover:border-zinc-400 disabled:cursor-wait disabled:opacity-50"
                             aria-label={`react ${r}`}
                             title={`react ${r}`}
+                            disabled={isBusy(ev.seq, r)}
                             onClick={() => react(ev.seq, r)}
                           >
                             <span aria-hidden="true">{reactionEmoji(r)}</span>
@@ -195,9 +249,10 @@ export default function Issue() {
                           {([content, count]) => (
                             <button
                               type="button"
-                              class="chip"
+                              class="chip disabled:cursor-wait disabled:opacity-50"
                               aria-label={`toggle ${content} reaction, ${count} total`}
                               title={`${content} · ${count}`}
+                              disabled={isBusy(ev.seq, content)}
                               onClick={() => toggleReaction(ev.seq, content)}
                             >
                               <span aria-hidden="true">{reactionEmoji(content)}</span> {count}
