@@ -7,6 +7,7 @@ import repos from "../../sdk/src/index.js";
 import { createContext, useContext, createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL } from "../lib/data.js";
+import { httpsCloneUrl, sshCloneUrl, cloneCommand, copyText } from "../lib/clone.js";
 import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 
@@ -51,17 +52,83 @@ function CloneMenu(props) {
   // Dogfood exception (§2.6): the recipe payload is server-rendered JSON.
   const [getRecipes, setRecipes] = createSignal(null);
   const [getOpen, setOpen] = createSignal(false);
+  const [getProto, setProto] = createSignal("https"); // issue #37 protocol toggle
+  const [getCopied, setCopied] = createSignal(""); // "", "copied", "failed"
+  let root; // the <details> popover
+  let box; // the clone-command textbox
+  let timer = 0;
+  onCleanup(() => clearTimeout(timer));
   const load = () => {
     if (getRecipes()) return;
     fetchRecipes()
       .then(setRecipes)
       .catch((e) => { setRecipes([]); reportError(e, "recipes"); });
   };
-  const clone = () => props.summary?.clone_url ?? `${location.origin}/${props.full}.git`;
+  // URL-building logic is unchanged (§2.6): the HTTPS URL is the server's
+  // clone_url (origin fallback); the SSH URL reuses its host at the default
+  // ssh port (lib/clone.js — the server never advertises its ssh listen
+  // port to the browser, so no port is guessed).
+  const https = () => httpsCloneUrl(props.summary, props.full, location.origin);
+  const url = () => (getProto() === "ssh" ? sshCloneUrl(https(), props.full, location.hostname) : https());
+  const cmd = () => cloneCommand(url());
+  const flag = (msg) => {
+    clearTimeout(timer);
+    setCopied(msg);
+    timer = setTimeout(() => setCopied(""), 2000);
+  };
+  const copy = async () => {
+    box?.focus();
+    box?.select();
+    flag((await copyText(cmd())) ? "copied" : "failed");
+  };
+  // Esc dismisses the popover and returns focus to the trigger. The <details>
+  // element is the keyboard baseline otherwise: <summary> toggles on
+  // Enter/Space natively and Tab walks the dialog controls.
+  const onKey = (e) => {
+    if (e.key === "Escape" && root?.open) {
+      root.open = false;
+      root.querySelector("summary")?.focus();
+    }
+  };
   return (
-    <details class="clone-menu relative" onToggle={(e) => { setOpen(e.target.open); if (e.target.open) load(); }}>
+    <details ref={root} class="clone-menu relative" onToggle={(e) => { setOpen(e.target.open); if (e.target.open) load(); }} onKeyDown={onKey}>
       <summary class="pill cursor-pointer select-none">Clone</summary>
-      <div class="clone-body card absolute right-0 z-30 mt-2 w-96 space-y-2 p-3">
+      <div class="clone-body card absolute right-0 z-30 mt-2 w-96 space-y-3 p-3">
+        <div class="flex items-center gap-2">
+          <div role="group" aria-label="Clone protocol" class="flex gap-1">
+            <For each={["https", "ssh"]}>
+              {(p) => (
+                <button
+                  type="button"
+                  class="btn px-2 py-1 text-xs"
+                  classList={{ "btn-active": getProto() === p }}
+                  aria-pressed={getProto() === p}
+                  onClick={() => { setProto(p); setCopied(""); }}
+                >
+                  {p === "https" ? "HTTPS" : "SSH"}
+                </button>
+              )}
+            </For>
+          </div>
+          <span role="status" aria-live="polite" class="muted text-xs">
+            {getCopied() === "copied" ? "copied" : getCopied() === "failed" ? "copy failed — press Ctrl+C" : ""}
+          </span>
+        </div>
+        <div class="flex items-center gap-2">
+          <input
+            ref={box}
+            class="input font-mono text-xs"
+            readOnly
+            value={cmd()}
+            aria-label="Clone command. Activate to copy."
+            onFocus={(e) => e.currentTarget.select()}
+            onClick={copy}
+            onKeyDown={(e) => { if (e.key === "Enter") void copy(); }}
+          />
+          <button type="button" class="btn shrink-0 px-2 py-1 text-xs" onClick={copy}>
+            Copy
+          </button>
+        </div>
         <Show when={getRecipes()} fallback={<p class="muted">loading recipes…</p>}>
           <For each={getRecipes() ?? []}>
             {(r) => (
@@ -70,8 +137,11 @@ function CloneMenu(props) {
                 <Show when={r.doc}>
                   <p class="muted text-xs">{r.doc}</p>
                 </Show>
+                {/* Recipes stay on the HTTPS URL: their bodies are https-only
+                    commands (bundle-URI https URLs, http.extraHeader), so an
+                    ssh:// substitution would break them. */}
                 <code class="clone-cmd block overflow-x-auto rounded bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-800">
-                  {String(r.command ?? r.cmd ?? "").replaceAll("{url}", clone()).replaceAll("URL", clone())}
+                  {String(r.command ?? r.cmd ?? "").replaceAll("{url}", https()).replaceAll("URL", https())}
                 </code>
               </div>
             )}
@@ -79,7 +149,7 @@ function CloneMenu(props) {
           <div class="clone-recipe">
             <strong>git</strong>
             <code class="clone-cmd block overflow-x-auto rounded bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-800">
-              {`git clone ${clone()}`}
+              {cmd()}
             </code>
           </div>
         </Show>

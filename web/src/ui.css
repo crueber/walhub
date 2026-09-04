@@ -93,6 +93,10 @@
   .empty-state-compact .empty-title { @apply text-sm; }
   .empty-state-compact .empty-hint { @apply text-xs; }
 
+  /* Clone popover (issue #37): solid panel — the shared .card background
+     is translucent in dark mode and tab text would bleed through. */
+  .clone-body { @apply bg-white dark:bg-zinc-900; }
+
   /* Progress bar + error tray */
   .progress { @apply fixed inset-x-0 top-0 z-50 h-0.5; }
   .progress-bar { @apply h-full bg-emerald-500 transition-all duration-300; }
