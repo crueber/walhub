@@ -26,6 +26,7 @@ import { attachReleases } from "./releases.js";
 import { attachSocial, attachSocialTop } from "./social.js";
 import { attachOrgs } from "./orgs.js";
 import { attachUsers } from "./users.js";
+import { attachImports } from "./import.js";
 import { openAuthPopup, canAuthenticate } from "./auth.js";
 
 /** Off-DOM default base, tests only (§1.3). */
@@ -162,6 +163,7 @@ export class ReposClient {
     attachInvites(this);
     attachNotifications(this);
     attachSocialTop(this);
+    attachImports(this);
   }
 
   /**

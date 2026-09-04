@@ -296,3 +296,29 @@ func TestValidateMalformedListen(t *testing.T) {
 		t.Fatalf("unparseable listen must not count as loopback: %v", warnings)
 	}
 }
+
+// [import] section: defaults pass; bounds and allowlist shape fail closed.
+func TestValidateImport(t *testing.T) {
+	if _, errs := Validate(Defaults()); len(errs) != 0 {
+		t.Fatalf("import defaults must validate clean: %v", errs)
+	}
+	c := Defaults()
+	c.Import.MaxRefs = 0
+	_, errs := Validate(c)
+	errsContain(t, errs, "import.max_refs must be >= 1")
+	c = Defaults()
+	c.Import.MaxConcurrent = 0
+	_, errs = Validate(c)
+	errsContain(t, errs, "import.max_concurrent must be >= 1")
+	for _, bad := range []string{"https://github.com", "github.com/org", "host:22", "user@host", ""} {
+		c = Defaults()
+		c.Import.URLAllowlist = []string{bad}
+		_, errs = Validate(c)
+		errsContain(t, errs, "must be a plain host")
+	}
+	c = Defaults()
+	c.Import.URLAllowlist = []string{"github.com", "git.example.com"}
+	if _, errs := Validate(c); len(errs) != 0 {
+		t.Fatalf("plain-host allowlist must pass: %v", errs)
+	}
+}

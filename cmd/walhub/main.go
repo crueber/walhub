@@ -74,7 +74,7 @@ var subcommands = []command{
 	{"wal annotate-pack", "retrofit side files via manifest-only CAS", runWalAnnotatePack},
 	{"wal rev-index", "write a .rev from an .idx", runWalRevIndex},
 	{"synth", "deterministic synthetic repo via git fast-import", runSynth},
-	{"import", "classic import of a git directory", runImport},
+	{"import", "import a git directory (--from) or a git URL (--url)", runImport},
 	{"mirror", "external bridge via a local bare buffer repo", runMirror},
 	{"config check", "validate file ⊕ env, report ignored overrides", runConfigCheck},
 	{"config dump", "print the effective config as TOML", runConfigDump},
@@ -192,6 +192,9 @@ Commands:
   wal rev-index IDX [--out P]
   synth --out DIR --size s|m|l [--seed N]
   import [--direct] --from GITDIR owner/name
+  import --url URL owner/name [--ref REF]… [--default-branch-only]
+      [--include-pull-heads] [--include-notes] [--token-env VAR]
+      [--format sha1|sha256] [--dangerous]
   mirror --from URL --to URL --dir PATH
   config check [--env-file PATH]… [--strict]
   config dump

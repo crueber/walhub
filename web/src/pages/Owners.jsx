@@ -9,7 +9,12 @@ export default function Owners() {
   const [getOwners] = useData("owners", () => repos.owners.list());
   return (
     <div class="owners-page">
-      <h2 class="mb-4 text-xl font-semibold">Owners</h2>
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-xl font-semibold">Owners</h2>
+        <A class="btn primary px-3 py-1" href="/import">
+          Import repository
+        </A>
+      </div>
       <Show when={getOwners()} fallback={<p class="muted">loading…</p>}>
         <Show
           when={(getOwners() ?? []).length > 0}

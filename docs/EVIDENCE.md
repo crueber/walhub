@@ -35,6 +35,7 @@ requested or when a review questions a hot path).
 | E8 | 2026-09-04 | Release latest-pointer, autodraft, asset streaming (`internal/releases`, `internal/social`) | Is the latest badge O(1), what does a publish/list/autodraft cost, is the asset upload memory-bounded, and are star/fork writes constant? | Latest hot read flat (2 GETs at 5 and 200 releases); publish 3 GETs + 2 PUTs; list 1 LIST + 1 GET per release; autodraft 1 probe per candidate (≤100) with zero LIST; 1 MiB upload 2 GETs + 2 PUTs with an empty spool dir and zero-write 413s; star 2+2, fork bump 1+1. Cannot explode: pointer monotonicity skips stale publishers, scans/lists are prefix-bounded and capped, git probes run under the package pool. |
 | E9 | 2026-09-04 | Collab stream fan-out + invalidation coalescing (`internal/notify`, `web/src/lib`) | What does one repo-frame publish cost vs subscriber count, what survives a stalled subscriber, and how many refetches does a 30-check burst cause? | Publish ~0.6 µs (1 sub) → ~10 µs (128 subs), zero store round-trips; stalled pages shed (never stall emission, never grow past 16 + 64 frames); bursts collapse to ~2 refetches per key via the per-tick key-set flush + per-key single-flight; warm revisits transfer nothing. Cannot explode: drop-oldest bus, bounded ring, bounded flush. |
 | E10 | 2026-09-04 | Push fast path with the collab layer mounted + full-chain e2e timing (`cmd/walhub`, `internal/e2e`) | Does the push fast path gain any bucket round trips from eight mounted feature packages, and how long is the full org→release→fork chain on a real stack? | Zero: cold push 8 ops, warm push 9 ops, 0 collab-family keys on either; full chain wall 2.2 s (slowest phase: merge+close 0.5 s). Cannot regress: the budget test fails on any collab key touched by a push. |
+| E11 | 2026-09-04 | Repository import (`internal/repoimport`) | What does one URL import cost, and does it grow with repo size? | Flat: 6 GETs+HEADs + 12 control PUTs + 0 LISTs at 50 and 400 commits; wall grows with pack bytes only. Cannot explode: exact-key probes, ref enumeration local + capped, pool-gated git, no lock held across I/O. |
 
 ---
 
@@ -759,3 +760,62 @@ Environment: linux, go1.27.1, stock git 2.53.0, memory store
 by a failing-if-touched test; the full collaboration chain runs in ~2 s
 on a real stack. No redesign required; the levers on the merge path stay
 the per-package ones (E4–E7).
+
+---
+
+## E11 — Repository import cost: flat control plane across S/M (2026-09-04)
+
+**Area:** repository import from a git source (`internal/repoimport`).
+Spec: `docs/features/10_git_import.md` §8.
+
+**Question:** what does one URL import cost in store round trips, and does
+the cost grow with repo size (commits/refs)?
+
+**Method.** Harness: `internal/repoimport/evidence_test.go`
+(`go test ./internal/repoimport/ -run 'TestEvidenceImportBudget|TestEvidenceImportFlat' -v`).
+The REAL `Service.RunHeadless` path (clone → publish → provenance) over
+the **memory store** wrapped in a class-counting decorator, with the REAL
+identity service (importer-admin write included) and the **real git
+binary**. Fixture remote = local `file://` repo repacked into the PINNED
+single-pack layout (`repackSingle` asserts exactly one source pack, so
+Npacks = 1 and the ops range is tight) at two populations — S: 50
+commits + 2 branches + 2 tags; M: 400 commits + 10 branches + 10 tags.
+Memory store isolates the import's algorithmic shape from network RTT
+(same gating as the keybench E1 precedent); absolute wall times are
+environment-bound (this workstation is a QEMU VM) — the *shape* (flat
+control plane, wall linear in pack bytes) is the durable claim.
+
+**Results.**
+
+| population | GETs+HEADs | PUTs (control) | LISTs | pack bytes (bulk, unbudgeted) | wall | refs landed |
+|---|---|---|---|---|---|---|
+| S (50c/2b/2t) | 6 | 14 (12) | 0 | 23,686 | ~40 ms | 5 |
+| M (400c/10b/10t) | 6 | 14 (12) | 0 | 238,485 | ~74 ms | 21 |
+
+Control PUTs = manifest Create + log segment(s) + checkpoint/refs pair +
+access.json + import.json + per-pack `.idx` (2 packs: tier-0 reuse +
+tier-2 base). Bulk `.pack` bytes are reported, not budgeted (plan §7:
+"bulk pack bytes excluded by definition").
+
+**Analysis.**
+
+- **Flat because everything scales with packs and refs, never with
+  commits.** Ref enumeration is local (`for-each-ref` on scratch, capped
+  by `import.max_refs`); the ref publish is ONE transaction regardless
+  of ref count; pack traffic is one PUT per pack (single-pack fixture ⇒
+  constant). S→M grows commits 8×, refs 4×, pack bytes 10× — control
+  ops do not move (6/12 at both sizes; the flatness test fails past +4).
+- **Zero LIST by construction:** every store touch is an exact-key probe
+  or create (manifest HEAD, import.json GET, pack/idx PUTs, CAS writes).
+- **Wall grows with pack bytes only** (40 ms → 74 ms for 10× bytes) —
+  git time (clone, repack) dominates, and both are pool-gated with ctx
+  timeouts, off the request path, off the hot path.
+- **Cannot explode:** exact-key probes only; no lock held across I/O
+  (the target has no handle pre-create); clone concurrency capped at
+  `import.max_concurrent = 2` (saturation fails loudly); scratch swept
+  per attempt; cancel-before-commit leaves only inert orphans.
+
+**Verdict.** Import adds zero round trips to any hot path (it is a task,
+and the push-budget fence stays green with the surface mounted) and its
+own cost is a flat 6 + 12 + 0 LIST range at both populations. No
+redesign required; the levers are the documented `[import]` keys.

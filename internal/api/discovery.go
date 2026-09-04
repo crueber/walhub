@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // --- GET /api/v1 (§8 discovery; no phantom routes, derived from the table) ----------
@@ -33,7 +34,40 @@ func discoveryEndpoints() []string {
 		seen[rt.Template] = true
 		out = append(out, rt.Template)
 	}
+	// Feature-owned routes served by ExtraRoutes chained in front of the
+	// core mux (docs/features/10: the /api/v1/repos/imports twins live in
+	// internal/repoimport, which core must not import — 14 §14.3). They are
+	// real routes, not phantoms: the composition registers both the
+	// template here and the handler there, in the same change (law 12).
+	exposedMu.Lock()
+	extra := append([]string{}, exposedExtra...)
+	exposedMu.Unlock()
+	for _, tmpl := range extra {
+		if seen[tmpl] {
+			continue
+		}
+		seen[tmpl] = true
+		out = append(out, tmpl)
+	}
 	return out
+}
+
+// exposedExtra holds feature-owned discovery templates (see above);
+// compiled-in registration only, never request-scoped.
+var (
+	exposedMu    sync.Mutex
+	exposedExtra []string
+)
+
+// RegisterExposed appends feature-owned route templates to the discovery
+// endpoints[] (14 §14.12 lane rule). Called once per template from the
+// feature's composition wiring (cmd/walhub); duplicates are dropped at
+// render time. Not concurrency-critical (startup-only), but mutex-guarded
+// for -race cleanliness.
+func RegisterExposed(templates ...string) {
+	exposedMu.Lock()
+	defer exposedMu.Unlock()
+	exposedExtra = append(exposedExtra, templates...)
 }
 
 func (h *handlers) discovery(w http.ResponseWriter, r *http.Request) {
