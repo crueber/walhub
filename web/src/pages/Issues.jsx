@@ -8,6 +8,9 @@ import { createSignal, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { TTL } from "../lib/collab.js";
+import { labelColorMap } from "../lib/labels.js";
+import { LabelChip } from "../components/LabelPicker.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 
@@ -36,6 +39,13 @@ export default function Issues() {
   const [getPage] = useData(key, () => ctx.repoClient.issues.list(query()));
 
   const reload = () => invalidate(key());
+
+  // Label colors for the card chips (#45): the index cards carry names
+  // only (02 §2 projection), so colors resolve through the cached
+  // `labels:{o}/{r}` set (30 s TTL, one shared entry with the thread
+  // page picker). Unknown names render as bare chips (02 §3.1).
+  const [getLabelSet] = useData(() => `labels:${ctx.full}`, () => ctx.repoClient.labels.list(), TTL.labels);
+  const colorMap = () => labelColorMap(getLabelSet()?.labels);
 
   // Live list: any `issue` frame invalidates the list windows (coalesced).
   useCollabStream(() => ctx.full, ctx.repoClient, ["issue"]);
@@ -133,9 +143,9 @@ export default function Issues() {
                       {issue.comment_count} comments · {fmtDate(issue.updated_at)}
                     </span>
                     <Show when={(issue.labels ?? []).length > 0}>
-                      <span class="flex w-full gap-1">
+                      <span class="flex w-full flex-wrap gap-1">
                         <For each={issue.labels}>
-                          {(l) => <span class="chip">{l}</span>}
+                          {(l) => <LabelChip name={l} map={colorMap()} />}
                         </For>
                       </span>
                     </Show>
