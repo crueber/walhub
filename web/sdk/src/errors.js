@@ -31,3 +31,12 @@ export class ReposError extends Error {
     return this.status === 401;
   }
 }
+
+/**
+ * 304 sentinel — NOT an error. The SDK resolves (never throws) this when a
+ * GET answers `304 Not Modified` (revalidation hit: the caller already holds
+ * the current body). The data layer treats it as silent keep-current: value
+ * untouched, no error-tray entry. `Symbol.for` keeps identity across bundle
+ * copies (SPA bundle vs `repos.js`), so compare with `===`, never by shape.
+ */
+export const NOT_MODIFIED = Symbol.for("walhub/not-modified");

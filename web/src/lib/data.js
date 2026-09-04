@@ -5,6 +5,7 @@
 
 import { createSignal, createEffect } from "solid-js";
 import { TTL, collabKeys } from "./collab.js";
+import { NOT_MODIFIED } from "../../sdk/src/errors.js";
 
 /** 08 §6 TTL table (re-exported from the pure collab module). */
 export { TTL };
@@ -75,31 +76,39 @@ function evict() {
   }
 }
 
-function start(key, entry, fn) {
-  entry.refetch = fn;
-  entry.promise = trackPending(
-    (async () => {
-      try {
-        const value = await fn();
-        entry.value = value;
-        entry.at = Date.now();
-        entry.error = null;
-        entry.signal[1](value);
-      } catch (err) {
-        entry.error = err;
-        entry.at = Date.now();
-        reportError(err, key); // errors go to the tray, not into the page
-      } finally {
-        entry.promise = null;
-      }
-    })()
-  );
+function start(key, entry, fn, { keepRefetch = false } = {}) {
+  // Ordering guard (#41): every fetch is a generation. A body (or error)
+  // commits only while its generation is still the newest — a stale
+  // disk-cache hit or a reordered response resolving after a newer fetch
+  // started is dropped and can never overwrite fresh state.
+  if (!keepRefetch) entry.refetch = fn;
+  const generation = ++entry.seq;
+  const task = (async () => {
+    try {
+      const value = await fn();
+      if (generation !== entry.seq) return; // stale loser: drop silently
+      if (value === NOT_MODIFIED) return void (entry.at = Date.now()); // 304: silent keep-current
+      entry.value = value;
+      entry.at = Date.now();
+      entry.error = null;
+      entry.signal[1](value);
+    } catch (err) {
+      if (generation !== entry.seq) return; // stale error: never clobber, never tray-spam
+      entry.error = err;
+      entry.at = Date.now();
+      reportError(err, key); // errors go to the tray, not into the page
+    } finally {
+      if (entry.promise === guarded) entry.promise = null;
+    }
+  })();
+  const guarded = trackPending(task);
+  entry.promise = guarded;
 }
 
 function ensureEntry(key) {
   let entry = cache.get(key);
   if (!entry) {
-    entry = { signal: createSignal(undefined), promise: null, value: undefined, at: 0, error: null, refetch: null };
+    entry = { signal: createSignal(undefined), promise: null, value: undefined, at: 0, error: null, refetch: null, seq: 0 };
     cache.set(key, entry);
   }
   return entry;
@@ -132,6 +141,23 @@ export function useData(key, fn, ttl = DEFAULT_TTL) {
   return [getValue];
 }
 
+// --- headless seam (tests + cache warmers) -----------------------------------
+// useData's effect cannot run under Node (the solid-js server build has no
+// effects), so headless tests drive the cache through prefetchData: the same
+// ensureEntry → touch/evict → start path the effect uses, minus reactivity.
+
+/**
+ * Internal: fetch NOW for key (a new generation), return the entry's value
+ * getter. Headless tests and cache warmers use this; components use useData.
+ */
+export function prefetchData(key, fn) {
+  const entry = ensureEntry(key);
+  touch(key, entry);
+  evict();
+  start(key, entry, fn);
+  return entry.signal[0];
+}
+
 /** Normalize an API field that may be a list, a comma string, a bool, or
  * null into a displayable array — the describe/settings payloads mix all of
  * these (e.g. this_host.serves is a BOOLEAN, roles a list). */
@@ -142,10 +168,22 @@ export function asList(v) {
   return String(v).split(",").map((x) => x.trim()).filter(Boolean);
 }
 
-/** Force a refetch of one key (e.g. after a mutating call). */
+/**
+ * Force a refetch of one key (e.g. after a mutating call). ALWAYS starts a
+ * new generation — even over an in-flight fetch: the ordering guard drops
+ * whichever settles stale, so a mutation refetch colliding with an in-flight
+ * (SSE/coalesced) read can no longer be skipped into showing old data. The
+ * refetch runs under the SDK's HTTP-cache bypass, so it always reads a
+ * post-mutation body, never a pre-mutation disk-cache hit (#41). The stored
+ * refetch closure is kept as-is (no wrapper layering).
+ */
 export function invalidate(key) {
   const entry = cache.get(key);
-  if (entry && !entry.promise) start(key, entry, entry.refetch ?? (() => Promise.resolve(entry.value)));
+  if (!entry || typeof entry.refetch !== "function") return;
+  const refetch = entry.refetch;
+  const run = () => refetch();
+  const fn = repos && typeof repos.withNoStore === "function" ? () => repos.withNoStore(run) : run;
+  start(key, entry, fn, { keepRefetch: true });
 }
 
 /** Force a refetch of every settled key under a prefix (list windows). */
@@ -159,9 +197,10 @@ export function invalidatePrefix(prefix) {
 
 // --- 08 §4 invalidation-storm coalescing ------------------------------------
 // A burst of collab frames (CI posting 30 check runs) MUST coalesce:
-// keys are collected into a set and invalidated once per tick, and the
-// promise-cache already single-flights per key (one in-flight fetch per
-// key; joiners share it).
+// keys are collected into a set and invalidated once per tick. Background
+// reads still single-flight per key (startIfStale joins the in-flight
+// fetch); invalidations always start a new generation and the ordering
+// guard in start() drops whichever settles stale (#41).
 const pendingInvalidations = new Set();
 let invalidateScheduled = false;
 

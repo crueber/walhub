@@ -10,7 +10,7 @@
  * Every method derives its own AbortController from the caller's signal (§1.6:
  * the caller owns the signal, the SDK owns the reader and closes it).
  */
-import { ReposError } from "./errors.js";
+import { ReposError, NOT_MODIFIED } from "./errors.js";
 import { readSse } from "./sse.js";
 import { RepoClient } from "./repo.js";
 import { attachAdmin } from "./admin.js";
@@ -158,6 +158,8 @@ export class ReposClient {
     this.authenticate = opts.authenticate ?? (canAuthenticate() ? () => openAuthPopup(this._base) : null);
     /** Single-flight popup promise — at most one per client (§1.2). @type {Promise<void>|null} */
     this._popupAuth = null;
+    /** HTTP-cache bypass nesting depth for withNoStore() (mutation refetches). */
+    this._noStoreDepth = 0;
     attachUsers(this);
     attachOrgs(this);
     attachInvites(this);
@@ -270,6 +272,26 @@ export class ReposClient {
     return p;
   }
 
+  /**
+   * Run fn with HTTP-cache bypass armed: every SDK call whose fetch is
+   * initiated synchronously inside fn sends `cache: "no-store"` plus
+   * `Cache-Control: no-cache` / `Pragma: no-cache`, so a
+   * mutation-triggered refetch can never read a pre-mutation body from the
+   * browser HTTP cache. The arming is a synchronous nesting counter around
+   * fn() — it is exact because `_call` → `_request` → fetch-invocation runs
+   * synchronously to the first await; SDK calls first awaited on something
+   * else inside fn lose the bypass (fail-open to cached reads) but stay
+   * correct. Returns fn()'s result; the counter restores on throw.
+   */
+  withNoStore(fn) {
+    this._noStoreDepth = (this._noStoreDepth ?? 0) + 1;
+    try {
+      return fn();
+    } finally {
+      this._noStoreDepth--;
+    }
+  }
+
   /** Derive an AbortController from the caller's signal (§1.6). */
   _controller(signal) {
     const c = new AbortController();
@@ -281,11 +303,22 @@ export class ReposClient {
   }
 
   /** Build {url, init} for one call under the current lane. */
-  _request(path, { method = "GET", headers, body, sse = true } = {}) {
+  _request(path, { method = "GET", headers, body, sse = true, cache } = {}) {
     const lane = selectLane({ token: this._token }, this._base);
+    const h = { ...headers };
+    let mode = cache;
+    if ((this._noStoreDepth ?? 0) > 0) {
+      // withNoStore() armed: skip the HTTP cache entirely so a
+      // mutation-triggered refetch can never read a pre-mutation body.
+      mode = "no-store";
+      h["Cache-Control"] ??= "no-cache";
+      h["Pragma"] ??= "no-cache";
+    }
+    const init = { ...laneInit(lane, this._token, h, sse), method };
+    if (mode !== undefined) init.cache = mode;
     return {
       url: laneUrl(this._base, lane, path),
-      init: { ...laneInit(lane, this._token, headers ?? {}, sse), method },
+      init,
       body,
     };
   }
@@ -313,8 +346,8 @@ export class ReposClient {
    * The fetch wrapper proper (§1.2): send → on 401 or opaque redirect,
    * single-flight popup auth → retry exactly once → dispatch by content type.
    */
-  async _call(path, { method = "GET", headers, body, signal, onProgress, sse = true, raw = false } = {}) {
-    const req = this._request(path, { method, headers, body, sse });
+  async _call(path, { method = "GET", headers, body, signal, onProgress, sse = true, raw = false, cache } = {}) {
+    const req = this._request(path, { method, headers, body, sse, cache });
     const controller = this._controller(signal);
     let res = await this._send(req, controller);
     if (res.status === 401 || this._isOpaqueRedirect(res)) {
@@ -334,6 +367,7 @@ export class ReposClient {
 
   /** Route a response by content type (§1.4); non-2xx → ReposError. */
   async _dispatch(res, { url, onProgress, signal }) {
+    if (res.status === 304) return NOT_MODIFIED; // revalidated: keep current, never an error
     if (!res.ok && res.status !== 0) {
       let text = "";
       try {
@@ -352,6 +386,7 @@ export class ReposClient {
 
   /** Raw-text path (application/toml endpoints): resolve the body as text. */
   async _textResponse(res, url) {
+    if (res.status === 304) return NOT_MODIFIED; // revalidated: keep current, never an error
     if (!res.ok && res.status !== 0) {
       let text = "";
       try { text = await res.text(); } catch { /* unreadable */ }
