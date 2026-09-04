@@ -20,6 +20,8 @@ import Commit from "./pages/Commit.jsx";
 import Issues from "./pages/Issues.jsx";
 import IssueNew from "./pages/IssueNew.jsx";
 import Issue from "./pages/Issue.jsx";
+import Pulls from "./pages/Pulls.jsx";
+import Pull from "./pages/Pull.jsx";
 import Labels from "./pages/Labels.jsx";
 import Milestones from "./pages/Milestones.jsx";
 import Wal from "./pages/Wal.jsx";
@@ -49,6 +51,8 @@ render(
         <Route path="/issues" component={Issues} />
         <Route path="/issues/new" component={IssueNew} />
         <Route path="/issues/:num" component={Issue} />
+        <Route path="/pulls" component={Pulls} />
+        <Route path="/pull/:num" component={Pull} />
         <Route path="/labels" component={Labels} />
         <Route path="/milestones" component={Milestones} />
         <Route path="/wal" component={Wal} />

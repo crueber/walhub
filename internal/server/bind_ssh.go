@@ -204,32 +204,66 @@ func (s *Server) uploadPackPrepare(ctx context.Context, id git.RepoId) (*git.Loc
 // pack, check connectivity, publish to the WAL, and write the report-status
 // result to out. Mid-pipeline refusals are git-wire responses (nil error);
 // HTTP (receivePackLocal §3.3) and SSH (§17) both land here.
+//
+// Server-managed refs (docs/features/03 §3: `refs/pull/**`) are refused
+// before ingest: commands targeting them get `ng "rejected by rule
+// 'pull-refs-managed'"` and never reach connectivity or publish. Only the
+// PR merge/open task publishes those refs, server-side through the WAL
+// funnel (which never enters this pipeline).
 func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Principal, repo *git.LocalRepo, req *git.PushRequest, pack io.Reader, packMax int64, out io.Writer) error {
+	managed := make([]git.PushCommand, 0, len(req.Commands))
+	allowed := make([]git.PushCommand, 0, len(req.Commands))
+	for _, c := range req.Commands {
+		if git.IsManagedRef(c.Ref) {
+			managed = append(managed, c)
+			continue
+		}
+		allowed = append(allowed, c)
+	}
+	if len(allowed) == 0 && len(managed) > 0 {
+		// Refused-only push: no ingest, no connectivity, no publish — the
+		// report alone (unpack ok + per-ref ng, §7.2 plain lines).
+		report := git.Report{UnpackOK: true, Sideband: req.Has("side-band-64k")}
+		for _, c := range managed {
+			report.Refs = append(report.Refs, git.RefReport{Ref: c.Ref, OK: false, Reason: git.ManagedRefReason()})
+		}
+		_, _ = out.Write(report.EncodeReport())
+		return nil
+	}
+	managedReq := req
+	if len(managed) > 0 {
+		cp := *req
+		cp.Commands = allowed
+		managedReq = &cp
+	}
 	if pack != nil {
 		if _, ierr := s.layer.IngestStream(ctx, repo, pack,
-			packMax, req.Has("thin-pack"), true); ierr != nil {
-			band2Failure(out, req, "pack rejected: "+ierr.Error())
+			packMax, managedReq.Has("thin-pack"), true); ierr != nil {
+			band2Failure(out, managedReq, "pack rejected: "+ierr.Error())
 			return nil
 		}
 	}
-	tips := make([]git.Oid, 0, len(req.Commands))
-	for _, c := range req.Commands {
+	tips := make([]git.Oid, 0, len(managedReq.Commands))
+	for _, c := range managedReq.Commands {
 		if c.New != repo.ZeroOid() && !isZeroOidStr(c.New) {
 			tips = append(tips, c.New)
 		}
 	}
 	if len(tips) > 0 {
 		if cerr := s.layer.CheckConnectivity(ctx, repo, tips); cerr != nil {
-			band2Failure(out, req, "connectivity check failed: "+cerr.Error())
+			band2Failure(out, managedReq, "connectivity check failed: "+cerr.Error())
 			return nil
 		}
 	}
-	res, pubErr := s.engine.Publish(ctx, id, req, p.Name, wal.ObjectAccess{Local: repo})
+	res, pubErr := s.engine.Publish(ctx, id, managedReq, p.Name, wal.ObjectAccess{Local: repo})
 	if pubErr != nil {
 		_, _ = out.Write(git.ErrPkt("walgit: publish failed: " + pubErr.Error()))
 		return nil
 	}
-	report := git.Report{UnpackOK: true, Sideband: req.Has("side-band-64k")}
+	report := git.Report{UnpackOK: true, Sideband: managedReq.Has("side-band-64k")}
+	for _, c := range managed {
+		report.Refs = append(report.Refs, git.RefReport{Ref: c.Ref, OK: false, Reason: git.ManagedRefReason()})
+	}
 	for _, rr := range res.PerRef {
 		if rr.Err != nil {
 			report.Refs = append(report.Refs, git.RefReport{Ref: rr.Name, OK: false, Reason: rr.Err.Error()})
