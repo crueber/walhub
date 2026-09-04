@@ -38,11 +38,11 @@ func TestCover3RoleRank(t *testing.T) {
 func TestCover3CheckRequiredChecksDirect(t *testing.T) {
 	e := newTestEnv()
 	putPolicy(t, e, `{"version":1,"rules":[]}`)
-	if err := e.svc.checkRequiredChecks(ctx(), "o", "r"); err != nil {
+	if err := e.svc.checkRequiredChecksGate(ctx(), "o", "r", strings.Repeat("b", 40), "refs/heads/main", "m"); err != nil {
 		t.Fatalf("empty: %v", err)
 	}
 	_ = e.store.Delete(ctx(), PolicyKey("o", "r"), "")
-	if err := e.svc.checkRequiredChecks(ctx(), "o", "r"); err != nil {
+	if err := e.svc.checkRequiredChecksGate(ctx(), "o", "r", strings.Repeat("b", 40), "refs/heads/main", "m"); err != nil {
 		t.Fatalf("absent: %v", err)
 	}
 }

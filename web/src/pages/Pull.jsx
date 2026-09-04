@@ -14,6 +14,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { CheckPill, ContextRows } from "./Checks.jsx";
 import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
 
 function eventText(ev) {
@@ -556,6 +557,7 @@ export default function Pull() {
     invalidate(threadsKey());
     invalidate(requestsKey());
     invalidate(diffKey());
+    invalidate(checksKey());
   };
   const reloadReview = () => {
     invalidate(key());
@@ -568,6 +570,34 @@ export default function Pull() {
   const pr = () => getView()?.pr;
   const mergeable = () => getView()?.mergeable;
   const head = () => getView()?.head_live_sha ?? pr()?.head?.sha ?? "";
+  // Head checks (05 §9): the combined view + per-context rows for the
+  // live head sha, and the required-checks advisory (union of
+  // require_checks over policy rules matching the base ref — exact-ref
+  // match client-side; the merge task decides server-side). The pill
+  // updates on reload; live `check` frames will refresh it once the repo
+  // collaboration stream lands (06/08 own that endpoint).
+  const checksKey = () => `checks:${ctx.full}:${head()}`;
+  const [getCombined] = useData(checksKey, () => (head() ? ctx.repoClient.checks.combined(head()) : Promise.resolve(null)));
+  const [getPolicy] = useData(`policy:${ctx.full}`, () => ctx.repoClient.policy.get().catch(() => null));
+  const requiredChecks = () => {
+    const base = pr()?.base?.ref ?? "";
+    const rules = getPolicy()?.rules ?? [];
+    const out = new Set();
+    for (const r of rules) {
+      const refs = r?.match?.refs ?? [];
+      if (refs.length && !refs.includes(base)) continue;
+      for (const c of r?.effect?.protect?.require_checks ?? []) out.add(c);
+    }
+    return [...out].sort();
+  };
+  const checksBlockers = () => {
+    const required = requiredChecks();
+    if (!required.length) return [];
+    const byCtx = new Map((getCombined()?.statuses ?? []).map((s) => [s.context, s.state]));
+    return required
+      .filter((c) => byCtx.get(c) !== "success")
+      .map((c) => (byCtx.has(c) ? `${c} (${byCtx.get(c)})` : `${c} (missing)`));
+  };
   const summary = () => thread()?.review_summary;
   const threads = () => getThreads()?.threads ?? [];
 
@@ -722,6 +752,25 @@ export default function Pull() {
           </div>
         </div>
         <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} />
+        <Show when={head()}>
+          <div class="card" aria-label="Checks">
+            <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold">
+              Checks
+              <CheckPill full={ctx.full} sha={head()} client={ctx.repoClient} verbose />
+            </h2>
+            <ContextRows full={ctx.full} sha={head()} client={ctx.repoClient} />
+            <Show when={requiredChecks().length > 0}>
+              <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                required: {requiredChecks().join(", ")}
+              </p>
+            </Show>
+            <Show when={checksBlockers().length > 0}>
+              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                blocking merge: {checksBlockers().join(", ")}
+              </p>
+            </Show>
+          </div>
+        </Show>
         <Show when={!pr()?.merged && thread()?.state === "open"}>
           <form class="card" onSubmit={merge}>
             <h2 class="mb-2 text-sm font-semibold">Merge</h2>
@@ -733,7 +782,12 @@ export default function Pull() {
                 <option value="rebase">rebase</option>
               </select>
             </label>
-            <button type="submit" class="btn btn-primary mt-2 px-3 py-1" disabled={getBusy()}>
+            <button
+              type="submit"
+              class="btn btn-primary mt-2 px-3 py-1"
+              disabled={getBusy() || checksBlockers().length > 0}
+              title={checksBlockers().length ? `required checks not green: ${checksBlockers().join(", ")}` : "merge pull request"}
+            >
               {getBusy() ? "merging…" : "merge pull request"}
             </button>
             <Show when={getTask()}>

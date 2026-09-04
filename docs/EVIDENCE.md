@@ -30,6 +30,7 @@ requested or when a review questions a hot path).
 | E3 | 2026-09-04 | Issue list/read path (`internal/issues`) | Is the issue list index-first O(1), what does a thread read cost, and is the LIST fallback bounded? | List flat (2 GETs, 0 LIST at any population when the index is complete); thread read linear in thread length; fallback bounded (1 LIST + ≤2000 header GETs, page ≤100). Cannot explode: every scan is prefix-bounded and paged. |
 | E4 | 2026-09-04 | PR mergeability + merge task (`internal/pulls`) | Does mergeability stay bounded as open PRs accumulate, what does a merge cost, and is git-pool usage bounded? | Recompute flat (3 GETs + 1 PUT, 0 LIST, 6 git calls at 1 and 50 open PRs); merge bounded (12 GETs + 5 PUTs, 0 LIST, 11 git calls, peak concurrency 1); 16 concurrent readers collapse to 1 merge-tree. Cannot explode: no LIST on any path, page-bounded sidecars, pool-gated git. |
 | E5 | 2026-09-04 | Review summary + required-reviews gate (`internal/review`) | What does a review-summary recompute cost, what does the merge-time gate scan cost, and why can't either explode? | Recompute linear in review/thread count (9 GETs + 1 PUT + 2 LISTs at 5 reviews/2 threads; 122 + 1 + 2 at 100/20); gate scan linear in review count (8 + 0 + 1 at 5; 103 + 0 + 1 at 100), own deadline, never trusts the summary. Cannot explode: scans are prefix-bounded to one PR's low-volume collaboration subtree, no git on any path, no cross-PR fan-out. |
+| E6 | 2026-09-04 | Check report path + combined view + required-checks gate (`internal/checks`) | What does one CI report cost, what does the combined view cost, and why can't either explode as context count grows? | First report 2 GETs + 2 PUTs + 1 LIST; re-report 4 GETs + 3 PUTs + 1 LIST (1 context); combined 1 LIST + 1 GET per context, 0 PUTs; gate = policy GET + 1 LIST + 1 GET per context under a 15 s deadline. Cannot explode: every scan is prefix-bounded to one sha, reports are CI-rate, no git on any read path, index writes are best-effort. |
 
 ---
 
@@ -397,3 +398,71 @@ the page/window size, not a redesign.
 **Verdict.** Recompute and gate costs are exactly linear in per-PR review
 count with constant LISTs (2 and 1) and at most 1 PUT, measured on the
 real code path at both populations. No redesign required.
+
+---
+
+## E6 — Check report path + combined view + required-checks gate (2026-09-04)
+
+**Question:** what does one CI status report cost, what does the combined
+worst-of view cost, what does the merge-time gate scan cost inside the
+merge task, and why can't any of them explode as context count grows?
+
+**Method.** Harness: `internal/checks/evidence_test.go`
+(`TestEvidenceReportBudget`; `go test ./internal/checks/ -run
+TestEvidence -v`). Real service paths over the **memory store** wrapped
+in an op-counting decorator — the budgets count store round-trips
+(GET/PUT/LIST), which is the round-trip cost model (AGENTS law 6);
+memory isolates the algorithmic shape from network RTT. Populations: 1
+context and 20 contexts on one sha (20 is past any sane CI matrix for a
+single commit).
+
+**Results.**
+
+| path | 1 context | 20 contexts | shape |
+|---|---|---|---|
+| first report (per context) | 2 GETs, 2 PUTs, 1 LIST | 230 GETs, 40 PUTs, 20 LISTs (cumulative over 20 reports) | 2 PUTs + (2 + k) GETs + 1 LIST per report, k = contexts on the sha |
+| re-report (1 of k) | 4 GETs, 3 PUTs, 1 LIST | 23 GETs, 3 PUTs, 1 LIST | status CAS (GET + PUT) + re-read + index CAS + combined re-read |
+| combined view | 1 GET, 0 PUTs, 1 LIST | 20 GETs, 0 PUTs, 1 LIST | exactly 1 LIST + 1 GET per context |
+| gate scan (merge task) | policy GET + 1 LIST + k GETs | same shape | under GateTimeout (15 s), fails closed |
+
+**Analysis.**
+
+- **A first report is 2 PUTs (status Create + index CAS) + 2 GETs
+  (index read + combined re-read for the broadcast packet) + 1 LIST**
+  (the combined re-read's prefix LIST). A re-report adds the failed
+  Create attempt and the CAS re-read: 4 GETs + 3 PUTs (one PUT failed
+  with 412 — counted as an attempt, not a write) + 1 LIST.
+- **The per-report cost grows linearly in k** because the broadcast
+  packet carries the fresh combined state, which re-reads all k
+  contexts (1 LIST + k GETs, bounded parallel fan-out cap 8). This is
+  deliberate: the SSE `check` frame must not lag one write behind.
+  Reports are CI-rate (one system per context, human-driven pipelines),
+  never git-hot-path, so k GETs per report is the honest price of a
+  correct broadcast — measured, not assumed.
+- **The combined view is exactly 1 LIST + k GETs, 0 PUTs, 0 git.**
+  No commit resolution happens on the read path (POST validates the
+  sha; GET trusts it), so reads never touch the git pool.
+- **The gate scan is policy GET + statuses LIST + k GETs** (same fold
+  as combined, minus the index), under its own 15 s deadline; a blown
+  deadline fails closed. It NEVER trusts the index projection — the
+  verdict re-derives from the per-context objects, so a stale or racing
+  index row cannot decide a merge (same discipline as the review gate's
+  distrust of review_summary, E5).
+- **Index writes are best-effort.** A lost index CAS (writer died
+  between the status write and the index CAS, or 5-attempt exhaustion)
+  costs one stale table row until the next report — the per-context
+  objects are the backfill truth, and compaction is inline past 256
+  KiB / newest 500 shas. The table page degrades to LIST, never to
+  wrong.
+
+**Over the network (S3/GCS/filesystem).** Same shape with per-op RTT: a
+report at 20 contexts is ~22 control-plane GETs + 2 CAS PUTs + 1 LIST
+(no bulk lane, at most 1 git call on POST for sha validation, zero on
+every GET); the gate is ~k+1 GETs + 1 LIST inside the merge task's
+deadline. All control plane, all off the git hot path — the lever if a
+deployment ever saw hundred-context shas is the fan-out cap, not a
+redesign.
+
+**Verdict.** Report cost is constant PUTs (2–3) with GETs linear in
+per-sha context count; combined and gate reads are exactly 1 LIST + k
+GETs with zero writes and zero git. No redesign required.

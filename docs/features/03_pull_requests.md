@@ -369,6 +369,13 @@ every call goes through the SDK).
   checks: no checks backend`) only when a rule actually carries the gate;
   plain protect rules merge fine. Pending Wave 05 (`internal/checks`
   absent) — the scan is where the head-sha verdict plugs in.
+- **Wave 05 landed (2026-09-04, `internal/checks`):** the pre-scan is
+  gone. `require_checks` is a strict optional field inside `protect`
+  (1–32 validated contexts; the push half ignores it), and the merge
+  task consults 05's stored-combined-view gate at the step-4 call site
+  through pulls' `ChecksGate` seam (next to the 04 gate) — the merge
+  logic is NOT forked. Nil backend fails closed only when a rule
+  actually carries the gate (same rule as the pre-scan kept).
 - **First fetch serves `unknown`** (§4 second line of defense): stamp
   mismatch (or miss) serves `unknown` + enqueues `pull-mergeable`; the
   background pass converges the cache and the next fetch serves the stamp

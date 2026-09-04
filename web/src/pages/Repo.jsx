@@ -94,6 +94,7 @@ const TABS = [
   { id: "commits", label: "Commits", href: (full) => `/${full}/commits` },
   { id: "issues", label: "Issues", href: (full) => `/${full}/issues` },
   { id: "pulls", label: "Pulls", href: (full) => `/${full}/pulls` },
+  { id: "checks", label: "Checks", href: (full) => `/${full}/checks` },
   { id: "wal", label: "WAL", href: (full) => `/${full}/wal` },
   { id: "settings", label: "Settings", href: (full) => `/${full}/settings` },
 ];
@@ -103,6 +104,7 @@ function activeTab(pathname) {
   if (/\/settings/.test(pathname)) return "settings";
   if (/\/issues|\/labels|\/milestones/.test(pathname)) return "issues";
   if (/\/pulls|\/pull\//.test(pathname)) return "pulls";
+  if (/\/checks/.test(pathname)) return "checks";
   if (/\/commits|\/commit\//.test(pathname)) return "commits";
   return "code";
 }
