@@ -22,20 +22,14 @@ import (
 	"golang.org/x/net/http2"
 
 	"git.packden.us/crueber/walhub/internal/api"
-	"git.packden.us/crueber/walhub/internal/checks"
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/events"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/identity"
-	"git.packden.us/crueber/walhub/internal/issues"
 	"git.packden.us/crueber/walhub/internal/maintain"
 	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/pulls"
-	"git.packden.us/crueber/walhub/internal/releases"
-	"git.packden.us/crueber/walhub/internal/review"
 	"git.packden.us/crueber/walhub/internal/server"
-	"git.packden.us/crueber/walhub/internal/server/auth"
-	"git.packden.us/crueber/walhub/internal/social"
 	"git.packden.us/crueber/walhub/internal/store"
 	"git.packden.us/crueber/walhub/internal/wal"
 )
@@ -102,22 +96,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var reg *wal.Registry
 	var engine *server.WalEngine
 	var apiEnv *api.Env
-	var ident *identity.Service
-	var identHandler *identity.Handler
-	var issuesSvc *issues.Service
-	var issuesHandler *issues.Handler
-	var pullsSvc *pulls.Service
-	var pullsHandler *pulls.Handler
-	var reviewSvc *review.Service
-	var reviewHandler *review.Handler
-	var checksSvc *checks.Service
-	var checksHandler *checks.Handler
-	var releasesSvc *releases.Service
-	var releasesHandler *releases.Handler
-	var socialSvc *social.Service
-	var socialHandler *social.Handler
-	var notifySvc *notify.Service
-	var notifyHandler *notify.Handler
+	var collab *collabWiring
 	if !setupOnly {
 		wal.SetWarnLogger(func(format string, args ...any) { log.Warn(fmt.Sprintf(format, args...)) })
 		reg = wal.NewRegistry(ctx, st, cfg)
@@ -125,83 +104,21 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		apiEnv = api.NewEnv(st, &repoRegistry{reg: reg, st: st}, cfg, engine, version(), hostname())
 		apiEnv.Tasks = &opsTasks{reg: reg, eng: engine}
 		apiEnv.Instance = reg.InstanceID()
-		// Wave A identity (docs/features/01): the access.json/org/team
-		// surface (Seam 1, both lanes), the require_read gate (Seam 3
-		// expansion wired into dry-run via GroupExpander), and the
-		// access-bootstrap op (Seam 5).
-		ident = identity.New(st, cfg)
-		identHandler = &identity.Handler{Svc: ident}
-		apiEnv.Access = ident
-		apiEnv.GroupExpander = ident.PolicyExpander()
-		// Wave B issues (docs/features/02): the thread/event/label/
-		// milestone surface (Seam 1, both lanes) over the P6 roles owned
-		// by identity. Notifications emit through the 02 §10 seam —
-		// nil until internal/notify lands (best-effort synchronous
-		// fan-out contract, P8).
-		issuesSvc = issues.New(st, ident)
-		issuesHandler = &issues.Handler{Svc: issuesSvc}
-		if ot, ok := apiEnv.Tasks.(*opsTasks); ok {
-			ot.ident = ident
-		}
-		// Wave C1 pulls (docs/features/03): PR threads over the shared
-		// numbering/thread/index family, pr.json sidecars, the stamped
-		// mergeable.json cache, the pull-merge/pull-mergeable/pull-fork
-		// tasks, and the pulls event sink. Ref publishes funnel through
-		// the WAL publish path (never force); the merge task calls 02's
-		// ApplyClosingReferences seam via issuesSvc.
-		pullsSvc, pullsHandler = newPullsService(st, ident, issuesSvc, reg, cfg.Git.Binary)
-		// Wave C2 review (docs/features/04): immutable reviews, CAS'd
-		// line-anchored threads, the review-requests index, the
-		// review_summary render cache, and the required-reviews
-		// merge-time half (consulted by the pull-merge task through
-		// pulls' ReviewGate seam — the merge logic is NOT forked).
-		// Suggest's commit authors ride pulls' HeadAuthors; the
-		// push-time half (policy.RequiredReviewsEffect) enforces at
-		// receive-pack with no wiring. Registers NO task kinds.
-		reviewSvc, reviewHandler = newReviewService(st, ident, pullsSvc)
-		// Wave 05 checks (docs/features/05): commit statuses (Create-
-		// then-CAS per (sha, context)), the CAS'd checks/index.json
-		// projection with inline compaction, wct_ CI tokens (Seam 2
-		// shape → unprivileged ci:<id> principal, capability checked
-		// handler-side), the combined worst-of view, and the
-		// require_checks merge-time half (consulted by the pull-merge
-		// task through pulls' ChecksGate seam — the merge logic is NOT
-		// forked). The push-time half needs no wiring: protect ignores
-		// require_checks on the push path by construction.
-		checksSvc, checksHandler = newChecksService(st, ident, pullsSvc, reg, cfg.Git.Binary)
-		// Feature 07 releases (docs/features/07 §§1–3): release headers,
-		// asset bytes (two-step upload, static serving), the monotonic
-		// latest pointer, and changelog autodraft. Publish fan-out rides
-		// internal/notify through the nil-safe seams bound below (P8).
-		releasesSvc, releasesHandler = newReleasesService(st, ident, reg, cfg.Git.Binary, cfg.Cache.Dir, int64(cfg.Releases.MaxAssetBytes))
-		// Feature 07 social (docs/features/07 §§4–6): stars, watcher
-		// reads, counters, starred lists. Watch mutation stays in
-		// internal/notify (06 §6); the fork counter binds onto pulls
-		// below (07 §6).
-		socialSvc, socialHandler = newSocialService(st, ident)
-		// Feature 06 notifications (docs/features/06): the fan-out
-		// layer — notification objects, per-user indexes, the activity
-		// log, per-user SSE, repo webhooks, retention. The REAL
-		// Emitter/Streamer implementations bind onto the nil-safe
-		// seams here, so issues/pulls/review/checks mutations fan out
-		// synchronously (P8) from this boot forward.
-		notifySvc, notifyHandler = newNotifyService(st, ident)
-		wireNotifyFanout(notifySvc, issuesSvc, pullsSvc, reviewSvc, checksSvc)
-		wireReleasesFanout(releasesSvc, notifySvc)
-		wireSocialForks(socialSvc, pullsSvc)
-		// Feature 08 §4: access.json CAS commits publish the "access"
-		// collab frame (nil-safe seam on the identity service; the doc
-		// stays the backfill truth).
-		if ident != nil {
-			ident.Stream = func(ctx context.Context, repo string) {
-				notifySvc.PublishFrame(notify.RepoFrame{Name: "access", Repo: repo})
-			}
-		}
+		// Features 01–08 assemble in exactly one place (collab.go,
+		// 09 §4 touch point 3); integration tests reuse buildCollab
+		// so the measured composition is the shipped composition.
+		collab = buildCollab(st, cfg, reg, apiEnv)
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --
 	roles := roleSet(cfg.Server.Roles)
 	eventsRole := len(roles) == 0 || roles["events"]
+	var pullsSvc *pulls.Service
+	var notifySvc *notify.Service
+	var ident *identity.Service
+	if collab != nil {
+		pullsSvc, notifySvc, ident = collab.pullsSvc, collab.notifySvc, collab.ident
+	}
 	var wake func(repo string)
 	if !setupOnly && eventsRole && (cfg.Events.WebhookURL != "" || pullsSvc != nil) {
 		var sinks []events.Sink
@@ -241,40 +158,10 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		Notifier:  wake,
 		ReadGate:  readGateOf(ident),
 	})
-	if identHandler != nil {
-		// Chain the identity surface in front of the core api mux (Seam 1);
-		// authentication resolves through the server chain (Seam 2).
-		identHandler.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
-			return srv.Auth().Authenticate(r, cfg)
-		}
-		srv.ChainExtra(identHandler)
-	}
-	if issuesHandler != nil {
-		// Chain the issues surface in front of the core api mux (Seam 1);
-		// authentication resolves through the server chain (Seam 2).
-		issuesHandler.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
-			return srv.Auth().Authenticate(r, cfg)
-		}
-		srv.ChainExtra(issuesHandler)
-	}
-	if pullsHandler != nil {
-		chainPulls(srv, pullsHandler)
-	}
-	if reviewHandler != nil {
-		chainReview(srv, reviewHandler)
-	}
-	if checksHandler != nil {
-		chainChecks(srv, checksHandler)
-	}
-	if releasesHandler != nil {
-		chainReleases(srv, releasesHandler)
-	}
-	if socialHandler != nil {
-		chainSocial(srv, socialHandler)
-	}
-	if notifyHandler != nil {
-		chainNotify(srv, notifyHandler)
-	}
+	// Features 01–08 mount here (collab.go chainCollab, 09 §4 touch
+	// point 3: one block per package + the per-user SSE mounts that
+	// ride the notify handler).
+	chainCollab(srv, collab)
 
 	// the SSH key registry backs both the sshd auth lookup and the
 	// /api/v1/ssh-keys surface (17_ssh.md §3); setup-only has no store, so

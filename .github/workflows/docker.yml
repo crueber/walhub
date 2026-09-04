@@ -37,6 +37,10 @@ jobs:
           go-version-file: go.mod
       - name: vet + fast Go tests
         run: go vet ./... && go test -short -count=1 ./...
+      - name: coverage gate (all packages incl. the collab layer, 09)
+        run: make cover
+      - name: e2e incl. the collab full chain (09; skips on old git)
+        run: make e2e
       - name: headless JS tests
         run: node --test "web/test/unit/*.test.js"
 

@@ -14,7 +14,7 @@ Test framework: stdlib `testing` only. No testify, no gomock (dependency policy,
 | fast | `make test` → `go test -short -count=1 ./...` + `node --test web/test/` | every unit/integration test honoring `testing.Short()`; hermetic: in-memory store, `t.TempDir()` caches, the real `git` binary; plus the headless JS tests (§6.5) | < 1 min; a watchdog (`timeout 300`) wraps the Go recipe |
 | store contract | `make contract` (memory + filesystem, always); `make contract-s3` / `make contract-gcs` for credentialed backends | ONE suite `contract.Run(store, prefix)` (§2) | every case green on every backend: memory + filesystem on every run, S3/GCS whenever their env is set |
 | sim | `make sim` → `go test -count=1 -timeout 15m ./internal/sim/...` | fault-injection over one truth store, one `FaultStore` **per instance link** (§3, §4) | the consistency proof; deterministic under a seed |
-| e2e | `make e2e` → `tests/e2e.sh` | real git clients against the running walhub server (smart HTTP, receive/upload-pack, bundle-uri, WAL) **plus the first-run/bootstrap lifecycle scenarios (§5.3)** | ~50 s; run whenever git-path or boot-path code changes |
+| e2e | `make e2e` → `go test -count=1 ./internal/e2e/...` | real git clients against the running walhub server (smart HTTP, receive/upload-pack, bundle-uri, WAL) **plus the first-run/bootstrap lifecycle scenarios (§5.3)** plus the collaboration full chain (§5.4) | ~60 s; run whenever git-path, boot-path, or collab-path code changes |
 | lint/vet | `make vet` → `go vet ./...` && `gofmt -l` && `go build ./...` | Go equivalent of Rust's `-D warnings`: `go vet` output, any `gofmt -l` line, or any build warning fails the gate | zero findings |
 | race | `make race` → `go test -race -short -count=1 ./...` | full fast tier under the race detector (§6) | zero races |
 | cover | `make cover` | per-package statement coverage of every `internal/...` package, ≥ 95% fail-under (§7) | CI-enforced; new code lands with tests (D7) |
@@ -250,6 +250,38 @@ Zero-config first run and the setup UI/API are first-class behaviors (06_server_
 | `bootstrap_setup_save_restart` | from the invalid (or absent) config: `PUT /api/v1/setup` with a corrected config, then restart the process | save returns 200 and lists which keys need a restart; `<data-dir>/walhub.toml` exists afterwards and is byte-valid TOML; after restart the server boots normally (no banner, no 503s, saved values effective — verified via `GET /api/v1/setup` effective values and a git round-trip) |
 | `bootstrap_setup_api_auth` | matrix over the access rule (D6): (a) no config file; (b) config present + `auth.mode = "none"`; (c) config present + token auth; (d) case (c) with `WALHUB_SETUP_TOKEN` set | (a) and (b): `GET/PUT /api/v1/setup` open, no credentials; (c): unauthenticated → 401, with the admin token → 200; (d): `WALHUB_SETUP_TOKEN` authorizes it; `POST /api/v1/setup/test` follows the same rule and never writes the file |
 
+### 5.4 Collaboration full chain (Feature 09)
+
+`TestE2E_CollabFullChain` (`internal/e2e/collab_test.go`) proves the
+collaboration layer works as one system on a real stack: a token-mode
+server subprocess (alice admin + bob writer — two principals, because
+fan-out never notifies the actor), the real git binary (preemptive
+`http.extraHeader` Bearer auth — git never answers a Bearer 401
+challenge), and a real webhook sink. One scenario walks org → team →
+access bindings → watch + repo webhook → issue #1 → branch push → PR #2
+(`fixes #1`) → cross-user approval review → `require_checks` policy
+(blocked merge task goes `error`, then reported-success turns the
+combined view green) → merge → `fixes #N` close-on-merge → tag + release
++ latest → author tray + webhook delivery → fork → cross-fork PR (#3,
+proving P2 shared numbering across forks). Phase timings log per run
+(the §7 rollout evidence in `docs/EVIDENCE.md` E10).
+
+Tier placement: the chain skips in `-short` mode (it is the e2e tier,
+not the fast tier). As-built scope notes the test pins: fork
+manifest-sharing is deferred (the pull-fork task records fork objects
+only — `ForkExecutor` nil), so the chain seeds the fork head by direct
+push and proves the cross-fork *open* path; the base-side reachability
+probe can only answer for objects the base materialization holds.
+
+The push fast-path fence lives next to the composition it measures:
+`TestPushFastPathZeroCollabRoundTrips` (`cmd/walhub/push_budget_test.go`,
+excluded from the coverage gate with the rest of `cmd/`) boots the
+shipped composition (`buildCollab` — the same function `serveHTTP`
+calls) over a prefix-counting store and pushes twice through real
+receive-pack: cold 8 ops, warm 9 ops, **0** collab-family keys on
+either. Any push-path read of `access.json`, a team roster, or an index
+object fails it.
+
 ---
 
 ## 6. Concurrency test kit (mandates from 13_concurrency.md)
@@ -342,10 +374,10 @@ dev-store-stop:
 clean:
 	rm -rf bin .cover && find . -name '*.test' -delete
 ci: ## what CI runs, in order (fast first, proof last)
-	$(MAKE) vet test race cover contract sim
+	$(MAKE) vet test race cover contract e2e
 ```
 
-Normative notes: the old `lint` target is `vet` (same three commands); the old `dev-local` recipe became `make dev`, which needs no `--config` because a bare serve boots with the D5 zero-config defaults — export the rustfs dev creds (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` as in `contract-s3`) before `dev` when the store backend is S3. `test-web` runs `node --test web/test/` (§6.5) and is part of `make test` — a Go-only green build is not green. S3/GCS contract targets stay env-gated; memory + filesystem (`contract`) never skip.
+Normative notes: the old `lint` target is `vet` (same three commands); the old `dev-local` recipe became `make dev`, which needs no `--config` because a bare serve boots with the D5 zero-config defaults — export the rustfs dev creds (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` as in `contract-s3`) before `dev` when the store backend is S3. `test-web` runs `node --test web/test/` (§6.5) and is part of `make test` — a Go-only green build is not green. S3/GCS contract targets stay env-gated; memory + filesystem (`contract`) never skip. `cover` discovers packages via `go list ./internal/...`, so every collaboration package (identity, issues, pulls, review, checks, notify, releases, social) is gated at ≥ 95% with no target change — the 09 integration added no new tier, only new suites inside the existing ones (§5.4) plus the `cmd/`-side push fence (outside the gate by §7.1). The `sim` tier has no package yet (`internal/sim` does not exist); until it lands, `e2e` is the end-to-end proof `ci` runs.
 
 ### 7.1 The coverage gate (Divergence D7)
 

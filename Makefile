@@ -65,7 +65,7 @@ clean: ## remove build artifacts
 	rm -rf $(BINARY) .cover web/dist
 	mkdir -p web/dist && touch web/dist/.keep
 
-ci: vet test race cover ## everything that must be green before a merge
+ci: vet test race cover contract e2e ## everything that must be green before a merge (09: contract + e2e gate the collab seams too)
 
 help: ## show targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'

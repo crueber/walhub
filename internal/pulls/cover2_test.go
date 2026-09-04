@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -525,5 +526,34 @@ func TestCoverTaskTable(t *testing.T) {
 	tbl.mu.Unlock()
 	if n > 128 {
 		t.Fatalf("recent unbounded: %d", n)
+	}
+}
+
+func TestCoverTaskEndSnapshotRace(t *testing.T) {
+	// Regression (09 audit): end() wrote rec.Finished without the record
+	// mutex while the production paths snapshot the LIVE record directly
+	// (StartMerge/UpdateBranch return entry.rec.snapshot(); merge/task
+	// polls read it) — a data race when completion lands mid-poll.
+	// -race must stay silent here.
+	tbl := newTaskTable()
+	e, joined := tbl.begin("rr", TaskKindMerge)
+	if joined {
+		t.Fatal("first must lead")
+	}
+	e.rec.initMerge(7, "merge")
+	var wg sync.WaitGroup
+	for r := 0; r < 8; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				_ = e.rec.snapshot()
+			}
+		}()
+	}
+	tbl.end("rr", TaskKindMerge)
+	wg.Wait()
+	if got := tbl.get("rr", TaskKindMerge); got == nil || got.Finished == "" {
+		t.Fatalf("recent get: %+v", got)
 	}
 }

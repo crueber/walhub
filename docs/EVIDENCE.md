@@ -33,7 +33,8 @@ requested or when a review questions a hot path).
 | E6 | 2026-09-04 | Check report path + combined view + required-checks gate (`internal/checks`) | What does one CI report cost, what does the combined view cost, and why can't either explode as context count grows? | First report 2 GETs + 2 PUTs + 1 LIST; re-report 4 GETs + 3 PUTs + 1 LIST (1 context); combined 1 LIST + 1 GET per context, 0 PUTs; gate = policy GET + 1 LIST + 1 GET per context under a 15 s deadline. Cannot explode: every scan is prefix-bounded to one sha, reports are CI-rate, no git on any read path, index writes are best-effort. |
 | E7 | 2026-09-04 | Notification fan-out + webhook delivery loop (`internal/notify`) | What is the write amplification of one emission, what does the unread dedup save on replay, and what does a delivery pass cost? | One emission = 2 GETs + 2 PUTs per recipient + 3 GETs + 2 PUTs fixed (thread, watchers, seq reservation, activity); deduped replay writes flat (2 PUTs, zero notification/index writes at any recipient count; probes are 3+n GETs); delivery pass = 1 LIST + ~3 GETs + 1 PUT per event + 1 cursor CAS, idle pass writes nothing. Cannot explode: 100-recipient sync cap with task fallback, 5 s budget, per-hook cursors. |
 | E8 | 2026-09-04 | Release latest-pointer, autodraft, asset streaming (`internal/releases`, `internal/social`) | Is the latest badge O(1), what does a publish/list/autodraft cost, is the asset upload memory-bounded, and are star/fork writes constant? | Latest hot read flat (2 GETs at 5 and 200 releases); publish 3 GETs + 2 PUTs; list 1 LIST + 1 GET per release; autodraft 1 probe per candidate (≤100) with zero LIST; 1 MiB upload 2 GETs + 2 PUTs with an empty spool dir and zero-write 413s; star 2+2, fork bump 1+1. Cannot explode: pointer monotonicity skips stale publishers, scans/lists are prefix-bounded and capped, git probes run under the package pool. |
-| E9 | 2026-09-04 | Collab stream fan-out + invalidation coalescing (`internal/notify`, `web/src/lib`) | What does one repo-frame publish cost vs subscriber count, what survives a stalled subscriber, and how many refetches does a 30-check burst cause? | Publish ~0.6 µs (1 sub) → ~10 µs (128 subs), zero store round-trips; stalled subscriber sheds (channel newest-16, ring newest-64); 30-frame burst → 1–2 refetches per key (15–30× fewer than per-frame); warm re-attach → 0 refetches; idle page → 0 polls. Cannot explode: drop-oldest bus, bounded ring, per-tick key-set flush + per-key single-flight. |
+| E9 | 2026-09-04 | Collab stream fan-out + invalidation coalescing (`internal/notify`, `web/src/lib`) | What does one repo-frame publish cost vs subscriber count, what survives a stalled subscriber, and how many refetches does a 30-check burst cause? | Publish ~0.6 µs (1 sub) → ~10 µs (128 subs), zero store round-trips; stalled pages shed (never stall emission, never grow past 16 + 64 frames); bursts collapse to ~2 refetches per key via the per-tick key-set flush + per-key single-flight; warm revisits transfer nothing. Cannot explode: drop-oldest bus, bounded ring, bounded flush. |
+| E10 | 2026-09-04 | Push fast path with the collab layer mounted + full-chain e2e timing (`cmd/walhub`, `internal/e2e`) | Does the push fast path gain any bucket round trips from eight mounted feature packages, and how long is the full org→release→fork chain on a real stack? | Zero: cold push 8 ops, warm push 9 ops, 0 collab-family keys on either; full chain wall 2.2 s (slowest phase: merge+close 0.5 s). Cannot regress: the budget test fails on any collab key touched by a push. |
 
 ---
 
@@ -670,3 +671,91 @@ store round-trips; stalled pages shed (never stall emission, never grow
 past 16 + 64 frames); bursts collapse to ~2 refetches per key via the
 per-tick key-set flush + per-key single-flight; warm revisits transfer
 nothing. Cannot explode: drop-oldest bus, bounded ring, bounded flush.
+
+---
+
+## E10 — Push fast path with the collab layer mounted + full-chain timing (2026-09-04)
+
+**Area:** rollout integration — the §5 invariant that the push fast path
+gains zero bucket round trips (`cmd/walhub`, `internal/e2e`). Spec:
+`docs/features/09_rollout.md` §5.3.
+
+**Question:** with all eight feature packages mounted (every `ExtraRoutes`
+handler chained, the identity `require_read` gate wired — the shipped
+composition, not a stub), does a git push touch ANY collaboration key
+family? And how long is the whole
+org → team → bindings → issue → PR → review → checks → gates → merge →
+release → notification/webhook → fork → cross-fork PR chain on a real
+stack with real git?
+
+**Method.** Two harnesses, both the real code path:
+- `TestPushFastPathZeroCollabRoundTrips` in `cmd/walhub/push_budget_test.go`
+  (`go test ./cmd/walhub/ -run TestPushFastPath -v`): the shipped
+  composition (`buildCollab`, the same function `serveHTTP` calls) over
+  the **memory store** wrapped in a prefix-counting decorator, served over
+  real HTTP (`httptest`), pushed twice with the **real git binary**
+  (cold auto-create + warm). Memory isolates the shape from network RTT;
+  every counted op is one bucket round trip on any backend. Collab
+  families: `orgs/`, `users/`, and `repos/<o>/<r>/` under `access.json`,
+  `meta/`, `issues/`, `pulls/`, `checks/`, `releases/`,
+  `collab-events/`, `webhooks/`, `fork.json`. `policy.json` is
+  deliberately NOT collab: the push rule language predates the layer and
+  its push-enforceable effects evaluate on the push path by design.
+- `TestE2E_CollabFullChain` in `internal/e2e/collab_test.go`
+  (`make e2e`, skipped in `-short`): token-mode server subprocess
+  (alice admin + bob writer), real git, real webhook sink. Phase timings
+  log per run.
+
+**Results.**
+
+| push | bucket ops | collab-family ops |
+|---|---|---|
+| cold (auto-create, `info/refs` + `receive-pack`) | 8 (get + put mix) | **0** |
+| warm (existing repo, `info/refs` + `receive-pack`) | 9 | **0** |
+
+| chain phase | wall (this run) |
+|---|---|
+| push seed (real git) | 32 ms |
+| org/team/bindings | 5 ms |
+| watch+webhook | 1 ms |
+| issue create | 1 ms |
+| branch push (real git) | 31 ms |
+| PR open (`fixes #1`) | 13 ms |
+| approval review | 2 ms |
+| gates (blocked merge → error + green combined) | 511 ms |
+| merge + close-on-merge | 523 ms |
+| release + latest | 44 ms |
+| tray + webhook | 2 ms |
+| fork + cross-fork PR | 80 ms |
+| **full chain** | **2.2 s** (+ ~5 s binary build, once per process) |
+
+Environment: linux, go1.27.1, stock git 2.53.0, memory store
+(budget test) / filesystem store (chain test).
+
+**Analysis.**
+
+- **Zero is structural, not incidental.** The push path resolves auth
+  through the static token table, evaluates only push-enforceable policy
+  effects (`ProtectEffect.Evaluate` never consults `RequireChecks` —
+  `internal/policy/effect_protect.go`), and publishes through the WAL
+  funnel. Collaboration handlers are reachable only through their HTTP
+  routes; the `require_read` gate fires on git/LFS *read* paths, never on
+  receive-pack. There is no code path from a push to a collab key — the
+  test is the regression fence: any future push-path read of
+  `access.json`, a team roster, or an index object fails it.
+- **The one by-design exception is priced in.** A `policy.json` carrying
+  `team:`/`role:` spellings pays identity expansion reads on push
+  (bounded: one exact-key GET per referenced team, 304-class when warm —
+  E2). The fence counts those as collab on purpose: the day a push pays
+  them, the test names the key. Today's push (no policy file) pays none.
+- **The chain is fast because every step is O(1)-ish.** The slowest
+  phases are the two that run real git (merge task: trial merge +
+  commit-tree + WAL publish, ~0.5 s) and the gate round trip (blocked
+  task failure + status report + combined re-read, ~0.5 s). Everything
+  else is single-digit milliseconds — the collaboration layer adds no
+  human-visible latency to any step.
+
+**Verdict.** The push fast path is collab-free by construction and pinned
+by a failing-if-touched test; the full collaboration chain runs in ~2 s
+on a real stack. No redesign required; the levers on the merge path stay
+the per-package ones (E4–E7).
