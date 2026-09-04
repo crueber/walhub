@@ -377,6 +377,13 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
   the summary; the event log stays the truth (a remove still resolves the
   live set). Fully CAS-atomic dedup would need the live set in the header
   schema — deferred as human-rate over-engineering.
+- **Reaction buttons render unicode emoji, never the wire words** (issue
+  #31: 👍 👎 😄 🎉 😕 ❤️ 🚀 👀 with the content spelling kept in
+  `aria-label`/`title`; no emoji library per the frontend budget). Each
+  commented/opened event carries its own emoji+count summary row sourced
+  from `reaction_summary`; summary chips toggle (remove-404 falls back to
+  add, GitHub semantics). `reaction_changed` rows read
+  "reacted 👀 eyes on #N" — glyph for scanners, word for clarity.
 
 ## Explicitly out of scope
 
