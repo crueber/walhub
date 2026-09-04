@@ -36,8 +36,6 @@ const SECTIONS = [
   ["/o/r/commits", "commits"],
   ["/o/r/commits?path=cmd%2Fwalhub", "commits"],
   ["/o/r/commit/abc123def456", "commits"],
-  ["/o/r/branches", "branches"],
-  ["/o/r/tags", "tags"],
   ["/o/r/issues", "issues"],
   ["/o/r/issues/new", "issues"],
   ["/o/r/issues/12", "issues"],
@@ -63,7 +61,9 @@ test("section paths highlight their own tab", () => {
 });
 
 test("short, unknown, and empty paths fall back to Code", () => {
-  for (const path of ["/", "/o", "/o/r/foobar", "", undefined, null]) {
+  // branches/tags have no tab and no route: a highlight-nothing id would
+  // leave the tab bar blank, so they fall back to Code like any unknown.
+  for (const path of ["/", "/o", "/o/r/foobar", "/o/r/branches", "/o/r/tags", "", undefined, null]) {
     assert.equal(activeTab(path), "code", String(path));
   }
 });

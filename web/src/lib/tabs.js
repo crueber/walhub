@@ -6,8 +6,9 @@
 // (blob/main/cmd/walhub/checks.go lit up Checks) — every tab had this bug,
 // because the filename, not the section, matched (issue #25).
 
-/** First-segment → tab id. Segments absent here (branches/tags) complete the
- *  table so the matcher covers every tab in Repo.jsx TABS. */
+/** First-segment → tab id. Every value names a tab in Repo.jsx TABS; any
+ *  section absent here falls back to "code", which always exists and
+ *  highlights (a highlight-nothing id would leave the tab bar blank). */
 const SECTION_TABS = {
   // Code (repo root + file browsing).
   tree: "code",
@@ -15,20 +16,15 @@ const SECTION_TABS = {
   // Commits.
   commits: "commits",
   commit: "commits",
-  // Branches / tags.
-  branches: "branches",
-  branch: "branches",
-  tags: "tags",
-  tag: "tags",
   // Issues (+ issue sub-collections, all rendered under the Issues tab).
   issues: "issues",
   labels: "issues",
   milestones: "issues",
-  // Pulls.
+  // Pulls (incl. /pull/:num sub-pages, rendered under the Pulls tab).
   pulls: "pulls",
   pull: "pulls",
-  // Checks / releases (no tab in TABS today — returning the id highlights
-  // nothing, which is correct; the point is a *filename* must never map here).
+  // Checks / releases (own tabs AND own routes — but a *filename* deeper in
+  // a blob/tree path must never map here; only the first segment decides).
   checks: "checks",
   check: "checks",
   releases: "releases",

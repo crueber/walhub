@@ -51,7 +51,8 @@ export function CopySha(props) {
       type="button"
       class="copy-sha muted flex shrink-0 cursor-pointer items-center rounded px-1 text-xs hover:text-zinc-900 dark:hover:text-zinc-100"
       title={getCopied() ? "copied!" : `copy full SHA ${String(props.sha ?? "")}`}
-      aria-label="copy full SHA"
+      aria-label={getCopied() ? "copied!" : `copy full SHA ${shortSha(props.sha)}`}
+      aria-live="polite"
       onClick={copy}
     >
       <Show
