@@ -272,6 +272,12 @@ func (s *Server) repoDispatch(w http.ResponseWriter, r *http.Request) {
 		// Lane root GET is handled above; fall through to UI check.
 		s.gated(s.repoPage(id))(w, r)
 	case uiPageRoute(sub[0]):
+		// A repo-subpath byte family shares the page prefix (releases
+		// pages AND release asset bytes both live under /releases/…):
+		// the byte route wins over the SPA shell on shape match.
+		if s.repoDispatchRepoExtras(w, r, id, sub) {
+			return
+		}
 		if !isUIPageMethod(r) {
 			w.Header().Set("Allow", "GET, HEAD")
 			plainStatus(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -279,6 +285,12 @@ func (s *Server) repoDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 		s.gated(s.repoPage(id))(w, r)
 	default:
+		// Feature repo-subpath families (repo_extra.go, 14.3 note):
+		// release asset bytes live here, outside the api lanes and
+		// outside every compress group.
+		if s.repoDispatchRepoExtras(w, r, id, sub) {
+			return
+		}
 		plainStatus(w, http.StatusNotFound, "not found")
 	}
 }
@@ -292,7 +304,7 @@ func isUIPageMethod(r *http.Request) bool {
 func uiPageRoute(sub0 string) bool {
 	switch sub0 {
 	case "tree", "blob", "commits", "commit", "branches", "tags", "wal", "settings",
-		"issues", "labels", "milestones", "pulls", "pull", "checks":
+		"issues", "labels", "milestones", "pulls", "pull", "checks", "releases":
 		return true
 	}
 	return false

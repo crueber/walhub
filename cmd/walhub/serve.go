@@ -31,9 +31,11 @@ import (
 	"git.packden.us/crueber/walhub/internal/maintain"
 	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/pulls"
+	"git.packden.us/crueber/walhub/internal/releases"
 	"git.packden.us/crueber/walhub/internal/review"
 	"git.packden.us/crueber/walhub/internal/server"
 	"git.packden.us/crueber/walhub/internal/server/auth"
+	"git.packden.us/crueber/walhub/internal/social"
 	"git.packden.us/crueber/walhub/internal/store"
 	"git.packden.us/crueber/walhub/internal/wal"
 )
@@ -110,6 +112,10 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var reviewHandler *review.Handler
 	var checksSvc *checks.Service
 	var checksHandler *checks.Handler
+	var releasesSvc *releases.Service
+	var releasesHandler *releases.Handler
+	var socialSvc *social.Service
+	var socialHandler *social.Handler
 	var notifySvc *notify.Service
 	var notifyHandler *notify.Handler
 	if !setupOnly {
@@ -163,6 +169,16 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// forked). The push-time half needs no wiring: protect ignores
 		// require_checks on the push path by construction.
 		checksSvc, checksHandler = newChecksService(st, ident, pullsSvc, reg, cfg.Git.Binary)
+		// Feature 07 releases (docs/features/07 §§1–3): release headers,
+		// asset bytes (two-step upload, static serving), the monotonic
+		// latest pointer, and changelog autodraft. Publish fan-out rides
+		// internal/notify through the nil-safe seams bound below (P8).
+		releasesSvc, releasesHandler = newReleasesService(st, ident, reg, cfg.Git.Binary, cfg.Cache.Dir, int64(cfg.Releases.MaxAssetBytes))
+		// Feature 07 social (docs/features/07 §§4–6): stars, watcher
+		// reads, counters, starred lists. Watch mutation stays in
+		// internal/notify (06 §6); the fork counter binds onto pulls
+		// below (07 §6).
+		socialSvc, socialHandler = newSocialService(st, ident)
 		// Feature 06 notifications (docs/features/06): the fan-out
 		// layer — notification objects, per-user indexes, the activity
 		// log, per-user SSE, repo webhooks, retention. The REAL
@@ -171,6 +187,8 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// synchronously (P8) from this boot forward.
 		notifySvc, notifyHandler = newNotifyService(st, ident)
 		wireNotifyFanout(notifySvc, issuesSvc, pullsSvc, reviewSvc, checksSvc)
+		wireReleasesFanout(releasesSvc, notifySvc)
+		wireSocialForks(socialSvc, pullsSvc)
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --
@@ -239,6 +257,12 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	}
 	if checksHandler != nil {
 		chainChecks(srv, checksHandler)
+	}
+	if releasesHandler != nil {
+		chainReleases(srv, releasesHandler)
+	}
+	if socialHandler != nil {
+		chainSocial(srv, socialHandler)
 	}
 	if notifyHandler != nil {
 		chainNotify(srv, notifyHandler)

@@ -392,7 +392,10 @@ every call goes through the SDK).
   `ForkExecutor` seam, nil in this wave — the task narrates the delegation
   instead of pretending. The fork-network GC rule (§7) is specified now
   (pack removal consults children's manifests); enforcement lands with the
-  executor.
+  executor. Completion additionally CAS-increments the parent's
+  `social.json` forks counter through pulls' `ForksCounter` seam (07 §6
+  owns the field; nil-safe, best-effort with a task notice — the fork
+  objects are committed either way).
 - **Backend outages propagate as 503, never misreported**: `ResolveRef`
   maps only genuine git exits to unknown-revision; transport failures
   (pool, timeout, missing binary) propagate as unavailable — same for

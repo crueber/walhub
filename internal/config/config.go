@@ -252,6 +252,12 @@ type Events struct {
 	SweepInterval Duration `toml:"sweep_interval"`
 }
 
+// Releases caps the collaboration release surface (docs/features/07 §1.2:
+// releases.max_asset_bytes, default 2 GiB → 413 over cap).
+type Releases struct {
+	MaxAssetBytes ByteSize `toml:"max_asset_bytes"`
+}
+
 // Config is the whole file. Section/field names match the TOML keys exactly.
 type Config struct {
 	Server      Server      `toml:"server"`
@@ -267,6 +273,7 @@ type Config struct {
 	Git         Git         `toml:"git"`
 	Telemetry   Telemetry   `toml:"telemetry"`
 	Events      Events      `toml:"events"`
+	Releases    Releases    `toml:"releases"`
 
 	// DataDir is the zero-config root (divergence D5): --data-dir / WALHUB_DATA_DIR,
 	// default ~/.local/share/walhub. Holds store/, cache/, and the saved walhub.toml.
@@ -387,5 +394,8 @@ func Defaults() *Config {
 			LockWaitWarn: Duration(time.Second),
 		},
 		Events: Events{SweepInterval: Duration(5 * time.Minute)},
+		Releases: Releases{
+			MaxAssetBytes: 2 << 30,
+		},
 	}
 }

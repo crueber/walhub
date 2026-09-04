@@ -13,7 +13,7 @@
 | Key | Body | Ops |
 |---|---|---|
 | `repos/<o>/<r>/releases/<tag.json>` | Release header | **CAS** (`PutUpdate`; create = CAS against absent), Delete via endpoint only |
-| `repos/<o>/<r>/releases/<tag.json>/assets/<name>` | Asset bytes | **Create** (immutable); Delete only via the asset DELETE endpoint |
+| `repos/<o>/<r>/releases/assets/<tag>/<name>` | Asset bytes | **Create** (immutable); Delete only via the asset DELETE endpoint |
 | `repos/<o>/<r>/releases/latest.json` | Latest-release pointer | **CAS**; repaired lazily |
 | `repos/<o>/<r>/meta/social.json` | Star/watch/fork counters | **CAS** |
 | `users/<principal>/starred/<o>/<r>.json` | Star record | **Create** / Delete (CAS Create-Delete family) |
@@ -68,8 +68,11 @@ Asset entries (in `assets[]`, `[]` when empty — never `null`):
 
 ### 1.2 Asset objects
 
-Asset bytes are stored like LFS objects: `repos/<o>/<r>/releases/<tag.json>/assets/<name>`, raw bytes,
-immutable `Create`. The JSON entry (in the release header) carries `sha256` + `size`; the object itself
+Asset bytes are stored like LFS objects: `repos/<o>/<r>/releases/assets/<tag>/<name>`, raw bytes,
+immutable `Create`. (The assets live in their own subtree rather than nested under the header
+file: `releases/<tag.json>/assets/…` would make the header path both a file and a directory,
+which the filesystem backend cannot store and no other object family does — keys stay
+prefix-free between files and directories on every backend. The HTTP byte route is unchanged.) The JSON entry (in the release header) carries `sha256` + `size`; the object itself
 carries no metadata. Serving is the static contract (`docs/go/06_server_http.md` §5): strong ETag = store
 version, `Range`/`If-Range` → 206/416, `Cache-Control: public, max-age=31536000, immutable`,
 `Content-Type` = the stored/declared type, accel offload eligible. Byte path:
@@ -282,6 +285,24 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
 - No task kinds in v1; the Seam 5 import hook is named, not built.
 - New repo sub-path family `/{o}/{r}/releases/{tag}/assets/{name}` for bytes (static contract) — the
   spec note 14.3 requires.
+- **Implementation notes (2026-09-04, recorded with the code):** watch PUT/DELETE routes stay
+  registered by `internal/notify` (06 §6 is landed and tested — one HTTP owner; the §7 provider
+  column for watch is superseded). `social.json` converges through dual field-scoped CAS loops
+  (notify: watch fields only; social: stars/forks only) per §4.1 — no route move, no second
+  writer conflict. Autodraft reads the SHARED `issues/index.json` (02-owned) plus `pr.json`
+  sidecars (03 owns the shape): the planned `pulls/index.json` was never adopted by 03, and the
+  shared index carries the same P4 hot-window semantics; LIST backfill for pre-window merges is
+  deferred (same class as P4). PUT is idempotent create-or-update (201/200): the §1.1
+  "duplicate 409" describes the store-level absent-CAS (concurrent creators converge via
+  re-read-as-update) — retry-safe publishes are what the P8 backfill contract needs; 409 stays
+  for asset sha clashes and stale `If-Match` (exact token; `*` = update-only per RFC —
+  must-exist, 404 when absent). The public list hides drafts; GET single serves
+  drafts under the read gate. The users starred twin is open (public info per "no private-read
+  filtering"). Autodraft git argv, named here because 04_git pins feature argv by reference:
+  `rev-parse --verify --quiet refs/tags/<tag>^{commit}` (peeled), `merge-base --is-ancestor`
+  (§3), `for-each-ref --sort=-creatordate --format=%(refname:strip=2) refs/tags` (previous-tag
+  default). Asset bytes serve direct (accel offload eligible, left to the edge). New config key
+  `releases.max_asset_bytes` (2 GiB default; reflective section — setup/env/validation free).
 
 ## Explicitly out of scope
 
