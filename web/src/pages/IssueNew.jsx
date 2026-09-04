@@ -54,12 +54,7 @@ export default function IssueNew() {
           />
         </label>
         <label class="grid gap-1">
-          <span class="flex items-center gap-2 text-sm font-medium">
-            Body
-            <button type="button" class="btn px-2 py-0.5 text-xs" onClick={() => setPreview((p) => !p)}>
-              {getPreview() ? "Edit" : "Preview"}
-            </button>
-          </span>
+          <span class="text-sm font-medium">Body</span>
           <Show when={getPreview()} fallback={
             <textarea
               class="input min-h-32 font-mono text-sm"
@@ -71,9 +66,17 @@ export default function IssueNew() {
             <div class="card prose-sm p-3" innerHTML={sanitize(renderMarkdown(getBody()))} />
           </Show>
         </label>
-        <div>
+        <div class="flex items-center justify-between">
           <button type="submit" class="btn primary" disabled={getBusy()}>
             {getBusy() ? "Creating…" : "Create issue"}
+          </button>
+          <button
+            type="button"
+            class="btn px-2 py-0.5 text-xs"
+            aria-pressed={getPreview()}
+            onClick={() => setPreview((p) => !p)}
+          >
+            {getPreview() ? "Edit" : "Preview"}
           </button>
         </div>
       </form>
