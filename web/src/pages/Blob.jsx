@@ -1,5 +1,5 @@
 // web/src/pages/Blob.jsx — Code tab blob view (§2.7 decision tree):
-// too_large → placeholder; binary → "binary file, N bytes"; .md → Preview|Code
+// too_large → placeholder; binary → "binary file, {human size}"; .md → Preview|Code
 // toggle (markdown-lite + sanitizer in preview, tokenizer in code view); else
 // line-numbered <pre> tinted by the mini tokenizer. Raw deep link comes from
 // the SDK's urls builder (§1.1) — no hand-built API URLs.
