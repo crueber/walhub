@@ -169,9 +169,12 @@ export default function Commits() {
   // Keyed on repo+ref: @solidjs/router reuses route components on query-only
   // navigations, and useResolved captures its keys at setup — so a ref change
   // must recreate the list (owner/name/rest are read fresh at that moment).
+  // The keyed child MUST take the key as its argument: Show returns a no-arg
+  // closure as-is (same reference), so `keyed` + `{() => …}` never remounts
+  // and the list sticks on the first ref (same flaw as #38).
   return (
     <Show when={`${ctx.full}?${ctx.rest || location.query.ref || ""}`} keyed>
-      {() => (
+      {(_key) => (
         <CommitList
           full={ctx.full}
           owner={ctx.owner}
