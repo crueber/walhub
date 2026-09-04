@@ -10,6 +10,7 @@ import { A } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate } from "../lib/data.js";
 import { useCollabStream } from "../components/collab.jsx";
+import Empty from "../components/Empty.jsx";
 
 const DOT = {
   success: "bg-emerald-500",
@@ -160,19 +161,30 @@ export default function Checks() {
         </div>
       </div>
       <Show when={getPage()} fallback={<p class="muted">loading checks…</p>}>
-        <ul class="card-list space-y-2">
-          <For each={getPage().checks ?? []} fallback={<li class="card">No checks reported yet.</li>}>
-            {(row) => (
-              <ShaRow
-                full={ctx.full}
-                row={row}
-                client={ctx.repoClient}
-                stateFilter={getStateFilter()}
-                contextFilter={getContextFilter()}
-              />
-            )}
-          </For>
-        </ul>
+        <Show
+          when={(getPage().checks ?? []).length > 0}
+          fallback={
+            <Empty
+              icon="check"
+              title="No checks reported yet"
+              hint="Check runs posted against commits in this repo will appear here — per-sha state with expandable per-context rows."
+            />
+          }
+        >
+          <ul class="card-list space-y-2">
+            <For each={getPage().checks ?? []}>
+              {(row) => (
+                <ShaRow
+                  full={ctx.full}
+                  row={row}
+                  client={ctx.repoClient}
+                  stateFilter={getStateFilter()}
+                  contextFilter={getContextFilter()}
+                />
+              )}
+            </For>
+          </ul>
+        </Show>
         <Show when={getPage().more}>
           <div class="pager mt-3">
             <button

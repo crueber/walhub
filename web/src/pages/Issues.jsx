@@ -9,6 +9,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { useCollabStream } from "../components/collab.jsx";
+import Empty from "../components/Empty.jsx";
 
 function statePill(state) {
   return state === "open" ? (
@@ -105,8 +106,20 @@ export default function Issues() {
       <Show when={getPage()} fallback={<p class="muted">loading…</p>}>
         {(page) => (
           <>
-            <ul class="grid gap-2">
-              <For each={page().issues ?? []} fallback={<li class="muted">no issues match</li>}>
+            <Show
+              when={(page().issues ?? []).length > 0}
+              fallback={
+                <Empty
+                  icon="issue"
+                  title="No issues match"
+                  hint="Try widening the filters — or file the first issue for this repo."
+                  actionHref={`/${ctx.full}/issues/new`}
+                  actionLabel="New issue"
+                />
+              }
+            >
+              <ul class="grid gap-2">
+                <For each={page().issues ?? []}>
                 {(issue) => (
                   <li class="card flex flex-wrap items-baseline gap-2 p-3">
                     {statePill(issue.state)}
@@ -129,7 +142,8 @@ export default function Issues() {
                   </li>
                 )}
               </For>
-            </ul>
+              </ul>
+            </Show>
             <Show when={page().more}>
               <button
                 type="button"

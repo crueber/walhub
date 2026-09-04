@@ -10,6 +10,7 @@ import { A } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { useCollabStream } from "../components/collab.jsx";
+import Empty from "../components/Empty.jsx";
 
 export function ReleaseBadges(props) {
   return (
@@ -54,25 +55,38 @@ export default function Releases() {
             refresh
           </button>
         </div>
-        <ul class="card-list">
-          <For each={getPage()?.releases ?? []} fallback={<li class="card">No releases yet.</li>}>
-            {(rel) => (
-              <li class="card">
-                <div class="flex items-center gap-2">
-                  <A href={`/${ctx.full}/releases/${encodeURIComponent(rel.tag)}`} class="card-title font-mono">
-                    {rel.tag}
-                  </A>
-                  <ReleaseBadges release={rel} />
-                </div>
-                <div class="card-meta">
-                  <span>{rel.name}</span>
-                  <span>{fmtDate(rel.published_at ?? rel.created_at)}</span>
-                  <span>{(rel.assets ?? []).length} assets</span>
-                </div>
-              </li>
-            )}
-          </For>
-        </ul>
+        <Show
+          when={(getPage()?.releases ?? []).length > 0}
+          fallback={
+            <Empty
+              icon="tag"
+              title="No releases yet"
+              hint="Tag a commit and publish release notes — drafts and prereleases are supported."
+              actionHref={`/${ctx.full}/releases/new`}
+              actionLabel="New release"
+            />
+          }
+        >
+          <ul class="card-list">
+            <For each={getPage()?.releases ?? []}>
+              {(rel) => (
+                <li class="card">
+                  <div class="flex items-center gap-2">
+                    <A href={`/${ctx.full}/releases/${encodeURIComponent(rel.tag)}`} class="card-title font-mono">
+                      {rel.tag}
+                    </A>
+                    <ReleaseBadges release={rel} />
+                  </div>
+                  <div class="card-meta">
+                    <span>{rel.name}</span>
+                    <span>{fmtDate(rel.published_at ?? rel.created_at)}</span>
+                    <span>{(rel.assets ?? []).length} assets</span>
+                  </div>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
         <Show when={getPage()?.more}>
           <button
             type="button"

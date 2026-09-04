@@ -77,6 +77,16 @@
   .err-line { @apply mt-1 text-xs text-red-600 dark:text-red-400; }
   .warn-line { @apply mt-1 text-xs text-amber-600 dark:text-amber-400; }
 
+  /* Empty states (issue #34): centered callouts that use the whitespace —
+     icon/title/hint composition, generous padding, dashed panel. */
+  .empty-state { @apply mx-auto flex w-full max-w-xl flex-col items-center gap-2 rounded-lg border border-dashed
+                 border-zinc-300 bg-zinc-50/50 px-6 py-12 text-center
+                 dark:border-zinc-700 dark:bg-zinc-900/30; }
+  .empty-icon { @apply text-zinc-400 dark:text-zinc-500; }
+  .empty-icon svg { @apply h-10 w-10; }
+  .empty-title { @apply text-base font-semibold text-zinc-800 dark:text-zinc-100; }
+  .empty-hint { @apply max-w-md text-sm text-zinc-500 dark:text-zinc-400; }
+
   /* Progress bar + error tray */
   .progress { @apply fixed inset-x-0 top-0 z-50 h-0.5; }
   .progress-bar { @apply h-full bg-emerald-500 transition-all duration-300; }
