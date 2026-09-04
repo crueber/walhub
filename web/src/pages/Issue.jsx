@@ -8,6 +8,7 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { MentionDatalist } from "./Mentions.jsx";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
 
@@ -192,7 +193,9 @@ export default function Issue() {
                   onInput={(e) => setBody(e.target.value)}
                   placeholder="Write a comment… (#N links issues, @user mentions)"
                   aria-label="comment body"
+                  list="mention-issue-comment"
                 />
+                <MentionDatalist id="mention-issue-comment" names={thread()?.participants} />
                 <div>
                   <button type="submit" class="btn primary" disabled={getBusy() || !getBody().trim()}>
                     Comment

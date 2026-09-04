@@ -29,6 +29,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/issues"
 	"git.packden.us/crueber/walhub/internal/maintain"
+	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/review"
 	"git.packden.us/crueber/walhub/internal/server"
@@ -105,8 +106,12 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var issuesHandler *issues.Handler
 	var pullsSvc *pulls.Service
 	var pullsHandler *pulls.Handler
+	var reviewSvc *review.Service
 	var reviewHandler *review.Handler
+	var checksSvc *checks.Service
 	var checksHandler *checks.Handler
+	var notifySvc *notify.Service
+	var notifyHandler *notify.Handler
 	if !setupOnly {
 		wal.SetWarnLogger(func(format string, args ...any) { log.Warn(fmt.Sprintf(format, args...)) })
 		reg = wal.NewRegistry(ctx, st, cfg)
@@ -147,7 +152,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// Suggest's commit authors ride pulls' HeadAuthors; the
 		// push-time half (policy.RequiredReviewsEffect) enforces at
 		// receive-pack with no wiring. Registers NO task kinds.
-		_, reviewHandler = newReviewService(st, ident, pullsSvc)
+		reviewSvc, reviewHandler = newReviewService(st, ident, pullsSvc)
 		// Wave 05 checks (docs/features/05): commit statuses (Create-
 		// then-CAS per (sha, context)), the CAS'd checks/index.json
 		// projection with inline compaction, wct_ CI tokens (Seam 2
@@ -157,7 +162,15 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// task through pulls' ChecksGate seam — the merge logic is NOT
 		// forked). The push-time half needs no wiring: protect ignores
 		// require_checks on the push path by construction.
-		_, checksHandler = newChecksService(st, ident, pullsSvc, reg, cfg.Git.Binary)
+		checksSvc, checksHandler = newChecksService(st, ident, pullsSvc, reg, cfg.Git.Binary)
+		// Feature 06 notifications (docs/features/06): the fan-out
+		// layer — notification objects, per-user indexes, the activity
+		// log, per-user SSE, repo webhooks, retention. The REAL
+		// Emitter/Streamer implementations bind onto the nil-safe
+		// seams here, so issues/pulls/review/checks mutations fan out
+		// synchronously (P8) from this boot forward.
+		notifySvc, notifyHandler = newNotifyService(st, ident)
+		wireNotifyFanout(notifySvc, issuesSvc, pullsSvc, reviewSvc, checksSvc)
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --
@@ -227,6 +240,9 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	if checksHandler != nil {
 		chainChecks(srv, checksHandler)
 	}
+	if notifyHandler != nil {
+		chainNotify(srv, notifyHandler)
+	}
 
 	// the SSH key registry backs both the sshd auth lookup and the
 	// /api/v1/ssh-keys surface (17_ssh.md §3); setup-only has no store, so
@@ -251,6 +267,12 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		}
 		prewarmAsync(ctx, engine, cfg.Cache.Prewarm, cfg.Cache.PrewarmParallelism, log)
 		go watchdog(ctx, log)
+		if notifySvc != nil {
+			// Feature 06 background loops (Seam 5): webhook wake-ups +
+			// sweeps and the daily retention pass. Same pattern as the
+			// events bridge above; stops at drain via ctx.
+			go notifySvc.Run(ctx)
+		}
 	}
 
 	// ---- listener (§10.4 step 7): TLS/h2c per config ---------------------------

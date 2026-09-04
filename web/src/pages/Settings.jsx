@@ -44,7 +44,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-const TABS = ["Scheduled tasks", "Push policy", "Effective config & history", "Access", "CI tokens"];
+const TABS = ["Scheduled tasks", "Push policy", "Effective config & history", "Access", "CI tokens", "Webhooks"];
 
 // --- tab 1: scheduled tasks ------------------------------------------------------
 
@@ -483,6 +483,156 @@ function CITokensTab(props) {
 
 // --- shell ---------------------------------------------------------------------------
 
+function WebhooksTab(props) {
+  const [getHooks, setHooks] = createSignal(null);
+  const [getUrl, setUrl] = createSignal("");
+  const [getEvents, setEvents] = createSignal("");
+  const [getSecret, setSecret] = createSignal("");
+  const [getNote, setNote] = createSignal("");
+  const [getDeliveries, setDeliveries] = createSignal({});
+  const [getOpen, setOpen] = createSignal(null);
+
+  const load = async () => {
+    try {
+      const res = await props.repo.webhooks.list();
+      setHooks(res.webhooks ?? []);
+      setNote("");
+    } catch (e) { setNote(String(e.message ?? e)); }
+  };
+  load();
+
+  const create = async (e) => {
+    e.preventDefault();
+    const url = getUrl().trim();
+    if (!url) return;
+    const events = getEvents().split(",").map((s) => s.trim()).filter(Boolean);
+    try {
+      await props.repo.webhooks.create({ url, events, secret: getSecret().trim() || undefined });
+      setUrl("");
+      setEvents("");
+      setSecret("");
+      setNote("webhook created — the secret is never shown again");
+      load();
+    } catch (err) { setNote(String(err.message ?? err)); }
+  };
+
+  const remove = async (id) => {
+    try {
+      await props.repo.webhooks.remove(id);
+      load();
+    } catch (err) { setNote(String(err.message ?? err)); }
+  };
+
+  const ping = async (id) => {
+    try {
+      const res = await props.repo.webhooks.ping(id);
+      setNote(res.delivery ? `ping ${id} delivered` : `ping ${id} queued (delivery pending)`);
+      load();
+    } catch (err) { setNote(String(err.message ?? err)); }
+  };
+
+  const toggleDeliveries = async (id) => {
+    if (getOpen() === id) {
+      setOpen(null);
+      return;
+    }
+    try {
+      const res = await props.repo.webhooks.deliveries(id);
+      setDeliveries((prev) => ({ ...prev, [id]: res.entries ?? [] }));
+      setOpen(id);
+    } catch (err) { setNote(String(err.message ?? err)); }
+  };
+
+  return (
+    <>
+      <section class="card p-4">
+        <h3 class="mb-2 font-semibold">Webhooks</h3>
+        <p class="muted mb-3 text-sm">
+          One POST per collaboration event (comments, reviews, checks, pings) with{" "}
+          <code class="font-mono">X-Walgit-Delivery</code> / <code class="font-mono">X-Walgit-Signature</code> /{" "}
+          <code class="font-mono">X-Walgit-Event</code> headers. HTTPS only (HTTP on loopback for dev).
+          Empty events = all; <code class="font-mono">*</code> matches everything.
+        </p>
+        <form class="flex flex-wrap items-center gap-2" onSubmit={create}>
+          <input
+            class="input w-72"
+            placeholder="https://example.com/hook"
+            value={getUrl()}
+            onInput={(e) => setUrl(e.target.value)}
+            aria-label="Webhook URL"
+          />
+          <input
+            class="input w-48"
+            placeholder="events, comma-list (empty = all)"
+            value={getEvents()}
+            onInput={(e) => setEvents(e.target.value)}
+            aria-label="Events filter"
+          />
+          <input
+            class="input w-48"
+            type="password"
+            placeholder="secret (optional, write-only)"
+            value={getSecret()}
+            onInput={(e) => setSecret(e.target.value)}
+            aria-label="Webhook secret"
+            autocomplete="new-password"
+          />
+          <button type="submit" class="btn btn-primary px-3 py-1">
+            add webhook
+          </button>
+        </form>
+        <Show when={getNote()}>
+          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{getNote()}</p>
+        </Show>
+      </section>
+      <section class="card mt-4 p-4">
+        <h3 class="mb-2 font-semibold">Configured hooks</h3>
+        <Show when={getHooks()} fallback={<p class="muted">loading…</p>}>
+          <table class="data-table">
+            <thead>
+              <tr><th>url</th><th>events</th><th>active</th><th>secret</th><th></th></tr>
+            </thead>
+            <tbody>
+              <For each={getHooks() ?? []} fallback={<tr><td colspan={5} class="muted">no webhooks</td></tr>}>
+                {(h) => (
+                  <>
+                    <tr>
+                      <td class="break-all font-mono text-xs">{h.url}</td>
+                      <td class="text-xs">{(h.events ?? []).join(", ") || "all"}</td>
+                      <td class="text-xs">{h.active ? "active" : "paused"}</td>
+                      <td class="text-xs">{h.secret_set ? "set" : "—"}</td>
+                      <td class="whitespace-nowrap text-xs">
+                        <button type="button" class="link mr-2" onClick={() => ping(h.id)}>ping</button>
+                        <button type="button" class="link mr-2" onClick={() => toggleDeliveries(h.id)}>
+                          {getOpen() === h.id ? "hide" : "deliveries"}
+                        </button>
+                        <button type="button" class="link" onClick={() => remove(h.id)}>delete</button>
+                      </td>
+                    </tr>
+                    <Show when={getOpen() === h.id}>
+                      <tr>
+                        <td colspan={5}>
+                          <For each={getDeliveries()[h.id] ?? []} fallback={<span class="muted text-xs">no deliveries yet</span>}>
+                            {(d) => (
+                              <div class="font-mono text-xs text-zinc-600 dark:text-zinc-300">
+                                #{d.seq} {d.event} → {d.status}{d.error ? ` (${d.error})` : ""} · {d.at}
+                              </div>
+                            )}
+                          </For>
+                        </td>
+                      </tr>
+                    </Show>
+                  </>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Show>
+      </section>
+    </>
+  );
+}
+
 export default function Settings() {
   const ctx = useRepo();
   const repo = ctx.repoClient;
@@ -513,6 +663,7 @@ export default function Settings() {
         <Show when={getTab() === "Effective config & history"}><ConfigTab ctx={ctx} repo={repo} /></Show>
         <Show when={getTab() === "Access"}><AccessTab ctx={ctx} repo={repo} /></Show>
         <Show when={getTab() === "CI tokens"}><CITokensTab ctx={ctx} repo={repo} /></Show>
+        <Show when={getTab() === "Webhooks"}><WebhooksTab ctx={ctx} repo={repo} /></Show>
       </div>
     </div>
   );

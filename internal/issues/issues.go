@@ -95,6 +95,10 @@ type NotifyEvent struct {
 	IssueNum   int      `json:"issue_num"`
 	Recipients []string `json:"recipients"`
 	At         string   `json:"at"` // RFC 3339 UTC
+	// Action disambiguates the coarse "subscribed" class for 06's
+	// activity log (opened|commented|closed|reopened|…; "" = commented).
+	// Additive (06 wave); readers treat "" as "commented".
+	Action string `json:"action,omitempty"`
 }
 
 // StreamEvent is the live-update contract for the repo SSE stream (§11):

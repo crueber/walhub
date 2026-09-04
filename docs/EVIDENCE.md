@@ -31,6 +31,7 @@ requested or when a review questions a hot path).
 | E4 | 2026-09-04 | PR mergeability + merge task (`internal/pulls`) | Does mergeability stay bounded as open PRs accumulate, what does a merge cost, and is git-pool usage bounded? | Recompute flat (3 GETs + 1 PUT, 0 LIST, 6 git calls at 1 and 50 open PRs); merge bounded (12 GETs + 5 PUTs, 0 LIST, 11 git calls, peak concurrency 1); 16 concurrent readers collapse to 1 merge-tree. Cannot explode: no LIST on any path, page-bounded sidecars, pool-gated git. |
 | E5 | 2026-09-04 | Review summary + required-reviews gate (`internal/review`) | What does a review-summary recompute cost, what does the merge-time gate scan cost, and why can't either explode? | Recompute linear in review/thread count (9 GETs + 1 PUT + 2 LISTs at 5 reviews/2 threads; 122 + 1 + 2 at 100/20); gate scan linear in review count (8 + 0 + 1 at 5; 103 + 0 + 1 at 100), own deadline, never trusts the summary. Cannot explode: scans are prefix-bounded to one PR's low-volume collaboration subtree, no git on any path, no cross-PR fan-out. |
 | E6 | 2026-09-04 | Check report path + combined view + required-checks gate (`internal/checks`) | What does one CI report cost, what does the combined view cost, and why can't either explode as context count grows? | First report 2 GETs + 2 PUTs + 1 LIST; re-report 4 GETs + 3 PUTs + 1 LIST (1 context); combined 1 LIST + 1 GET per context, 0 PUTs; gate = policy GET + 1 LIST + 1 GET per context under a 15 s deadline. Cannot explode: every scan is prefix-bounded to one sha, reports are CI-rate, no git on any read path, index writes are best-effort. |
+| E7 | 2026-09-04 | Notification fan-out + webhook delivery loop (`internal/notify`) | What is the write amplification of one emission, what does the unread dedup save on replay, and what does a delivery pass cost? | One emission = 2 GETs + 2 PUTs per recipient + 3 GETs + 2 PUTs fixed (thread, watchers, seq reservation, activity); deduped replay writes flat (2 PUTs, zero notification/index writes at any recipient count; probes are 3+n GETs); delivery pass = 1 LIST + ~3 GETs + 1 PUT per event + 1 cursor CAS, idle pass writes nothing. Cannot explode: 100-recipient sync cap with task fallback, 5 s budget, per-hook cursors. |
 
 ---
 
@@ -466,3 +467,74 @@ redesign.
 **Verdict.** Report cost is constant PUTs (2–3) with GETs linear in
 per-sha context count; combined and gate reads are exactly 1 LIST + k
 GETs with zero writes and zero git. No redesign required.
+
+---
+
+## E7 — Notification fan-out write amplification + webhook delivery loop (2026-09-04)
+
+**Area:** notifications, subscriptions, mentions, webhooks (`internal/notify`).
+Spec: `docs/features/06_notifications.md` §4–§5.
+
+**Method.** Harness: `internal/notify/evidence_test.go`
+(`TestEvidenceFanoutAmplification`, `TestEvidenceDeliveryLoop`;
+`go test ./internal/notify/ -run TestEvidence -v`). Real service paths
+over the **memory store** wrapped in an op-counting decorator — the
+budgets count store round-trips (GET/PUT/LIST/HEAD), which is the
+round-trip cost model (AGENTS law 6); memory isolates the algorithmic
+shape from network RTT. Populations: 1 and 10 recipients per emission
+(the 100-recipient overflow path is covered by
+`TestOverflowDefersToFanoutTask`, which asserts full drain + task
+record); delivery measured over 5 queued events against a live sink plus
+the true idle pass.
+
+**Results.**
+
+| path | 1 recipient | 10 recipients | shape |
+|---|---|---|---|
+| one emission (subscribed) | 5 GETs, 4 PUTs | 23 GETs, 22 PUTs | 2 GETs + 2 PUTs per recipient + 3 GETs + 2 PUTs fixed |
+| deduped second emission (all still unread) | 4 GETs, 2 PUTs | 13 GETs, 2 PUTs | writes flat (activity only, zero notification/index writes); probes are 3 + n GETs |
+| delivery pass, 5 queued, live sink | 14 GETs, 8 HEADs, 6 PUTs, 1 LIST | — | ~3 GETs + 1 PUT per event + 1 cursor CAS; cursor 0 → 5 |
+| idle pass (cursor at head) | 3 GETs, 8 HEADs, 0 PUTs, 1 LIST | — | hooks LIST + cursor GET + head probe; writes nothing |
+
+**Analysis.**
+
+- **One emission is 2 GETs + 2 PUTs per recipient** (dedup probe +
+  idempotent Create, index CAS read + write) **plus 3 GETs + 2 PUTs
+  fixed** (thread title/author read, watchers read, seq-reservation
+  CAS, activity Create). No LIST on the emission path at any
+  population. The fixed cost is the price of §2 resolution without
+  event scans; the per-recipient cost is two CAS-arbitrated writes,
+  parallel under the cap-8 semaphore.
+- **The unread dedup makes replay WRITES flat (probes stay linear).** A
+  second emission while every recipient still holds a live entry costs
+  (3 + n) GETs + 2 PUTs — 4 + 2 at 1 recipient, 13 + 2 at 10 (3 fixed
+  probes for thread/watchers/seq plus one index probe per recipient) —
+  with zero notification objects and zero index rewrites at any
+  population. Each emission mints a
+  distinct activity seq by design: a crash loses the fan-out per P8
+  (it never replays it), so retries mint no duplicate webhook
+  delivery keys.
+- **A delivery pass is 1 LIST (hooks) + ~3 GETs + 1 PUT per event**
+  (event read, POST, ring CAS) **+ 1 cursor CAS**; the cursor advances
+  only past 2xx deliveries (at-least-once, per-hook isolation — a
+  refused sink holds its own cursor at 0 while others advance). The
+  idle pass is 1 LIST + 3 GETs + 8 HEADs (the bounded honest-gap
+  probe) and **zero writes**.
+- **Overflow is the bound, not the cliff.** Past 100 recipients the
+  request writes only the activity event (recipients in its payload as
+  the durable queue) and returns; `notify-fanout` drains the set
+  idempotently (deterministic ids + index dedup) under the same 5 s
+  budget. A 1 000-watcher repo costs one request-side activity write,
+  not 1 000 synchronous CAS rounds.
+
+**Over the network (S3/GCS/filesystem).** Same shape with per-op RTT:
+a 10-recipient comment is ~23 control-plane GETs + ~22 small-JSON
+PUTs, all off the git hot path (collaboration rate, human-driven);
+webhook POSTs are the only wide-area calls (10 s each, per-hook
+sequential, hooks parallel). The lever if a deployment ever saw
+pathological mention storms is the sync cap + budget, not a redesign.
+
+**Verdict.** Fan-out amplification is linear with slope 2+2 per
+recipient and a 5-op fixed cost; deduped replays write flat (2 PUTs at
+any population, probes 3+n GETs); delivery is
+one cursor CAS per pass with zero-write idles. No redesign required.

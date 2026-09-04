@@ -109,6 +109,49 @@ function activeTab(pathname) {
   return "code";
 }
 
+// --- watch toggle (06 §7): optimistic flip, reconcile on error -------------
+
+function WatchToggle(props) {
+  const [getWatch, setWatch] = createSignal(null);
+  const load = async () => {
+    try {
+      const res = await props.repo.watch.get();
+      setWatch(res);
+    } catch {
+      setWatch(null); // anonymous or unreadable: hide the toggle
+    }
+  };
+  load();
+  const flip = async () => {
+    const cur = getWatch();
+    if (!cur) return;
+    setWatch({ watching: !cur.watching, watchers: cur.watchers }); // optimistic
+    try {
+      const res = await props.repo.watch.set(!cur.watching);
+      setWatch(res);
+    } catch (e) {
+      setWatch(cur); // reconcile on error
+      reportError(e, "watch");
+    }
+  };
+  return (
+    <Show when={getWatch()}>
+      {(w) => (
+        <button
+          type="button"
+          class="btn px-2 py-1 text-sm"
+          classList={{ primary: w().watching }}
+          onClick={flip}
+          title={w().watching ? "Unwatch this repo" : "Watch this repo"}
+          aria-pressed={w().watching}
+        >
+          {w().watching ? "👁 watching" : "👁 watch"} · {w().watchers ?? 0}
+        </button>
+      )}
+    </Show>
+  );
+}
+
 // --- ref picker (SSE stream, one live stream per picker) -------------------------
 
 function RefPicker(props) {
@@ -351,6 +394,7 @@ export default function Repo(props) {
             )}
           </Show>
           <div class="ml-auto flex items-center gap-2">
+            <WatchToggle repo={repoClient} />
             <TasksOverlay repo={repoClient} />
             <RefPicker full={full()} repo={repoClient} />
             <Show when={getSummary()}>

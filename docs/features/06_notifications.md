@@ -242,8 +242,8 @@ RouteProvider (Seam 1).
 | `POST /api/v1/notifications/{id}/unread` | authenticated (self only) | → `Notification` | |
 | `POST /api/v1/notifications/read_all` | authenticated (self only) | → `{updated: N}` | one index CAS + per-object state writes bounded to the index window |
 | `GET /api/v1/notifications/stream` | authenticated (self only) | SSE (§5.1) | no-store |
-| `PUT /{o}/{r}/api/watch` | read | → `{watching: true, count}` | 07 owns the record; this is its API |
-| `DELETE /{o}/{r}/api/watch` | read (self only) | → `{watching: false, count}` | |
+| `PUT /{o}/{r}/api/watch` | read | → `{watching: true, watchers}` | 07 owns the record; this is its API |
+| `DELETE /{o}/{r}/api/watch` | read (self only) | → `{watching: false, watchers}` | |
 | `GET /{o}/{r}/api/watch` | authenticated (self only) | → `{watching: bool}` | no-store |
 | `GET /{o}/{r}/api/webhooks` | admin | → `{webhooks: [Hook (no secret)]}` | |
 | `POST /{o}/{r}/api/webhooks` | admin | `{url, events[], secret?, insecure_tls?}` → `Hook` | 400 on bad URL/events |
@@ -319,6 +319,19 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **Email is out; the activity log is the named seam** — a future email sink needs no schema change here.
 - **`X-Walgit-*` header keepers on collaboration webhooks** — wire identifiers are contracts, not branding (D-NAME-1).
 - **User notification SSE stream is a new top-level route**, not a repo-stream extension: notifications are user-scoped and must not require per-repo subscriptions.
+
+## Decisions (Feature 06 implementation wave, 2026-09-04)
+
+- **Package name is `internal/notify`** — 09 §2's dispatch table wins over this doc's `internal/notifications` text. Rationale: one package per feature, and the rollout table is the dispatch authority agents branch from.
+- **Activity seq is reserved BEFORE the notification Creates** (the ids embed the seq), while the activity object itself is still written at step 4 — the normative 2→3→4→5 order governs the WRITES. Rationale: ids must be computable before step 2; a crash between reservation and step 4 leaves a gap, which the honest-gap rule already covers.
+- **§1.1 sort sentence corrected**: sha256-hex ids do NOT sort by event time, so LIST overflow pages sort by `(created_at desc, id)` — the index (newest-first entries) is still the O(1) default read. Rationale: the formula is normative; the sentence described a different id scheme.
+- **Watch endpoints live in `internal/notify` until 07 lands** (`PUT/DELETE/GET /{o}/{r}/api/watch` writing the 07 §5 record shape verbatim), and the watcher array field is **`watcher_list`** (capped, `watchers_truncated`), NOT `watchers` — 07 defines `watchers` as the COUNT. Rationale: 06 must resolve watchers without listing users, and the count/array names must not collide when 07 adopts `social.json`.
+- **Thread author receives `author` INSTEAD of `subscribed`** on activity classes (never both). Rationale: the §2 table names three distinct reasons; doubling the author's tray for one event is noise, and the dedup key keeps both representable if a future dial wants both.
+- **Repo StreamEvent frames land on notify's in-process repo bus** (drop-oldest, 64-frame ring, `SubscribeRepo` seam) with NO v1 HTTP reader — 08's collab stream subscribes there. Rationale: no repo broadcast bus exists yet; the normative live proof (notification object + `notification` frame) rides Emit, and inventing a second stream endpoint here would preempt 08's stream design.
+- **Overflow (> 100 recipients) writes the activity event FIRST** (recipients in the payload as the durable queue) and returns; `notify-fanout` drains it. Dedup-skips never arm the task (a task racing a later read-flip could otherwise mint a duplicate live entry). Rationale: the request never extends past the 5 s budget; the activity payload is the only queue that survives a restart.
+- **No config key**: retention window is a `RetentionDays` field defaulting to 30, no `notifications.*` TOML. Rationale: one scalar does not justify a config surface + validation + schema churn; composition can set it from env later without a wire change.
+- **Issues `NotifyEvent` gains additive `Action`** (opened|commented|closed|reopened; "" = commented) so the activity log records the true action behind the coarse `subscribed` class; pulls/review/checks classes were already precise. `mentioned`-emission added to pulls (opened body, PR comments) and review (submitted reviews, thread comments) via the shared `identity.ParseMentions` §3 parser (email principals + `@org/team`, code-span stripping, 50-token cap); issues additionally passes team spellings through (`/` cannot appear in a principal, so the spelling is self-describing). Rationale: §3 mandates parsing on EVERY comment/review/body event, and the parser belongs to 01 (the principal authority) so all emitters share one grammar.
+- **PR #17 review fixes (2026-09-04):** `insecure_tls` is honored per hook (dedicated insecure lane cloned from the default transport — the field was stored but never selected); the retention activity sweep is read-bounded (600 seqs/pass, converging across daily passes — the loop was O(minCursor) reads); the §6 watch rows now spell the key `watchers` (matching 07 §5 and the implementation); E7's replay row now reports the measured (3+n) GETs (writes were and are flat at 2 PUTs). Rationale: a stored-but-dead TLS flag fails closed against the wrong party (self-signed dev hooks never deliver); maintainer passes must stay bounded; wire tables must match the owned shape.
 
 ## Explicitly out of scope
 

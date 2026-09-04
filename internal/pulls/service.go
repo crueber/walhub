@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 )
@@ -388,6 +389,7 @@ func (s *Service) OpenPR(ctx context.Context, owner, repo string, actor auth.Pri
 	}
 	s.updateIndex(ctx, owner, repo, prCardOf(th))
 	s.emit(ctx, NotifyEvent{Repo: baseRepo, Class: "opened", Actor: who, PullNum: num, Recipients: []string{}})
+	s.emitMentioned(ctx, owner, repo, num, who, in.Body)
 	s.stream(ctx, StreamEvent{Name: "pull", Repo: baseRepo, Action: "opened", Num: num, Title: title, State: StateOpen, Author: who, BaseRef: in.BaseRef, HeadRef: in.HeadRef, HeadSHA: headSHA})
 	// Server-side refs/pull/<num>/head publish (WAL publish path, §3):
 	// only for reachable heads; unreachable same-repo heads already 422'd
@@ -961,5 +963,31 @@ func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, a
 	_ = pr
 	s.updateIndex(ctx, owner, repo, prCardOf(th))
 	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "subscribed", Actor: who, PullNum: num, Recipients: prParticipants(th, who)})
+	s.emitMentioned(ctx, owner, repo, num, who, body)
 	return ev, nil
+}
+
+// emitMentioned fans "mentioned" for @-parsed principals and @org/team
+// spellings in a PR opened/commented body (06 §3; the consumer validates
+// and expands). Bodies without tokens emit nothing.
+func (s *Service) emitMentioned(ctx context.Context, owner, repo string, num int, actor, body string) {
+	if body == "" {
+		return
+	}
+	users, teams := identity.ParseMentions(body)
+	var recips []string
+	for _, m := range users {
+		if m != actor && identity.ValidPrincipal(m) {
+			recips = append(recips, m)
+		}
+	}
+	for _, t := range teams {
+		if t != actor {
+			recips = append(recips, t)
+		}
+	}
+	if len(recips) == 0 {
+		return
+	}
+	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "mentioned", Actor: actor, PullNum: num, Recipients: recips})
 }
