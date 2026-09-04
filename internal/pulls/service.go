@@ -710,7 +710,7 @@ type ListFilter struct {
 	State string
 	Base  string
 	Head  string
-	Sort  string // updated (default) | created — display order only
+	Sort  string // updated | created — parsed + validated, but the render is always number-descending (issue #48)
 	After int
 	N     int
 }
