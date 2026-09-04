@@ -66,6 +66,19 @@ func doReq(h *Handler, method, target string, body string) *httptest.ResponseRec
 	return w
 }
 
+// seedRepo marks owner/repo as existing: the manifest probe is the
+// repo-existence signal (invite paths gate on it), and the body is never
+// read.
+func seedRepo(t *testing.T, s *Service, owner, repo string) {
+	t.Helper()
+	if _, err := store.PutBytes(context.Background(), s.Store, "repos/"+owner+"/"+repo+"/manifest.pb", []byte("manifest"),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/x-protobuf"}); err != nil {
+		if !store.IsPreconditionFailed(err) {
+			t.Fatal(err)
+		}
+	}
+}
+
 // seedOrg creates org acme owned by alice with team platform {bob}.
 func seedOrg(t *testing.T, s *Service) {
 	t.Helper()

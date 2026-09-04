@@ -19,7 +19,9 @@ import (
 // and CAS-increments the counter. Auth: authenticated AND repo-visible at
 // read level (an anonymous_read repo is starrable by any signed-in user).
 // A 412 on the record Create is "already starred" — no count change, so
-// concurrent stars converge instead of double-counting.
+// concurrent stars converge instead of double-counting. Starring a deleted
+// repo is 404: without the manifest gate every star would mint a fresh
+// userspace record the prefix sweep can never clean.
 func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string) (int, error) {
 	if err := requireAuthenticated(p); err != nil {
 		return 0, err
@@ -27,16 +29,22 @@ func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string
 	if err := s.requireRead(ctx, owner, repo, p); err != nil {
 		return 0, err
 	}
+	if !s.repoAlive(ctx, owner, repo) {
+		return 0, fmt.Errorf("%w: repo %s not found", ErrNotFound, repoName(owner, repo))
+	}
 	who := normPrincipal(p.Name)
 	key := StarKey(who, owner, repo)
 	if raw, _, err := s.getJSON(ctx, key); err != nil {
 		return 0, err
 	} else if raw != nil {
-		return s.starCount(ctx, owner, repo), nil
+		return s.reconcileStar(ctx, owner, repo)
 	}
 	rec, _ := json.Marshal(StarRecord{Repo: repoName(owner, repo), StarredAt: s.nowUTC().Format(dateTimeFmt)})
 	if err := s.putCreate(ctx, key, rec); err != nil {
 		if store.IsPreconditionFailed(err) {
+			// Lost the record Create race: the concurrent Star owns
+			// the bump — recount without repairing (the repair path
+			// is only for records that pre-existed this call).
 			return s.starCount(ctx, owner, repo), nil
 		}
 		return 0, err
@@ -44,9 +52,38 @@ func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string
 	return s.bumpStars(ctx, owner, repo, +1)
 }
 
+// reconcileStar serves the already-starred path. Healthy repos return the
+// denormalized count untouched. A delete+recreate resets social.json while
+// the userspace record survives the prefix sweep, so a record with an
+// absent (or freshly zeroed) counter is repaired with a single +1 — the
+// (c) resync. Only the zero state repairs: a nonzero count is assumed to
+// include this star (no reverse index exists to verify — see Decisions),
+// so a second stale starrer's star converges via unstar/restar instead.
+// A corrupt counter keeps the old tolerance (record is the truth, 0).
+func (s *Service) reconcileStar(ctx context.Context, owner, repo string) (int, error) {
+	raw, _, err := s.getJSON(ctx, SocialKey(owner, repo))
+	if err != nil {
+		return 0, err
+	}
+	if raw == nil {
+		return s.bumpStars(ctx, owner, repo, +1)
+	}
+	d, err := parseSocial(raw)
+	if err != nil {
+		return 0, nil
+	}
+	if d.Stars == 0 {
+		return s.bumpStars(ctx, owner, repo, +1)
+	}
+	return d.Stars, nil
+}
+
 // Unstar deletes the caller's star record (idempotent) and CAS-decrements
 // the counter (floor 0). Auth: authenticated only — unstar must always
-// work, even on repos the principal can no longer see (§4).
+// work, even on repos the principal can no longer see (§4). On a deleted
+// repo the record delete still runs (cleanup) but the counter bump is
+// skipped: bumping would lazily (re)create social.json for a repo the
+// prefix sweep removed.
 func (s *Service) Unstar(ctx context.Context, p auth.Principal, owner, repo string) (int, error) {
 	if err := requireAuthenticated(p); err != nil {
 		return 0, err
@@ -71,6 +108,9 @@ func (s *Service) Unstar(ctx context.Context, p auth.Principal, owner, repo stri
 			return s.starCount(ctx, owner, repo), nil
 		}
 		return 0, derr
+	}
+	if !s.repoAlive(ctx, owner, repo) {
+		return 0, nil
 	}
 	return s.bumpStars(ctx, owner, repo, -1)
 }
@@ -125,10 +165,15 @@ func (s *Service) starCount(ctx context.Context, owner, repo string) int {
 }
 
 // Counts reads the denormalized counters (zeros when absent, §6). Read
-// gate applies (counts are repo-visible metadata).
+// gate applies (counts are repo-visible metadata); a deleted repo is 404
+// (the read gate alone would synthesize a public default and serve zeros
+// for a ghost).
 func (s *Service) Counts(ctx context.Context, p auth.Principal, owner, repo string) (SocialDoc, error) {
 	if err := s.requireRead(ctx, owner, repo, p); err != nil {
 		return SocialDoc{}, err
+	}
+	if !s.repoAlive(ctx, owner, repo) {
+		return SocialDoc{}, fmt.Errorf("%w: repo %s not found", ErrNotFound, repoName(owner, repo))
 	}
 	raw, _, err := s.getJSON(ctx, SocialKey(owner, repo))
 	if err != nil {
@@ -146,9 +191,13 @@ func (s *Service) Counts(ctx context.Context, p auth.Principal, owner, repo stri
 
 // ViewerState reports the caller's (starred, watching) flags for GET
 // social's viewer object. Anonymous ⇒ both false (no error: the counts
-// are still served under the read gate).
+// are still served under the read gate). A deleted repo ⇒ both false
+// (miss-tolerant: the stale userspace records must not render).
 func (s *Service) ViewerState(ctx context.Context, p auth.Principal, owner, repo string) (starred, watching bool) {
 	if p.Anonymous || p.Name == "" {
+		return false, false
+	}
+	if !s.repoAlive(ctx, owner, repo) {
 		return false, false
 	}
 	who := normPrincipal(p.Name)
@@ -162,9 +211,11 @@ func (s *Service) ViewerState(ctx context.Context, p auth.Principal, owner, repo
 }
 
 // Starred lists one principal's star records newest-first (n default 50,
-// max 100; after is the "<starred_at>|<repo>" cursor). Entries for repos
-// that no longer exist are tolerated and returned as-is (§7); corrupt
-// records are skipped (they render nothing).
+// max 100; after is the "<starred_at>|<repo>" cursor). Entries naming a
+// deleted repo are SKIPPED (miss-tolerant reads, §7 — the prefix sweep
+// cannot enumerate userspace, so readers probe the manifest per entry;
+// probe errors keep the entry). Corrupt records are skipped (they render
+// nothing).
 func (s *Service) Starred(ctx context.Context, principal string, n int, after string) ([]StarEntry, bool, error) {
 	who := normPrincipal(principal)
 	if who == "" {
@@ -209,6 +260,11 @@ func (s *Service) Starred(ctx context.Context, principal string, n int, after st
 		repo := rec.Repo
 		if repo == "" {
 			repo = o + "/" + r
+		}
+		if or, nm, ok := splitStarRepo(repo); ok {
+			if !s.repoAlive(ctx, or, nm) {
+				continue
+			}
 		}
 		if after != "" && !starCursorAfter(rec.StarredAt, repo, afterTime, afterRepo) {
 			continue

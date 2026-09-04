@@ -54,6 +54,64 @@ type Inbox struct {
 	UpdatedAt string       `json:"updated_at"`
 }
 
+// repoAlive reports whether the repo exists (manifest deleted first on
+// Delete, created first on Create; absent = deleted-or-never-existed). A
+// probe error fails OPEN: a transient store fault must not mass-hide
+// inboxes — the CAS loops surface real errors on their own reads.
+func (s *Service) repoAlive(ctx context.Context, owner, repo string) bool {
+	ok, err := store.Exists(ctx, s.Store, "repos/"+owner+"/"+repo+"/manifest.pb")
+	if err != nil {
+		return true
+	}
+	return ok
+}
+
+// inviteRepoAlive reports whether a repo-kind invitation still names a
+// live repo (org invites and malformed spellings pass through as true —
+// only affirmative ghost knowledge rejects).
+func (s *Service) inviteRepoAlive(ctx context.Context, inv *Invitation) bool {
+	if inv.Kind != InviteRepo || inv.Repo == "" {
+		return true
+	}
+	org, repo, ok := strings.Cut(inv.Repo, "/")
+	if !ok {
+		return true
+	}
+	return s.repoAlive(ctx, org, repo)
+}
+
+// issuerAlive reports whether the issuer-side object for one inbox entry
+// still exists. The inbox is a cache of issuer truth (a crash between the
+// issuer write and inboxAdd drops the row while the object stays pending)
+// so a row without an object is skipped: this hides invites swept with a
+// deleted repo even after the repo is recreated (the manifest probe alone
+// cannot tell a stale row from a live one — same repo string). Entries
+// with no scope, and probe errors, keep the row (fail open).
+func (s *Service) issuerAlive(ctx context.Context, e InboxEntry) bool {
+	var keys []string
+	if e.Org != "" {
+		keys = append(keys, OrgInviteKey(e.Org, e.ID))
+	}
+	if e.Repo != "" {
+		if org, repo, ok := strings.Cut(e.Repo, "/"); ok {
+			keys = append(keys, RepoInviteKey(org, repo, e.ID))
+		}
+	}
+	if len(keys) == 0 {
+		return true
+	}
+	for _, k := range keys {
+		_, _, err := store.GetBytes(ctx, s.Store, k, store.GetOptions{})
+		if err == nil {
+			return true
+		}
+		if !store.IsNotFound(err) {
+			return true
+		}
+	}
+	return false
+}
+
 func encodeInvite(inv *Invitation) []byte {
 	raw, _ := json.Marshal(inv)
 	return raw
@@ -133,7 +191,9 @@ func (s *Service) CreateOrgInvite(ctx context.Context, org, email, role, invited
 }
 
 // CreateRepoInvite records a repo collaborator invitation (admin-only,
-// checked by the handler).
+// checked by the handler). Inviting to a deleted repo is 404 — the issuer
+// object would live under a swept prefix and the inbox row could never be
+// honored.
 func (s *Service) CreateRepoInvite(ctx context.Context, owner, repo, subject string, role Role, invitedBy string, ttl time.Duration) (*Invitation, error) {
 	subject = normPrincipal(subject)
 	if !ValidPrincipal(subject) {
@@ -141,6 +201,9 @@ func (s *Service) CreateRepoInvite(ctx context.Context, owner, repo, subject str
 	}
 	if !validRole(string(role)) {
 		return nil, fmt.Errorf("%w: invalid role %q", ErrInvalid, string(role))
+	}
+	if !s.repoAlive(ctx, owner, repo) {
+		return nil, fmt.Errorf("%w: unknown repo %q", ErrNotFound, owner+"/"+repo)
 	}
 	id, err := s.randomHex(8)
 	if err != nil {
@@ -219,7 +282,13 @@ func (s *Service) inboxRemove(ctx context.Context, principal, id string) error {
 	return err
 }
 
-// MyInvites returns the caller's pending invites (no-store).
+// MyInvites returns the caller's pending invites (no-store). Repo-kind
+// entries naming a deleted repo are skipped, as are rows whose
+// issuer-side object is gone (miss-tolerant: the prefix sweep removes the
+// issuer object but cannot enumerate inboxes; the object is the truth, so
+// this also keeps swept rows hidden after a recreate. Expiry does NOT
+// hide: expired rows still list and fail closed on accept, unchanged).
+// A probe error or malformed repo keeps the entry (fail open).
 func (s *Service) MyInvites(ctx context.Context, principal string) ([]InboxEntry, error) {
 	raw, _, err := store.GetBytes(ctx, s.Store, InboxKey(principal), store.GetOptions{})
 	if err != nil {
@@ -232,7 +301,21 @@ func (s *Service) MyInvites(ctx context.Context, principal string) ([]InboxEntry
 	if perr != nil {
 		return nil, perr
 	}
-	return in.Entries, nil
+	live := in.Entries[:0]
+	for _, e := range in.Entries {
+		if e.Repo != "" {
+			if org, repo, ok := strings.Cut(e.Repo, "/"); ok {
+				if !s.repoAlive(ctx, org, repo) {
+					continue
+				}
+			}
+		}
+		if !s.issuerAlive(ctx, e) {
+			continue
+		}
+		live = append(live, e)
+	}
+	return live, nil
 }
 
 // findInvite locates an invite by id across org and repo families. The
@@ -326,6 +409,13 @@ func (s *Service) AcceptInvite(ctx context.Context, principal, id string) (strin
 	}
 	if normPrincipal(inv.Subject) != principal {
 		return "", fmt.Errorf("%w: not your invitation", ErrForbidden)
+	}
+	// A repo deleted after the invite was issued leaves the inbox row
+	// behind (the sweep cannot enumerate inboxes). Accepting would bind a
+	// role into a freshly synthesized access.json for a ghost repo — the
+	// invite died with the repo, so this is 409 like the swept-keys case.
+	if !s.inviteRepoAlive(ctx, inv) {
+		return "", fmt.Errorf("%w: invitation no longer pending", ErrConflict)
 	}
 	switch inv.Kind {
 	case InviteOrg:

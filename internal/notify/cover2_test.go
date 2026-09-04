@@ -18,6 +18,7 @@ import (
 
 func TestResolveRecipientGuards(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	x.addProfile("amy@example.com", "bob@example.com", "carol@example.com")
 	x.writeThread(t, "acme", "repo", 7, "T", "amy@example.com")
 	// Empty + actor + duplicate primaries hit every guard; carol lands once.
@@ -132,6 +133,7 @@ func TestIndexInPlaceFlipAndTrim(t *testing.T) {
 
 func TestTrayCapAndStateAfterUnknown(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	rec := do(x.handler, req(t, "GET", "/api/v1/notifications?n=500", "amy@example.com"))
 	if rec.Code != 200 {
 		t.Fatalf("n cap = %d", rec.Code)
@@ -176,6 +178,7 @@ func TestHandleRepoErrorBranches(t *testing.T) {
 	}
 	// SetWatch store error → 4xx/5xx through the handler (corrupt social
 	// is invalid → 400).
+	seedRepo(t, x, "acme", "repo2")
 	writeRaw(t, x.svc.Store, SocialKey("acme", "repo2"), []byte("{bad"))
 	rec = do(x.handler, req(t, "PUT", "/acme/repo2/api/watch", "amy@example.com"))
 	if rec.Code != http.StatusBadRequest {
@@ -443,6 +446,7 @@ func TestPingStoreErrors(t *testing.T) {
 
 func TestSetWatchUnwatchCorrupt(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	writeRaw(t, x.svc.Store, SocialKey("acme", "repo"), []byte("{bad"))
 	if _, err := x.svc.SetWatch(ctx(), "amy@example.com", "acme", "repo", false); err == nil {
 		t.Fatal("corrupt social on unwatch must fail")
@@ -451,6 +455,7 @@ func TestSetWatchUnwatchCorrupt(t *testing.T) {
 
 func TestSocialTruncation(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	// Pre-fill past the cap, then watch: the list trims and flags.
 	members := make([]string, 0, MaxWatchers+1)
 	for i := 0; i < MaxWatchers+1; i++ {

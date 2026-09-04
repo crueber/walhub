@@ -180,6 +180,29 @@ both exist), but every mutation path uses the same loop, so interleavings conver
 negligible (human-rate events; documented per P2 reasoning). No lock, no singleflight: the CAS IS the
 arbitrator. `updated_at` is set by whichever write wins last.
 
+#### 4.1 Deleted repos — miss-tolerant reads, guarded writes, resync on recreate (issue #63)
+
+Repo deletion sweeps only the `repos/<o>/<r>/` prefix; star/watch records under `users/` survive it,
+and there is deliberately NO reverse index (enumerating people is not a feature — 01). So:
+
+- **Reads tolerate:** `Starred` skips entries whose manifest is absent (one `HEAD` per entry; probe
+  errors keep the entry); `ViewerState` reports `(false, false)` for ghosts; `Counts` (hence
+  `GET …/api/social`) is `404`.
+- **Writes fail closed:** `Star` on a ghost is `404` (otherwise every star would mint a fresh record the
+  sweep can never clean); `Unstar` still deletes the record but skips the counter CAS (bumping would
+  lazily resurrect `social.json` for a swept repo).
+- **Recreate resyncs:** a delete+recreate zeroes `social.json` while the stale record survives, so the
+  already-starred path repairs — absent or freshly-zeroed counter plus a live record repairs with one
+  `+1` (a corrupt counter keeps the old tolerance: record is the truth, count reads `0`). A `412` on
+  the record Create is still a pure race (the concurrent Star owns the bump): recount, no repair.
+  Known limit, no reverse index to fix it: only the zero state repairs, so the FIRST stale starrer
+  after a recreate reconverges and later ones assume inclusion — a second stale star reconverges via
+  unstar/restar.
+- **Cost:** one manifest `HEAD` per star/unstar/watch-mutation and per listed record (E8 budgets carry
+  the `+1 HEAD` lines); watch re-watches self-heal through the existing field-scoped CAS (the fresh
+  list cannot contain the stale principal), and fork counts on a recreated parent stay reset (no
+  recount without the reverse index).
+
 ## 5. Watches (cross-ref 06)
 
 - Record: `users/<principal>/watching/<o>/<r>.json` = `{"repo": "<o>/<r>", "watched_at": "RFC3339"}` —
@@ -226,7 +249,7 @@ byte route is registered in the static group (no compress, accel eligible).
 | PUT/DELETE `/{o}/{r}/api/watch` | authenticated + visible | `{}` → `{watching, watchers}` | social |
 | GET `/{o}/{r}/api/social` | read | → `{stars, watchers, forks, viewer: {starred, watching}}` | social |
 | GET `/api/v1/me/starred?n=&after=` | authenticated | → `{starred: [{repo, starred_at}], more}`; starred_at desc, n default 50 max 100 | social |
-| GET `/api/v1/users/{principal}/starred?n=&after=` | read | same shape; entries for repos that no longer exist are tolerated and returned | social |
+| GET `/api/v1/users/{principal}/starred?n=&after=` | read | same shape; entries naming a deleted repo are skipped (miss-tolerant reads, §4.1) | social |
 
 Release JSON on the wire = the §1.1 body + `browser_download_url` per asset + `assets: []` when empty.
 Errors are plain text (`unknown revision`, `conflict`, `asset too large`).
@@ -306,6 +329,12 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
   (§3), `for-each-ref --sort=-creatordate --format=%(refname:strip=2) refs/tags` (previous-tag
   default). Asset bytes serve direct (accel offload eligible, left to the edge). New config key
   `releases.max_asset_bytes` (2 GiB default; reflective section — setup/env/validation free).
+- **Repo-delete userspace hygiene (issue #63, 2026-09-04):** miss-tolerant reads + guarded writes +
+  recreate resync per §4.1 — no reverse index (enumerating people stays a non-feature), no tombstones
+  (per-repo state must die with the prefix), no repair-on-recreate scan. Rationale: readers can probe
+  the manifest (one HEAD, fail-open on store errors so a blip never mass-hides lists); writers must
+  fail closed (ghost writes mint un-cleanable records); the counter heals per stale starrer because a
+  global recount is unrepresentable without the index.
 
 ## Explicitly out of scope
 

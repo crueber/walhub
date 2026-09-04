@@ -32,7 +32,7 @@ requested or when a review questions a hot path).
 | E5 | 2026-09-04 | Review summary + required-reviews gate (`internal/review`) | What does a review-summary recompute cost, what does the merge-time gate scan cost, and why can't either explode? | Recompute linear in review/thread count (9 GETs + 1 PUT + 2 LISTs at 5 reviews/2 threads; 122 + 1 + 2 at 100/20); gate scan linear in review count (8 + 0 + 1 at 5; 103 + 0 + 1 at 100), own deadline, never trusts the summary. Cannot explode: scans are prefix-bounded to one PR's low-volume collaboration subtree, no git on any path, no cross-PR fan-out. |
 | E6 | 2026-09-04 | Check report path + combined view + required-checks gate (`internal/checks`) | What does one CI report cost, what does the combined view cost, and why can't either explode as context count grows? | First report 2 GETs + 2 PUTs + 1 LIST; re-report 4 GETs + 3 PUTs + 1 LIST (1 context); combined 1 LIST + 1 GET per context, 0 PUTs; gate = policy GET + 1 LIST + 1 GET per context under a 15 s deadline. Cannot explode: every scan is prefix-bounded to one sha, reports are CI-rate, no git on any read path, index writes are best-effort. |
 | E7 | 2026-09-04 | Notification fan-out + webhook delivery loop (`internal/notify`) | What is the write amplification of one emission, what does the unread dedup save on replay, and what does a delivery pass cost? | One emission = 2 GETs + 2 PUTs per recipient + 3 GETs + 2 PUTs fixed (thread, watchers, seq reservation, activity); deduped replay writes flat (2 PUTs, zero notification/index writes at any recipient count; probes are 3+n GETs); delivery pass = 1 LIST + ~3 GETs + 1 PUT per event + 1 cursor CAS, idle pass writes nothing. Cannot explode: 100-recipient sync cap with task fallback, 5 s budget, per-hook cursors. |
-| E8 | 2026-09-04 | Release latest-pointer, autodraft, asset streaming (`internal/releases`, `internal/social`) | Is the latest badge O(1), what does a publish/list/autodraft cost, is the asset upload memory-bounded, and are star/fork writes constant? | Latest hot read flat (2 GETs at 5 and 200 releases); publish 3 GETs + 2 PUTs; list 1 LIST + 1 GET per release; autodraft 1 probe per candidate (≤100) with zero LIST; 1 MiB upload 2 GETs + 2 PUTs with an empty spool dir and zero-write 413s; star 2+2, fork bump 1+1. Cannot explode: pointer monotonicity skips stale publishers, scans/lists are prefix-bounded and capped, git probes run under the package pool. |
+| E8 | 2026-09-04 | Release latest-pointer, autodraft, asset streaming (`internal/releases`, `internal/social`) | Is the latest badge O(1), what does a publish/list/autodraft cost, is the asset upload memory-bounded, and are star/fork writes constant? | Latest hot read flat (2 GETs at 5 and 200 releases); publish 3 GETs + 2 PUTs; list 1 LIST + 1 GET per release; autodraft 1 probe per candidate (≤100) with zero LIST; 1 MiB upload 2 GETs + 2 PUTs with an empty spool dir and zero-write 413s; star 2 GETs + 1 HEAD + 2 PUTs, fork bump 1+1. Cannot explode: pointer monotonicity skips stale publishers, scans/lists are prefix-bounded and capped, git probes run under the package pool. |
 | E9 | 2026-09-04 | Collab stream fan-out + invalidation coalescing (`internal/notify`, `web/src/lib`) | What does one repo-frame publish cost vs subscriber count, what survives a stalled subscriber, and how many refetches does a 30-check burst cause? | Publish ~0.6 µs (1 sub) → ~10 µs (128 subs), zero store round-trips; stalled pages shed (never stall emission, never grow past 16 + 64 frames); bursts collapse to ~2 refetches per key via the per-tick key-set flush + per-key single-flight; warm revisits transfer nothing. Cannot explode: drop-oldest bus, bounded ring, bounded flush. |
 | E10 | 2026-09-04 | Push fast path with the collab layer mounted + full-chain e2e timing (`cmd/walhub`, `internal/e2e`) | Does the push fast path gain any bucket round trips from eight mounted feature packages, and how long is the full org→release→fork chain on a real stack? | Zero: cold push 8 ops, warm push 9 ops, 0 collab-family keys on either; full chain wall 2.2 s (slowest phase: merge+close 0.5 s). Cannot regress: the budget test fails on any collab key touched by a push. |
 | E11 | 2026-09-04 | Repository import (`internal/repoimport`) | What does one URL import cost, and does it grow with repo size? | Flat: 6 GETs+HEADs + 12 control PUTs + 0 LISTs at 50 and 400 commits; wall grows with pack bytes only. Cannot explode: exact-key probes, ref enumeration local + capped, pool-gated git, no lock held across I/O. |
@@ -574,10 +574,10 @@ order of magnitude beyond, so flat-vs-growing is visible in the table.
 | autodraft | 5 PRs: 12 GETs, 5 git probes | 50 PRs: 102 GETs, 50 git probes | 1 index + 2 per candidate, 1 ancestry probe per candidate (cap 100), 0 LIST |
 | 1 MiB asset upload (4 MiB cap) | 2 GETs, 2 PUTs | — | header probe + bytes Create + header CAS; spool dir empty after |
 | over-cap upload (declared + streamed) | 413, 0 PUTs | — | rejected before any store write |
-| star | 2 GETs, 2 PUTs | — | record probe + Create + counter CAS |
-| unstar | 2 GETs, 1 PUT, 1 DELETE | — | record probe + Delete + counter CAS |
+| star | 2 GETs, 1 HEAD, 2 PUTs | — | record probe + manifest HEAD + Create + counter CAS |
+| unstar | 2 GETs, 1 HEAD, 1 PUT, 1 DELETE | — | record probe + Delete + manifest HEAD + counter CAS (ghost unstar skips the CAS: 1 GET + 1 HEAD + 1 DELETE, 0 PUTs) |
 | fork increment | 1 GET, 1 PUT | — | counter CAS only |
-| starred list (n=50) | 3 stars: 1 LIST + 3 GETs | 60 stars: 1 LIST + 60 GETs | 1 LIST + 1 GET per record, `more` past the page |
+| starred list (n=50) | 3 stars: 1 LIST + 3 GETs + 3 HEADs | 60 stars: 1 LIST + 60 GETs + 60 HEADs | 1 LIST + 1 GET + 1 manifest HEAD per record, `more` past the page |
 
 **Analysis.**
 
@@ -610,7 +610,11 @@ order of magnitude beyond, so flat-vs-growing is visible in the table.
   on the record Create/Delete (412 = already there — no double
   count); the counter CAS is field-scoped (stars/forks move,
   `watcher_list` passes through for 06's fan-out). Fork completion
-  is one counter CAS (1 GET + 1 PUT) on the parent.
+  is one counter CAS (1 GET + 1 PUT) on the parent. Since #63 every
+  star-path carries one manifest HEAD (fail-open miss-tolerance for
+  deleted repos; ghost unstars skip the counter CAS instead) and the
+  starred list carries one HEAD per record — linear with slope ≤ 2
+  per item, still zero LIST beyond the paged list's one.
 
 **Over the network (S3/GCS/filesystem).** Same shape with per-op RTT:
 the hot paths are small-JSON control-plane ops at human rate; the
@@ -623,7 +627,6 @@ redesign required.
 linear with slope ≤ 2 per item and zero LIST on every path except
 the paged list (1 LIST by design); uploads are streaming with a
 hard cap; social writes are constant. No redesign required.
-
 ---
 
 ## E9 — Collab stream fan-out + invalidation coalescing (2026-09-04)

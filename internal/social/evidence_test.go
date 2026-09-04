@@ -10,9 +10,11 @@ import (
 
 // countingStore tallies backend round trips (E8: the social half —
 // starring is human-rate; the counts pin the constant, not the shape).
+// HEADs are counted separately: the manifest-exists probe (#63
+// miss-tolerance) rides HEAD, not GET.
 type countingStore struct {
 	store.ObjectStore
-	gets, puts, lists, deletes int
+	gets, puts, lists, deletes, heads int
 }
 
 func (c *countingStore) Get(ctx context.Context, key string, opts store.GetOptions) (store.GetResult, error) {
@@ -35,31 +37,39 @@ func (c *countingStore) Delete(ctx context.Context, key string, v store.Version)
 	return c.ObjectStore.Delete(ctx, key, v)
 }
 
-func (c *countingStore) String() string {
-	return fmt.Sprintf("GETs=%d PUTs=%d LISTs=%d DELETEs=%d", c.gets, c.puts, c.lists, c.deletes)
+func (c *countingStore) Head(ctx context.Context, key string) (*store.ObjectMeta, error) {
+	c.heads++
+	return c.ObjectStore.Head(ctx, key)
 }
+
+func (c *countingStore) String() string {
+	return fmt.Sprintf("GETs=%d HEADs=%d PUTs=%d LISTs=%d DELETEs=%d", c.gets, c.heads, c.puts, c.lists, c.deletes)
+}
+
+func (c *countingStore) reset() { c.gets, c.heads, c.puts, c.lists, c.deletes = 0, 0, 0, 0, 0 }
 
 func TestEvidenceSocialCosts(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	cs := &countingStore{ObjectStore: x.svc.Store}
 	x.svc.Store = cs
 
 	if _, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("star (record probe + Create + counter CAS): %s", cs)
-	if cs.gets != 2 || cs.puts != 2 {
+	t.Logf("star (manifest HEAD + record probe + Create + counter CAS): %s", cs)
+	if cs.gets != 2 || cs.heads != 1 || cs.puts != 2 {
 		t.Fatalf("star budget: %s", cs)
 	}
-	cs.gets, cs.puts, cs.lists, cs.deletes = 0, 0, 0, 0
+	cs.reset()
 	if _, err := x.svc.Unstar(ctx(), jane(), "o", "r"); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("unstar (record probe + Delete + counter CAS): %s", cs)
-	if cs.gets != 2 || cs.puts != 1 || cs.deletes != 1 {
+	t.Logf("unstar (record probe + Delete + manifest HEAD + counter CAS): %s", cs)
+	if cs.gets != 2 || cs.heads != 1 || cs.puts != 1 || cs.deletes != 1 {
 		t.Fatalf("unstar budget: %s", cs)
 	}
-	cs.gets, cs.puts, cs.lists, cs.deletes = 0, 0, 0, 0
+	cs.reset()
 	if err := x.svc.IncForks(ctx(), "o", "r"); err != nil {
 		t.Fatal(err)
 	}
@@ -67,9 +77,13 @@ func TestEvidenceSocialCosts(t *testing.T) {
 	if cs.gets != 1 || cs.puts != 1 {
 		t.Fatalf("forks budget: %s", cs)
 	}
-	// Starred list at 3 and 60 entries: 1 LIST + 1 GET per record.
+	// Starred list at 3 and 60 entries: 1 LIST + 1 GET + 1 manifest HEAD
+	// per record.
 	for _, n := range []int{3, 60} {
 		y := newHarness(t)
+		for i := 0; i < n; i++ {
+			seedRepo(t, y, "o", fmt.Sprintf("r%d", i))
+		}
 		cy := &countingStore{ObjectStore: y.svc.Store}
 		y.svc.Store = cy
 		for i := 0; i < n; i++ {
@@ -77,13 +91,13 @@ func TestEvidenceSocialCosts(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		cy.gets, cy.puts, cy.lists, cy.deletes = 0, 0, 0, 0
+		cy.reset()
 		entries, more, err := y.svc.Starred(ctx(), "jane", 50, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Logf("starred list (n=50) at %d stars: %s more=%v", n, cy, more)
-		if cy.lists != 1 || cy.gets != n || len(entries) != min(n, 50) {
+		if cy.lists != 1 || cy.gets != n || cy.heads != n || len(entries) != min(n, 50) {
 			t.Fatalf("starred budget at %d: %s", n, cy)
 		}
 	}

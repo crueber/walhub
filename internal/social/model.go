@@ -39,7 +39,8 @@ type WatchRecord struct {
 }
 
 // StarEntry is one starred-list row (§7): the record plus nothing derived
-// (repos that no longer exist are tolerated and returned as-is).
+// (entries naming a deleted repo are skipped by Starred — miss-tolerant
+// reads, since the prefix sweep cannot enumerate userspace).
 type StarEntry struct {
 	Repo      string `json:"repo"`
 	StarredAt string `json:"starred_at"`
@@ -67,6 +68,16 @@ func parseStarRecord(raw []byte) (*StarRecord, error) {
 		return nil, fmt.Errorf("%w: star record: %v", ErrCorrupt, err)
 	}
 	return &r, nil
+}
+
+// splitStarRepo splits an "owner/repo" entry repo; false when malformed
+// (the caller keeps the entry — it renders what the record says).
+func splitStarRepo(repo string) (string, string, bool) {
+	o, r, ok := strings.Cut(repo, "/")
+	if !ok || o == "" || r == "" || strings.Contains(r, "/") {
+		return "", "", false
+	}
+	return o, r, true
 }
 
 // splitStarKey parses users/<p>/starred/<o>/<r>.json into (o, r); false

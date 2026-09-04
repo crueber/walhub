@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 // do fires one request through the handler with test-principal headers.
@@ -30,6 +32,8 @@ func asUser(name string) map[string]string { return map[string]string{"X-Test-Pr
 
 func TestSocialHTTPTable(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
+	seedRepo(t, x, "o.git", "r")
 	rows := []struct {
 		name   string
 		method string
@@ -71,6 +75,7 @@ func TestSocialHTTPTable(t *testing.T) {
 
 	// Star response shape + social viewer flags.
 	x2 := newHarness(t)
+	seedRepo(t, x2, "o", "r")
 	rec := do(t, x2, "PUT", "/o/r/api/star", nil, asUser("jane"))
 	var star map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &star); err != nil {
@@ -134,5 +139,48 @@ func TestSocialPrincipalFallback(t *testing.T) {
 	rec := do(t, x, "PUT", "/o/r/api/star", nil, nil)
 	if rec.Code != 401 {
 		t.Fatalf("nil auth: %d", rec.Code)
+	}
+}
+
+// TestSocialDeletedRepoTable pins the #63 HTTP surface for ghost repos
+// (no manifest seeded): mutations fail closed, lists tolerate.
+func TestSocialDeletedRepoTable(t *testing.T) {
+	x := newHarness(t)
+	// A stale userspace record with no repo behind it.
+	seedSocialKey(t, x, StarredPrefix("jane")+"o/ghost.json", `{"repo":"o/ghost","starred_at":"2026-09-04T12:00:00Z"}`)
+	rows := []struct {
+		name   string
+		method string
+		path   string
+		head   map[string]string
+		status int
+		body   string // "" = unchecked; otherwise must be contained
+	}{
+		{"star ghost 404", "PUT", "/o/ghost/api/star", asUser("jane"), 404, "not found"},
+		{"social ghost 404", "GET", "/o/ghost/api/social", asUser("jane"), 404, "not found"},
+		{"unstar ghost cleans record", "DELETE", "/o/ghost/api/star", asUser("jane"), 200, `"stars":0`},
+		{"social anon still 401 first", "GET", "/o/ghost/api/social", nil, 401, ""},
+		{"starred skips ghost", "GET", "/api/v1/me/starred", asUser("jane"), 200, `"starred":[]`},
+		{"user starred skips ghost", "GET", "/api/v1/users/jane/starred", nil, 200, `"starred":[]`},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			rec := do(t, x, row.method, row.path, nil, row.head)
+			if rec.Code != row.status {
+				t.Fatalf("%s %s: got %d want %d (%q)", row.method, row.path, rec.Code, row.status, rec.Body.String())
+			}
+			if row.body != "" && !strings.Contains(rec.Body.String(), row.body) {
+				t.Fatalf("%s %s: body %q lacks %q", row.method, row.path, rec.Body.String(), row.body)
+			}
+		})
+	}
+	// The ghost unstar above removed the record: a second unstar is a
+	// quiet no-op, and no social.json was resurrected.
+	rec := do(t, x, "DELETE", "/o/ghost/api/star", nil, asUser("jane"))
+	if rec.Code != 200 {
+		t.Fatalf("re-unstar: %d", rec.Code)
+	}
+	if raw, _, err := store.GetBytes(ctx(), x.svc.Store, SocialKey("o", "ghost"), store.GetOptions{}); err == nil && raw != nil {
+		t.Fatalf("resurrected social.json: %s", raw)
 	}
 }

@@ -287,6 +287,7 @@ func TestAccessHandlerErrors(t *testing.T) {
 func TestRepoInviteHandlerErrors(t *testing.T) {
 	s := testService()
 	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
 	ks := &keyFailStore{ObjectStore: s.Store, err: errBoom,
 		failGet:    []string{"repos/acme/repo/meta/invitations/"},
 		failPut:    []string{"repos/acme/repo/meta/invitations/"},
@@ -444,6 +445,7 @@ func TestTopInviteErrors(t *testing.T) {
 	if _, err := store.PutBytes(reqCtx(), s.Store, AccessKey("acme", "corrupt"), []byte("{x"), store.PutOptions{Mode: store.PutCreate}); err != nil {
 		t.Fatal(err)
 	}
+	seedRepo(t, s, "acme", "corrupt")
 	inv, err := s.CreateRepoInvite(reqCtx(), "acme", "corrupt", "vic@example.com", RoleRead, "alice@example.com", 3600)
 	if err != nil {
 		t.Fatal(err)
@@ -536,6 +538,7 @@ func TestStoreEdgeCases(t *testing.T) {
 	}
 	// CreateTeam PUT failure.
 	s11 := testService()
+	seedRepo(t, s11, "acme", "r")
 	if _, err := s11.CreateOrg(ctx, "acme", "A", "", "a@b.c"); err != nil {
 		t.Fatal(err)
 	}
@@ -556,6 +559,7 @@ func TestStoreEdgeCases(t *testing.T) {
 		t.Errorf("repo invite put error: %v", err)
 	}
 	s14 := testService()
+	seedRepo(t, s14, "acme", "r")
 	s14.Rand = failReader{}
 	if _, err := s14.CreateOrgInvite(ctx, "acme", "x@y.z", "member", "a@b.c", 3600); err == nil {
 		t.Error("org invite rand error must fail")

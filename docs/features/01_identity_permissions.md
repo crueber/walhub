@@ -249,6 +249,12 @@ Invitation kinds: `org` (join an org with role `owner|member`) and `repo` (colla
   (member add / access.json CAS) and deletes the invite.
 - Repo collaborator invites put the binding in `access.json` (P6 source 1); org invites write
   `orgs/<org>/members.json` (CAS).
+- Deleted repos (issue #63): the prefix sweep removes the issuer-side object but cannot enumerate
+  inboxes, so `MyInvites` skips repo-kind rows whose manifest is gone AND rows whose issuer object is
+  gone (the inbox is a cache of issuer truth — this also keeps swept rows hidden after a recreate, and
+  expiry still lists, failing closed on accept, unchanged). Creating a repo invite for a ghost is 404;
+  accepting one is 409 "no longer pending" (no binding is written — the synthesized default must never
+  gain ghost bindings). Probe errors keep the row (fail open).
 
 ### Concurrency
 
@@ -338,6 +344,12 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
 - **Invites are Create-only, delete-on-transition; the inbox is a P4-style index** — an invite that can be rewritten is a second writer of role state, and "my invites" must never enumerate orgs/repos.
 - **Legacy repos synthesize on read, then materialize lazily; `access.json` edits are full-document `PUT`s** (no per-binding endpoints) — zero-downtime adoption, no per-binding endpoint surface; matches the policy/settings PUT class.
 - **Repo delete stays a core lifecycle op; this doc owns only its gate and fork semantics** (issue #39) — `DELETE …/api` predates the collaboration layer, so the settings Danger Zone needed no new endpoint, no new SDK method, and no new backend tests; §5.1 pins the admin gate and the fork/GC delete rule instead.
+- **Invite inbox verifies issuer truth on read (issue #63, 2026-09-04)** — one manifest HEAD plus one
+  issuer-object GET per repo row (org rows: one GET; probe errors fail open). Rationale: the inbox is
+  a lossy cache of the issuer objects (the §7 crash rule says so), so consulting the objects on read
+  is the same truth source accept already uses — no sweeper, no users LIST, no tombstone, and no
+  prune path that could orphan a pending row. P6/auth is untouched: the gates still decide visibility,
+  existence only decides whether a row renders.
 
 ## Explicitly out of scope
 

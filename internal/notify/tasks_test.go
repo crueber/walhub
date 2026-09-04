@@ -66,6 +66,7 @@ func TestOverflowDefersToFanoutTask(t *testing.T) {
 func TestRetentionCompactsReads(t *testing.T) {
 	x := newHarness(t)
 	x.svc.RetentionDays = 30
+	seedRepo(t, x, "acme", "repo")
 	x.addProfile("amy@example.com", "bob@example.com")
 	old := x.now.AddDate(0, 0, -60).Format(dateTimeFmt)
 	recent := x.now.Format(dateTimeFmt)
@@ -251,5 +252,91 @@ func TestTaskJoinSemantics(t *testing.T) {
 			t.Fatal("webhooks task did not finish")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestRetentionDropsDeadRepos pins the #63 retention contract: tray rows
+// naming a deleted repo are dropped (any state) with their objects, the
+// unread count reconciles, and overflow objects past the hot window are
+// swept too — while live-repo rows are untouched.
+func TestRetentionDropsDeadRepos(t *testing.T) {
+	x := newHarness(t)
+	x.svc.RetentionDays = 30
+	seedRepo(t, x, "acme", "live")
+	recent := x.now.Format(dateTimeFmt)
+	seed := func(who, id, repo, state string) {
+		n := Notification{ID: id, Repo: repo, Num: 7, Kind: "issue", Reason: ReasonSubscribed, State: state, CreatedAt: recent}
+		if err := x.svc.putCreate(ctx(), NotifKey(who, id), encode(n)); err != nil {
+			t.Fatal(err)
+		}
+		if err := x.svc.indexAdd(ctx(), who, IndexEntry{ID: id, Repo: repo, Num: 7, Kind: "issue", Reason: ReasonSubscribed, State: state, At: recent}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Window: one dead unread, one dead read, one live unread.
+	seed("amy@example.com", strings.Repeat("d", 32), "acme/gone", StateUnread)
+	seed("amy@example.com", strings.Repeat("e", 32), "acme/gone", StateRead)
+	seed("amy@example.com", strings.Repeat("f", 32), "acme/live", StateUnread)
+	// Overflow: a dead-repo object with no index row (trim the window by
+	// hand — indexAdd caps at TrayPageSize, so evict via direct write).
+	overflow := Notification{ID: strings.Repeat("0", 32), Repo: "acme/gone", Num: 9, Kind: "issue", Reason: ReasonMentioned, State: StateUnread, CreatedAt: recent}
+	if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", strings.Repeat("0", 32)), encode(overflow)); err != nil {
+		t.Fatal(err)
+	}
+	x.svc.RunRetention(ctx())
+	// Dead objects gone (window + overflow), live object kept.
+	for _, id := range []string{strings.Repeat("d", 32), strings.Repeat("e", 32), strings.Repeat("0", 32)} {
+		if _, _, err := store.GetBytes(ctx(), x.svc.Store, NotifKey("amy@example.com", id), store.GetOptions{}); !store.IsNotFound(err) {
+			t.Fatalf("dead object %s must be deleted: %v", id, err)
+		}
+	}
+	if _, _, err := store.GetBytes(ctx(), x.svc.Store, NotifKey("amy@example.com", strings.Repeat("f", 32)), store.GetOptions{}); err != nil {
+		t.Fatalf("live object must survive: %v", err)
+	}
+	raw, _, _ := store.GetBytes(ctx(), x.svc.Store, NotifIndexKey("amy@example.com"), store.GetOptions{})
+	var ix IndexDoc
+	_ = json.Unmarshal(raw, &ix)
+	if len(ix.Entries) != 1 || ix.Entries[0].ID != strings.Repeat("f", 32) {
+		t.Fatalf("window = %+v", ix.Entries)
+	}
+	if ix.UnreadCount != 1 {
+		t.Fatalf("count = %d, want 1", ix.UnreadCount)
+	}
+}
+
+func TestRetainOverflowEdges(t *testing.T) {
+	x := newHarness(t)
+	at := x.now.Format(dateTimeFmt)
+	put := func(id, repo string, body []byte) {
+		t.Helper()
+		if body == nil {
+			n := Notification{ID: id, Repo: repo, Num: 1, Kind: "issue", Reason: ReasonSubscribed, State: StateUnread, CreatedAt: at}
+			body = encode(n)
+		}
+		if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", id), body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Zero budget: no scan, nothing deleted.
+	if n := x.svc.retainOverflow(ctx(), "amy@example.com", map[string]bool{}, 0); n != 0 {
+		t.Fatalf("zero budget = %d", n)
+	}
+	// Corrupt objects and live-repo objects are never touched; the
+	// already-handled id is skipped; the dead object goes.
+	put(strings.Repeat("1", 32), "acme/gone", []byte("{bad"))
+	put(strings.Repeat("2", 32), "acme/live", nil)
+	put(strings.Repeat("3", 32), "acme/gone", nil)
+	seedRepo(t, x, "acme", "live")
+	dead := map[string]bool{strings.Repeat("2", 32): true}
+	if n := x.svc.retainOverflow(ctx(), "amy@example.com", dead, 200); n != 1 {
+		t.Fatalf("deleted = %d, want 1", n)
+	}
+	for _, id := range []string{strings.Repeat("1", 32), strings.Repeat("2", 32)} {
+		if _, _, err := store.GetBytes(ctx(), x.svc.Store, NotifKey("amy@example.com", id), store.GetOptions{}); err != nil {
+			t.Fatalf("kept object %s: %v", id, err)
+		}
+	}
+	if _, _, err := store.GetBytes(ctx(), x.svc.Store, NotifKey("amy@example.com", strings.Repeat("3", 32)), store.GetOptions{}); !store.IsNotFound(err) {
+		t.Fatalf("dead object must go: %v", err)
 	}
 }

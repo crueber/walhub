@@ -345,9 +345,13 @@ func (s *Service) RunRetention(ctx context.Context) {
 }
 
 // retainUser compacts one user's tray: drops read entries older than the
-// cutoff (Delete their objects, best-effort, capped), advances
+// cutoff AND entries naming a deleted repo (any state — a deleted repo
+// never comes back with the same threads, so its tray rows are garbage;
+// their objects are Deleted, best-effort, capped), advances
 // compacted_through, reconciles unread_count against actual unreads, and
-// stamps swept_at. Users swept within the last day are skipped.
+// stamps swept_at. Dead-repo objects past the index hot window are swept
+// by the overflow pass below (same visit, shared delete cap). Users swept
+// within the last day are skipped.
 func (s *Service) retainUser(ctx context.Context, principal string, now time.Time, cutoff string) {
 	raw, _, err := s.getJSON(ctx, NotifIndexKey(principal))
 	if err != nil || raw == nil {
@@ -364,16 +368,32 @@ func (s *Service) retainUser(ctx context.Context, principal string, now time.Tim
 	}
 	const maxDeletes = 200
 	deleted := 0
+	dead := map[string]bool{}
 	kept := make([]IndexEntry, 0, len(ix.Entries))
 	var compacted string
 	for _, en := range ix.Entries {
-		if en.State == StateRead && en.At < cutoff && deleted < maxDeletes {
+		if o, r, ok := repoOf(en.Repo); ok && !s.repoAlive(ctx, o, r) {
+			if deleted < maxDeletes {
+				_ = s.Store.Delete(ctx, NotifKey(principal, en.ID), "")
+				deleted++
+				dead[en.ID] = true
+				compacted = en.ID
+				continue
+			}
+		} else if en.State == StateRead && en.At < cutoff && deleted < maxDeletes {
 			_ = s.Store.Delete(ctx, NotifKey(principal, en.ID), "")
 			deleted++
 			compacted = en.ID
 			continue
 		}
 		kept = append(kept, en)
+	}
+	// Overflow sweep: objects past the hot window have no index row, so
+	// the loop above cannot see them — LIST the prefix (bounded, like the
+	// tray overflow) and delete the ones naming a deleted repo. Live-repo
+	// overflow is never touched.
+	if deleted < maxDeletes {
+		deleted += s.retainOverflow(ctx, principal, dead, maxDeletes-deleted)
 	}
 	// Reconcile: unread_count = actual unreads in the window. Entries
 	// trimmed from the hot window keep their objects (LIST overflow
@@ -404,6 +424,9 @@ func (s *Service) retainUser(ctx context.Context, principal string, now time.Tim
 				gone[en.ID] = true
 			}
 		}
+		for id := range dead {
+			gone[id] = true
+		}
 		next := make([]IndexEntry, 0, len(curIx.Entries))
 		for _, en := range curIx.Entries {
 			if gone[en.ID] {
@@ -425,6 +448,45 @@ func (s *Service) retainUser(ctx context.Context, principal string, now time.Tim
 		curIx.SweptAt = now.Format(dateTimeFmt)
 		return encode(curIx), true, nil
 	})
+}
+
+// retainOverflow deletes dead-repo notification objects past the index
+// hot window (they have no index row, so the window loop cannot see
+// them). Bounded: at most 1000 prefix entries are scanned (the tray
+// overflow bound) and at most budget objects are deleted; ids already
+// handled by the window pass are skipped. Live-repo objects are never
+// touched. Returns the number deleted.
+func (s *Service) retainOverflow(ctx context.Context, principal string, dead map[string]bool, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	const maxScan = 1000
+	deleted, scanned := 0, 0
+	_ = s.Store.List(ctx, NotifPrefix(principal), "", func(m store.ObjectMeta) error {
+		if strings.HasSuffix(m.Key, "/index.json") || scanned >= maxScan || deleted >= budget {
+			return nil
+		}
+		scanned++
+		raw, _, err := s.getJSON(ctx, m.Key)
+		if err != nil || raw == nil {
+			return nil
+		}
+		var n Notification
+		if err := json.Unmarshal(raw, &n); err != nil {
+			return nil
+		}
+		if dead[n.ID] {
+			return nil
+		}
+		o, r, ok := repoOf(n.Repo)
+		if !ok || s.repoAlive(ctx, o, r) {
+			return nil
+		}
+		_ = s.Store.Delete(ctx, m.Key, "")
+		deleted++
+		return nil
+	})
+	return deleted
 }
 
 // retainRepoEvents deletes activity events below the minimum webhook
