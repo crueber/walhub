@@ -79,6 +79,30 @@
  * @typedef {{id: string, kind: "org"|"repo", org: string, repo: string, role: string,
  *   subject: string, invited_by: string, state: string, created_at: string,
  *   expires_at: string}} Invitation
+ *
+ * @typedef {{kind: "review"|"review_dismissed", seq: number, at: string, by: string,
+ *   state: "APPROVED"|"CHANGES_REQUESTED"|"COMMENTED"|undefined,
+ *   commit_sha: string|undefined, body: string|undefined,
+ *   dismisses: number|undefined, reason: string|undefined}} Review
+ *
+ * @typedef {{path: string, side: "NEW"|"OLD",
+ *   old_start: number, old_lines: number, new_start: number, new_lines: number,
+ *   commit_sha: string, context_sha: string}} ThreadAnchor
+ *
+ * @typedef {{tid: string, num: number, kind: "review_thread", anchor: ThreadAnchor,
+ *   resolved: boolean, resolved_by: string, resolved_at: string,
+ *   comment_count: number, next_event_seq: number,
+ *   created_at: string, created_by: string, updated_at: string, version: number}} ThreadHeader
+ *
+ * @typedef {{kind: "review_thread_comment", seq: number, at: string, by: string,
+ *   body: string}} ThreadComment
+ *
+ * @typedef {{principal: string, by: string, at: string}} RequestedReviewer
+ *
+ * @typedef {{decision: "APPROVED"|"CHANGES_REQUESTED"|"REVIEW_REQUIRED",
+ *   latest: {[reviewer: string]: {state: string, seq: number, commit_sha: string, at: string}},
+ *   approvals: number, requested: string[], threads_total: number,
+ *   threads_unresolved: number}} ReviewSummary
  */
 
 export {};

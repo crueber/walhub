@@ -143,7 +143,12 @@ func (s *Service) checkProtectedRef(ctx context.Context, owner, repo string, pri
 	if err != nil {
 		return err
 	}
-	v := policy.Evaluate(ctx, doc, policy.Request{Principal: principal, Ref: ref, Op: op})
+	// Protect-only evaluation (policy.EvaluateProtect): the merge publish
+	// is server-side, NOT a receive-pack push, so observation effects with
+	// their own gates (required-reviews — consulted separately by runMerge
+	// through the ReviewGate seam) must not deny here. Required-checks
+	// runs through its own pre-scan above (pending Wave 05).
+	v := policy.EvaluateProtect(ctx, doc, policy.Request{Principal: principal, Ref: ref, Op: op})
 	if !v.Allow {
 		return fmt.Errorf("rejected by rule '%s'", v.Rule)
 	}

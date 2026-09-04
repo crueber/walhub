@@ -276,3 +276,69 @@ envelope handling; JSDoc `@typedef Review/ThreadAnchor/ThreadHeader` in `types.j
 - Editing or deleting posted reviews (compensating events only), private review comments.
 - Cross-PR / cross-repo review aggregation; email-based review submission (the API + UI are the only
   writers — the CLI is never a second writer implementation, 14 §14.9).
+
+## Wave C2 implementation notes (2026-09-04, `internal/review` landed)
+
+- **Seam 1 in code is the `server.ExtraRoutes` chain**, not `api.Lanes` — the
+  package fronts the core mux via `Handle(w, r) bool` on both lanes, exactly
+  like `internal/identity`, `internal/issues`, and `internal/pulls` (see the Wave A
+  amendment in 14_extensibility.md Decisions). Route-for-route the §7 table is
+  implemented verbatim; no additive endpoints.
+- **PR-header fields ride `pulls.Thread` opaquely.** `next_review_seq`,
+  `next_thread_num`, and `review_summary` are 14 §14.12 additive optional fields
+  on the shared header: `internal/review` owns their semantics, `internal/pulls`
+  round-trips them (`ReviewSummary json.RawMessage` — preserved, never
+  interpreted) so PR comments/merges never drop review state. The two packages
+  share no code for the header — only the JSON shape — and a test pins the
+  round-trip both ways.
+- **The push-time half lives in `internal/policy`** (`effect_required_reviews.go`,
+  beside its siblings) because push-path matching uses the package-private
+  glob/actor law; registration is the same `init()` + `RegisterEffect` call as
+  every other effect. Two small exported helpers serve the merge-time half:
+  `policy.MatchingRules` (same match law, no eval) and `policy.Bypassed`
+  (empty bypass admits nobody — callers check len first, fail-closed). The
+  merge-time verdict itself (scan + most-restrictive combination) is
+  `review.Service.EvaluateGate`; 03's merge task calls it through pulls'
+  `ReviewGate` seam (`CheckRequiredReviews`) at the step-4 call site in
+  `runMerge` — the merge logic is NOT forked.
+- **Dismissing a non-latest review is recorded but inert.** `isDismissed`
+  (and the rollup) only demote while the target is still the reviewer's
+  latest; a `review_dismissed` pointing at history commits a truthful event
+  that changes no verdict — compensating evidence, never an edit.
+- **CHANGES_REQUESTED blocks regardless of staleness.** `dismiss_stale`
+  freshens only the approval count (`commit_sha == head`); a surviving
+  request-changes always blocks. Staleness is derived (`commit_sha != head`)
+  in the UI, the summary, and the gate from the same pin — zero coordination.
+- **`review-suggest` degrades by seam.** Access bindings always apply;
+  team expansion needs the `GroupExpander` seam (identity's `ExpandGroups`)
+  and commit authors need `CommitAuthors` (pulls' `HeadAuthors` via
+  `LogRange`); nil severs contribute nothing, never an error.
+- **Drift-hash twins.** `DriftHash` (Go, `internal/review/model.go`) and
+  `anchorContextSha` (`web/src/lib/diff.js` — the ONLY client implementation,
+  sync hand-rolled SHA-256, no dependency) hash identical bytes; a fixed
+  vector (`src/main.go` + `[a b]`/`[c]`) is pinned in BOTH suites — changing
+  the hash is a wire-level break. The server validates anchor shape only
+  (no git subprocesses on the review path, §7 Concurrency); correctness of
+  the hash is derived at view time by the client.
+- **SSE frames publish through the seam; the UI does not subscribe yet.**
+  Mutations emit `review` (with the new summary) and `thread` (with `tid`)
+  through the `Streamer` seam (nil until 06 lands, like 02/03). The PR page
+  reloads via `invalidate` on mutation — no polling loops (P7) — and follows
+  `review`/`thread` frames on the collaboration stream once 06 names it, the
+  same deferral 02/03 pages already carry.
+- **Discovery has no per-feature provenance.** `/api/v1` `endpoints[]`
+  derives from the core route table only (01/02/03 routes are absent there
+  alike); the SDK enumerates review endpoints statically, like pulls.
+  Recorded here, not silently diverged.
+- **SDK naming.** §8 names the submodule `web/sdk/src/pulls.js`, but that
+  file already exists (03's surface) — review additions live in the new
+  `web/sdk/src/reviews.js`, attached as `repo.pulls.reviews/threads/requests`
+  + `repo.pulls.suggest` (the §8 member names verbatim), wired in `core.js`
+  beside `attachPulls`. JSDoc `Review/ThreadAnchor/ThreadHeader` typedefs in
+  `types.js`.
+- **Evidence E5** (`docs/EVIDENCE.md`): recompute = 2 LIST + 1 GET per
+  review/thread + requests/header reads + 1 CAS PUT (9+1+2 at 5 reviews,
+  122+1+2 at 100 — exact formula, no hidden fan-out); gate = policy/header/
+  sidecar GETs + 1 LIST + 1 GET per review (8+0+1 at 5, 103+0+1 at 100),
+  own deadline, never trusts the summary. Zero git on every review path.
+  16-way concurrent submits converge with unique seqs (`-race`, in-suite).

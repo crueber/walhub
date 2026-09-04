@@ -41,6 +41,10 @@ func init() {
 	RegisterEffect((*ProtectEffect)(nil))
 	RegisterEffect((*HistoryEffect)(nil))
 	RegisterEffect((*SizeEffect)(nil))
+	// docs/features/04 §6: the required-reviews push-time half (deny
+	// direct pushes to matched refs); the merge-time half lives in
+	// internal/review, which scans review events at merge time.
+	RegisterEffect((*RequiredReviewsEffect)(nil))
 }
 
 // effectNull reports a null/missing effect payload, which is a parse error

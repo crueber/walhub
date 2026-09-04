@@ -152,6 +152,18 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 		rec.notice("protected-ref gate: %s", gerr.Error())
 		return nil, fmt.Errorf("%w: %v", ErrConflict, gerr)
 	}
+	// Required-reviews gate (04 §6 merge-time half): the review-provided
+	// gate function with the LIVE head sha (it re-derives by event scan —
+	// it never trusts review_summary). A failed gate narrates the
+	// shortfall (law 7) and the merge ref is not published. Nil Reviews
+	// skips the gate (no review backend wired).
+	if s.Reviews != nil {
+		if gerr := s.Reviews.CheckRequiredReviews(ctx, owner, repo, num, headLive, pr.Base.Ref, who); gerr != nil {
+			rec.notice("required-reviews gate: %s", gerr.Error())
+			return nil, fmt.Errorf("%w: %v", ErrConflict, gerr)
+		}
+		rec.notice("required-reviews gate: satisfied")
+	}
 	// Step 2: strategy argv (stock git only, plumbing — no worktree).
 	authorName, authorEmail := who, who
 	cName, cEmail := s.committer()
