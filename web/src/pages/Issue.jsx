@@ -328,9 +328,6 @@ export default function Issue() {
               <div class="card grid gap-1 p-3 text-sm">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">State</span>
                 <span>{t().state}{t().state_reason ? ` (${t().state_reason})` : ""}</span>
-                <Show when={canComment()}>
-                  <span class="muted text-xs">close / reopen from the comment box</span>
-                </Show>
               </div>
               <div class="card grid gap-2 p-3 text-sm">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Labels</span>
