@@ -13,6 +13,7 @@ import { useData, invalidate, reportError } from "../lib/data.js";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
+import { useRole } from "../components/perms.jsx";
 
 const REACTIONS = ["+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"];
 
@@ -53,6 +54,8 @@ export default function Issue() {
   const num = () => params.num;
   const key = () => `issue:${ctx.full}:${num()}`;
   const [getView] = useData(key, () => ctx.repoClient.issues.get(num()));
+  const { role } = useRole(ctx.full, ctx.repoClient);
+  const canComment = () => role() !== null;
   const [getOlder, setOlder] = createSignal(false);
   // Older event windows accumulate here (the view holds the newest page;
   // both are newest-first, so concatenation stays ordered).
@@ -174,12 +177,14 @@ export default function Issue() {
                   {getOlder() ? "Loading…" : "Older events"}
                 </button>
               </Show>
-              <CommentComposer
-                onSubmit={comment}
-                errorKey="issue-comment"
-                mentionId="mention-issue-comment"
-                mentionNames={thread()?.participants}
-              />
+              <Show when={canComment()}>
+                <CommentComposer
+                  onSubmit={comment}
+                  errorKey="issue-comment"
+                  mentionId="mention-issue-comment"
+                  mentionNames={thread()?.participants}
+                />
+              </Show>
             </>
           )}
         </Show>

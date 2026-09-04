@@ -19,7 +19,7 @@ export default function Release() {
   const tag = () => params.tag;
   const key = () => `release:${ctx.full}:${tag()}`;
   const [getRel, setRel] = createSignal(null);
-  const [getView] = useData(key, async () => {
+  useData(key, async () => {
     const rel = await ctx.repoClient.releases.get(tag());
     setRel(rel);
     return rel;

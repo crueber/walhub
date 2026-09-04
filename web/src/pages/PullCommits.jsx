@@ -6,13 +6,18 @@ import { A, useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
+import { useCollabStream } from "../components/collab.jsx";
 
 export default function PullCommits() {
   const ctx = useRepo();
   const params = useParams();
   const num = () => params.num;
   const key = () => `prcommits:${ctx.full}:${num()}`;
-  const [getView] = useData(key, () => ctx.repoClient.pulls.commits(num(), { n: 100 }), TTL.prcommits);
+  // NOTE: TTL.pulls (5 s), not TTL.prcommits (∞) — the key is not
+  // sha-addressed, so ∞ would serve a stale list forever after the
+  // head moves (08 §6 reserves ∞ for immutable content).
+  const [getView] = useData(key, () => ctx.repoClient.pulls.commits(num(), { n: 100 }), TTL.pulls);
+  useCollabStream(() => ctx.full, ctx.repoClient, ["pull"], (frame) => Number(frame.num) === Number(num()));
   return (
     <div>
       <p class="mb-3 text-sm">

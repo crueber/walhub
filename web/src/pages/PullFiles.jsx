@@ -8,6 +8,7 @@ import { A, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
+import { useCollabStream } from "../components/collab.jsx";
 import { parsePatchFiles } from "../lib/diff.js";
 
 export default function PullFiles() {
@@ -19,7 +20,13 @@ export default function PullFiles() {
     const res = await ctx.repoClient.pulls.diff(num());
     const patch = typeof res === "string" ? res : res.patch ?? res.diff ?? "";
     return parsePatchFiles(patch);
-  }, TTL.diff);
+    // NOTE: TTL.pulls (5 s), not TTL.diff (∞) — the key is not
+    // sha-addressed, so ∞ would serve a stale diff forever after the
+    // head moves (08 §6 reserves ∞ for immutable content).
+  }, TTL.pulls);
+  // `pull` frames (opened/head_force_pushed/merged) invalidate the
+  // pulldiff key coalesced — the stream is the live path, TTL the backstop.
+  useCollabStream(() => ctx.full, ctx.repoClient, ["pull"], (frame) => Number(frame.num) === Number(num()));
   return (
     <div>
       <p class="mb-3 text-sm">
