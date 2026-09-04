@@ -47,49 +47,64 @@ export default function Releases() {
   // Live list: `release` frames invalidate the list + latest (coalesced).
   useCollabStream(() => ctx.full, ctx.repoClient, ["release"]);
 
+  // Empty state (issue #50): exactly ONE "New release" CTA — the Empty
+  // callout's action. The toolbar button and the Latest sidebar (which
+  // carries its own Empty + CTA) render only when releases exist, so the
+  // empty page is one centered composition with no sidebar.
+  const hasReleases = () => (getPage()?.releases ?? []).length > 0;
+  const newHref = () => `/${ctx.full}/releases/new`;
+
   return (
+    <Show
+      when={hasReleases()}
+      fallback={
+        <section aria-label="Releases">
+          <div class="mb-3 flex items-center justify-end gap-2">
+            <button type="button" class="btn px-2 py-1" onClick={reload}>
+              refresh
+            </button>
+          </div>
+          <div class="mx-auto max-w-xl">
+            <Empty
+              icon="tag"
+              title="No releases yet"
+              hint="Tag a commit and publish release notes — drafts and prereleases are supported."
+              actionHref={newHref()}
+              actionLabel="New release"
+            />
+          </div>
+        </section>
+      }
+    >
     <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
       <section aria-label="Releases">
         <div class="mb-3 flex items-center gap-2">
-          <A href={`/${ctx.full}/releases/new`} class="btn px-2 py-1">
+          <A href={newHref()} class="btn px-2 py-1">
             New release
           </A>
           <button type="button" class="btn ml-auto px-2 py-1" onClick={reload}>
             refresh
           </button>
         </div>
-        <Show
-          when={(getPage()?.releases ?? []).length > 0}
-          fallback={
-            <Empty
-              icon="tag"
-              title="No releases yet"
-              hint="Tag a commit and publish release notes — drafts and prereleases are supported."
-              actionHref={`/${ctx.full}/releases/new`}
-              actionLabel="New release"
-            />
-          }
-        >
-          <ul class="card-list">
-            <For each={getPage()?.releases ?? []}>
-              {(rel) => (
-                <li class="card">
-                  <div class="flex items-center gap-2">
-                    <A href={`/${ctx.full}/releases/${encodeURIComponent(rel.tag)}`} class="card-title font-mono">
-                      {rel.tag}
-                    </A>
-                    <ReleaseBadges release={rel} />
-                  </div>
-                  <div class="card-meta">
-                    <span>{rel.name}</span>
-                    <span>{fmtDate(rel.published_at ?? rel.created_at)}</span>
-                    <span>{(rel.assets ?? []).length} assets</span>
-                  </div>
-                </li>
-              )}
-            </For>
-          </ul>
-        </Show>
+        <ul class="card-list">
+          <For each={getPage()?.releases ?? []}>
+            {(rel) => (
+              <li class="card">
+                <div class="flex items-center gap-2">
+                  <A href={`/${ctx.full}/releases/${encodeURIComponent(rel.tag)}`} class="card-title font-mono">
+                    {rel.tag}
+                  </A>
+                  <ReleaseBadges release={rel} />
+                </div>
+                <div class="card-meta">
+                  <span>{rel.name}</span>
+                  <span>{fmtDate(rel.published_at ?? rel.created_at)}</span>
+                  <span>{(rel.assets ?? []).length} assets</span>
+                </div>
+              </li>
+            )}
+          </For>
+        </ul>
         <Show when={getPage()?.more}>
           <button
             type="button"
@@ -116,7 +131,7 @@ export default function Releases() {
                   icon="tag"
                   title="No published releases"
                   hint="Tag a commit and publish release notes — drafts and prereleases are supported."
-                  actionHref={`/${ctx.full}/releases/new`}
+                  actionHref={newHref()}
                   actionLabel="New release"
                 />
               </div>
@@ -184,5 +199,6 @@ export default function Releases() {
         </Show>
       </aside>
     </div>
+    </Show>
   );
 }
