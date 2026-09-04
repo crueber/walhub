@@ -186,7 +186,20 @@ func (s *Service) refreshHead(ctx context.Context, owner, repo string, pr *PRDoc
 	if headLive == "" || headLive == pr.Head.SHA {
 		return
 	}
-	old := pr.Head.SHA
+	// Owned-delta re-apply (§2.3: this writer owns Head.SHA +
+	// HeadForcePushedAt only): work on the fresh doc. The passed-in pr may
+	// predate a landed merge — saving it wholesale with a fresh version
+	// would clobber the write-once outcome with no 412 to stop it.
+	target := pr
+	fresh, prVer, _ := s.loadPR(ctx, owner, repo, pr.Num)
+	if fresh != nil {
+		target = fresh
+	}
+	if headLive == target.Head.SHA {
+		pr.Head.SHA = headLive
+		return // another writer already recorded it
+	}
+	old := target.Head.SHA
 	forced := true
 	if s.Git != nil && s.Dirs != nil && old != "" {
 		if dir, derr := s.Dirs.Dir(ctx, pr.Head.Repo); derr == nil {
@@ -196,12 +209,15 @@ func (s *Service) refreshHead(ctx context.Context, owner, repo string, pr *PRDoc
 		}
 	}
 	now := s.nowUTC().Format(dateTimeFmt)
+	target.Head.SHA = headLive
+	if forced {
+		target.HeadForcePushedAt = &now
+	}
+	_ = s.savePR(ctx, owner, repo, target, prVer)
 	pr.Head.SHA = headLive
 	if forced {
-		pr.HeadForcePushedAt = &now
+		pr.HeadForcePushedAt = target.HeadForcePushedAt
 	}
-	_, prVer, _ := s.loadPR(ctx, owner, repo, pr.Num)
-	_ = s.savePR(ctx, owner, repo, pr, prVer)
 	if forced {
 		who := normPrincipal(actor.Name)
 		if who == "" {

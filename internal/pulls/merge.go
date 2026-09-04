@@ -277,13 +277,22 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 	if nt != nil {
 		th = nt
 	}
-	pr.Merged = true
-	pr.MergedAt = &mergedAt
-	pr.MergedBy = &who
-	pr.MergeCommitSHA = &newSHA
-	pr.MergeStrategy = &in.Strategy
-	_, prVer, _ := s.loadPR(ctx, owner, repo, num)
-	_ = s.savePR(ctx, owner, repo, pr, prVer)
+	// Owned-delta re-apply (§2.3: this writer owns the outcome fields
+	// only): record onto the fresh doc. A body edit or head refresh may
+	// have landed while the task ran — saving the task-start snapshot
+	// wholesale with a fresh version would clobber it with no 412.
+	target := pr
+	fresh, prVer, _ := s.loadPR(ctx, owner, repo, num)
+	if fresh != nil {
+		target = fresh
+	}
+	target.Merged = true
+	target.MergedAt = &mergedAt
+	target.MergedBy = &who
+	target.MergeCommitSHA = &newSHA
+	target.MergeStrategy = &in.Strategy
+	_ = s.savePR(ctx, owner, repo, target, prVer)
+	pr = target
 	s.updateIndex(ctx, owner, repo, prCardOf(th))
 	texts := append([]string{pr.Body, fullMessage(title, body)}, commitTexts...)
 	var closed []int
