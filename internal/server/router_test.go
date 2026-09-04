@@ -296,3 +296,38 @@ func osStat(p string) (interface{ Size() int64 }, error) {
 	fi, err := os.Stat(p)
 	return fi, err
 }
+
+// TestTeamPageRoute pins the 08 §1 org team page: "/{owner}/teams/{slug}"
+// serves the SPA shell (gated, GET/HEAD only); other methods 405; a repo
+// literally named "teams" keeps its 2-segment root.
+func TestTeamPageRoute(t *testing.T) {
+	_, h := newTestServer(t, nil)
+	rows := []struct {
+		name   string
+		method string
+		target string
+		want   int
+		shell  bool
+	}{
+		{"team page shell", "GET", "http://x/acme/teams/dev", http.StatusOK, true},
+		{"team page head", "HEAD", "http://x/acme/teams/dev", http.StatusOK, false},
+		{"team page post rejected", "POST", "http://x/acme/teams/dev", http.StatusMethodNotAllowed, false},
+		{"empty slug 404", "GET", "http://x/acme/teams/", http.StatusNotFound, false},
+		{"repo named teams keeps root", "GET", "http://x/acme/teams", http.StatusOK, true},
+		{"bad owner 404", "GET", "http://x/Bad%20Owner/teams/dev", http.StatusNotFound, false},
+	}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.target, nil)
+			req.Header.Set("Authorization", "Bearer tok123")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("%s %s = %d, want %d (%s)", tc.method, tc.target, rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.shell && !strings.Contains(rec.Body.String(), "walhub") {
+				t.Fatalf("%s %s missing shell: %q", tc.method, tc.target, rec.Body.String())
+			}
+		})
+	}
+}

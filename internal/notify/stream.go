@@ -89,19 +89,28 @@ func (b *userBus) liveCount(principal string) int {
 
 // --- repo frame bus (Streamer seam) --------------------------------------------
 
-// RepoFrame is one repo-scoped live event (issues/pulls/review/checks
-// StreamEvents translated by composition). It rides the in-process repo
-// bus; 08's collab stream subscribes via SubscribeRepo. There is no v1
-// HTTP reader — the normative live proof (notification object +
-// notification frame) rides Emit (see Decisions in 06).
+// RepoFrame is one repo-scoped live event (feature StreamEvents
+// translated by composition). It rides the in-process repo bus; 08's
+// collab stream (collab.go) subscribes via SubscribeRepo and serves it
+// over GET /{o}/{r}/api/collab/stream. Name is the 08 §4 kind
+// (issue|issue_event|pull|review|thread|check|release|access); the
+// optional fields carry the kind's extras (checks: SHA/Context/Combined;
+// threads: TID; releases: Tag; pulls: HeadSHA; every frame: Actor).
 type RepoFrame struct {
-	Name   string `json:"name"`
-	Repo   string `json:"repo"`
-	Action string `json:"action,omitempty"`
-	Num    int    `json:"num,omitempty"`
-	Title  string `json:"title,omitempty"`
-	State  string `json:"state,omitempty"`
-	At     string `json:"at"`
+	Name     string `json:"name"`
+	Repo     string `json:"repo"`
+	Action   string `json:"action,omitempty"`
+	Num      int    `json:"num,omitempty"`
+	Title    string `json:"title,omitempty"`
+	State    string `json:"state,omitempty"`
+	At       string `json:"at"`
+	Actor    string `json:"actor,omitempty"`
+	Sha      string `json:"sha,omitempty"`
+	Tag      string `json:"tag,omitempty"`
+	Tid      string `json:"tid,omitempty"`
+	Context  string `json:"context,omitempty"`
+	Combined string `json:"combined_state,omitempty"`
+	Seq      int    `json:"seq,omitempty"`
 }
 
 // repoBus multiplexes RepoFrames to per-repo subscribers with a bounded
@@ -120,12 +129,24 @@ func newRepoBus() *repoBus {
 }
 
 // PublishStream publishes one repo frame (non-blocking, drop-oldest).
-// Composition calls this from each package's Streamer seam.
+// Composition calls this from each package's Streamer seam. The name is
+// the 08 §4 kind; title/state carry the human summary.
 func (s *Service) PublishStream(name, repo, action, title, state string, num int) {
-	s.rbus.publish(RepoFrame{
+	s.PublishFrame(RepoFrame{
 		Name: name, Repo: repo, Action: action, Num: num,
 		Title: title, State: state, At: s.nowUTC().Format(dateTimeFmt),
 	})
+}
+
+// PublishFrame publishes a full repo frame (non-blocking, drop-oldest).
+// Composition adapters prefer this when the feature event carries
+// kind-specific extras (checks SHA/context, thread TID, release tag).
+// The caller sets At; an empty At is stamped here.
+func (s *Service) PublishFrame(f RepoFrame) {
+	if f.At == "" {
+		f.At = s.nowUTC().Format(dateTimeFmt)
+	}
+	s.rbus.publish(f)
 }
 
 func (b *repoBus) publish(f RepoFrame) {
@@ -156,6 +177,18 @@ func (b *repoBus) publish(f RepoFrame) {
 // first); the caller MUST call unsubscribe, which closes the channel.
 func (s *Service) SubscribeRepo(repo string) (<-chan RepoFrame, []RepoFrame, func()) {
 	return s.rbus.subscribe(repo)
+}
+
+// repoLiveCount reports current repo subscribers (tests only).
+func (s *Service) repoLiveCount(repo string) int {
+	return s.rbus.liveCount(repo)
+}
+
+// liveCount reports current repo subscribers (tests only).
+func (b *repoBus) liveCount(repo string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subs[repo])
 }
 
 func (b *repoBus) subscribe(repo string) (<-chan RepoFrame, []RepoFrame, func()) {

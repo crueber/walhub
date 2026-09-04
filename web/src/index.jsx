@@ -21,8 +21,13 @@ import Issues from "./pages/Issues.jsx";
 import IssueNew from "./pages/IssueNew.jsx";
 import Issue from "./pages/Issue.jsx";
 import Pulls from "./pages/Pulls.jsx";
+import PullNew from "./pages/PullNew.jsx";
 import Pull from "./pages/Pull.jsx";
+import PullCommits from "./pages/PullCommits.jsx";
+import PullFiles from "./pages/PullFiles.jsx";
 import Checks from "./pages/Checks.jsx";
+import CheckDetail from "./pages/CheckDetail.jsx";
+import Team from "./pages/Team.jsx";
 import Releases from "./pages/Releases.jsx";
 import Release from "./pages/Release.jsx";
 import ReleaseNew from "./pages/ReleaseNew.jsx";
@@ -48,6 +53,7 @@ render(
       <Route path="/notifications" component={Notifications} />
       <Route path="/:owner" component={Repos} />
       <Route path="/:org/settings" component={Org} />
+      <Route path="/:owner/teams/:slug" component={Team} />
       <Route path="/:owner/:name" component={Repo}>
         <Route path="/" component={Tree} />
         <Route path="/tree/*rest" component={Tree} />
@@ -58,8 +64,12 @@ render(
         <Route path="/issues/new" component={IssueNew} />
         <Route path="/issues/:num" component={Issue} />
         <Route path="/pulls" component={Pulls} />
+        <Route path="/pulls/new" component={PullNew} />
         <Route path="/pull/:num" component={Pull} />
+        <Route path="/pull/:num/commits" component={PullCommits} />
+        <Route path="/pull/:num/files" component={PullFiles} />
         <Route path="/checks" component={Checks} />
+        <Route path="/checks/:sha" component={CheckDetail} />
         <Route path="/releases" component={Releases} />
         <Route path="/releases/new" component={ReleaseNew} />
         <Route path="/releases/:tag" component={Release} />

@@ -1,16 +1,19 @@
 // web/src/pages/Issue.jsx — route "/:owner/:name/issues/:num" (02 §11):
 // the thread page (header, timeline with seq-window older-on-demand,
 // comment composer, sidebar with labels/assignees/milestone/state for ≥
-// triage). `issue_event` frames append timeline entries; `issue` frames
-// refresh the header — both ride the repo's existing SSE stream.
+// triage). `issue_event` frames refresh the header, `issue` frames the
+// header too — both ride the ONE repo collaboration stream (08 §4), one
+// connection per page via mountStreamRetry; frames invalidate cache keys
+// (coalesced), they never carry full state.
 
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
-import { MentionDatalist } from "./Mentions.jsx";
-import { renderMarkdown } from "../lib/markdown.js";
-import { sanitize } from "../lib/sanitize.js";
+import ThreadTimeline from "../components/ThreadTimeline.jsx";
+import CommentComposer from "../components/CommentComposer.jsx";
+import { useCollabStream } from "../components/collab.jsx";
+import { useRole } from "../components/perms.jsx";
 
 const REACTIONS = ["+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"];
 
@@ -51,8 +54,8 @@ export default function Issue() {
   const num = () => params.num;
   const key = () => `issue:${ctx.full}:${num()}`;
   const [getView] = useData(key, () => ctx.repoClient.issues.get(num()));
-  const [getBody, setBody] = createSignal("");
-  const [getBusy, setBusy] = createSignal(false);
+  const { role } = useRole(ctx.full, ctx.repoClient);
+  const canComment = () => role() !== null;
   const [getOlder, setOlder] = createSignal(false);
   // Older event windows accumulate here (the view holds the newest page;
   // both are newest-first, so concatenation stays ordered).
@@ -75,19 +78,9 @@ export default function Issue() {
   const events = () => [...(getView()?.events ?? []), ...getExtra()];
   const more = () => (getExtraMore() === undefined ? getView()?.events_more : getExtraMore());
 
-  const comment = async (e) => {
-    e.preventDefault();
-    if (!getBody().trim()) return;
-    setBusy(true);
-    try {
-      await ctx.repoClient.issues.comment(num(), getBody());
-      setBody("");
-      reload();
-    } catch (err) {
-      reportError(err, "issue-comment");
-    } finally {
-      setBusy(false);
-    }
+  const comment = async (body) => {
+    await ctx.repoClient.issues.comment(num(), body);
+    reload();
   };
 
   const react = async (seq, content) => {
@@ -133,6 +126,11 @@ export default function Issue() {
     }
   };
 
+  // The ONE repo collaboration stream (08 §4): one connection for this
+  // page, capped reconnect; matching issue frames invalidate (coalesced)
+  // — the header refetch (with its newest events page) is the backfill.
+  useCollabStream(() => ctx.full, ctx.repoClient, ["issue", "issue_event"], (frame) => Number(frame.num) === Number(num()));
+
   return (
     <div class="issue-page grid gap-4 md:grid-cols-[1fr_16rem]">
       <div class="min-w-0">
@@ -148,60 +146,45 @@ export default function Issue() {
               <p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
                 {t().author} opened {fmtDate(t().created_at)} · {t().comment_count} comments
               </p>
-              <ol class="grid gap-2">
-                <For each={events()}>
-                  {(ev) => (
-                    <li class="card p-3">
-                      <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
-                        <span class="font-medium text-zinc-700 dark:text-zinc-200">{ev.actor}</span> · {fmtDate(ev.at)}
-                        <Show when={ev.type === "opened" || ev.type === "commented"}>
-                          <span class="ml-2 inline-flex gap-1">
-                            <For each={REACTIONS}>
-                              {(r) => (
-                                <button
-                                  type="button"
-                                  class="chip hover:border-zinc-400"
-                                  title={`react ${r}`}
-                                  onClick={() => react(ev.seq, r)}
-                                >
-                                  {r}
-                                  <Show when={(summary()[seqKey(ev.seq)] ?? {})[r]}>
-                                    {" "}{(summary()[seqKey(ev.seq)] ?? {})[r]}
-                                  </Show>
-                                </button>
-                              )}
-                            </For>
-                          </span>
-                        </Show>
-                      </p>
-                      <Show when={ev.body != null} fallback={<p class="text-sm italic">{eventText(ev)}</p>}>
-                        <div class="prose-sm" innerHTML={sanitize(renderMarkdown(ev.body ?? ""))} />
-                      </Show>
-                    </li>
-                  )}
-                </For>
-              </ol>
+              <ThreadTimeline
+                events={events()}
+                textFor={eventText}
+                fmtDate={fmtDate}
+                actionsFor={(ev) => (
+                  <Show when={ev.type === "opened" || ev.type === "commented"}>
+                    <span class="ml-2 inline-flex gap-1">
+                      <For each={REACTIONS}>
+                        {(r) => (
+                          <button
+                            type="button"
+                            class="chip hover:border-zinc-400"
+                            title={`react ${r}`}
+                            onClick={() => react(ev.seq, r)}
+                          >
+                            {r}
+                            <Show when={(summary()[seqKey(ev.seq)] ?? {})[r]}>
+                              {" "}{(summary()[seqKey(ev.seq)] ?? {})[r]}
+                            </Show>
+                          </button>
+                        )}
+                      </For>
+                    </span>
+                  </Show>
+                )}
+              />
               <Show when={more()}>
                 <button type="button" class="btn mt-2" disabled={getOlder()} onClick={loadOlder}>
                   {getOlder() ? "Loading…" : "Older events"}
                 </button>
               </Show>
-              <form class="card mt-3 grid gap-2 p-3" onSubmit={comment}>
-                <textarea
-                  class="input min-h-24 font-mono text-sm"
-                  value={getBody()}
-                  onInput={(e) => setBody(e.target.value)}
-                  placeholder="Write a comment… (#N links issues, @user mentions)"
-                  aria-label="comment body"
-                  list="mention-issue-comment"
+              <Show when={canComment()}>
+                <CommentComposer
+                  onSubmit={comment}
+                  errorKey="issue-comment"
+                  mentionId="mention-issue-comment"
+                  mentionNames={thread()?.participants}
                 />
-                <MentionDatalist id="mention-issue-comment" names={thread()?.participants} />
-                <div>
-                  <button type="submit" class="btn primary" disabled={getBusy() || !getBody().trim()}>
-                    Comment
-                  </button>
-                </div>
-              </form>
+              </Show>
             </>
           )}
         </Show>

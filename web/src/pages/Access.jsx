@@ -4,6 +4,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { TTL } from "../lib/collab.js";
 
 const ROLES = ["read", "triage", "write", "maintain", "admin"];
 
@@ -90,6 +91,9 @@ export default function AccessTab(props) {
 
   return (
     <div>
+      <section class="card mb-4 p-4" aria-label="Effective access">
+        <CollaboratorsBlock full={full} repo={repo} />
+      </section>
       <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
         {(doc) => (
           <>
@@ -194,4 +198,40 @@ function friendly(err) {
   if (err.status === 403) return "admin role required to change access";
   if (err.status === 401) return "sign in to view access";
   return String(err.message ?? err);
+}
+
+/** Effective access (08 §§3.6/5): your resolved role plus the effective
+ *  collaborator list with resolution sources. Read-gated; anonymous on a
+ *  private repo sees the 401 note instead of the table. */
+function CollaboratorsBlock(props) {
+  const [getRole] = useData(`perms:${props.full}`, () => props.repo.permissions().catch(() => ({ role: null })), TTL.perms);
+  const [getCollabs] = useData(`collaborators:${props.full}`, () => props.repo.collaborators.list().catch(() => ({ collaborators: [] })), TTL.perms);
+  return (
+    <>
+      <h3 class="mb-2 font-semibold">Effective access</h3>
+      <p class="mb-2 text-sm">
+        your role: <code class="font-mono text-xs">{getRole()?.role ?? "none"}</code>
+      </p>
+      <Show when={(getCollabs()?.collaborators ?? []).length > 0} fallback={<p class="muted text-sm">no effective collaborators</p>}>
+        <div class="overflow-x-auto">
+          <table class="data-table">
+            <thead>
+              <tr><th>principal</th><th>role</th><th>source</th></tr>
+            </thead>
+            <tbody>
+              <For each={getCollabs().collaborators}>
+                {(c) => (
+                  <tr>
+                    <td><code class="font-mono text-xs">{c.principal}</code></td>
+                    <td>{c.role}</td>
+                    <td><code class="font-mono text-xs">{c.source}</code></td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      </Show>
+    </>
+  );
 }

@@ -103,6 +103,18 @@
  *   latest: {[reviewer: string]: {state: string, seq: number, commit_sha: string, at: string}},
  *   approvals: number, requested: string[], threads_total: number,
  *   threads_unresolved: number}} ReviewSummary
+ *
+ * @typedef {{role: "read"|"triage"|"write"|"maintain"|"admin"|null}} Permissions
+ *
+ * @typedef {{principal: string, role: "read"|"triage"|"write"|"maintain"|"admin",
+ *   source: string}} Collaborator
+ *
+ * @typedef {{principal: string, display: string}} Assignable
+ *
+ * @typedef {{kind: "issue"|"issue_event"|"pull"|"review"|"thread"|"check"|"release"|"access",
+ *   num?: number, seq?: number, sha?: string, tag?: string, actor?: string,
+ *   action?: string, title?: string, state?: string, at: string,
+ *   thread_id?: string, context?: string, combined_state?: string}} CollabFrame
  */
 
 export {};

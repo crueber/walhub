@@ -199,6 +199,9 @@ func (s *Service) PutAccess(ctx context.Context, owner, repo string, base store.
 		return nil, cerr
 	}
 	s.access.invalidate(owner, repo)
+	if s.Stream != nil {
+		s.Stream(ctx, owner+"/"+repo)
+	}
 	return result, nil
 }
 

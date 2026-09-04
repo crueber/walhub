@@ -182,7 +182,7 @@ func (s *Service) CreateIssue(ctx context.Context, owner, repo string, actor aut
 	s.writeRefs(ctx, owner, repo, num, -1, normPrincipal(actor.Name), body)
 	s.emitSubscribed(ctx, owner, repo, th, normPrincipal(actor.Name), "opened")
 	s.emitMentioned(ctx, owner, repo, num, normPrincipal(actor.Name), body)
-	s.stream(ctx, StreamEvent{Name: "issue", Repo: repoName(owner, repo), IssueNum: num})
+	s.stream(ctx, StreamEvent{Name: "issue", Repo: repoName(owner, repo), IssueNum: num, Seq: ev.Seq})
 	nt, _, _ := s.loadThread(ctx, owner, repo, num)
 	if nt != nil {
 		th = nt
@@ -226,7 +226,7 @@ func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, a
 	s.writeRefs(ctx, owner, repo, num, ev.Seq, who, body)
 	s.emitSubscribed(ctx, owner, repo, th, who, "commented")
 	s.emitMentioned(ctx, owner, repo, num, who, body)
-	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num})
+	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num, Seq: ev.Seq})
 	return ev, nil
 }
 
@@ -669,7 +669,7 @@ func (s *Service) AddReaction(ctx context.Context, owner, repo string, num, targ
 		return nil, nil, false, err
 	}
 	s.updateIndex(ctx, owner, repo, cardOf(th))
-	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num})
+	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num, Seq: ev.Seq})
 	return th, ev, true, nil
 }
 
@@ -700,7 +700,7 @@ func (s *Service) RemoveReaction(ctx context.Context, owner, repo string, num, t
 		return nil, fmt.Errorf("%w: unknown reaction", ErrNotFound)
 	}
 	now := s.nowUTC().Format(dateTimeFmt)
-	th, _, err := s.appendEvent(ctx, owner, repo, num, func(t *Thread, seq int) (*Event, error) {
+	th, ev, err := s.appendEvent(ctx, owner, repo, num, func(t *Thread, seq int) (*Event, error) {
 		t.NextEventSeq = seq + 1
 		t.UpdatedAt = now
 		t.Version++
@@ -722,7 +722,7 @@ func (s *Service) RemoveReaction(ctx context.Context, owner, repo string, num, t
 		return nil, err
 	}
 	s.updateIndex(ctx, owner, repo, cardOf(th))
-	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num})
+	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num, Seq: ev.Seq})
 	return th, nil
 }
 

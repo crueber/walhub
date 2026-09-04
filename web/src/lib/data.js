@@ -4,6 +4,10 @@
 // D-WEB-6 (2026-09-02): same API on Solid primitives after the vanilla-ESM port.
 
 import { createSignal, createEffect } from "solid-js";
+import { TTL, collabKeys } from "./collab.js";
+
+/** 08 §6 TTL table (re-exported from the pure collab module). */
+export { TTL };
 
 export const DEFAULT_TTL = 5_000; // revalidation window for ref-dependent data
 const MAX_ENTRIES = 400; // LRU cap
@@ -13,6 +17,7 @@ const TRAY_FADE_MS = 10_000; // auto-fade
 export const REPO_TTL = 5_000; // repo context per §2.6
 export const RESOLVE_TTL = 5_000; // resolve step of §9.2
 export const SHA_TTL = Infinity; // sha-addressed payloads are immutable
+export { TTL as TTL_TABLE } from "./collab.js"; // alias for the 08 §6 table
 
 // --- pending counter (top progress bar) --------------------------------------
 
@@ -141,6 +146,49 @@ export function asList(v) {
 export function invalidate(key) {
   const entry = cache.get(key);
   if (entry && !entry.promise) start(key, entry, entry.refetch ?? (() => Promise.resolve(entry.value)));
+}
+
+/** Force a refetch of every settled key under a prefix (list windows). */
+export function invalidatePrefix(prefix) {
+  const keys = [];
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) keys.push(key);
+  }
+  for (const key of keys) invalidate(key);
+}
+
+// --- 08 §4 invalidation-storm coalescing ------------------------------------
+// A burst of collab frames (CI posting 30 check runs) MUST coalesce:
+// keys are collected into a set and invalidated once per tick, and the
+// promise-cache already single-flights per key (one in-flight fetch per
+// key; joiners share it).
+const pendingInvalidations = new Set();
+let invalidateScheduled = false;
+
+/** Queue one key for coalesced invalidation (flushed once per tick). */
+export function scheduleInvalidate(key) {
+  pendingInvalidations.add(key);
+  if (invalidateScheduled) return;
+  invalidateScheduled = true;
+  queueMicrotask(() => {
+    invalidateScheduled = false;
+    const keys = [...pendingInvalidations];
+    pendingInvalidations.clear();
+    for (const k of keys) {
+      if (k.endsWith("*")) invalidatePrefix(k.slice(0, -1));
+      else invalidate(k);
+    }
+  });
+}
+
+/**
+ * invalidateCollab(full, frame) — the 08 §4 frame table: one repo stream
+ * frame fans out to the data-layer keys it invalidates. Timelines append
+ * via (num, seq) dedup at the component level; lists and headers refetch
+ * here, coalesced. `full` is "owner/name".
+ */
+export function invalidateCollab(full, frame) {
+  for (const key of collabKeys(full, frame)) scheduleInvalidate(key);
 }
 
 /** Internal: remember fn so invalidate() can refetch. */

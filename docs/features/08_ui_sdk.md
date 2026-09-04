@@ -12,6 +12,14 @@ conventions of `docs/go/07_api.md` §2: plain-text errors shown verbatim, arrays
 SSE envelope (§6), SWR/ETag vs no-store cache classes (§4). No new npm dependencies (law 1: zero runtime,
 esbuild dev-only). No TypeScript, no framework.
 
+> **Adaptation (2026-09-04, D-WEB-6 — see Decisions):** the paragraph above describes the vanilla-ESM
+> SPA. The repo ships the SolidJS SPA (`solid-js` + `@solidjs/router` runtime; `vite` +
+> `vite-plugin-solid` + `@tailwindcss/vite` dev-only; SDK still dependency-free, still no TypeScript).
+> "Reactive core" = Solid signals, "router" = `@solidjs/router`, "no build" = vite build into
+> `web/dist/`; the contract below (routes, components, cache keys, SDK surface, SSE wiring) is
+> implemented in that idiom. Page/component module names below read `.js` in the vanilla text and
+> are `.jsx` on disk.
+
 ## 1. Route table additions (SPA)
 
 Routes are additions to the 12_web_ui.md §2.3 inventory; every route returns the SPA `index.html` and is
@@ -26,19 +34,19 @@ lazy `import()`ed. Repo tabs extend to: **Code, Issues, Pulls, Releases, Commits
 | `/:owner/:repo/labels` | `labels.js` | triage+ | Label CRUD |
 | `/:owner/:repo/milestones` | `milestones.js` | triage+ | Milestone CRUD + progress |
 | `/:owner/:repo/pulls` | `pulls.js` | read | List with open/closed/merged tabs, same card shape as issues (`kind` distinguishes) |
-| `/:owner/:repo/pulls/new` | `pullNew.js` | write+ | Head/base pickers via `repo.refStream` (§2.6 pattern) |
+| `/:owner/:repo/pulls/new` | `PullNew.jsx` | write+ | Head/base pickers via `repo.refStream` (§2.6 pattern) |
 | `/:owner/:repo/pull/:num` | `pull.js` | read | Conversation + MergeBox (per 03; singular `pull` is 03's spelling) |
-| `/:owner/:repo/pull/:num/commits` | `pullCommits.js` | read | PR commit list |
-| `/:owner/:repo/pull/:num/files` | `pullFiles.js` | read | DiffPage over `parsePatchFiles`; line-thread anchoring |
+| `/:owner/:repo/pull/:num/commits` | `PullCommits.jsx` | read | PR commit list |
+| `/:owner/:repo/pull/:num/files` | `PullFiles.jsx` | read | DiffPage over `parsePatchFiles`; line-thread anchoring lives on the main PR page |
 | `/:owner/:repo/checks` | `checks.js` | read | Paged index of checked shas (state pills, filter, live rows via `check` frames) |
-| `/:owner/:repo/checks/:sha` | `checks.js` | read | Statuses for one commit; linked from commit detail, CheckPill, and MergeBox |
+| `/:owner/:repo/checks/:sha` | `CheckDetail.jsx` | read | Statuses for one commit; linked from commit detail, CheckPill, and MergeBox |
 | `/:owner/:repo/releases` | `releases.js` | read | Per 07: list, latest |
 | `/:owner/:repo/releases/{tag}` | `releases.js` | read | Detail: markdown-lite body, assets table |
 | `/:owner/:repo/releases/new` | `releaseNew.js` | maintain+ | Tag picker (`refStream`), autodraft fill, asset upload with client-side `crypto.subtle` sha256 |
 | `/notifications` | `notifications.js` | authenticated | Full tray page; the dropdown tray (below) is global chrome |
 | `/:owner/:repo/settings/{tab}` | `settings.js` (extended) | varies | Sub-tabs: `access`, `collaborators`, `webhooks`, `ci-tokens` (admin); `labels`, `milestones` (triage+); existing scheduled/policy/config tabs unchanged |
 | `/:owner/settings/{tab}` | `orgSettings.js` | org owner/admin | Org sub-tabs: profile, members, teams, invites, webhooks |
-| `/:owner/teams/:slug` | `team.js` | read | Team page: members, team repos (per 01) |
+| `/:owner/teams/:slug` | `Team.jsx` | read | Team page: members, team repos (per 01) |
 
 Global chrome additions: notification bell + **NotificationTray** dropdown (all pages), star/watch toggles in
 the repo header (07, optimistic update + rollback), "New issue"/"New pull request" buttons in repo tabs.
@@ -100,10 +108,10 @@ this section is the client mirror of exactly one provider; auth levels shown per
 | `events(num, {after_seq, n})` | `GET …/issues/{num}/events?after_seq=&n=` | `{events: [], more}` seq window |
 | `patch(num, fields)` | `PATCH …/issues/{num}` | one event per field group |
 | `comment(num, body)` | `POST …/issues/{num}/comments` | `201 {event_seq}` |
-| `react(num, {target_event_seq, content})` | `POST …/issues/{num}/reactions` | `201` |
-| `unreact(num, {target_event_seq, content})` | `DELETE …/issues/{num}/reactions/{target_event_seq}/{content}` | self-removal (read) |
-| `labels.list()/get(name)/put(name, {color, description})/delete(name)` | `…/labels[/{name}]` | label CRUD |
-| `milestones.list()/create(...)/patch(id)/delete(id)` | `…/milestones[/{id}]` | milestone CRUD |
+| `react(num, {target_event_seq, content})` | `POST …/issues/{num}/reactions` | `201` (shipped as `reactions.add`; dup → 200 `{summary}`) |
+| `unreact(num, {target_event_seq, content})` | `DELETE …/issues/{num}/reactions/{target_event_seq}/{content}` | self-removal (read; shipped as `reactions.remove(num, seq, content)`) |
+| `labels.list()/create({name, color, description})/update(name, fields)/delete(name)` | `GET/POST/PATCH/DELETE …/labels[/{name}]` | label CRUD (triage+; names immutable; no single-get endpoint — 08's `get/put` spellings corrected 2026-09-04) |
+| `milestones.list(query?)/get(id)/create(...)/update(id, fields)/delete(id)` | `GET/POST/PATCH/DELETE …/milestones[/{id}]` | milestone CRUD (triage+; 08's `patch` spelling corrected 2026-09-04) |
 
 ### 3.2 `pulls.js` → `repo.pulls` (03)
 
@@ -115,39 +123,40 @@ this section is the client mirror of exactly one provider; auth levels shown per
 | `update(num, fields)` | `PUT …/pulls/{num}` | title/body/state (close/reopen; write) |
 | `diff(num)` | `GET …/pulls/{num}/diff` | `text/plain` unified patch base…head (DiffPage parser input), `ETag: "<head sha>"` |
 | `commits(num)` | `GET …/pulls/{num}/commits` | `{commits: [Commit]}` |
-| `merge(num, {merge_method, commit_title?, commit_message?}, onEvent)` | `POST …/pulls/{num}/merge` | maintain; SSE task attach, task kind `pull-merge` (envelope §6) |
-| `updateBranch(num, onEvent)` | `POST …/pulls/{num}/update-branch` | write; task `pull-update-branch` |
+| `merge(num, {strategy, commit_title?, commit_message?, delete_head?})` | `POST …/pulls/{num}/merge` | maintain; `202 {task}` + attach via `mergeTask(num)` poll (the task record carries progress + terminal outcome; shipped shape — 08's `merge_method/onEvent` spellings corrected 2026-09-04) |
+| `mergeTask(num)` | `GET …/pulls/{num}/merge/task` | merge-task attach poll (progress + terminal outcome) |
+| `updateBranch(num, {expected_head_sha?})` | `POST …/pulls/{num}/update-branch` | write; task `pull-update-branch` (shipped shape — 08's `onEvent` spelling corrected 2026-09-04) |
 | `deleteHead(num)` | `DELETE …/pulls/{num}/head` | maintain |
 
-`forks.js` → `client.forks.create(owner, repo, onEvent)` → `POST /api/v1/repos/{owner}/{repo}/forks`
+`forks.js` → `repo.forks.create(opts, callOpts)` → `POST /api/v1/repos/{owner}/{repo}/forks`
 (write + create rights on target) → `202` + TaskRecord, task kind `pull-fork` (top-level route, same
-`pulls` RouteProvider per 03).
+`pulls` RouteProvider per 03; shipped shape — 08's `(owner, repo, onEvent)` spelling corrected 2026-09-04).
 
 ### 3.3 `reviews.js` → `repo.reviews` (04)
 
 | Method | Endpoint | Shape |
 |---|---|---|
 | `list(num)` | `GET …/pulls/{num}/reviews` | `{reviews: []}` |
-| `create(num, {event, body?, commit_sha, threads?})` | `POST …/pulls/{num}/reviews` | `201`; `event: APPROVE\|REQUEST_CHANGES\|COMMENT`; `threads[]` = pending line-anchored comments |
+| `submit(num, {state, body?, commit_sha, threads?})` | `POST …/pulls/{num}/reviews` | `201`; `state: APPROVE\|REQUEST_CHANGES\|COMMENT` (shipped as `submit` with `state`, not `create` with `event` — corrected 2026-09-04); `threads[]` = pending line-anchored comments |
 | `get(num, seq)` | `GET …/pulls/{num}/reviews/{seq}` | one review |
-| `dismiss(num, seq)` | `POST …/pulls/{num}/reviews/{seq}/dismiss` | maintain+ |
-| `requests.list(num)` / `requests.add(num, names)` / `requests.remove(num, names)` | `GET/POST/DELETE …/pulls/{num}/review-requests` | reviewer requests (write+) |
+| `dismiss(num, seq, {reason?})` | `POST …/pulls/{num}/reviews/{seq}/dismiss` | maintain+ |
+| `requests.list(num)` / `requests.add(num, reviewers[])` / `requests.remove(num, reviewers[])` | `GET/POST/DELETE …/pulls/{num}/review-requests` | reviewer requests (write+) |
 | `suggest(num, q?)` | `GET …/pulls/{num}/review-suggest?q=` | reviewer auto-suggest (access.json roles + commit authors) |
-| `threads(num, {…})` | `GET …/pulls/{num}/threads` | list with anchors + resolution |
-| `threadCreate(num, {path, side, line, body})` | `POST …/pulls/{num}/threads` | create line thread from a diff hunk |
-| `thread(num, id).get()` | `GET …/pulls/{num}/threads/{tid}` | thread header (P3) |
-| `thread(num, id).comment(body)` | `POST …/pulls/{num}/threads/{tid}/comments` | `201` |
-| `thread(num, id).resolve()` / `.unresolve()` | `POST …/pulls/{num}/threads/{tid}/resolve` \| `/unresolve` | resolve toggle |
+| `threads.list(num, {…})` | `GET …/pulls/{num}/threads` | list with anchors + resolution |
+| `threads.create(num, {anchor, body})` | `POST …/pulls/{num}/threads` | create line thread from a diff hunk (shipped shape — 08's `threadCreate(num, {path, side, line, body})` corrected 2026-09-04) |
+| `threads.get(num, tid)` | `GET …/pulls/{num}/threads/{tid}` | thread header (P3) |
+| `threads.comment(num, tid, body)` | `POST …/pulls/{num}/threads/{tid}/comments` | `201` |
+| `threads.resolve(num, tid)` / `threads.unresolve(num, tid)` | `POST …/pulls/{num}/threads/{tid}/resolve` \| `/unresolve` | resolve toggle |
 
 ### 3.4 `checks.js` → `repo.checks` (05)
 
 | Method | Endpoint | Shape |
 |---|---|---|
 | `combined(sha)` | `GET …/checks/{sha}` | `{sha, state, total_counts, statuses: []}` (worst-of rollup; no-store — sha-addressed but mutable) |
-| `statuses.get(sha)` | `GET …/checks/statuses/{sha}` | `{sha, statuses: []}` |
+| `statuses(sha)` | `GET …/checks/statuses/{sha}` | `{sha, statuses: []}` (shipped as a flat method, not a `statuses.get` group — corrected 2026-09-04) |
 | `report(sha, {context, state, target_url?, description?, started_at?, completed_at?})` | `POST …/checks/statuses/{sha}` | CI surface: `checks:write` token or write role → `200` |
 | `list({after, n})` | `GET …/checks?after=&n=` | `{checks: [{sha, state, contexts: []}], more}` (n 50/200) |
-| `tokens.create()/list()/revoke(id)` | `POST/GET …/checks/tokens`, `DELETE …/checks/tokens/{id}` | CI tokens (admin) |
+| `ciTokens.create({name, scopes})/list()/revoke(id)` | `POST/GET …/checks/tokens`, `DELETE …/checks/tokens/{id}` | CI tokens (admin; shipped as `ciTokens`, not `tokens` — corrected 2026-09-04) |
 
 ### 3.5 `notifications.js` → `client.notifications` (06)
 
@@ -166,25 +175,36 @@ this section is the client mirror of exactly one provider; auth levels shown per
 |---|---|---|
 | `orgs.list()` / `orgs.create({name, ...})` | `GET/POST /api/v1/orgs` | sorted list; create (write auth) |
 | `orgs.get(org)` / `orgs.put(...)` / `orgs.delete(org)` | `GET/PUT/DELETE /api/v1/orgs/{org}` | org profile; PUT/DELETE = org owner |
-| `orgs.members.list(org)` / `add/remove(org, principal)` | `…/orgs/{org}/members[/{principal}]` | membership (PUT/DELETE = owner) |
+| `orgs.members.list(org)` / `orgs.members.get(org, principal)` / `put(org, principal, role)` / `delete(org, principal)` | `GET …/orgs/{org}/members[/{principal}]`, `PUT/DELETE …` | membership (PUT/DELETE = owner; shipped `put/delete` spellings, not `add/remove` — corrected 2026-09-04) |
 | `orgs.teams.list/create(org)` / `get/put/delete(org, slug)` | `…/orgs/{org}/teams[/{slug}]` | teams (owner) |
-| `orgs.teams.addMember/removeMember(org, slug, principal)` | `…/teams/{slug}/members/{principal}` | team membership (owner) |
-| `invitations.create(org, ...)` / `invitations.mine()` / `accept(id)` / `decline(id)` | `POST …/orgs/{org}/invitations`; `GET/POST/DELETE /api/v1/invitations[/{id}…]` | per 01 (owner invites; accept/decline mine) |
+| `orgs.teams.addMember/removeMember(org, slug, principal)` | `PUT/DELETE …/teams/{slug}/members/{principal}` | team membership (owner) |
+| `orgs.invites.create(org, ...)` / `client.invites.mine()` / `accept(id)` / `cancel(id)` | `POST …/orgs/{org}/invitations`; `GET/POST/DELETE /api/v1/invitations[/{id}…]` | per 01 (owner invites; accept/cancel mine; shipped `cancel`, not `decline` — corrected 2026-09-04) |
 | `repo.permissions()` | `GET …/api/permissions` | `{role}` per P6 (anonymous → `{role: null}` or `read` when `anonymous_read`) |
 | `repo.access.get()` / `repo.access.put(bindings, version)` | `GET/PUT …/api/access` | role bindings; GET triage+, PUT admin (full-doc replace, CAS version, `409` on mismatch) |
-| `repo.access.invitations.list/create()/delete(id)` | `POST/GET …/api/invitations`, `DELETE …/api/invitations/{id}` | repo invites (admin) |
+| `repo.invites.list/create()/cancel(id)` | `POST/GET …/api/invitations`, `DELETE …/api/invitations/{id}` | repo invites (admin; shipped on `repo.invites`, not `repo.access.invitations` — corrected 2026-09-04) |
 | `repo.collaborators.list()` | `GET …/api/collaborators` | effective bindings + resolution source |
 | `repo.assignables()` | `GET …/api/assignables` | `[{principal, display}]` |
-| `repo.webhooks.list/create/update/remove(id)/ping(id)/deliveries(id)` | `GET/POST …/api/webhooks`, `GET/PATCH/DELETE …/webhooks/{id}`, `POST …/webhooks/{id}/ping`, `GET …/webhooks/{id}/deliveries` | per 06; the secret is never returned (`secret_set`) |
+| `repo.webhooks.list/create(id?)/get/update/remove(id)/ping(id)/deliveries(id)` | `GET/POST …/api/webhooks`, `GET/PATCH/DELETE …/webhooks/{id}`, `POST …/webhooks/{id}/ping`, `GET …/webhooks/{id}/deliveries` | per 06; the secret is never returned (`secret_set`) |
 
 ### 3.7 `releases.js` + `social.js` (07)
 
 `repo.releases`: `list({n, after})`, `latest({include_prereleases?})`, `get(tag)`, `put(tag, {body, name?,
-draft?, prerelease?}, ifMatch?)`, `delete(tag)`, `uploadAsset(tag, name, bytes, {sha256})`,
-`deleteAsset(tag, name)`, `autodraft({tag, since})`. `repo.social`: `get()` → `{stars, watchers, forks,
-viewer:{starred, watching}}`, `star()/unstar()` (watch lives in `client.watch`, §3.5 — Decisions).
-`client.starred({n, after})`, `client.userStarred(principal)` for the top-level starred lists. Asset bytes
+draft?, prerelease?}, ifMatch?)`, `remove(tag)`, `uploadAsset(tag, name, bytes, {sha256})`,
+`deleteAsset(tag, name)`, `autodraft({tag, since})`, `releaseAssetUrl(tag, name)`. `repo.social`: `get()` → `{stars, watchers, forks,
+viewer:{starred, watching}}`, `repo.star.set()/remove()` (watch lives in `repo.watch`, §3.5 — Decisions).
+`client.social.myStarred({n, after})`, `client.social.userStarred(principal)` for the top-level starred lists
+(shipped spellings — 08's `delete/client.starred/userStarred/star/unstar` corrected 2026-09-04). Asset bytes
 download via the static `/{o}/{r}/releases/{tag}/assets/{name}` URL (`browser_download_url`).
+
+### 3.8 `collab.js` → `repo.collab` (08 §4, new in this change)
+
+| Method | Endpoint | Shape |
+|---|---|---|
+| `stream(onFrame, {signal?})` | `GET …/api/collab/stream` | SSE, read-gated; `onFrame({kind, num?, seq?, sha?, tag?, actor?, at, …})`; the promise settles on stream end (clean EOF rejects so the page reconnects); abort via `signal` → 499, reader closed in `finally` |
+
+Unlike `notifications.stream` (which resolves with a cancel function), `collab.stream` awaits the
+stream lifetime so `mountStreamRetry` reconnects mid-stream drops with backoff — drive it through
+`useCollabStream`, not directly.
 
 ### Concurrency — SDK additions
 Same hazard set as 12 §1.6: leaked readers, unbounded parallel streams, popup-auth races. Avoidance is
@@ -296,6 +316,29 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
 
 ## Decisions
 
+- **SolidJS idiom (2026-09-04, D-WEB-6 adaptation — this change).** 08's text describes a vanilla-ESM
+  SPA (hand-rolled reactive core, hand-rolled router, `useData`/`mountStream` in `lib/`); the repo ships
+  the SolidJS SPA per the D-WEB-6 amendment. This change implements 08's CONTRACT in the waves A–C
+  SolidJS idiom: routes in `web/src/index.jsx` (`@solidjs/router`), state via Solid signals/stores,
+  `useData` on Solid primitives, `mountStream` + new `mountStreamRetry` in `lib/sse.js`, shared
+  components in `web/src/components/` (ThreadTimeline, CommentComposer, MergeBox, NotificationTray,
+  perms/collab helpers), pure dependency-free helpers in `web/src/lib/collab.js` (TTL table,
+  frame→key map, backoff). Runtime npm budget stays `solid-js` + `@solidjs/router`; the SDK stays
+  dependency-free; no TypeScript. `index.js` does NOT re-export submodules — the attach pattern
+  (`client.repo(o/r)` gains `.issues/.pulls/...`, `client` gains `.notifications/.orgs/...`) IS the
+  re-export surface, established by waves A–C and kept.
+- **08's §3 tables corrected toward the shipped wire (2026-09-04, same change).** Where 08 named an
+  SDK method the waves did not ship (`react`, `labels.get/put`, `milestones.patch`, `reviews.create`,
+  `threadCreate`, `statuses.get`, `tokens.*`, `members.add/remove`, `invitations.decline`,
+  `access.invitations`, `releases.delete`, `client.starred`, `star/unstar`, `merge_method`, fork
+  `(owner, repo, onEvent)`), the feature doc owns the wire and the shipped SDK/pages are the
+  implementation of record — 08's tables now name the shipped shapes (each correction marked
+  inline). `pull-merge` attach is the `mergeTask` poll (the task record carries progress + terminal
+  outcome), not a generic SSE envelope — MergeBox polls it with a double-submit guard and
+  exactly-once terminal flip.
+- **Collab-stream client awaits the lifetime (2026-09-04).** Unlike `notifications.stream` (resolves
+  with a cancel fn), `repo.collab.stream` awaits stream end and rejects clean EOFs so
+  `mountStreamRetry` reconnects mid-stream drops with backoff; cancel via the caller signal.
 - **This doc owns routes/components/SDK surface; feature docs own wire semantics** — one place to build the UI from; conflicts resolve toward the feature doc in the same change.
 - **One repo collaboration stream (`/{o}/{r}/api/collab/stream`) instead of per-feature streams** — one connection per page, one parser, kinds namespaced; frames invalidate caches rather than carry state (P8 keeps handlers synchronous; the timeline is the backfill truth).
 - **PR diff served as `text/plain` unified patch** — the 12 §2.8 parser is already the contract; no JSON diff shape to invent.

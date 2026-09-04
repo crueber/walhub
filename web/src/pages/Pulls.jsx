@@ -8,6 +8,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { useCollabStream } from "../components/collab.jsx";
 
 export default function Pulls() {
   const ctx = useRepo();
@@ -25,6 +26,9 @@ export default function Pulls() {
   const [getPage] = useData(key, () => ctx.repoClient.pulls.list(query()));
 
   const reload = () => invalidate(key());
+
+  // Live list: any `pull` frame invalidates the list windows (coalesced).
+  useCollabStream(() => ctx.full, ctx.repoClient, ["pull"]);
 
   const setFilter = (k, v) => {
     setAfter(0);
@@ -78,6 +82,9 @@ export default function Pulls() {
           <button type="button" class="btn ml-auto px-2 py-1" onClick={reload}>
             refresh
           </button>
+          <A class="btn primary px-2 py-1" href={`/${ctx.full}/pulls/new`}>
+            New pull request
+          </A>
         </div>
         <ul class="card-list">
           <For each={getPage()?.pulls ?? []} fallback={<li class="card">No pull requests.</li>}>

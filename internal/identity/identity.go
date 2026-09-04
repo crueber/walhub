@@ -204,6 +204,11 @@ type Service struct {
 
 	access *accessCache
 	teams  *teamCache
+
+	// Stream publishes the 08 §4 "access" frame after an access.json CAS
+	// commit (nil = no-op; composition wires the repo bus). Synchronous
+	// post-commit fan-out per P8; the access doc is the backfill truth.
+	Stream func(ctx context.Context, repo string)
 }
 
 // New builds a Service over st.

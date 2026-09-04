@@ -60,7 +60,7 @@ func wireNotifyFanout(svc *notify.Service, issuesSvc *issues.Service, pullsSvc *
 			svc.EmitIssue(ctx, ev.Repo, ev.IssueNum, ev.Class, ev.Actor, ev.At, ev.Action, ev.Recipients)
 		}
 		issuesSvc.Stream = func(ctx context.Context, ev issues.StreamEvent) {
-			svc.PublishStream(ev.Name, ev.Repo, "", "", "", ev.IssueNum)
+			svc.PublishFrame(notify.RepoFrame{Name: ev.Name, Repo: ev.Repo, Num: ev.IssueNum, Seq: ev.Seq})
 		}
 	}
 	if pullsSvc != nil {
@@ -68,7 +68,7 @@ func wireNotifyFanout(svc *notify.Service, issuesSvc *issues.Service, pullsSvc *
 			svc.EmitPull(ctx, ev.Repo, ev.PullNum, ev.Class, ev.Actor, ev.At, ev.Recipients)
 		}
 		pullsSvc.Stream = func(ctx context.Context, ev pulls.StreamEvent) {
-			svc.PublishStream(ev.Name, ev.Repo, ev.Action, ev.Title, ev.State, ev.Num)
+			svc.PublishFrame(notify.RepoFrame{Name: ev.Name, Repo: ev.Repo, Action: ev.Action, Num: ev.Num, Title: ev.Title, State: ev.State, Sha: ev.HeadSHA})
 		}
 	}
 	if reviewSvc != nil {
@@ -76,7 +76,7 @@ func wireNotifyFanout(svc *notify.Service, issuesSvc *issues.Service, pullsSvc *
 			svc.EmitReview(ctx, ev.Repo, ev.PullNum, ev.Class, ev.Actor, ev.At, ev.Recipients)
 		}
 		reviewSvc.Stream = func(ctx context.Context, ev review.StreamEvent) {
-			svc.PublishStream(ev.Name, ev.Repo, ev.Action, "", "", ev.Num)
+			svc.PublishFrame(notify.RepoFrame{Name: ev.Name, Repo: ev.Repo, Action: ev.Action, Num: ev.Num, Tid: ev.TID})
 		}
 	}
 	if checksSvc != nil {
@@ -84,7 +84,7 @@ func wireNotifyFanout(svc *notify.Service, issuesSvc *issues.Service, pullsSvc *
 			svc.EmitCheck(ctx, ev.Repo, ev.SHA, ev.Context, ev.State, ev.Description, ev.TargetURL, ev.Actor, ev.At, ev.PR)
 		}
 		checksSvc.Stream = func(ctx context.Context, ev checks.StreamEvent) {
-			svc.PublishStream(ev.Name, ev.Repo, ev.State, ev.Context, ev.CombinedState, 0)
+			svc.PublishFrame(notify.RepoFrame{Name: ev.Name, Repo: ev.Repo, Sha: ev.SHA, Context: ev.Context, State: ev.State, Combined: ev.CombinedState, At: ev.UpdatedAt})
 		}
 	}
 }

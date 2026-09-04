@@ -57,7 +57,7 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) bool {
 		if _, err := git.ParseRepoId(owner + "/" + repo); err != nil {
 			return false
 		}
-		if len(segs[3:]) >= 1 && (segs[3] == "watch" || segs[3] == "webhooks") {
+		if len(segs[3:]) >= 1 && (segs[3] == "watch" || segs[3] == "webhooks" || segs[3] == "collab") {
 			h.handleRepo(w, r, owner, repo, segs[3:])
 			return true
 		}
@@ -194,6 +194,11 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request, owner, repo
 	}
 	if rest[0] == "watch" && len(rest) == 1 {
 		h.watch(w, r, owner, repo, p)
+		return
+	}
+	// Collaboration stream (08 §4): read-gated, one connection per page.
+	if rest[0] == "collab" && len(rest) == 2 && rest[1] == "stream" {
+		h.collabStream(w, r, owner, repo, p)
 		return
 	}
 	// Webhooks: admin only (P6).

@@ -203,6 +203,8 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request, owner, repo
 			return false
 		}
 		return h.routeAccess(w, r, owner, repo)
+	case "permissions", "collaborators", "assignables":
+		return h.routePerms(w, r, owner, repo, rest)
 	case "invitations":
 		return h.routeRepoInvites(w, r, owner, repo, rest[1:])
 	}
