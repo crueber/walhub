@@ -6,6 +6,7 @@ import { A } from "@solidjs/router";
 import { useResolved } from "../lib/data.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
+import { fmtSize } from "../lib/format.js";
 import { useRepo, shortRef } from "./Repo.jsx";
 
 function Breadcrumb(props) {
@@ -65,7 +66,7 @@ export default function Tree() {
                           </Show>
                         </td>
                         <td class="entry-mode muted font-mono text-xs">{e.mode ?? ""}</td>
-                        <td class="entry-size muted tabular text-xs">{e.type === "blob" ? String(e.size ?? "-") : ""}</td>
+                        <td class="entry-size muted tabular text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{e.type === "blob" ? (e.size == null ? "-" : fmtSize(e.size)) : ""}</td>
                       </tr>
                     )}
                   </For>
