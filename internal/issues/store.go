@@ -287,6 +287,9 @@ func upsertCard(ix *Index, card Card) {
 }
 
 // sortCards orders newest-activity-first (updated_at desc, num desc).
+// This is the INDEX storage order (§2) — it is NOT the list render order
+// (lists render number-desc via sortCardsByNum; see the §2 Decisions
+// amendment in docs/features/02_issues.md).
 func sortCards(cards []Card) {
 	sort.Slice(cards, func(i, j int) bool {
 		if cards[i].UpdatedAt != cards[j].UpdatedAt {
@@ -294,6 +297,14 @@ func sortCards(cards []Card) {
 		}
 		return cards[i].Num > cards[j].Num
 	})
+}
+
+// sortCardsByNum orders lists newest-first by issue number descending
+// (num desc). List render paths (ListIssues) use this AFTER merging the
+// open + closed_recent pages, so the combined list is always #N…#1
+// regardless of the state filter — activity recency never reorders it.
+func sortCardsByNum(cards []Card) {
+	sort.Slice(cards, func(i, j int) bool { return cards[i].Num > cards[j].Num })
 }
 
 // CompactIndex evicts the oldest closed_recent entries while the object

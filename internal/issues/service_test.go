@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
 )
@@ -625,3 +626,83 @@ func TestNotifyEmission(t *testing.T) {
 }
 
 func ptrTo(s *string) **string { return &s }
+
+func numsOf(cards []Card) []int {
+	out := make([]int, 0, len(cards))
+	for _, c := range cards {
+		out = append(out, c.Num)
+	}
+	return out
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestListIssuesNumberDesc pins issue #48: the combined open+closed list
+// ALWAYS renders newest-first by issue number descending, regardless of
+// the state filter. Activity recency must never reorder it: here #1 takes
+// the newest activity (a late comment) and #2 is closed newest of all, yet
+// every filter still reads #3 before #2 before #1.
+func TestListIssuesNumberDesc(t *testing.T) {
+	roles := newFakeRoles()
+	s := testService(roles)
+	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	at := base
+	s.Now = func() time.Time { return at }
+	for _, title := range []string{"one", "two", "three"} {
+		at = at.Add(time.Hour)
+		mustCreate(t, s, "acme", "repo", janeP, title, "")
+	}
+	at = at.Add(time.Hour)
+	if _, err := s.AddComment(reqCtx(), "acme", "repo", 1, janeP, "late activity on one"); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Hour)
+	if _, err := s.PatchIssue(reqCtx(), "acme", "repo", 2, janeP, IssuePatch{State: strPtr("closed")}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.ListIssues(reqCtx(), "acme", "repo", janeP, ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := numsOf(all.Issues); !equalInts(got, []int{3, 2, 1}) {
+		t.Fatalf("all = %v, want [3 2 1]", got)
+	}
+	open, err := s.ListIssues(reqCtx(), "acme", "repo", janeP, ListFilter{State: "open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := numsOf(open.Issues); !equalInts(got, []int{3, 1}) {
+		t.Fatalf("open = %v, want [3 1]", got)
+	}
+	closed, err := s.ListIssues(reqCtx(), "acme", "repo", janeP, ListFilter{State: "closed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := numsOf(closed.Issues); !equalInts(got, []int{2}) {
+		t.Fatalf("closed = %v, want [2]", got)
+	}
+	page, err := s.ListIssues(reqCtx(), "acme", "repo", janeP, ListFilter{N: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := numsOf(page.Issues); !equalInts(got, []int{3, 2}) || !page.More {
+		t.Fatalf("page = %v more=%v, want [3 2]/true", got, page.More)
+	}
+	rest, err := s.ListIssues(reqCtx(), "acme", "repo", janeP, ListFilter{N: 2, After: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := numsOf(rest.Issues); !equalInts(got, []int{1}) || rest.More {
+		t.Fatalf("rest = %v more=%v, want [1]/false", got, rest.More)
+	}
+}

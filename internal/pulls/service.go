@@ -250,6 +250,8 @@ func upsertCard(ix *Index, card Card) {
 }
 
 // sortCards orders newest-activity-first (updated_at desc, num desc).
+// This is the INDEX storage order (shared with 02 §2) — it is NOT the
+// list render order (ListPRs renders number-desc via sortCardsByNum).
 func sortCards(cards []Card) {
 	sort.Slice(cards, func(i, j int) bool {
 		if cards[i].UpdatedAt != cards[j].UpdatedAt {
@@ -257,6 +259,14 @@ func sortCards(cards []Card) {
 		}
 		return cards[i].Num > cards[j].Num
 	})
+}
+
+// sortCardsByNum orders lists newest-first by PR number descending (num
+// desc). ListPRs uses this AFTER merging the open + closed_recent pages,
+// so the combined list is always #N…#1 regardless of the state filter —
+// activity recency never reorders it (same rule as 02 issue #48).
+func sortCardsByNum(cards []Card) {
+	sort.Slice(cards, func(i, j int) bool { return cards[i].Num > cards[j].Num })
 }
 
 // --- open --------------------------------------------------------------------
@@ -700,7 +710,7 @@ type ListFilter struct {
 	State string
 	Base  string
 	Head  string
-	Sort  string // updated (default) | created — display order only
+	Sort  string // updated | created — parsed + validated, but the render is always number-descending (issue #48)
 	After int
 	N     int
 }
@@ -714,7 +724,10 @@ type ListResult struct {
 // ListPRs serves the PR list index-first (P4): the shared index supplies
 // nums in newest-activity order; each row is enriched from its pr.json
 // sidecar (one GET per listed row — page-bounded, never a LIST). Base/head
-// filters apply post-enrichment. Auth: read.
+// filters apply post-enrichment. Render order is ALWAYS number-descending
+// (newest PR first), regardless of the state filter — the merged open +
+// closed_recent pool is re-sorted by num before windowing (same rule as 02
+// issue #48). Auth: read.
 func (s *Service) ListPRs(ctx context.Context, owner, repo string, p auth.Principal, f ListFilter) (*ListResult, error) {
 	if err := s.requireRead(ctx, owner, repo, p); err != nil {
 		return nil, err
@@ -731,7 +744,7 @@ func (s *Service) ListPRs(ctx context.Context, owner, repo string, p auth.Princi
 		return nil, err
 	}
 	pool := append(append([]Card{}, ix.Open...), ix.ClosedRecent...)
-	sortCards(pool)
+	sortCardsByNum(pool)
 	var rows []PROut
 	for _, c := range pool {
 		if c.Kind != "pr" {
@@ -763,7 +776,7 @@ func (s *Service) ListPRs(ctx context.Context, owner, repo string, p auth.Princi
 	return &ListResult{Pulls: page, More: more}, nil
 }
 
-// windowRows slices the newest-first rows after the after-num cursor
+// windowRows slices the number-descending rows after the after-num cursor
 // (unknown cursor ⇒ from the top). Callers always pass a non-nil pool
 // (ListPRs normalizes), so the page is non-nil by construction.
 func windowRows(pool []PROut, after, n int) ([]PROut, bool) {

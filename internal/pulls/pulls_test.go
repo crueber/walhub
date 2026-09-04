@@ -536,3 +536,61 @@ func putPolicyRaw(t *testing.T, e *testEnv, doc string) {
 	t.Helper()
 	putPolicy(t, e, doc)
 }
+
+func prNums(rows []PROut) []int {
+	out := make([]int, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Num)
+	}
+	return out
+}
+
+// TestListPRsNumberDesc pins the pulls half of issue #48: the combined
+// open+closed PR list ALWAYS renders newest-first by PR number descending,
+// regardless of the state filter. Here #1 takes the newest activity (a late
+// title edit), yet every filter still reads #3 before #2 before #1.
+func TestListPRsNumberDesc(t *testing.T) {
+	e := newTestEnv()
+	e.roles.Roles["jane@example.com"] = "write"
+	e.seedRefs("o/r", map[string]string{
+		"refs/heads/main": hexSHA(1),
+		"refs/heads/a":    hexSHA(2),
+		"refs/heads/b":    hexSHA(3),
+		"refs/heads/c":    hexSHA(4),
+	})
+	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	at := base
+	e.svc.Now = func() time.Time { return at }
+	for _, head := range []string{"refs/heads/a", "refs/heads/b", "refs/heads/c"} {
+		at = at.Add(time.Hour)
+		if _, _, err := e.svc.OpenPR(ctx(), "o", "r", writer(), OpenInput{Title: "pr " + head, BaseRef: "refs/heads/main", HeadRef: head}, ""); err != nil {
+			t.Fatalf("OpenPR: %v", err)
+		}
+	}
+	at = at.Add(time.Hour)
+	if _, _, err := e.svc.UpdatePR(ctx(), "o", "r", 1, writer(), PRPatch{Title: strPtr("late activity on one")}); err != nil {
+		t.Fatalf("UpdatePR: %v", err)
+	}
+	all, err := e.svc.ListPRs(ctx(), "o", "r", writer(), ListFilter{})
+	if err != nil {
+		t.Fatalf("ListPRs: %v", err)
+	}
+	got := prNums(all.Pulls)
+	if len(got) != 3 || got[0] != 3 || got[1] != 2 || got[2] != 1 {
+		t.Fatalf("all = %v, want [3 2 1]", got)
+	}
+	paged, err := e.svc.ListPRs(ctx(), "o", "r", writer(), ListFilter{N: 2})
+	if err != nil || len(paged.Pulls) != 2 || !paged.More {
+		t.Fatalf("paged = %+v %v", paged, err)
+	}
+	if got := prNums(paged.Pulls); got[0] != 3 || got[1] != 2 {
+		t.Fatalf("paged = %v, want [3 2]", got)
+	}
+	rest, err := e.svc.ListPRs(ctx(), "o", "r", writer(), ListFilter{N: 2, After: 2})
+	if err != nil || len(rest.Pulls) != 1 || rest.More {
+		t.Fatalf("rest = %+v %v", rest, err)
+	}
+	if got := prNums(rest.Pulls); got[0] != 1 {
+		t.Fatalf("rest = %v, want [1]", got)
+	}
+}

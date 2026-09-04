@@ -1,6 +1,6 @@
 // web/src/pages/Pulls.jsx — route "/:owner/:name/pulls" (03 §9): the PR
 // list (state tabs open/closed, base/head filters, paged index-first
-// cards). Opening a PR lives on the full "/pulls/new" page (issue #34 —
+// cards), ALWAYS rendered newest-first by number descending (#48). Opening a PR lives on the full "/pulls/new" page (issue #34 —
 // the cramped sidebar box is gone; this page links to it). Cards refresh
 // on `pull` SSE frames (the repo stream is shared; this page refetches its
 // window).
@@ -9,6 +9,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate } from "../lib/data.js";
+import { sortByNumDesc } from "../lib/sort.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 
@@ -92,7 +93,7 @@ export default function Pulls() {
           }
         >
           <ul class="card-list">
-            <For each={getPage().pulls ?? []}>
+            <For each={sortByNumDesc(getPage().pulls)}>
               {(pr) => (
                 <li class="card">
                   <A href={`/${ctx.owner}/${ctx.name}/pull/${pr.num}`} class="card-title">

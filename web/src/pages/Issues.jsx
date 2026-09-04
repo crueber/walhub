@@ -1,6 +1,7 @@
 // web/src/pages/Issues.jsx — route "/:owner/:name/issues" (02 §11): the
 // issue list with a filter bar (state/labels/assignee/milestone/since),
 // paged cards from the index (index-first, LIST fallback server-side),
+// ALWAYS rendered newest-first by number descending (#48).
 // new-issue + labels/milestones links. Cards upsert in place on `issue`
 // SSE frames (the repo stream is shared; this page refetches its window).
 
@@ -8,6 +9,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { sortByNumDesc } from "../lib/sort.js";
 import { TTL } from "../lib/collab.js";
 import { labelColorMap } from "../lib/labels.js";
 import { LabelChip } from "../components/LabelPicker.jsx";
@@ -129,7 +131,7 @@ export default function Issues() {
               }
             >
               <ul class="grid gap-2">
-                <For each={page().issues ?? []}>
+                <For each={sortByNumDesc(page().issues)}>
                 {(issue) => (
                   <li class="card flex flex-wrap items-baseline gap-2 p-3">
                     {statePill(issue.state)}

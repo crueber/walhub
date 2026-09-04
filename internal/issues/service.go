@@ -819,6 +819,11 @@ type ListResult struct {
 // union-by-num with the header winning over a stale card — LIST fallback
 // makes staleness a performance gap, never a correctness gap. A LIST
 // failure degrades to the index window instead of erroring.
+//
+// Render order is ALWAYS number-descending (newest issue first),
+// regardless of the state filter: the merged open + closed_recent pool is
+// re-sorted by num before windowing. The index object itself stays
+// newest-activity-first (§2); the render sort is what the UI shows.
 func (s *Service) ListIssues(ctx context.Context, owner, repo string, p auth.Principal, f ListFilter) (*ListResult, error) {
 	if err := s.requireRead(ctx, owner, repo, p); err != nil {
 		return nil, err
@@ -837,7 +842,7 @@ func (s *Service) ListIssues(ctx context.Context, owner, repo string, p auth.Pri
 	next := s.loadCounter(ctx, owner, repo)
 	if indexComplete(ix, next) {
 		pool := filterCards(append(append([]Card{}, ix.Open...), ix.ClosedRecent...), f)
-		sortCards(pool)
+		sortCardsByNum(pool)
 		page, more := windowCards(pool, f.After, n)
 		return &ListResult{Issues: page, More: more}, nil
 	}
@@ -848,7 +853,7 @@ func (s *Service) ListIssues(ctx context.Context, owner, repo string, p auth.Pri
 	if lerr != nil {
 		// LIST failure degrades to the index window, not an error.
 		pool = filterCards(pool, f)
-		sortCards(pool)
+		sortCardsByNum(pool)
 		page, _ := windowCards(pool, f.After, n)
 		return &ListResult{Issues: page, More: false}, nil
 	}
@@ -864,7 +869,7 @@ func (s *Service) ListIssues(ctx context.Context, owner, repo string, p auth.Pri
 		merged = append(merged, c)
 	}
 	merged = filterCards(merged, f)
-	sortCards(merged)
+	sortCardsByNum(merged)
 	page, more := windowCards(merged, f.After, n)
 	return &ListResult{Issues: page, More: more}, nil
 }
@@ -1012,9 +1017,9 @@ func filterCards(cards []Card, f ListFilter) []Card {
 	return out
 }
 
-// windowCards slices the newest-first pool after the after-num cursor.
-// The after cursor is positional in display order: the page starts after
-// the card with that num (unknown cursor → from the top).
+// windowCards slices the number-descending pool after the after-num
+// cursor. The after cursor is positional in display order: the page starts
+// after the card with that num (unknown cursor → from the top).
 func windowCards(pool []Card, after, n int) ([]Card, bool) {
 	start := 0
 	if after > 0 {
