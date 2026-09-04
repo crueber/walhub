@@ -38,7 +38,7 @@ func TestCover4GitShapes(t *testing.T) {
 echo "not-a-sha"; exit 0`)
 		g := NewSubprocessGit(bin)
 		g.Timeout = 30 * time.Second
-		if _, err := g.Replay(ctx, t.TempDir(), "o", "b", "h"); !errors.Is(err, ErrCorrupt) {
+		if _, err := g.Replay(ctx, t.TempDir(), "o", "b", "h", "w", "w@x"); !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("replay: %v", err)
 		}
 	})

@@ -335,7 +335,7 @@ func TestCover5Misc(t *testing.T) {
 		bin := fakeGitScript(t, "exit 1")
 		g := NewSubprocessGit(bin)
 		g.Timeout = 30 * time.Second
-		if _, err := g.Replay(context.Background(), t.TempDir(), "o", "b", "h"); err == nil {
+		if _, err := g.Replay(context.Background(), t.TempDir(), "o", "b", "h", "w", "w@x"); err == nil {
 			t.Fatal("replay mb err must surface")
 		}
 	})

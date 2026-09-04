@@ -188,7 +188,7 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 			return nil, merr
 		}
 		_ = mb
-		newSHA, err = s.Git.Replay(ctx, baseDir, baseLive, baseLive, headLive)
+		newSHA, err = s.Git.Replay(ctx, baseDir, baseLive, baseLive, headLive, cName, cEmail)
 		if err != nil {
 			return nil, err
 		}

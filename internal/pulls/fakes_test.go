@@ -230,9 +230,9 @@ func (f *FakeGit) CommitTree(_ context.Context, dir, tree string, parents []stri
 	return fmt.Sprintf("c%039d", n), nil
 }
 
-func (f *FakeGit) Replay(_ context.Context, dir, onto, base, head string) (string, error) {
+func (f *FakeGit) Replay(_ context.Context, dir, onto, base, head, committerName, committerEmail string) (string, error) {
 	defer f.enter("replay")()
-	_, _, _, _ = dir, onto, base, head
+	_, _, _, _, _, _ = dir, onto, base, head, committerName, committerEmail
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ReplayErr != nil {

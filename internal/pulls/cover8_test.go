@@ -41,12 +41,29 @@ func TestCover8GitShapes(t *testing.T) {
 	})
 	t.Run("replay success returns the tip", func(t *testing.T) {
 		sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		mb := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		tip := "cccccccccccccccccccccccccccccccccccccccc"
+		bin := fakeGitScript(t, "if [ \"$1\" = \"merge-base\" ]; then echo "+mb+"; exit 0; fi\n"+
+			"if [ \"$1\" = \"update-ref\" ]; then exit 0; fi\n"+
+			"if [ \"$1\" = \"replay\" ]; then ref=${5#*..}; echo \"update $ref "+tip+" "+sha+"\"; exit 0; fi\n"+
+			"echo "+sha+"; exit 0")
+		g := NewSubprocessGit(bin)
+		g.Timeout = 30 * time.Second
+		// Distinct base/head shas force the temp-branch + print parse path
+		// (equal shas short-circuit as an empty range).
+		got, err := g.Replay(ctx, t.TempDir(), mb, mb, sha, "w", "w@x")
+		if err != nil || got != tip {
+			t.Fatalf("replay = %q %v", got, err)
+		}
+	})
+	t.Run("replay identity returns head", func(t *testing.T) {
+		sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		bin := fakeGitScript(t, "echo "+sha+"; exit 0")
 		g := NewSubprocessGit(bin)
 		g.Timeout = 30 * time.Second
 		// MergeBase succeeds (garbage is not valid here — use the sha for
 		// both so validation passes).
-		got, err := g.Replay(ctx, t.TempDir(), sha, sha, sha)
+		got, err := g.Replay(ctx, t.TempDir(), sha, sha, sha, "w", "w@x")
 		if err != nil || got != sha {
 			t.Fatalf("replay = %q %v", got, err)
 		}

@@ -167,7 +167,16 @@ Steps (git is always the subprocess with exact argv, `docs/go/04_git.md`):
 | `merge` | `git merge-tree --write-tree --name-only <base_sha> <head_sha>` → tree `T` (exit 1 ⇒ abort, narrate conflict paths) | merge commit |
 | `merge` (commit) | `git commit-tree T -p <base_sha> -p <head_sha> -m <message>` with `GIT_AUTHOR_NAME/EMAIL/DATE` = merging principal, `GIT_COMMITTER_NAME/EMAIL` = server identity (`walhub <server.identity_email>`, default `walhub@localhost`), committer date = now | the merge commit sha |
 | `squash` | same trial `merge-tree`, then `git commit-tree T -p <base_sha> -m <title>\n\n<flattened body>` (author = principal, committer = server) | single-parent commit |
-| `rebase` | `git replay --onto <base_sha> <merge_base>..<head_sha>` (plumbing, no worktree) → new tip `R`; then `git commit-tree` is NOT used — `R` is published as-is | replayed tip; original authorship preserved per commit, committer = server identity |
+| `rebase` | plant temp branch `refs/heads/walhub-tmp-replay-<pid>-<nanos>` at `<head_sha>` (`git update-ref`, unique per call, deleted on every exit path), then `git replay --onto <base_sha> --ref-action=print <merge_base>..<tmpref>` → parse the `update <tmpref> <new> <old>` line for tip `R` (plumbing, no worktree); then `git commit-tree` is NOT used — `R` is published as-is | replayed tip; original authorship preserved per commit, committer = server identity |
+
+> Rebase argv rationale (verified live against stock git 2.53): `git replay`
+> (experimental) only tracks *branches* named in the revision range — a
+> pure-SHA range is a silent no-op (exit 0, empty stdout), so the bare
+> `<merge_base>..<head_sha>` form can never yield a tip. `--ref-action=print`
+> is load-bearing: default update mode moves refs on disk directly, behind
+> the WAL's back; print mode emits `update` lines and touches nothing (the
+> temp branch create/delete are the only serving-repo writes, and no
+> user-visible ref is ever moved except through the WAL publish in step 5).
 
 3. **Message templates.** Default titles: merge — `Merge pull request #<num> from <head-ref-shorthand>`;
    squash/rebase — the head's subject (+ body = squashed head messages or the request's

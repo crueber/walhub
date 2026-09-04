@@ -30,7 +30,7 @@ func TestCoverGitBadDir(t *testing.T) {
 	if _, err := g.CommitTree(ctx, bad, "t", []string{"p"}, "m", "a", "a@x", "c", "c@x", time.Now()); err == nil {
 		t.Fatal("commit-tree")
 	}
-	if _, err := g.Replay(ctx, bad, "o", "b", "h"); err == nil {
+	if _, err := g.Replay(ctx, bad, "o", "b", "h", "w", "w@x"); err == nil {
 		t.Fatal("replay")
 	}
 	if _, err := g.BehindCount(ctx, bad, "b", "h"); err == nil {
@@ -95,13 +95,21 @@ func TestCoverGitReplayBranches(t *testing.T) {
 	g.Timeout = 60 * time.Second
 	ctx := context.Background()
 	// MergeBase failure ⇒ replay error (bad sha).
-	if _, err := g.Replay(ctx, dir, "zzzz", base, head); err == nil {
+	if _, err := g.Replay(ctx, dir, "zzzz", base, head, "w", "w@x"); err == nil {
 		t.Fatal("replay bad onto")
 	}
-	// Non-hex replay output is impossible via stock git; the corrupt branch
-	// is covered by construction (replay always errors on stock git).
-	if _, err := g.Replay(ctx, dir, base, base, head); err == nil {
-		t.Fatal("stock git has no replay plumbing")
+	// Replay succeeds on stock git (experimental replay + temp branch +
+	// --ref-action=print): the tip lands on base with the server committer.
+	tip, err := g.Replay(ctx, dir, base, base, head, "walhub", "walhub@localhost")
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if ok, _ := g.IsAncestor(ctx, dir, base, tip); !ok {
+		t.Fatalf("tip %s must sit on base", tip)
+	}
+	out, err := g.runCollect(ctx, dir, []string{"log", "-1", "--format=%cn %ce", tip}, "", nil)
+	if err != nil || strings.TrimSpace(out) != "walhub walhub@localhost" {
+		t.Fatalf("tip committer = %q %v", out, err)
 	}
 }
 

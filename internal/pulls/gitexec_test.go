@@ -150,11 +150,35 @@ func TestSubprocessGitReal(t *testing.T) {
 	if err != nil || len(sha) != 40 {
 		t.Fatalf("commit-tree = %q %v", sha, err)
 	}
-	// Replay is the §5 rebase plumbing verbatim; stock git has no `replay`
-	// command, so against real git it errors — the task surfaces the
-	// narration (FakeGit covers the success shape).
-	if _, err := g.Replay(ctx, dir, base, base, head); err == nil {
-		t.Fatal("replay against stock git must fail (no such plumbing)")
+	// Replay is the §5 rebase plumbing: stock git 2.53 ships experimental
+	// `git replay`, but a pure-SHA range is a silent no-op (exit 0, empty
+	// stdout), so Replay plants a temp branch and runs with
+	// --ref-action=print (print mode never updates serving refs). Success
+	// shape: the replayed tip differs from head, sits on base, the temp
+	// branch is gone, and user refs are untouched.
+	tip, err := g.Replay(ctx, dir, base, base, head, "walhub", "walhub@localhost")
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if tip == head {
+		t.Fatalf("replay tip == head %s: expected a rewritten commit", head)
+	}
+	if ok, _ := g.IsAncestor(ctx, dir, base, tip); !ok {
+		t.Fatalf("replay tip %s must sit on base %s", tip, base)
+	}
+	tipSubj, err := g.Subject(ctx, dir, tip)
+	if err != nil || tipSubj != "head tip" {
+		t.Fatalf("replay tip subject = %q %v", tipSubj, err)
+	}
+	left, err := g.runCollect(ctx, dir, []string{"for-each-ref", "--format=%(refname)", "refs/heads/walhub-tmp-replay-"}, "", nil)
+	if err != nil || strings.TrimSpace(left) != "" {
+		t.Fatalf("temp branches leaked: %q %v", left, err)
+	}
+	if sha, _ := g.ResolveRef(ctx, dir, "refs/heads/main"); sha != base {
+		t.Fatalf("main moved during replay: %s", sha)
+	}
+	if sha, _ := g.ResolveRef(ctx, dir, "refs/heads/topic"); sha != head {
+		t.Fatalf("topic moved during replay: %s", sha)
 	}
 	// Unknown binary surfaces unavailable, never a silent result.
 	g2 := NewSubprocessGit("/nonexistent/git-binary")

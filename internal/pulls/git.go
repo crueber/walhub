@@ -42,7 +42,10 @@ type GitRunner interface {
 	// author/committer identity. Returns the new commit sha.
 	CommitTree(ctx context.Context, dir, tree string, parents []string, msg, authorName, authorEmail, committerName, committerEmail string, when time.Time) (string, error)
 	// Replay runs the §5 rebase strategy plumbing. Returns the replayed tip.
-	Replay(ctx context.Context, dir, onto, base, head string) (string, error)
+	// Committer identity is explicit (replay mints commits; the runner
+	// strips ambient env, so the server identity rides GIT_COMMITTER_*):
+	// original authorship preserved per commit, committer = server.
+	Replay(ctx context.Context, dir, onto, base, head, committerName, committerEmail string) (string, error)
 	// BehindCount returns `git rev-list --count head..base` (§4 behind).
 	BehindCount(ctx context.Context, dir, base, head string) (int, error)
 	// Reachable reports whether sha is reachable from any existing ref
@@ -209,6 +212,9 @@ func pathEnv() string {
 // osGetenv reads one env var (PATH only — nothing else is inherited).
 func osGetenv(k string) string { return os.Getenv(k) }
 
+// osGetpid names the process for unique temp-branch construction.
+func osGetpid() int { return os.Getpid() }
+
 // ResolveRef resolves any ref to its commit sha:
 // `git rev-parse --verify --quiet <ref>^{commit}`. A genuine git failure
 // (non-zero exit) is unknown-revision (404/422); a backend failure (pool,
@@ -333,23 +339,54 @@ func (g *SubprocessGit) CommitTree(ctx context.Context, dir, tree string, parent
 	return sha, nil
 }
 
-// Replay runs the §5 rebase strategy plumbing, no worktree:
-// `git replay --onto <base> <merge_base>..<head>` — the replayed tip is the
-// new head. Original authorship preserved per commit, committer = server.
-func (g *SubprocessGit) Replay(ctx context.Context, dir, onto, base, head string) (string, error) {
+// Replay runs the §5 rebase strategy plumbing, no worktree. Stock git's
+// `replay` (experimental, shipped in git 2.53) only tracks branches named
+// in the revision range: a pure-SHA range is a silent no-op (exit 0, empty
+// stdout — verified live, so the bare §5 argv can never yield a tip). Replay
+// therefore plants a uniquely-named temporary branch at the head sha, runs
+// `git replay --onto <onto> --ref-action=print <mb>..<tmpref>` (print mode
+// emits `update` lines and never updates serving refs — default update mode
+// would move refs on disk behind the WAL's back), parses the
+// `update <tmpref> <new> <old>` line for the replayed tip, and deletes the
+// temp branch on every exit path. Original authorship preserved per commit.
+//
+// ### Concurrency
+//
+// Hazard: two concurrent replays colliding on one temp branch, or a crash
+// leaving a temp branch advertised. Avoidance: the branch name carries
+// pid+nanos (unique per call, same scheme as the ingest scratch dirs in
+// 04_git.md §3.1); deletion is deferred; a leaked temp branch matches no
+// PR ref and is swept by name prefix on the next replay.
+func (g *SubprocessGit) Replay(ctx context.Context, dir, onto, base, head, committerName, committerEmail string) (string, error) {
 	mb, err := g.MergeBase(ctx, dir, base, head)
 	if err != nil {
 		return "", err
 	}
-	out, err := g.runCollect(ctx, dir, []string{"replay", "--onto", onto, mb + ".." + head}, "", nil)
+	if mb == head {
+		return head, nil // empty range: nothing to replay
+	}
+	tmpRef := fmt.Sprintf("refs/heads/walhub-tmp-replay-%d-%d", osGetpid(), time.Now().UnixNano())
+	if _, err := g.runCollect(ctx, dir, []string{"update-ref", tmpRef, head}, "", nil); err != nil {
+		return "", fmt.Errorf("replay temp branch: %w", err)
+	}
+	defer func() {
+		_, _ = g.runCollect(context.WithoutCancel(ctx), dir, []string{"update-ref", "-d", tmpRef}, "", nil)
+	}()
+	env := []string{"GIT_COMMITTER_NAME=" + committerName, "GIT_COMMITTER_EMAIL=" + committerEmail}
+	out, err := g.runCollect(ctx, dir, []string{"replay", "--onto", onto, "--ref-action=print", mb + ".." + tmpRef}, "", env)
 	if err != nil {
 		return "", fmt.Errorf("replay: %w", err)
 	}
-	sha := strings.TrimSpace(out)
-	if err := validateSHA(sha); err != nil {
-		return "", fmt.Errorf("%w: replay produced %q", ErrCorrupt, sha)
+	for _, line := range splitLines(out) {
+		fields := strings.Fields(line)
+		if len(fields) == 4 && fields[0] == "update" && fields[1] == tmpRef {
+			if verr := validateSHA(fields[2]); verr != nil {
+				return "", fmt.Errorf("%w: replay produced %q", ErrCorrupt, fields[2])
+			}
+			return fields[2], nil
+		}
 	}
-	return sha, nil
+	return "", fmt.Errorf("%w: replay produced no update for %s", ErrCorrupt, tmpRef)
 }
 
 // BehindCount runs `git rev-list --count <head>..<base>` (§4 behind).
