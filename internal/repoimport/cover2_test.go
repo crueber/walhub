@@ -200,7 +200,7 @@ func TestProbeStoreNil(t *testing.T) {
 	}
 }
 
-func TestProbeCorruptDoc500(t *testing.T) {
+func TestProbeCorruptDoc409(t *testing.T) {
 	cfg := testConfig(t)
 	svc, _ := testService(t, cfg, &FakeRoles{})
 	h := testHandler(svc, adminPrincipal())
@@ -212,8 +212,21 @@ func TestProbeCorruptDoc500(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := doPost(t, h, "/api/v1/repos/imports", `{"source_url":"file:///srv/x.git","owner":"acme","name":"bad"}`, "")
-	if w.Code != 500 {
-		t.Fatalf("corrupt doc probe = %d (%q), want 500", w.Code, w.Body.String())
+	if w.Code != 409 {
+		t.Fatalf("corrupt doc probe = %d (%q), want 409", w.Code, w.Body.String())
+	}
+}
+
+// --- nil-service guards (both verbs 503, never a nil-map panic) -------------------------
+
+func TestNilSvc503(t *testing.T) {
+	h := testHandler(nil, adminPrincipal())
+	w := doPost(t, h, "/api/v1/repos/imports", `{"source_url":"file:///srv/x.git","owner":"a","name":"b"}`, "")
+	if w.Code != 503 {
+		t.Fatalf("nil-svc POST = %d, want 503", w.Code)
+	}
+	if g := doGet(t, h, "/api/v1/repos/imports/whatever", ""); g.Code != 503 {
+		t.Fatalf("nil-svc GET = %d, want 503", g.Code)
 	}
 }
 

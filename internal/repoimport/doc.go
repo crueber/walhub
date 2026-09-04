@@ -40,7 +40,9 @@ func readImportDoc(ctx context.Context, st store.ObjectStore, owner, repo string
 	}
 	var doc ImportDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, "", &StatusError{Status: 500, Message: fmt.Sprintf("import.json corrupt: %v", scrubError(err.Error()))}
+		// Corrupt/unreadable provenance never adopts (B3): 409 names
+		// the delete-and-retry fix; a store failure stays 500.
+		return nil, "", &StatusError{Status: 409, Message: fmt.Sprintf("import.json corrupt (target %s/%s was not cleanly imported; delete and retry, or pick another name): %v", owner, repo, scrubError(err.Error()))}
 	}
 	if doc.RequestedRefs == nil {
 		doc.RequestedRefs = []string{}

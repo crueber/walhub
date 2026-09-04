@@ -787,7 +787,7 @@ control plane, wall linear in pack bytes) is the durable claim.
 
 **Results.**
 
-| population | GETs+HEADs | PUTs (control) | LISTs | pack bytes (bulk, unbudgeted) | wall | refs landed |
+| population | GETs+HEADs | PUTs total (control) | LISTs | pack bytes (bulk, unbudgeted) | wall | refs landed |
 |---|---|---|---|---|---|---|
 | S (50c/2b/2t) | 6 | 14 (12) | 0 | 23,686 | ~40 ms | 5 |
 | M (400c/10b/10t) | 6 | 14 (12) | 0 | 238,485 | ~74 ms | 21 |

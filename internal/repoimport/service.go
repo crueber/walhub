@@ -198,9 +198,12 @@ func (s *Service) Begin(ctx context.Context, p auth.Principal, params Params, to
 		s.mu.Unlock()
 		return res, rec, err
 	}
-	// B3 probe (synchronous, fail fast): manifest × import.json.
-	manifestPresent, doc, err := s.probe(ctx, params)
 	s.mu.Unlock()
+	// B3 probe (synchronous, fail fast): manifest × import.json. Runs
+	// OUTSIDE the service lock — never hold a lock across store I/O
+	// (13 §2 rule 4); the join window is re-checked under the lock
+	// below before the running entry is installed.
+	manifestPresent, doc, err := s.probe(ctx, params)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -223,6 +226,7 @@ func (s *Service) Begin(ctx context.Context, p auth.Principal, params Params, to
 	r := &running{id: id, params: want, done: make(chan struct{})}
 	s.running[target] = r
 	s.streams[id] = st
+	pruneExpiredLocked(s.streams)
 	s.mu.Unlock()
 
 	go s.drive(target, id, params, token, st, r)
@@ -382,6 +386,7 @@ func newImportID() string {
 // the core table for pruned-but-remembered records).
 func (s *Service) Lookup(id string) (*stream, *wal.TaskRecord, bool) {
 	s.mu.Lock()
+	pruneExpiredLocked(s.streams)
 	st, ok := s.streams[id]
 	s.mu.Unlock()
 	if ok {
@@ -398,14 +403,23 @@ func (s *Service) Lookup(id string) (*stream, *wal.TaskRecord, bool) {
 }
 
 // Janitor prunes finished rings past retention (mirrors the wal byID
-// janitor; import.json stays the durable truth).
+// janitor; import.json stays the durable truth). Begin/Lookup already
+// prune lazily on every call, so this is the explicit-sweep entry point
+// (operator/debug use) rather than a required sweeper.
 func (s *Service) Janitor() {
-	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for id, st := range s.streams {
+	pruneExpiredLocked(s.streams)
+}
+
+// pruneExpiredLocked deletes finished streams past streamRetain. Caller
+// holds the service lock; the stream expiry check nests stream.mu under
+// it (the same direction as Janitor — never the reverse).
+func pruneExpiredLocked(streams map[string]*stream) {
+	now := time.Now()
+	for id, st := range streams {
 		if st.expired(now) {
-			delete(s.streams, id)
+			delete(streams, id)
 		}
 	}
 }

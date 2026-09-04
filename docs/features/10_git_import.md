@@ -347,8 +347,9 @@ clean.
 - **The `.idx` discipline (§6.1)** closes a latent `AddPack` gap (idx
   neither installed nor uploaded) with no `internal/wal` touch.
 - **HTTP/CLI ids are service ids** (B4 rings); the table record id
-  stays internal — GET merges the ring mirror (fresh on every packet)
-  with the table fallback for pruned windows.
+  stays internal — GET merges the ring mirror (fresh on every packet);
+  pruned windows (past the 1 h retention) answer 404 per the §3 status
+  table, and `import.json` stays the durable truth.
 
 ## Explicitly out of scope
 

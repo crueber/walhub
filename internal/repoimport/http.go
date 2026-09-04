@@ -169,6 +169,10 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
 		writeAuthErr(w, aerr)
 		return
 	}
+	if h.Svc == nil {
+		writePlain(w, http.StatusServiceUnavailable, "import service not configured")
+		return
+	}
 	st, rec, ok := h.Svc.Lookup(id)
 	if !ok {
 		writePlain(w, http.StatusNotFound, "unknown import: "+id)
@@ -425,9 +429,19 @@ func newSSEWithTicker(w http.ResponseWriter, r *http.Request, keepalive time.Dur
 	s := &sseWriter{w: w, fl: fl, ctx: r.Context()}
 	s.ka = time.NewTicker(keepalive)
 	go func() {
-		for range s.ka.C {
-			if !s.comment(": keepalive") {
+		// 13 §1: every goroutine exits via context. (A bare
+		// `for range s.ka.C` would park forever after Stop — the
+		// ticker channel is never closed — leaking one goroutine
+		// per attach. Stops elsewhere stay: Stop is idempotent.)
+		defer s.ka.Stop()
+		for {
+			select {
+			case <-s.ctx.Done():
 				return
+			case <-s.ka.C:
+				if !s.comment(": keepalive") {
+					return
+				}
 			}
 		}
 	}()
