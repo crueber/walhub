@@ -1,14 +1,16 @@
 // web/src/pages/Pulls.jsx — route "/:owner/:name/pulls" (03 §9): the PR
 // list (state tabs open/closed, base/head filters, paged index-first
-// cards) plus the open-PR form (title, base/head refs). Cards refresh on
-// `pull` SSE frames (the repo stream is shared; this page refetches its
+// cards). Opening a PR lives on the full "/pulls/new" page (issue #34 —
+// the cramped sidebar box is gone; this page links to it). Cards refresh
+// on `pull` SSE frames (the repo stream is shared; this page refetches its
 // window).
 
 import { createSignal, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
-import { useData, invalidate, reportError } from "../lib/data.js";
+import { useData, invalidate } from "../lib/data.js";
 import { useCollabStream } from "../components/collab.jsx";
+import Empty from "../components/Empty.jsx";
 
 export default function Pulls() {
   const ctx = useRepo();
@@ -35,111 +37,90 @@ export default function Pulls() {
     setSearch({ [k]: v || undefined });
   };
 
-  const [getTitle, setTitle] = createSignal("");
-  const [getBase, setBase] = createSignal("refs/heads/main");
-  const [getHead, setHead] = createSignal("");
-  const [getBusy, setBusy] = createSignal(false);
-
-  const open = async (e) => {
-    e.preventDefault();
-    if (!getTitle().trim() || !getHead().trim()) return;
-    setBusy(true);
-    try {
-      await ctx.repoClient.pulls.open({
-        title: getTitle().trim(),
-        base_ref: getBase().trim(),
-        head_ref: getHead().trim(),
-      });
-      setTitle("");
-      setHead("");
-      setAfter(0);
-      reload();
-    } catch (err) {
-      reportError(err);
-    } finally {
-      setBusy(false);
-    }
+  // Carry the head/base filters into the new-PR page so a filtered empty
+  // list ("no PRs from refs/heads/topic") opens the composer prefilled.
+  const newHref = () => {
+    const params = new URLSearchParams({
+      ...(search.base ? { base: search.base } : {}),
+      ...(search.head ? { head: search.head } : {}),
+    });
+    const qs = params.toString();
+    return `/${ctx.full}/pulls/new${qs ? `?${qs}` : ""}`;
   };
 
+  const emptyTitle = () => (search.state === "closed" ? "No closed pull requests" : "No pull requests");
+  const emptyHint = () =>
+    search.base || search.head
+      ? `Nothing matches${search.base ? ` base ${search.base}` : ""}${search.head ? ` head ${search.head}` : ""} — clear the filters or open one from these refs.`
+      : "Propose a change from a branch — pick a base and a head to compare.";
+
   return (
-    <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
-      <section aria-label="Pull requests">
-        <div class="mb-3 flex items-center gap-2">
-          <button
-            type="button"
-            class={`btn px-2 py-1 ${!search.state ? "btn-active" : ""}`}
-            onClick={() => setFilter("state", "")}
-          >
-            open
-          </button>
-          <button
-            type="button"
-            class={`btn px-2 py-1 ${search.state === "closed" ? "btn-active" : ""}`}
-            onClick={() => setFilter("state", "closed")}
-          >
-            closed
-          </button>
-          <button type="button" class="btn ml-auto px-2 py-1" onClick={reload}>
-            refresh
-          </button>
-          <A class="btn primary px-2 py-1" href={`/${ctx.full}/pulls/new`}>
-            New pull request
-          </A>
-        </div>
-        <ul class="card-list">
-          <For each={getPage()?.pulls ?? []} fallback={<li class="card">No pull requests.</li>}>
-            {(pr) => (
-              <li class="card">
-                <A href={`/${ctx.owner}/${ctx.name}/pull/${pr.num}`} class="card-title">
-                  #{pr.num} {pr.title}
-                </A>
-                <div class="card-meta">
-                  <span class={`chip chip-${pr.state}`}>{pr.state}</span>
-                  <span>
-                    {pr.base_ref} ← {pr.head_ref}
-                  </span>
-                  <span>{pr.author}</span>
-                  <span>{fmtDate(pr.updated_at)}</span>
-                </div>
-              </li>
-            )}
-          </For>
-        </ul>
-        <Show when={getPage()?.more}>
-          <button
-            type="button"
-            class="btn mt-3 px-3 py-1"
-            onClick={() => setAfter(getPage().pulls.at(-1)?.num ?? 0)}
-          >
-            older
-          </button>
-        </Show>
-      </section>
-      <aside aria-label="Open a pull request">
-        <form class="card" onSubmit={open}>
-          <h2 class="mb-2 text-sm font-semibold">Open a pull request</h2>
-          <label class="field">
-            <span>Title</span>
-            <input value={getTitle()} onInput={(e) => setTitle(e.target.value)} required maxlength="256" />
-          </label>
-          <label class="field">
-            <span>Base ref</span>
-            <input value={getBase()} onInput={(e) => setBase(e.target.value)} required />
-          </label>
-          <label class="field">
-            <span>Head ref</span>
-            <input
-              value={getHead()}
-              onInput={(e) => setHead(e.target.value)}
-              required
-              placeholder="refs/heads/topic"
+    <section aria-label="Pull requests">
+      <div class="mb-3 flex items-center gap-2">
+        <button
+          type="button"
+          class={`btn px-2 py-1 ${!search.state ? "btn-active" : ""}`}
+          onClick={() => setFilter("state", "")}
+        >
+          open
+        </button>
+        <button
+          type="button"
+          class={`btn px-2 py-1 ${search.state === "closed" ? "btn-active" : ""}`}
+          onClick={() => setFilter("state", "closed")}
+        >
+          closed
+        </button>
+        <button type="button" class="btn ml-auto px-2 py-1" onClick={reload}>
+          refresh
+        </button>
+        <A class="btn primary px-2 py-1" href={newHref()}>
+          New pull request
+        </A>
+      </div>
+      <Show when={getPage()} fallback={<p class="muted">loading…</p>}>
+        <Show
+          when={(getPage().pulls ?? []).length > 0}
+          fallback={
+            <Empty
+              icon="pull"
+              title={emptyTitle()}
+              hint={emptyHint()}
+              actionHref={newHref()}
+              actionLabel="New pull request"
             />
-          </label>
-          <button type="submit" class="btn btn-primary mt-2 px-3 py-1" disabled={getBusy()}>
-            {getBusy() ? "opening…" : "open pull request"}
-          </button>
-        </form>
-      </aside>
-    </div>
+          }
+        >
+          <ul class="card-list">
+            <For each={getPage().pulls ?? []}>
+              {(pr) => (
+                <li class="card">
+                  <A href={`/${ctx.owner}/${ctx.name}/pull/${pr.num}`} class="card-title">
+                    #{pr.num} {pr.title}
+                  </A>
+                  <div class="card-meta">
+                    <span class={`chip chip-${pr.state}`}>{pr.state}</span>
+                    <span>
+                      {pr.base_ref} ← {pr.head_ref}
+                    </span>
+                    <span>{pr.author}</span>
+                    <span>{fmtDate(pr.updated_at)}</span>
+                  </div>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </Show>
+      <Show when={getPage()?.more}>
+        <button
+          type="button"
+          class="btn mt-3 px-3 py-1"
+          onClick={() => setAfter(getPage().pulls.at(-1)?.num ?? 0)}
+        >
+          older
+        </button>
+      </Show>
+    </section>
   );
 }
