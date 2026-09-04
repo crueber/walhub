@@ -347,6 +347,15 @@ func TestReactionsHTTP(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("react = %d: %s", w.Code, w.Body.String())
 	}
+	var created struct {
+		Event *Event `json:"event"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Event == nil || created.Event.Type != EventReactionChanged || created.Event.TargetEventSeq == nil || *created.Event.TargetEventSeq != 0 {
+		t.Fatalf("react event = %s", w.Body.String())
+	}
 	// Duplicate → 200 with the summary.
 	w = doReq(h, "POST", "/acme/repo/api/issues/1/reactions", `{"target_event_seq":0,"content":"+1"}`)
 	if w.Code != http.StatusOK {

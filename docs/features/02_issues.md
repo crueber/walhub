@@ -366,6 +366,17 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
   twin, unlike issue nums.
 - **Default close-reason + `*none`/`none` filter spellings** (`assignee=*none`,
   `milestone=none`) are implemented exactly as §7 rows state.
+- **Event windows return arrays newest-first** (most recent event at index
+  0; `after_seq=` pages strictly below toward older). The §2/P3 phrase
+  "newest-last" names the pagination direction (older on demand), not the
+  array order — code, tests, and the thread page all agree on newest-first.
+- **Duplicate-reaction dedup is best-effort under true concurrency.** The
+  (actor, target, content) check reads the log before the reserving CAS, so
+  sequential double-submits (the real double-click case) are no-ops while
+  two truly-simultaneous duplicate adds could both commit and double-count
+  the summary; the event log stays the truth (a remove still resolves the
+  live set). Fully CAS-atomic dedup would need the live set in the header
+  schema — deferred as human-rate over-engineering.
 
 ## Explicitly out of scope
 

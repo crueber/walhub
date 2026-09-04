@@ -531,7 +531,7 @@ func (h *Handler) addReaction(w http.ResponseWriter, r *http.Request, owner, rep
 		writePlain(w, http.StatusBadRequest, "target_event_seq is required")
 		return
 	}
-	th, added, err := h.Svc.AddReaction(r.Context(), owner, repo, num, *body.TargetEventSeq, p, body.Content)
+	th, ev, added, err := h.Svc.AddReaction(r.Context(), owner, repo, num, *body.TargetEventSeq, p, body.Content)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -541,11 +541,8 @@ func (h *Handler) addReaction(w http.ResponseWriter, r *http.Request, owner, rep
 		writeJSON(w, http.StatusOK, map[string]any{"summary": th.ReactionSummary})
 		return
 	}
-	events, _, _ := h.Svc.eventWindow(r.Context(), owner, repo, num, 0, 1)
-	var ev *Event
-	if len(events) > 0 {
-		ev = events[0]
-	}
+	// ev is the committed event from the same two-step — no re-read, so a
+	// concurrent interleaving event cannot misattribute the 201 body.
 	writeJSON(w, http.StatusCreated, map[string]any{"event": ev})
 }
 

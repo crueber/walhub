@@ -419,7 +419,7 @@ func TestPRKindRejected(t *testing.T) {
 	if _, err := s.AddComment(reqCtx(), "acme", "repo", 1, aliceP, "x"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("comment pr = %v", err)
 	}
-	if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, aliceP, "+1"); !errors.Is(err, ErrNotFound) {
+	if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, aliceP, "+1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("react pr = %v", err)
 	}
 	if _, err := s.RemoveReaction(reqCtx(), "acme", "repo", 1, 0, aliceP, "+1"); !errors.Is(err, ErrNotFound) {

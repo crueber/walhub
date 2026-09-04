@@ -93,7 +93,7 @@ func TestMutationStoreFailures(t *testing.T) {
 		s, fl := newSvc()
 		mustCreate(t, s, "acme", "repo", janeP, "t", "")
 		fl.failGet = func(key string) error { return store.NewRetryable(key, fmt.Errorf("down")) }
-		if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {
+		if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {
 			t.Fatal("want error")
 		}
 		if _, err := s.RemoveReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {

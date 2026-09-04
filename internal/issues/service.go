@@ -257,7 +257,9 @@ func (s *Service) writeRefs(ctx context.Context, owner, repo string, srcNum, src
 			cancel()
 		}
 		src := map[string]any{"repo": sourceRepo, "num": srcNum}
-		if ref.CrossRepo != "" || srcSeq >= 0 {
+		if srcSeq >= 0 {
+			// Comment bodies source kind:"comment" with their event
+			// seq; opened bodies source kind:"thread" (no event_seq).
 			src["kind"] = "comment"
 			src["event_seq"] = srcSeq
 		} else {
@@ -590,51 +592,53 @@ func reactionState(events []*Event) map[string]bool {
 // (principal, target, content) UNIQUE — a duplicate add is a no-op
 // returning the summary, not an event. The summary ±1 rides the SAME
 // header CAS that reserves the seq (one CAS, no extra round trip).
-func (s *Service) AddReaction(ctx context.Context, owner, repo string, num, target int, actor auth.Principal, content string) (*Thread, bool, error) {
+// Returns the committed thread, the written event (nil on duplicate
+// no-op), whether an event was written, and an error.
+func (s *Service) AddReaction(ctx context.Context, owner, repo string, num, target int, actor auth.Principal, content string) (*Thread, *Event, bool, error) {
 	if err := requireAuthenticated(actor); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if err := s.requireRead(ctx, owner, repo, actor); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	c := strings.ToLower(strings.TrimSpace(content))
 	if !ReactionContents[c] {
-		return nil, false, fmt.Errorf("%w: unknown reaction %q", ErrInvalid, content)
+		return nil, nil, false, fmt.Errorf("%w: unknown reaction %q", ErrInvalid, content)
 	}
 	who := normPrincipal(actor.Name)
 	th, _, err := s.loadThread(ctx, owner, repo, num)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if th == nil || th.Kind != "issue" {
-		return nil, false, fmt.Errorf("%w: unknown issue", ErrNotFound)
+		return nil, nil, false, fmt.Errorf("%w: unknown issue", ErrNotFound)
 	}
 	te, err := s.loadEvent(ctx, owner, repo, num, target)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if te == nil {
-		return nil, false, fmt.Errorf("%w: unknown target event", ErrInvalid)
+		return nil, nil, false, fmt.Errorf("%w: unknown target event", ErrInvalid)
 	}
 	if te.Type != EventOpened && te.Type != EventCommented {
-		return nil, false, fmt.Errorf("%w: reactions target opened/commented events only", ErrInvalid)
+		return nil, nil, false, fmt.Errorf("%w: reactions target opened/commented events only", ErrInvalid)
 	}
 	events, err := s.scanEvents(ctx, owner, repo, num)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if reactionState(events)[who+"\x00"+itoa(target)+"\x00"+c] {
 		th, _, lerr := s.loadThread(ctx, owner, repo, num)
 		if lerr != nil {
-			return nil, false, lerr
+			return nil, nil, false, lerr
 		}
 		if th == nil {
-			return nil, false, fmt.Errorf("%w: unknown issue", ErrNotFound)
+			return nil, nil, false, fmt.Errorf("%w: unknown issue", ErrNotFound)
 		}
-		return th, false, nil // duplicate add: no-op, current summary
+		return th, nil, false, nil // duplicate add: no-op, current summary
 	}
 	now := s.nowUTC().Format(dateTimeFmt)
-	th, _, err = s.appendEvent(ctx, owner, repo, num, func(t *Thread, seq int) (*Event, error) {
+	th, ev, err := s.appendEvent(ctx, owner, repo, num, func(t *Thread, seq int) (*Event, error) {
 		t.NextEventSeq = seq + 1
 		t.UpdatedAt = now
 		t.Participants = uniqSorted(append(t.Participants, who))
@@ -650,11 +654,11 @@ func (s *Service) AddReaction(ctx context.Context, owner, repo string, num, targ
 			TargetEventSeq: &target, Content: strPtr(c), Op: strPtr("add")}, nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	s.updateIndex(ctx, owner, repo, cardOf(th))
 	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num})
-	return th, true, nil
+	return th, ev, true, nil
 }
 
 // RemoveReaction appends a reaction_changed remove for the actor's OWN
@@ -762,6 +766,7 @@ func (s *Service) ApplyClosingReferences(ctx context.Context, owner, repo string
 		if nt.Milestone != nil {
 			s.bumpMilestone(ctx, owner, repo, *nt.Milestone, -1, +1)
 		}
+		s.emitSubscribed(ctx, owner, repo, nt, who)
 		s.stream(ctx, StreamEvent{Name: "issue", Repo: repoName(owner, repo), IssueNum: m.Num})
 		closed = append(closed, m.Num)
 	}

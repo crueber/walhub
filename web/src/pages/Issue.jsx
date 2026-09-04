@@ -4,7 +4,7 @@
 // triage). `issue_event` frames append timeline entries; `issue` frames
 // refresh the header — both ride the repo's existing SSE stream.
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
@@ -12,6 +12,9 @@ import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
 
 const REACTIONS = ["+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"];
+
+// reaction_summary keys are %06x event seqs (02 §1.1: "000003", never "3").
+const seqKey = (seq) => Number(seq).toString(16).padStart(6, "0");
 
 function eventText(ev) {
   switch (ev.type) {
@@ -50,11 +53,26 @@ export default function Issue() {
   const [getBody, setBody] = createSignal("");
   const [getBusy, setBusy] = createSignal(false);
   const [getOlder, setOlder] = createSignal(false);
+  // Older event windows accumulate here (the view holds the newest page;
+  // both are newest-first, so concatenation stays ordered).
+  const [getExtra, setExtra] = createSignal([]);
+  const [getExtraMore, setExtraMore] = createSignal(undefined);
+  createEffect(() => {
+    num(); // reset accumulation when navigating between issues
+    setExtra([]);
+    setExtraMore(undefined);
+  });
 
-  const reload = () => invalidate(key());
+  const reload = () => {
+    setExtra([]);
+    setExtraMore(undefined);
+    invalidate(key());
+  };
 
   const thread = () => getView()?.thread;
   const summary = () => thread()?.reaction_summary ?? {};
+  const events = () => [...(getView()?.events ?? []), ...getExtra()];
+  const more = () => (getExtraMore() === undefined ? getView()?.events_more : getExtraMore());
 
   const comment = async (e) => {
     e.preventDefault();
@@ -99,16 +117,14 @@ export default function Issue() {
   };
 
   const loadOlder = async () => {
-    const events = getView()?.events ?? [];
-    if (!events.length) return;
+    const all = events();
+    if (!all.length || getOlder()) return;
     setOlder(true);
     try {
-      const oldest = events[events.length - 1].seq;
+      const oldest = all[all.length - 1].seq;
       const page = await ctx.repoClient.issues.events(num(), { after_seq: oldest });
-      const view = getView();
-      invalidate(key());
-      void page;
-      void view;
+      setExtra([...getExtra(), ...(page.events ?? [])]);
+      setExtraMore(page.more);
     } catch (err) {
       reportError(err, "issue-events");
     } finally {
@@ -132,7 +148,7 @@ export default function Issue() {
                 {t().author} opened {fmtDate(t().created_at)} · {t().comment_count} comments
               </p>
               <ol class="grid gap-2">
-                <For each={getView()?.events ?? []}>
+                <For each={events()}>
                   {(ev) => (
                     <li class="card p-3">
                       <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
@@ -148,8 +164,8 @@ export default function Issue() {
                                   onClick={() => react(ev.seq, r)}
                                 >
                                   {r}
-                                  <Show when={(summary()[String(ev.seq)] ?? {})[r]}>
-                                    {" "}{(summary()[String(ev.seq)] ?? {})[r]}
+                                  <Show when={(summary()[seqKey(ev.seq)] ?? {})[r]}>
+                                    {" "}{(summary()[seqKey(ev.seq)] ?? {})[r]}
                                   </Show>
                                 </button>
                               )}
@@ -164,7 +180,7 @@ export default function Issue() {
                   )}
                 </For>
               </ol>
-              <Show when={getView()?.events_more}>
+              <Show when={more()}>
                 <button type="button" class="btn mt-2" disabled={getOlder()} onClick={loadOlder}>
                   {getOlder() ? "Loading…" : "Older events"}
                 </button>

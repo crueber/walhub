@@ -332,7 +332,7 @@ func TestReactions(t *testing.T) {
 	s := testService(roles)
 	th := mustCreate(t, s, "acme", "repo", janeP, "bug", "body")
 	// React to the opened event (seq 0).
-	nt, added, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1")
+	nt, _, added, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1")
 	if err != nil || !added {
 		t.Fatalf("add = %v,%v", nt, err)
 	}
@@ -340,7 +340,7 @@ func TestReactions(t *testing.T) {
 		t.Fatalf("summary = %v", nt.ReactionSummary)
 	}
 	// Duplicate add: no-op, same summary.
-	nt2, added, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1")
+	nt2, _, added, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1")
 	if err != nil || added {
 		t.Fatalf("dup = %v,%v", added, err)
 	}
@@ -348,11 +348,11 @@ func TestReactions(t *testing.T) {
 		t.Fatalf("dup summary = %v", nt2.ReactionSummary)
 	}
 	// Unknown content.
-	if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "party"); !errors.Is(err, ErrInvalid) {
+	if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "party"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("bad content err = %v", err)
 	}
 	// Unknown target event.
-	if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 99, bobP, "+1"); !errors.Is(err, ErrInvalid) {
+	if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 99, bobP, "+1"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("bad target err = %v", err)
 	}
 	// Non-comment target (title_changed) rejected: make one first.
@@ -368,7 +368,7 @@ func TestReactions(t *testing.T) {
 			titleSeq = e.Seq
 		}
 	}
-	if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, titleSeq, bobP, "+1"); !errors.Is(err, ErrInvalid) {
+	if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, titleSeq, bobP, "+1"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("non-comment target err = %v", err)
 	}
 	// Remove own reaction.
@@ -383,14 +383,14 @@ func TestReactions(t *testing.T) {
 	if _, err := s.RemoveReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("double remove err = %v", err)
 	}
-	if _, added, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, aliceP, "heart"); err != nil || !added {
+	if _, _, added, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, aliceP, "heart"); err != nil || !added {
 		t.Fatal(err)
 	}
 	if _, err := s.RemoveReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "heart"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("steal remove err = %v", err)
 	}
 	// Anon denied both ways.
-	if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, anonP, "+1"); !errors.Is(err, ErrUnauthorized) {
+	if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, anonP, "+1"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("anon add err = %v", err)
 	}
 	if _, err := s.RemoveReaction(reqCtx(), "acme", "repo", th.Num, 0, anonP, "+1"); !errors.Is(err, ErrUnauthorized) {

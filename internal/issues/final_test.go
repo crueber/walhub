@@ -120,7 +120,7 @@ func TestEventScanFailures(t *testing.T) {
 			}
 			return nil
 		}
-		if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {
+		if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {
 			t.Fatal("want error")
 		}
 	})
@@ -128,7 +128,7 @@ func TestEventScanFailures(t *testing.T) {
 		s := testService(newFakeRoles())
 		th := mustCreate(t, s, "acme", "repo", janeP, "t", "")
 		mustPut(t, s, EventKey("acme", "repo", th.Num, 7), []byte("{bad"))
-		if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 7, bobP, "+1"); !errors.Is(err, ErrCorrupt) {
+		if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 7, bobP, "+1"); !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -343,7 +343,7 @@ func TestReactionEdges(t *testing.T) {
 		s := New(fl, newFakeRoles())
 		mustCreate(t, s, "acme", "repo", janeP, "t", "")
 		fl.failList = func(prefix string) error { return fmt.Errorf("list down") }
-		if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {
+		if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {
 			t.Fatal("want error")
 		}
 		if _, err := s.RemoveReaction(reqCtx(), "acme", "repo", 1, 0, bobP, "+1"); err == nil {
@@ -353,10 +353,10 @@ func TestReactionEdges(t *testing.T) {
 	t.Run("shared target decrements", func(t *testing.T) {
 		s := testService(newFakeRoles())
 		th := mustCreate(t, s, "acme", "repo", janeP, "t", "")
-		if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1"); err != nil {
+		if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1"); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, aliceP, "+1"); err != nil {
+		if _, _, _, err := s.AddReaction(reqCtx(), "acme", "repo", th.Num, 0, aliceP, "+1"); err != nil {
 			t.Fatal(err)
 		}
 		rt, err := s.RemoveReaction(reqCtx(), "acme", "repo", th.Num, 0, bobP, "+1")
