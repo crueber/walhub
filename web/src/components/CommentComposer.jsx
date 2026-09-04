@@ -4,6 +4,11 @@
 // fed by the assignables cache (repo collaborators ∪ org members),
 // submit via the feature's comment endpoint. Internal busy guard doubles
 // as the double-submit guard (disabled while posting + guard clause).
+// Optional close controls (issues #33): `closeLabel` + `onClose` render a
+// Close/Reopen button, `onCommentAndClose` a "Comment and Close" button
+// (posts the body when non-empty, then closes — GitHub semantics). All
+// actions share one right-aligned row; the composer clears only when the
+// handler resolves, so a failed post keeps its text for retry.
 
 import { createSignal, Show } from "solid-js";
 import { reportError } from "../lib/data.js";
@@ -29,6 +34,32 @@ export default function CommentComposer(props) {
   };
 
   const listId = () => props.mentionId ?? "mention-composer";
+
+  const commentAndClose = async (e) => {
+    e.preventDefault();
+    if (getBusy() || !props.onCommentAndClose) return;
+    setBusy(true);
+    try {
+      await props.onCommentAndClose(getBody());
+      setBody("");
+    } catch (err) {
+      reportError(err, props.errorKey ?? "comment");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runClose = async (e) => {
+    e.preventDefault();
+    if (getBusy() || !props.onClose) return;
+    setBusy(true);
+    try {
+      await props.onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <form class="card mt-3 grid gap-2 p-3" onSubmit={submit} aria-label={props.label ?? "New comment"}>
       <textarea
@@ -42,7 +73,17 @@ export default function CommentComposer(props) {
       <Show when={props.mentionNames}>
         <MentionDatalist id={listId()} names={props.mentionNames} />
       </Show>
-      <div>
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <Show when={props.onClose}>
+          <button type="button" class="btn" disabled={getBusy()} onClick={runClose}>
+            {props.closeLabel ?? "Close"}
+          </button>
+        </Show>
+        <Show when={props.onCommentAndClose}>
+          <button type="button" class="btn" disabled={getBusy()} onClick={commentAndClose}>
+            {props.commentAndCloseLabel ?? "Comment and Close"}
+          </button>
+        </Show>
         <button type="submit" class="btn primary" disabled={getBusy() || !getBody().trim()}>
           {getBusy() ? "Posting…" : (props.submitLabel ?? "Comment")}
         </button>

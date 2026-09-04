@@ -1,7 +1,7 @@
 // web/src/pages/Issue.jsx — route "/:owner/:name/issues/:num" (02 §11):
 // the thread page (header, timeline with seq-window older-on-demand,
-// comment composer, sidebar with labels/assignees/milestone/state for ≥
-// triage). `issue_event` frames refresh the header, `issue` frames the
+// comment composer with close / comment-and-close controls, sidebar with
+// labels/assignees/milestone/state badge). `issue_event` frames refresh the header, `issue` frames the
 // header too — both ride the ONE repo collaboration stream (08 §4), one
 // connection per page via mountStreamRetry; frames invalidate cache keys
 // (coalesced), they never carry full state.
@@ -76,6 +76,19 @@ export default function Issue() {
 
   const comment = async (body) => {
     await ctx.repoClient.issues.comment(num(), body);
+    reload();
+  };
+
+  const commentAndClose = async (body) => {
+    // No atomic comment+close endpoint (PATCH takes state only): post the
+    // body first when non-empty (GitHub semantics — empty body just
+    // closes), then close. Either step throwing keeps the composer text
+    // (CommentComposer clears only on success); after a comment-posted /
+    // close-failed split the plain Close button finishes the job.
+    if (String(body ?? "").trim()) {
+      await ctx.repoClient.issues.comment(num(), body);
+    }
+    await ctx.repoClient.issues.patch(num(), { state: "closed" });
     reload();
   };
 
@@ -204,6 +217,10 @@ export default function Issue() {
               <Show when={canComment()}>
                 <CommentComposer
                   onSubmit={comment}
+                  onCommentAndClose={t().state === "open" ? commentAndClose : undefined}
+                  commentAndCloseLabel="Comment and Close"
+                  closeLabel={t().state === "open" ? "Close" : "Reopen"}
+                  onClose={() => patch({ state: t().state === "open" ? "closed" : "open" })}
                   errorKey="issue-comment"
                   mentionId="mention-issue-comment"
                   mentionNames={thread()?.participants}
@@ -220,11 +237,7 @@ export default function Issue() {
               <div class="card grid gap-1 p-3 text-sm">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">State</span>
                 <span>{t().state}{t().state_reason ? ` (${t().state_reason})` : ""}</span>
-                <div class="flex gap-1">
-                  <button type="button" class="btn px-2 py-0.5 text-xs" onClick={() => patch({ state: t().state === "open" ? "closed" : "open" })}>
-                    {t().state === "open" ? "Close" : "Reopen"}
-                  </button>
-                </div>
+                <span class="muted text-xs">close / reopen from the comment box</span>
               </div>
               <div class="card grid gap-1 p-3 text-sm">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Labels</span>
