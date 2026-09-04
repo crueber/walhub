@@ -12,26 +12,25 @@ import { useRepo, shortRef } from "./Repo.jsx";
 function Breadcrumb(props) {
   const parts = () => (props.path ? props.path.split("/") : []);
   return (
-    <nav class="crumbs mb-2 text-sm">
-      <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}`}>
-        {props.head ?? "root"}
-      </A>
-      <For each={parts()}>
-        {(part, i) => {
-          const sub = () => parts().slice(0, i() + 1).join("/");
-          return (
-            <>
-              {" / "}
-              <Show when={i() === parts().length - 1} fallback={
-                <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}/tree/${sub()}`}>{part}</A>
-              }>
-                <strong>{part}</strong>
-              </Show>
-            </>
-          );
-        }}
-      </For>
-    </nav>
+    <Show when={parts().length > 0}>
+      <nav class="crumbs mb-2 text-sm">
+        <For each={parts()}>
+          {(part, i) => {
+            const sub = () => parts().slice(0, i() + 1).join("/");
+            return (
+              <>
+                <Show when={i() > 0}>{" / "}</Show>
+                <Show when={i() === parts().length - 1} fallback={
+                  <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}/tree/${sub()}`}>{part}</A>
+                }>
+                  <strong>{part}</strong>
+                </Show>
+              </>
+            );
+          }}
+        </For>
+      </nav>
+    </Show>
   );
 }
 
@@ -46,7 +45,7 @@ export default function Tree() {
           const treeRest = () => (t().ref ? `${shortRef(t().ref)}` : "") + (t().path ? `/${t().path}` : "");
           return (
             <>
-              <Breadcrumb full={ctx.full} path={t().path ?? ""} head={shortRef(t().ref)} />
+              <Breadcrumb full={ctx.full} path={t().path ?? ""} />
               <table class="data-table tree-table">
                 <thead>
                   <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24 text-right">size</th></tr>
