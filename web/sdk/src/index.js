@@ -9,10 +9,10 @@
  * .mjs twin, pre-1.0 no-compat).
  */
 import { ReposClient } from "./core.js";
-import { ReposError } from "./errors.js";
+import { ReposError, NOT_MODIFIED } from "./errors.js";
 import { parseFrame, readSse } from "./sse.js";
 
-export { ReposClient, ReposError, parseFrame, readSse };
+export { ReposClient, ReposError, NOT_MODIFIED, parseFrame, readSse };
 
 // Default client: one per document, shared by the SPA and external consumers.
 let defaultClient = new ReposClient();
