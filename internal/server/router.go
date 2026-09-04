@@ -291,8 +291,8 @@ func isUIPageMethod(r *http.Request) bool {
 // uiPageRoute reports the /{o}/{r}/<page> UI routes (§3.3 gated list).
 func uiPageRoute(sub0 string) bool {
 	switch sub0 {
-	case "tree", "blob", "commits", "commit", "wal", "settings",
-		"issues", "labels", "milestones", "pulls", "pull":
+	case "tree", "blob", "commits", "commit", "branches", "tags", "wal", "settings",
+		"issues", "labels", "milestones", "pulls", "pull", "checks":
 		return true
 	}
 	return false

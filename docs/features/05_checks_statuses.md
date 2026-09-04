@@ -268,3 +268,52 @@ re-exports; envelope/SSE parsing reuses `sdk/src/sse.js` — one parser (12_web_
 - **Per-repo required-check defaults outside `policy.json`** — the protect effect is the only gate language; no settings.json parallel.
 - **CI token scopes beyond `checks:write`** — the `scopes` field exists, but no second capability is defined; granting repo-write or admin via a CI token is explicitly rejected.
 - **Merge queues / batching** — the gate is per-merge-task; a queue is 09-rollout territory and deferred.
+
+## Implementation notes (Wave 05 landed 2026-09-04, `internal/checks`)
+
+- **Seam 1 in code is the `server.ExtraRoutes` chain** (`Handle(w, r) bool`
+  on both lanes), not `api.Lanes` — the package fronts the core mux
+  exactly like `internal/identity`, `internal/issues`, `internal/pulls`,
+  and `internal/review` (see the Wave A amendment in
+  14_extensibility.md Decisions). No discovery entries: `/api/v1`
+  `endpoints[]` derive from the core route table only (same rule as
+  01/02/03/C2); the SDK enumerates checks statically. There is no
+  `Name()` method — nothing calls it.
+- **Seam 2 in code is `AuthService.ExtraCredential`** (a func hook
+  consulted after static tokens in `token`/`oidc` modes), not an
+  `auth.Provider` registry — this tree has no provider registry, and the
+  hook is the registry-shaped seam with the same startup overlap rule
+  (`checks.AssertPrefixDisjoint`, called from composition). The hook
+  resolves the wct_ SHAPE to `ci:<id>` (unprivileged); the secret is
+  verified handler-side per repo. `none` mode needs no hook (everyone is
+  already admin; CI reports ride the write role).
+- **State-not-in-enum is 409** (`ErrInvalidState`): the §4 table's
+  enum-specific rule wins over the generic 400 line — a typo'd state
+  must not silently become pending, and 409 names the closed enum.
+- **Open-PR head lookup reads pr.json sidecars, not cards**: the shared
+  `issues/index.json` cards carry no `head_sha`, so the handler filters
+  `kind:"pr"` + `state:"open"` cards, GETs each `pulls/<num:06x>/pr.json`
+  (03 §2.1 documented layout, capped at 200 rows), skips merged
+  sidecars, and confirms `state:"open"` on the thread header (the header
+  wins over the projection). Bounded at collaboration rate; best-effort
+  per P8.
+- **Bypass lists apply to the whole rule** (03 §5 step 4): the union
+  covers matching rules the merger does not bypass; 05's "no bypass
+  list" means `require_checks` carries no bypass FIELD of its own. A
+  merger bypassing every carrying rule skips the gate (the merge-queue
+  shape); bypassing some still gates on the rest.
+- **Re-reports keep the first creator** (`created_at` pairs with it);
+  `updated_at`/`version` move on every CAS write.
+- **Index CAS exhaustion answers 200, not 503**: the status CAS already
+  committed, so the write succeeds and the projection repairs on the
+  next report (same discipline as 02's index — projection, never truth).
+  Only the status-object CAS exhaustion (≤ 5) is a 503.
+- **Live `check` rows are refetch, not SSE, in v1**: the repo
+  collaboration stream has no endpoint yet (06/08 own it; the checks
+  `Streamer` is nil in composition), so the table page, pills, and PR
+  box refetch their windows like the Issues cards do. The packet shape
+  (§7) is implemented and unit-pinned; wiring it to a stream is a
+  composition one-liner when the endpoint lands.
+- **Evidence E6** (`docs/EVIDENCE.md`): report-path round trips,
+  combined-view fan-out bounds, gate scan cost, and why none of them can
+  explode.

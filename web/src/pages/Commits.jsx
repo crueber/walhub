@@ -8,6 +8,7 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { useData, useResolved, SHA_TTL } from "../lib/data.js";
 import { fmtDate, shortRef, useRepo } from "./Repo.jsx";
+import { CheckPill } from "./Checks.jsx";
 
 function CommitRow(props) {
   const c = () => props.commit;
@@ -35,6 +36,9 @@ function CommitRow(props) {
         </div>
       </div>
       <code class="sha shrink-0 font-mono text-xs">{String(c().sha).slice(0, 12)}</code>
+      <span class="shrink-0">
+        <CheckPill full={props.full} sha={String(c().sha)} client={props.client} />
+      </span>
     </div>
   );
 }
@@ -93,7 +97,7 @@ function CommitList(props) {
             </nav>
             <div class="commit-list card divide-y divide-zinc-100 dark:divide-zinc-800/60">
               <For each={hist().commits ?? []}>
-                {(c) => <CommitRow full={props.full} commit={c} />}
+                {(c) => <CommitRow full={props.full} commit={c} client={props.repoClient} />}
               </For>
               <Show when={(hist().commits ?? []).length === 0}>
                 <p class="muted p-3">no commits in this window.</p>

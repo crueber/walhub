@@ -425,37 +425,37 @@ func TestCoverLoadPaths(t *testing.T) {
 
 func TestCoverRequiredChecksGate(t *testing.T) {
 	e := newTestEnv()
-	// A rule carrying a required-checks gate fails closed (Wave 05
-	// pending) — the raw scan runs before the strict parse, so the gate
-	// verdict wins over the parse verdict, and both fail closed.
-	putPolicy(t, e, `{"version":1,"rules":[{"name":"gated","match":{"refs":["refs/heads/main"]},"effect":{"protect":{"restricts":["update"],"required_checks":["ci"]}}}]}`)
-	if err := e.svc.checkRequiredChecks(ctx(), "o", "r"); !errors.Is(err, ErrConflict) {
+	// A rule carrying a require_checks gate with no checks backend fails
+	// closed (05 §6) — the strict parse now accepts the key, the gate
+	// probe names the rule, and the push half still enforces restricts.
+	putPolicy(t, e, `{"version":1,"rules":[{"name":"gated","match":{"refs":["refs/heads/main"]},"effect":{"protect":{"restricts":["update"],"require_checks":["ci"]}}}]}`)
+	if err := e.svc.checkRequiredChecksGate(ctx(), "o", "r", strings.Repeat("a", 40), "refs/heads/main", "m"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("gate: %v", err)
-	} else if !strings.Contains(err.Error(), "gated") {
-		t.Fatalf("gate must name the rule: %v", err)
+	} else if !strings.Contains(err.Error(), "gated") || !strings.Contains(err.Error(), "no checks backend") {
+		t.Fatalf("gate must name the rule and the missing backend: %v", err)
 	}
-	if err := e.svc.checkProtectedRef(ctx(), "o", "r", "m", "refs/heads/main", "update"); !errors.Is(err, ErrConflict) {
+	if err := e.svc.checkProtectedRef(ctx(), "o", "r", "m", "refs/heads/main", "update"); err == nil || !strings.Contains(err.Error(), "gated") {
 		t.Fatalf("protected: %v", err)
 	}
-	// Unnamed rules report as unnamed; bad effect bodies are skipped.
-	putPolicy(t, e, `{"version":1,"rules":[{"match":{},"effect":{"protect":"oops"}}]}`)
-	if err := e.svc.checkRequiredChecks(ctx(), "o", "r"); err != nil {
-		t.Fatalf("bad body skipped: %v", err)
+	// A bypassed rule contributes nothing — the queue merges fine with no
+	// backend (03 §5 step 4: bypass lists apply unchanged).
+	putPolicy(t, e, `{"version":1,"rules":[{"name":"gated","match":{"refs":["refs/heads/main"]},"effect":{"protect":{"restricts":["update"],"require_checks":["ci"],"bypass":["m"]}}}]}`)
+	if err := e.svc.checkRequiredChecksGate(ctx(), "o", "r", strings.Repeat("a", 40), "refs/heads/main", "m"); err != nil {
+		t.Fatalf("bypassed: %v", err)
 	}
-	putPolicy(t, e, `{"version":1,"rules":[{"effect":{"protect":{"REQUIRED-CHECKS":[]}}}]}`)
-	if err := e.svc.checkRequiredChecks(ctx(), "o", "r"); !errors.Is(err, ErrConflict) {
-		t.Fatalf("unnamed gate: %v", err)
-	} else if !strings.Contains(err.Error(), "unnamed") {
-		t.Fatalf("unnamed rule: %v", err)
+	// Plain protect rules merge fine with no backend.
+	putPolicy(t, e, `{"version":1,"rules":[{"name":"plain","match":{"refs":["refs/heads/main"]},"effect":{"protect":{"restricts":["update"]}}}]}`)
+	if err := e.svc.checkRequiredChecksGate(ctx(), "o", "r", strings.Repeat("a", 40), "refs/heads/main", "m"); err != nil {
+		t.Fatalf("plain: %v", err)
 	}
 	// Missing policy ⇒ no gate; unparseable ⇒ no gate verdict here
 	// (loadPolicy fails closed next).
 	_ = e.store.Delete(ctx(), PolicyKey("o", "r"), "")
-	if err := e.svc.checkRequiredChecks(ctx(), "o", "r"); err != nil {
+	if err := e.svc.checkRequiredChecksGate(ctx(), "o", "r", strings.Repeat("a", 40), "refs/heads/main", "m"); err != nil {
 		t.Fatalf("absent: %v", err)
 	}
 	putPolicy(t, e, `{oops`)
-	if err := e.svc.checkRequiredChecks(ctx(), "o", "r"); err != nil {
+	if err := e.svc.checkRequiredChecksGate(ctx(), "o", "r", strings.Repeat("a", 40), "refs/heads/main", "m"); err != nil {
 		t.Fatalf("corrupt: %v", err)
 	}
 }

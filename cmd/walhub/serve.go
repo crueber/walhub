@@ -22,6 +22,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"git.packden.us/crueber/walhub/internal/api"
+	"git.packden.us/crueber/walhub/internal/checks"
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/events"
 	"git.packden.us/crueber/walhub/internal/git"
@@ -105,6 +106,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var pullsSvc *pulls.Service
 	var pullsHandler *pulls.Handler
 	var reviewHandler *review.Handler
+	var checksHandler *checks.Handler
 	if !setupOnly {
 		wal.SetWarnLogger(func(format string, args ...any) { log.Warn(fmt.Sprintf(format, args...)) })
 		reg = wal.NewRegistry(ctx, st, cfg)
@@ -146,6 +148,16 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// push-time half (policy.RequiredReviewsEffect) enforces at
 		// receive-pack with no wiring. Registers NO task kinds.
 		_, reviewHandler = newReviewService(st, ident, pullsSvc)
+		// Wave 05 checks (docs/features/05): commit statuses (Create-
+		// then-CAS per (sha, context)), the CAS'd checks/index.json
+		// projection with inline compaction, wct_ CI tokens (Seam 2
+		// shape → unprivileged ci:<id> principal, capability checked
+		// handler-side), the combined worst-of view, and the
+		// require_checks merge-time half (consulted by the pull-merge
+		// task through pulls' ChecksGate seam — the merge logic is NOT
+		// forked). The push-time half needs no wiring: protect ignores
+		// require_checks on the push path by construction.
+		_, checksHandler = newChecksService(st, ident, pullsSvc, reg, cfg.Git.Binary)
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --
@@ -211,6 +223,9 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	}
 	if reviewHandler != nil {
 		chainReview(srv, reviewHandler)
+	}
+	if checksHandler != nil {
+		chainChecks(srv, checksHandler)
 	}
 
 	// the SSH key registry backs both the sshd auth lookup and the

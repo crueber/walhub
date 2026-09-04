@@ -7,6 +7,7 @@ import { A } from "@solidjs/router";
 import { useData, SHA_TTL } from "../lib/data.js";
 import { parsePatchFiles, splitRows, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
 import { fmtDate, useRepo } from "./Repo.jsx";
+import { CheckPill, ContextRows } from "./Checks.jsx";
 
 const fileAnchor = (path) => `f-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 const lineClass = (t) => (t === "+" ? "diff-add" : t === "-" ? "diff-del" : "");
@@ -168,6 +169,23 @@ function TrailerTable(props) {
   );
 }
 
+function CheckDetails(props) {
+  const [getOpen, setOpen] = createSignal(false);
+  return (
+    <div class="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800/60">
+      <button type="button" class="flex items-center gap-2 text-sm" onClick={() => setOpen(!getOpen())} aria-label="Toggle check details">
+        <CheckPill full={props.full} sha={props.sha} client={props.client} verbose />
+        <span class="link text-xs">{getOpen() ? "hide checks" : "checks"}</span>
+      </button>
+      <Show when={getOpen()}>
+        <div class="mt-2">
+          <ContextRows full={props.full} sha={props.sha} client={props.client} />
+        </div>
+      </Show>
+    </div>
+  );
+}
+
 function CommitDetail(props) {
   const [getCommit] = useData(
     `commit:${props.full}:${props.sha}`,
@@ -247,6 +265,7 @@ function CommitDetail(props) {
                   <span class="text-red-600 dark:text-red-400">{`−${totalDel()}`}</span>
                   {` across ${d().stats.length} file${d().stats.length === 1 ? "" : "s"} (server stats)`}
                 </p>
+                <CheckDetails full={props.full} sha={String(c().sha ?? props.sha)} client={props.repoClient} />
               </section>
 
               <Show when={d().files.length > 0}>

@@ -146,12 +146,21 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 	rec.notice("mergeability %s (base %s, head %s)", m.State, shortSHA(baseLive), shortSHA(headLive))
 	// Step 4: protected-ref gate — explicitly evaluate policy.json for
 	// (merger, base.ref, update). The required-checks gate is consulted
-	// when the rule carries it (pending Wave 05: fails closed only if a
-	// rule actually carries the gate).
+	// next, when a rule carries it (05 §6 merge-time half).
 	if gerr := s.checkProtectedRef(ctx, owner, repo, who, pr.Base.Ref, "update"); gerr != nil {
 		rec.notice("protected-ref gate: %s", gerr.Error())
 		return nil, fmt.Errorf("%w: %v", ErrConflict, gerr)
 	}
+	// Required-checks gate (05 §6 merge-time half): the checks-provided
+	// gate function with the LIVE head sha (it reads the stored combined
+	// view — it never trusts a cache). A failed gate narrates the
+	// shortfall (law 7) and the merge ref is not published. Nil Checks
+	// fails closed only when a rule actually carries the gate.
+	if gerr := s.checkRequiredChecksGate(ctx, owner, repo, headLive, pr.Base.Ref, who); gerr != nil {
+		rec.notice("required-checks gate: %s", gerr.Error())
+		return nil, fmt.Errorf("%w: %v", ErrConflict, gerr)
+	}
+	rec.notice("required-checks gate: satisfied")
 	// Required-reviews gate (04 §6 merge-time half): the review-provided
 	// gate function with the LIVE head sha (it re-derives by event scan —
 	// it never trusts review_summary). A failed gate narrates the

@@ -35,6 +35,23 @@ type AuthService struct {
 
 	static map[string]auth.Principal // resolved token → principal (token_env resolved at startup)
 	jwks   *JWKS
+
+	// ExtraCredential is the Seam 2 hook for compiled-in credential
+	// shapes the core chain does not know (14_extensibility.md §14.4;
+	// first consumer: internal/checks' wct_ CI tokens — see
+	// docs/features/05_checks_statuses.md §3). It sees the raw bearer
+	// token (or Basic password) AFTER static tokens and reports
+	// (principal, nil, true) when it claims the credential,
+	// (zero, authErr, true) when it claims-but-rejects it (a real
+	// 401/403/503 from the hook wins — the credential is the hook's to
+	// judge), or (_, _, false) to fall through to the mode's normal
+	// resolution. Claimed prefixes MUST NOT overlap any core prefix
+	// (notably wgt_) — composition validates this at startup and panics
+	// on overlap. The hook resolves the credential SHAPE only (e.g. an
+	// unprivileged ci:<id> principal); scoped capability checks stay
+	// handler-side per repo, where the credential's home object lives.
+	// Nil = no extra shapes (legacy behavior, unchanged).
+	ExtraCredential func(token string) (auth.Principal, *auth.AuthError, bool)
 }
 
 func NewAuthService(a *config.Auth, now func() time.Time) *AuthService {
@@ -126,6 +143,9 @@ func (s *AuthService) authToken(r *http.Request) (auth.Principal, *auth.AuthErro
 	if p, ok := s.static[tok]; ok {
 		return p, nil
 	}
+	if p, aerr, claimed := s.extra(tok); claimed {
+		return p, aerr
+	}
 	_ = basic
 	return auth.Principal{}, &auth.AuthError{Kind: auth.ErrInvalid, Why: "invalid token"}
 }
@@ -141,6 +161,9 @@ func (s *AuthService) authOIDC(r *http.Request) (auth.Principal, *auth.AuthError
 		// Static tokens work in oidc mode.
 		if p, ok := s.static[tok]; ok {
 			return p, nil
+		}
+		if p, aerr, claimed := s.extra(tok); claimed {
+			return p, aerr
 		}
 		if strings.HasPrefix(tok, "wgt_") {
 			return s.wgtPrincipal(tok)
@@ -229,6 +252,15 @@ func (s *AuthService) principalFromEmail(email string) (auth.Principal, *auth.Au
 		}
 	}
 	return auth.Principal{Name: email, Write: write, Admin: admin}, nil
+}
+
+// extra consults the Seam 2 ExtraCredential hook (nil-safe): (zero,
+// nil, false) when no hook claims the token.
+func (s *AuthService) extra(tok string) (auth.Principal, *auth.AuthError, bool) {
+	if s.ExtraCredential == nil || tok == "" {
+		return auth.Principal{}, nil, false
+	}
+	return s.ExtraCredential(tok)
 }
 
 // requireRead/Write/Admin are the §8.3 checks.

@@ -1,9 +1,11 @@
-// web/src/pages/Settings.jsx — repo settings, three sub-tabs (§2.9):
+// web/src/pages/Settings.jsx — repo settings, five sub-tabs (§2.9 + 05 §9):
 // 1. Scheduled tasks — strategy table + placement/host facts + upstream follow status.
 // 2. Push policy — textarea editor, 400 ms debounced validate, dry-run vs last N
 //    pushes, save/discard/copy.
 // 3. Effective config & history — TOML editor with debounced validate, publish with
 //    a message, clear, per-revision history with "Revert to this" + line diff.
+// 4. Access — visibility + role bindings (Access.jsx).
+// 5. CI tokens — wct_ token mint/list/revoke (05 §3, admin-only).
 
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useData, reportError, asList } from "../lib/data.js";
@@ -42,7 +44,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-const TABS = ["Scheduled tasks", "Push policy", "Effective config & history", "Access"];
+const TABS = ["Scheduled tasks", "Push policy", "Effective config & history", "Access", "CI tokens"];
 
 // --- tab 1: scheduled tasks ------------------------------------------------------
 
@@ -360,6 +362,125 @@ function ConfigTab(props) {
   );
 }
 
+// --- tab 5: CI tokens (05 §9, admin-only) ---------------------------------------------
+
+function CITokensTab(props) {
+  const key = () => `ci-tokens:${props.ctx.full}`;
+  const [getTokens, setTokens] = createSignal(null);
+  const [getName, setName] = createSignal("");
+  const [getSecret, setSecret] = createSignal("");
+  const [getNote, setNote] = createSignal("");
+
+  const load = async () => {
+    try {
+      const res = await props.repo.ciTokens.list();
+      setTokens(res.tokens ?? []);
+      setNote("");
+    } catch (e) { setNote(String(e.message ?? e)); }
+  };
+  load();
+
+  const create = async (e) => {
+    e.preventDefault();
+    const name = getName().trim();
+    if (!name) return;
+    try {
+      const res = await props.repo.ciTokens.create({ name });
+      setSecret(res.token ?? "");
+      setName("");
+      setNote(`created ${res.id} — copy the secret now, it is shown once`);
+      load();
+    } catch (err) { setNote(String(err.message ?? err)); }
+  };
+
+  const revoke = async (id) => {
+    try {
+      await props.repo.ciTokens.revoke(id);
+      if (getSecret()) setSecret("");
+      load();
+    } catch (err) { setNote(String(err.message ?? err)); }
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(getSecret());
+      setNote("secret copied");
+    } catch {
+      setNote("copy failed — select the secret manually");
+    }
+  };
+
+  return (
+    <>
+      <section class="card p-4">
+        <h3 class="mb-2 font-semibold">CI tokens</h3>
+        <p class="muted mb-3 text-sm">
+          External CI reports statuses with a <code class="font-mono">wct_</code> token.
+          Tokens grant <code class="font-mono">checks:write</code> on this repo only —
+          never push, merge, or admin.
+        </p>
+        <form class="flex flex-wrap items-center gap-2" onSubmit={create}>
+          <input
+            class="input w-64"
+            placeholder="token name (e.g. woodpecker)"
+            value={getName()}
+            onInput={(e) => setName(e.target.value)}
+            aria-label="Token name"
+          />
+          <button type="submit" class="btn btn-primary px-3 py-1">
+            create token
+          </button>
+        </form>
+        <Show when={getSecret()}>
+          <div class="mt-3 rounded border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950">
+            <p class="mb-1 text-sm font-semibold text-amber-800 dark:text-amber-200">Copy now — shown once:</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <code class="break-all font-mono text-xs">{getSecret()}</code>
+              <button type="button" class="pill cursor-pointer select-none" onClick={copy}>
+                copy
+              </button>
+            </div>
+          </div>
+        </Show>
+        <Show when={getNote()}>
+          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{getNote()}</p>
+        </Show>
+      </section>
+      <section class="card mt-4 p-4">
+        <h3 class="mb-2 font-semibold">Tokens</h3>
+        <Show when={getTokens()} fallback={<p class="muted">loading…</p>}>
+          <table class="data-table">
+            <thead>
+              <tr><th>id</th><th>name</th><th>scopes</th><th>created by</th><th>created</th><th>status</th><th></th></tr>
+            </thead>
+            <tbody>
+              <For each={getTokens() ?? []} fallback={<tr><td colspan={7} class="muted">no tokens</td></tr>}>
+                {(t) => (
+                  <tr>
+                    <td class="font-mono text-xs">{t.id}</td>
+                    <td>{t.name}</td>
+                    <td class="text-xs">{(t.scopes ?? []).join(", ")}</td>
+                    <td class="text-xs">{t.created_by}</td>
+                    <td class="text-xs">{fmtDate(t.created_at)}</td>
+                    <td class="text-xs">{t.revoked_at ? `revoked ${fmtDate(t.revoked_at)}` : "active"}</td>
+                    <td>
+                      <Show when={!t.revoked_at}>
+                        <button type="button" class="link text-xs" onClick={() => revoke(t.id)}>
+                          revoke
+                        </button>
+                      </Show>
+                    </td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Show>
+      </section>
+    </>
+  );
+}
+
 // --- shell ---------------------------------------------------------------------------
 
 export default function Settings() {
@@ -391,6 +512,7 @@ export default function Settings() {
         <Show when={getTab() === "Push policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
         <Show when={getTab() === "Effective config & history"}><ConfigTab ctx={ctx} repo={repo} /></Show>
         <Show when={getTab() === "Access"}><AccessTab ctx={ctx} repo={repo} /></Show>
+        <Show when={getTab() === "CI tokens"}><CITokensTab ctx={ctx} repo={repo} /></Show>
       </div>
     </div>
   );

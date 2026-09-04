@@ -2,7 +2,6 @@ package pulls
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -136,9 +135,6 @@ func (s *Service) checkProtectedRef(ctx context.Context, owner, repo string, pri
 		// are never managed refs — reaching here is a bug signal.
 		return fmt.Errorf("%w: refused to publish managed ref %q through the policy path", ErrForbidden, ref)
 	}
-	if gerr := s.checkRequiredChecks(ctx, owner, repo); gerr != nil {
-		return gerr
-	}
 	doc, err := s.loadPolicy(ctx, owner, repo)
 	if err != nil {
 		return err
@@ -147,55 +143,11 @@ func (s *Service) checkProtectedRef(ctx context.Context, owner, repo string, pri
 	// is server-side, NOT a receive-pack push, so observation effects with
 	// their own gates (required-reviews — consulted separately by runMerge
 	// through the ReviewGate seam) must not deny here. Required-checks
-	// runs through its own pre-scan above (pending Wave 05).
+	// runs through its own gate next (checkRequiredChecksGate in
+	// checks.go — 05 §6 merge-time half, never the push path).
 	v := policy.EvaluateProtect(ctx, doc, policy.Request{Principal: principal, Ref: ref, Op: op})
 	if !v.Allow {
 		return fmt.Errorf("rejected by rule '%s'", v.Rule)
-	}
-	return nil
-}
-
-// checkRequiredChecks consults the required-checks gate (doc 05) when a
-// rule carries it. It runs BEFORE the strict policy parse, scanning the raw
-// policy.json structurally: internal/checks does not exist yet (Wave 05),
-// so a rule that actually carries the gate fails closed here ("no checks
-// backend") rather than dying opaquely at parse (protect is strict:
-// required_checks would be an unknown key) or silently allowing. Plain
-// protect rules (the only kind this tree can parse) never trigger it —
-// evaluation is the protect rules above, and the gate is recorded as
-// pending Wave 05. When 05 lands, this is where the head-sha check verdict
-// is consulted instead, failing closed with the named checks.
-func (s *Service) checkRequiredChecks(ctx context.Context, owner, repo string) error {
-	raw, _, err := s.getJSON(ctx, PolicyKey(owner, repo))
-	if err != nil || raw == nil {
-		return err
-	}
-	var doc struct {
-		Rules []struct {
-			Name   string                     `json:"name"`
-			Effect map[string]json.RawMessage `json:"effect"`
-		} `json:"rules"`
-	}
-	if jerr := json.Unmarshal(raw, &doc); jerr != nil {
-		return nil // unparseable ⇒ loadPolicy fails closed next; no gate verdict here
-	}
-	for _, r := range doc.Rules {
-		for _, body := range r.Effect {
-			var m map[string]any
-			if jerr := json.Unmarshal(body, &m); jerr != nil {
-				continue
-			}
-			for k := range m {
-				lk := strings.ToLower(k)
-				if strings.Contains(lk, "required") && strings.Contains(lk, "check") {
-					name := r.Name
-					if name == "" {
-						name = "unnamed"
-					}
-					return fmt.Errorf("%w: rule '%s' requires checks: no checks backend (Wave 05 pending)", ErrConflict, name)
-				}
-			}
-		}
 	}
 	return nil
 }
