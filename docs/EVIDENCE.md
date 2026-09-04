@@ -33,6 +33,7 @@ requested or when a review questions a hot path).
 | E6 | 2026-09-04 | Check report path + combined view + required-checks gate (`internal/checks`) | What does one CI report cost, what does the combined view cost, and why can't either explode as context count grows? | First report 2 GETs + 2 PUTs + 1 LIST; re-report 4 GETs + 3 PUTs + 1 LIST (1 context); combined 1 LIST + 1 GET per context, 0 PUTs; gate = policy GET + 1 LIST + 1 GET per context under a 15 s deadline. Cannot explode: every scan is prefix-bounded to one sha, reports are CI-rate, no git on any read path, index writes are best-effort. |
 | E7 | 2026-09-04 | Notification fan-out + webhook delivery loop (`internal/notify`) | What is the write amplification of one emission, what does the unread dedup save on replay, and what does a delivery pass cost? | One emission = 2 GETs + 2 PUTs per recipient + 3 GETs + 2 PUTs fixed (thread, watchers, seq reservation, activity); deduped replay writes flat (2 PUTs, zero notification/index writes at any recipient count; probes are 3+n GETs); delivery pass = 1 LIST + ~3 GETs + 1 PUT per event + 1 cursor CAS, idle pass writes nothing. Cannot explode: 100-recipient sync cap with task fallback, 5 s budget, per-hook cursors. |
 | E8 | 2026-09-04 | Release latest-pointer, autodraft, asset streaming (`internal/releases`, `internal/social`) | Is the latest badge O(1), what does a publish/list/autodraft cost, is the asset upload memory-bounded, and are star/fork writes constant? | Latest hot read flat (2 GETs at 5 and 200 releases); publish 3 GETs + 2 PUTs; list 1 LIST + 1 GET per release; autodraft 1 probe per candidate (≤100) with zero LIST; 1 MiB upload 2 GETs + 2 PUTs with an empty spool dir and zero-write 413s; star 2+2, fork bump 1+1. Cannot explode: pointer monotonicity skips stale publishers, scans/lists are prefix-bounded and capped, git probes run under the package pool. |
+| E9 | 2026-09-04 | Collab stream fan-out + invalidation coalescing (`internal/notify`, `web/src/lib`) | What does one repo-frame publish cost vs subscriber count, what survives a stalled subscriber, and how many refetches does a 30-check burst cause? | Publish ~0.6 µs (1 sub) → ~10 µs (128 subs), zero store round-trips; stalled subscriber sheds (channel newest-16, ring newest-64); 30-frame burst → 1–2 refetches per key (15–30× fewer than per-frame); warm re-attach → 0 refetches; idle page → 0 polls. Cannot explode: drop-oldest bus, bounded ring, per-tick key-set flush + per-key single-flight. |
 
 ---
 
@@ -620,3 +621,52 @@ redesign required.
 linear with slope ≤ 2 per item and zero LIST on every path except
 the paged list (1 LIST by design); uploads are streaming with a
 hard cap; social writes are constant. No redesign required.
+
+---
+
+## E9 — Collab stream fan-out + invalidation coalescing (2026-09-04)
+
+**Area:** the ONE repo collaboration stream (08 §4): `internal/notify`
+repoBus (`stream.go`, `collab.go`) + the data-layer invalidation path
+(`web/src/lib/data.js`, `web/src/lib/collab.js`). Spec:
+`docs/features/08_ui_sdk.md` §§4/6.
+
+**Question:** what does one repo-frame publish cost as subscribers grow,
+what survives a stalled page, and how many client refetches does a
+30-check CI burst cause (vs naive per-frame invalidation)? What does a
+warm revisit cost (cache-hit shape)?
+
+**Method.** Harnesses (all real code paths, no mocks for the layer under
+test):
+- `internal/notify/collab_evidence_test.go` (`TestEvidenceCollabFanout`,
+  `TestEvidenceCollabDropOldest`;
+  `go test ./internal/notify/ -run TestEvidenceCollab -v`): 2000
+  `PublishFrame` calls over the **memory store** with 1 vs 128 live
+  subscribers; 200 publishes against a never-read subscriber.
+- `web/test/evid/collab-burst.mjs`
+  (`node --conditions=browser web/test/evid/collab-burst.mjs`;
+  needs `web/node_modules`): the real `useData` + `invalidateCollab` +
+  `scheduleInvalidate` with counting fetch fns — warm revisit, then 30
+  synthetic `check` frames in one tick. (Plain `node --test` resolves
+  SolidJS to its SSR build where effects no-op, so this lives outside
+  `make test-web`, which stays install-free per 12 §5.)
+- Live-browser corroboration: headless Chrome against the compose stack —
+  30 real `POST …/checks/statuses/{sha}` calls while the checks page
+  holds the stream open, counting `GET …/api/checks*` refetches.
+
+**Results.**
+
+| Population | Publish cost | Client refetches |
+|---|---|---|
+| 1 subscriber, 2000 frames | 646 ns/publish | — |
+| 128 subscribers, 2000 frames | 10.5 µs/publish (linear in subs, zero store round-trips — the bus never touches the store) | — |
+| 200 publishes, 1 stalled subscriber | 110 µs total (emission never waits) | channel holds newest 16, ring holds newest 64 (`RepoRing`), newest num 199 |
+| 30-frame check burst (harness) | — | 2 refetches per key (`checks`, `statuses`, index) — 15× fewer than per-frame |
+| 30-report CI burst (live browser, headless Chrome vs compose stack) | — | 1–2 `GET …/api/checks?n=50` refetches across runs; 0 API GETs in 5 s idle (no polling loops) |
+| warm revisit inside TTL (harness) | — | 0 refetches |
+
+**Verdict.** Fan-out is linear in subscribers at ~80 ns/sub with zero
+store round-trips; stalled pages shed (never stall emission, never grow
+past 16 + 64 frames); bursts collapse to ~2 refetches per key via the
+per-tick key-set flush + per-key single-flight; warm revisits transfer
+nothing. Cannot explode: drop-oldest bus, bounded ring, bounded flush.

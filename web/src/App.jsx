@@ -6,7 +6,8 @@ import { createEffect, createSignal, Show, For } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { usePending, trayErrors, dismissError } from "./lib/data.js";
 import { theme, toggleTheme } from "./lib/store.js";
-import { unreadCount, refreshUnread } from "./pages/Notifications.jsx";
+import { refreshUnread } from "./pages/Notifications.jsx";
+import NotificationTray from "./components/NotificationTray.jsx";
 
 export default function App(props) {
   const location = useLocation();
@@ -56,19 +57,7 @@ export default function App(props) {
             <A href="/setup">setup</A>
           </nav>
           <div class="ml-auto flex items-center gap-2">
-            <A
-              href="/notifications"
-              class="btn relative px-2 py-1"
-              title="Notifications"
-              aria-label={unreadCount() ? `${unreadCount()} unread notifications` : "Notifications"}
-            >
-              <span aria-hidden="true">🔔</span>
-              <Show when={(unreadCount() ?? 0) > 0}>
-                <span class="absolute -right-1 -top-1 min-w-5 rounded-full bg-emerald-500 px-1 text-center text-[11px] font-semibold leading-5 text-white">
-                  {(unreadCount() ?? 0) > 99 ? "99+" : unreadCount()}
-                </span>
-              </Show>
-            </A>
+            <NotificationTray />
             <button
               type="button"
               class="btn px-2 py-1"

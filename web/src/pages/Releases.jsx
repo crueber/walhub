@@ -1,13 +1,15 @@
 // web/src/pages/Releases.jsx — route "/:owner/:name/releases" (07 §8):
 // release cards (tag, name, draft/prerelease badges, date, asset count)
-// plus the repo "Latest" badge and the star toggle. `release` SSE frames
-// refresh the list once 08 wires the collaboration stream; until then this
-// page refetches on navigation and on demand (no polling loops).
+// plus the repo "Latest" badge and the star toggle. `release` frames ride
+// the ONE repo collaboration stream (08 §4) and invalidate the list +
+// latest coalesced; the page refetches on navigation and on demand
+// (no polling loops).
 
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { useCollabStream } from "../components/collab.jsx";
 
 export function ReleaseBadges(props) {
   return (
@@ -37,6 +39,9 @@ export default function Releases() {
     invalidate(key());
     invalidate(`latest:${ctx.full}`);
   };
+
+  // Live list: `release` frames invalidate the list + latest (coalesced).
+  useCollabStream(() => ctx.full, ctx.repoClient, ["release"]);
 
   return (
     <div class="grid gap-6 lg:grid-cols-[1fr_320px]">

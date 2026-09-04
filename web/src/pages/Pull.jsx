@@ -1,22 +1,24 @@
 // web/src/pages/Pull.jsx — route "/:owner/:name/pull/:num" (03 §9 + 04 §8):
-// the PR conversation (timeline, comment box, merge box with strategy
-// select, mergeable state, and task progress) plus the code-review surface:
-// review summary bar, reviews list, reviewers panel, finish-review modal,
-// and the diff review surface (line anchors via lib/diff.js
-// anchorContextSha — the ONLY §4 hash implementation client-side).
-// `pull` frames refresh the header; the merge box polls the pull-merge
-// task record while it runs. Review/thread mutations reload via
-// invalidate (no polling loops, P7); the `review`/`thread` SSE frames ride
-// the collaboration stream once 06 lands it (the server already
-// publishes them — see internal/review).
+// the PR conversation (ThreadTimeline, CommentComposer, MergeBox with the
+// 08 §2 state machine + task attach + double-submit guard) plus the
+// code-review surface: review summary bar, reviews list, reviewers panel,
+// finish-review modal, and the diff review surface (line anchors via
+// lib/diff.js anchorContextSha — the ONLY §4 hash implementation
+// client-side). `pull`/`review`/`thread`/`check` frames ride the ONE repo
+// collaboration stream (08 §4) and invalidate coalesced keys; the merge
+// box recomputes on every header fetch.
 
 import { createSignal, For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
-import { MentionDatalist } from "./Mentions.jsx";
 import { CheckPill, ContextRows } from "./Checks.jsx";
 import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
+import ThreadTimeline from "../components/ThreadTimeline.jsx";
+import CommentComposer from "../components/CommentComposer.jsx";
+import MergeBox from "../components/MergeBox.jsx";
+import { useCollabStream } from "../components/collab.jsx";
+import { useRole, roleAtLeast } from "../components/perms.jsx";
 
 function eventText(ev) {
   switch (ev.type) {
@@ -196,13 +198,20 @@ function ReviewersPanel(props) {
   return (
     <div class="card" aria-label="Reviewers">
       <h2 class="mb-2 text-sm font-semibold">Reviewers</h2>
+      <Show when={props.canEdit} fallback={
+        <p class="text-xs text-zinc-500 dark:text-zinc-400">requesting reviewers needs the write role</p>
+      }>
       <div class="relative">
         <input
           class="input w-full"
           placeholder="request a reviewer…"
           value={getQuery()}
           onInput={(e) => search(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setOpen(false);
+          }}
           aria-label="Request a reviewer"
+          aria-expanded={getOpen()}
         />
         <Show when={getOpen() && getOptions().length > 0}>
           <ul class="ref-list absolute z-10 max-h-48 w-full overflow-y-auto">
@@ -223,13 +232,16 @@ function ReviewersPanel(props) {
           {(who) => (
             <li class="pill">
               {who}
-              <button type="button" class="link ml-1" onClick={() => remove(who)} aria-label={`Remove ${who}`}>
-                ×
-              </button>
+              <Show when={props.canEdit}>
+                <button type="button" class="link ml-1" onClick={() => remove(who)} aria-label={`Remove ${who}`}>
+                  ×
+                </button>
+              </Show>
             </li>
           )}
         </For>
       </ul>
+      </Show>
     </div>
   );
 }
@@ -545,10 +557,12 @@ export default function Pull() {
     const patch = typeof res === "string" ? res : res.patch ?? res.diff ?? "";
     return parsePatchFiles(patch);
   });
-  const [getBody, setBody] = createSignal("");
-  const [getBusy, setBusy] = createSignal(false);
-  const [getStrategy, setStrategy] = createSignal("merge");
-  const [getTask, setTask] = createSignal(null);
+  const { role } = useRole(ctx.full, ctx.repoClient);
+  const canComment = () => role() !== null;
+  const canReview = () => roleAtLeast(role(), "write");
+  const canResolve = () => roleAtLeast(role(), "triage");
+  const canDismiss = () => roleAtLeast(role(), "maintain");
+  const canUpdateBranch = () => roleAtLeast(role(), "write");
   const [getPending, setPending] = createSignal([]);
   const [getFinishing, setFinishing] = createSignal(false);
 
@@ -605,50 +619,15 @@ export default function Pull() {
   const stage = (draft) => setPending((list) => [...list, draft]);
   const unstage = (i) => setPending((list) => list.filter((_, j) => j !== i));
 
-  const comment = async (e) => {
-    e.preventDefault();
-    if (!getBody().trim()) return;
-    setBusy(true);
-    try {
-      await ctx.repoClient.pulls.comment(num(), getBody().trim());
-      setBody("");
-      reload();
-    } catch (err) {
-      reportError(err);
-    } finally {
-      setBusy(false);
-    }
+  const comment = async (body) => {
+    await ctx.repoClient.pulls.comment(num(), body);
+    reload();
   };
 
-  const pollTask = async () => {
-    for (let i = 0; i < 60; i++) {
-      try {
-        const { task } = await ctx.repoClient.pulls.mergeTask(num());
-        setTask(task);
-        if (task?.state !== "running") {
-          reload();
-          return;
-        }
-      } catch {
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  };
-
-  const merge = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      const { task } = await ctx.repoClient.pulls.merge(num(), { strategy: getStrategy() });
-      setTask(task);
-      pollTask();
-    } catch (err) {
-      reportError(err);
-    } finally {
-      setBusy(false);
-    }
-  };
+  // The ONE repo collaboration stream (08 §4): pull/review/thread/check
+  // frames for this PR invalidate coalesced keys; the header refetch
+  // recomputes the MergeBox machine.
+  useCollabStream(() => ctx.full, ctx.repoClient, ["pull", "review", "thread", "check"], (frame) => Number(frame.num) === Number(num()));
 
   return (
     <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -662,57 +641,43 @@ export default function Pull() {
         <div class="mb-4">
           <ReviewSummaryBar summary={summary()} head={head()} />
         </div>
-        <ul class="card-list">
-          <For each={getView()?.events ?? []} fallback={<li class="card">No events yet.</li>}>
-            {(ev) => (
-              <li class="card">
-                <div class="card-meta">
-                  <span>{ev.actor}</span>
-                  <span>{fmtDate(ev.at)}</span>
-                </div>
-                <Show when={eventText(ev)} fallback={<p class="whitespace-pre-wrap">{ev.body}</p>}>
-                  <p class="text-sm italic">{eventText(ev)}</p>
-                </Show>
-              </li>
-            )}
-          </For>
-        </ul>
-        <form class="card mt-3" onSubmit={comment}>
-          <label class="field">
-            <span>Comment</span>
-            <textarea value={getBody()} onInput={(e) => setBody(e.target.value)} rows="3" list="mention-pull-comment" />
-            <MentionDatalist id="mention-pull-comment" names={thread()?.participants} />
-          </label>
-          <button type="submit" class="btn btn-primary mt-2 px-3 py-1" disabled={getBusy()}>
-            {getBusy() ? "posting…" : "comment"}
-          </button>
-        </form>
+        <ThreadTimeline events={getView()?.events ?? []} textFor={eventText} fmtDate={fmtDate} />
+        <Show when={canComment()}>
+          <CommentComposer
+            onSubmit={comment}
+            errorKey="pull-comment"
+            mentionId="mention-pull-comment"
+            mentionNames={thread()?.participants}
+          />
+        </Show>
         <div class="mt-4 space-y-4">
           <ReviewsList
             num={num()}
             client={ctx.repoClient}
             reviews={getReviews()?.reviews}
             head={head()}
-            canDismiss
+            canDismiss={canDismiss()}
             reload={reloadReview}
           />
-          <Show when={getFinishing()} fallback={
-            <button type="button" class="btn px-3 py-1" onClick={() => setFinishing(true)}>
-              finish review{(getPending().length ? ` (${getPending().length} staged)` : "")}
-            </button>
-          }>
-            <FinishReview
-              num={num()}
-              client={ctx.repoClient}
-              head={head()}
-              pending={getPending()}
-              onUnstage={unstage}
-              onDone={() => {
-                setFinishing(false);
-                setPending([]);
-                reloadReview();
-              }}
-            />
+          <Show when={canReview()}>
+            <Show when={getFinishing()} fallback={
+              <button type="button" class="btn px-3 py-1" onClick={() => setFinishing(true)}>
+                finish review{(getPending().length ? ` (${getPending().length} staged)` : "")}
+              </button>
+            }>
+              <FinishReview
+                num={num()}
+                client={ctx.repoClient}
+                head={head()}
+                pending={getPending()}
+                onUnstage={unstage}
+                onDone={() => {
+                  setFinishing(false);
+                  setPending([]);
+                  reloadReview();
+                }}
+              />
+            </Show>
           </Show>
           <div aria-label="Files">
             <h2 class="mb-2 text-sm font-semibold">Files ({(getDiff()?.files ?? []).length})</h2>
@@ -728,7 +693,7 @@ export default function Pull() {
                     head={head()}
                     onStage={stage}
                     reload={reloadReview}
-                    canResolve
+                    canResolve={canResolve()}
                   />
                 </div>
               )}
@@ -753,7 +718,7 @@ export default function Pull() {
             <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/files`}>files</A>
           </div>
         </div>
-        <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} />
+        <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} canEdit={canReview()} />
         <Show when={head()}>
           <div class="card" aria-label="Checks">
             <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold">
@@ -773,40 +738,19 @@ export default function Pull() {
             </Show>
           </div>
         </Show>
-        <Show when={!pr()?.merged && thread()?.state === "open"}>
-          <form class="card" onSubmit={merge}>
-            <h2 class="mb-2 text-sm font-semibold">Merge</h2>
-            <label class="field">
-              <span>Strategy</span>
-              <select value={getStrategy()} onInput={(e) => setStrategy(e.target.value)}>
-                <option value="merge">merge</option>
-                <option value="squash">squash</option>
-                <option value="rebase">rebase</option>
-              </select>
-            </label>
-            <button
-              type="submit"
-              class="btn btn-primary mt-2 px-3 py-1"
-              disabled={getBusy() || checksBlockers().length > 0}
-              title={checksBlockers().length ? `required checks not green: ${checksBlockers().join(", ")}` : "merge pull request"}
-            >
-              {getBusy() ? "merging…" : "merge pull request"}
-            </button>
-            <Show when={getTask()}>
-              <p class="mt-2 text-xs">
-                task {getTask()?.state}
-                <Show when={getTask()?.error}>: {getTask()?.error}</Show>
-              </p>
-              <ul class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                <For each={getTask()?.progress ?? []}>{(line) => <li>{line}</li>}</For>
-              </ul>
-            </Show>
-          </form>
-        </Show>
-        <Show when={pr()?.merged}>
-          <p class="card text-sm">
-            merged as {(pr()?.merge_commit_sha ?? "").slice(0, 12)} by {pr()?.merged_by}
-          </p>
+        <Show when={thread()?.state === "open" || pr()?.merged}>
+          <MergeBox
+            client={ctx.repoClient}
+            num={num()}
+            pr={pr()}
+            mergeable={mergeable()}
+            checksBlockers={checksBlockers}
+            reviewDecision={() => summary()?.decision}
+            role={role}
+            canUpdate={canUpdateBranch}
+            onSettled={() => reload()}
+            reload={() => reload()}
+          />
         </Show>
       </aside>
     </div>

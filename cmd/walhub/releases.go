@@ -61,7 +61,7 @@ func wireReleasesFanout(svc *releases.Service, notifySvc *notify.Service) {
 		notifySvc.EmitRelease(ctx, ev.Repo, ev.Tag, ev.Actor, ev.At)
 	}
 	svc.Stream = func(ctx context.Context, ev releases.StreamEvent) {
-		notifySvc.PublishStream(ev.Name, ev.Repo, ev.Action, ev.Tag, "", 0)
+		notifySvc.PublishFrame(notify.RepoFrame{Name: ev.Name, Repo: ev.Repo, Action: ev.Action, Tag: ev.Tag})
 	}
 }
 

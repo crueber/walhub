@@ -103,10 +103,13 @@ type NotifyEvent struct {
 
 // StreamEvent is the live-update contract for the repo SSE stream (§11):
 // event name "issue" (header upsert) or "issue_event" (timeline frame).
+// Seq carries the appended event's seq on issue_event frames (08 §4: the
+// timeline appends without refetch); header frames leave it zero.
 type StreamEvent struct {
 	Name     string `json:"name"`
 	Repo     string `json:"repo"`
 	IssueNum int    `json:"issue_num"`
+	Seq      int    `json:"seq,omitempty"`
 }
 
 // Emitter delivers NotifyEvents synchronously in the mutating handler

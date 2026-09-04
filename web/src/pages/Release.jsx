@@ -19,7 +19,7 @@ export default function Release() {
   const tag = () => params.tag;
   const key = () => `release:${ctx.full}:${tag()}`;
   const [getRel, setRel] = createSignal(null);
-  const [, { refetch }] = useData(key, async () => {
+  const [getView] = useData(key, async () => {
     const rel = await ctx.repoClient.releases.get(tag());
     setRel(rel);
     return rel;
@@ -138,7 +138,7 @@ export default function Release() {
                 <button type="button" class="btn danger px-2 py-1" disabled={getBusy()} onClick={remove}>
                   delete
                 </button>
-                <button type="button" class="btn ml-auto px-2 py-1" onClick={() => refetch()}>
+                <button type="button" class="btn ml-auto px-2 py-1" onClick={() => reload()}>
                   refresh
                 </button>
               </div>

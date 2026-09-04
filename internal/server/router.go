@@ -206,6 +206,25 @@ func (s *Server) repoDispatch(w http.ResponseWriter, r *http.Request) {
 		s.gated(s.ownerPage)(w, r)
 		return
 	}
+	if len(segs) == 3 && segs[1] == "teams" {
+		// 08 §1 org team page "/{owner}/teams/{slug}" → SPA shell
+		// (gated, GET/HEAD only). A repo literally named "teams" keeps
+		// its 2-segment root and every deeper git/API path; only the
+		// otherwise-meaningless 3-segment shape reroutes.
+		owner, err := decodeSeg(segs[0])
+		slug, serr := decodeSeg(segs[2])
+		if err != nil || serr != nil || owner == "" || slug == "" || !validOwner(owner) {
+			plainStatus(w, http.StatusNotFound, "not found")
+			return
+		}
+		if !isUIPageMethod(r) {
+			w.Header().Set("Allow", "GET, HEAD")
+			plainStatus(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.gated(s.ownerPage)(w, r)
+		return
+	}
 	owner, rerr := decodeSeg(segs[0])
 	repoSeg, rerr2 := decodeSeg(segs[1])
 	if rerr != nil || rerr2 != nil {

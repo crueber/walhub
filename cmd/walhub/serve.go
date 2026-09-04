@@ -189,6 +189,14 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		wireNotifyFanout(notifySvc, issuesSvc, pullsSvc, reviewSvc, checksSvc)
 		wireReleasesFanout(releasesSvc, notifySvc)
 		wireSocialForks(socialSvc, pullsSvc)
+		// Feature 08 §4: access.json CAS commits publish the "access"
+		// collab frame (nil-safe seam on the identity service; the doc
+		// stays the backfill truth).
+		if ident != nil {
+			ident.Stream = func(ctx context.Context, repo string) {
+				notifySvc.PublishFrame(notify.RepoFrame{Name: "access", Repo: repo})
+			}
+		}
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --

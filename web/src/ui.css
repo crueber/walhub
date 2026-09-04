@@ -13,6 +13,14 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+@layer base {
+  /* 08 §7 a11y floor: every keyboard-reachable control shows focus. */
+  :focus-visible {
+    outline: 2px solid var(--color-emerald-500);
+    outline-offset: 1px;
+  }
+}
+
 @layer components {
   /* Panels and chrome */
   .card { @apply rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900/70; }

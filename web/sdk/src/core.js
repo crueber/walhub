@@ -15,6 +15,7 @@ import { readSse } from "./sse.js";
 import { RepoClient } from "./repo.js";
 import { attachAdmin } from "./admin.js";
 import { attachAccess } from "./access.js";
+import { attachCollab } from "./collab.js";
 import { attachInvites, attachRepoInvites } from "./invites.js";
 import { attachIssues } from "./issues.js";
 import { attachPulls } from "./pulls.js";
@@ -194,6 +195,7 @@ export class ReposClient {
     const r = new RepoClient(this, fullName);
     attachAdmin(r);
     attachAccess(r);
+    attachCollab(r);
     attachRepoInvites(r);
     attachIssues(r);
     attachPulls(r);

@@ -1,15 +1,15 @@
-// web/src/pages/Checks.jsx — route "/:owner/:name/checks" (05 §9): the
-// checks table page (paged index, state pill per sha, expandable
-// per-context rows, filter by state/context). Rows refetch their window;
-// live `check` frames will upsert in place once the repo collaboration
-// stream lands (06/08 own that endpoint — until then this page refetches
-// like the Issues cards do). Also exports CheckPill, the shared
+// web/src/pages/Checks.jsx — route "/:owner/:name/checks" (05 §9 + 08 §1):
+// the checks table page (paged index, state pill per sha, expandable
+// per-context rows, filter by state/context). Live `check` frames ride
+// the ONE repo collaboration stream (08 §4) and invalidate the index +
+// sha views coalesced. Also exports CheckPill, the shared
 // combined-state pill used by the commit pages and the PR head box.
 
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate } from "../lib/data.js";
+import { useCollabStream } from "../components/collab.jsx";
 
 const DOT = {
   success: "bg-emerald-500",
@@ -28,19 +28,24 @@ export function stateLabel(state) {
 
 /** CheckPill fetches the combined view for one sha and renders the
  *  colored dot + label (no-store server-side, so this uses the default
- *  TTL, never SHA_TTL — sha-addressed does NOT mean immutable here). */
+ *  TTL, never SHA_TTL — sha-addressed does NOT mean immutable here).
+ *  Links to the per-sha detail page (08 §1). */
 export function CheckPill(props) {
   const key = () => `checks:${props.full}:${props.sha}`;
   const [getView] = useData(key, () => props.client.checks.combined(props.sha));
   return (
-    <span class="inline-flex items-center gap-1.5" title={`checks: ${getView()?.state ?? "…"}`}>
+    <A
+      class="inline-flex items-center gap-1.5 hover:underline"
+      href={`/${props.full}/checks/${props.sha}`}
+      title={`checks: ${getView()?.state ?? "…"}`}
+    >
       <Show when={getView()} fallback={<span class="inline-block h-2.5 w-2.5 rounded-full bg-zinc-300 dark:bg-zinc-600" aria-label="checks loading" />}>
         <span class={`inline-block h-2.5 w-2.5 rounded-full ${stateDot(getView().state)}`} aria-label={`checks ${getView().state}`} />
         <Show when={props.verbose}>
           <span class="text-xs text-zinc-500 dark:text-zinc-400">{stateLabel(getView().state)}</span>
         </Show>
       </Show>
-    </span>
+    </A>
   );
 }
 
@@ -120,6 +125,10 @@ export default function Checks() {
   const key = () => `checks:${ctx.full}:${JSON.stringify(query())}`;
   const [getPage] = useData(key, () => ctx.repoClient.checks.list(query()));
   const reload = () => invalidate(key());
+
+  // Live rows: `check` frames invalidate the index + sha views (coalesced —
+  // a 30-run CI burst refetches once per key per tick, never 30×).
+  useCollabStream(() => ctx.full, ctx.repoClient, ["check"]);
 
   return (
     <div class="checks-page">
