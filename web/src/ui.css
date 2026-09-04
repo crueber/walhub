@@ -86,6 +86,12 @@
   .empty-icon svg { @apply h-10 w-10; }
   .empty-title { @apply text-base font-semibold text-zinc-800 dark:text-zinc-100; }
   .empty-hint { @apply max-w-md text-sm text-zinc-500 dark:text-zinc-400; }
+  /* Compact empty-state for narrow sidebars (releases Latest panel, #35):
+     tighter padding, smaller icon/title — same dashed callout language. */
+  .empty-state-compact { @apply gap-1.5 px-4 py-6; }
+  .empty-state-compact .empty-icon svg { @apply h-7 w-7; }
+  .empty-state-compact .empty-title { @apply text-sm; }
+  .empty-state-compact .empty-hint { @apply text-xs; }
 
   /* Progress bar + error tray */
   .progress { @apply fixed inset-x-0 top-0 z-50 h-0.5; }
