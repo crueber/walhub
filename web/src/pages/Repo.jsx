@@ -7,6 +7,7 @@ import repos from "../../sdk/src/index.js";
 import { createContext, useContext, createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL } from "../lib/data.js";
+import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 
 export const BUSY_MS = 1500; // poll cadence while something runs
@@ -100,16 +101,9 @@ const TABS = [
   { id: "settings", label: "Settings", href: (full) => `/${full}/settings` },
 ];
 
-function activeTab(pathname) {
-  if (/\/wal$/.test(pathname)) return "wal";
-  if (/\/settings/.test(pathname)) return "settings";
-  if (/\/issues|\/labels|\/milestones/.test(pathname)) return "issues";
-  if (/\/pulls|\/pull\//.test(pathname)) return "pulls";
-  if (/\/checks/.test(pathname)) return "checks";
-  if (/\/releases/.test(pathname)) return "releases";
-  if (/\/commits|\/commit\//.test(pathname)) return "commits";
-  return "code";
-}
+// The tab matcher lives in lib/tabs.js (pure, unit-tested): the active tab
+// derives from the first path segment after /:owner/:name, so blob/tree
+// paths with tab-word filenames (checks.go, …) still highlight Code.
 
 // --- watch toggle (06 §7): optimistic flip, reconcile on error -------------
 
