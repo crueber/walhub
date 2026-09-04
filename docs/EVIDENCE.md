@@ -561,8 +561,8 @@ over the **memory store** wrapped in op-counting decorators (same shape
 as E3/E7 — budgets count store round-trips, the AGENTS law 6 cost
 model); git calls run against scripted fakes with call counts (argv is
 covered against real git by `TestSubprocessGitReal`). Populations: 5
-vs 200 releases, 5 vs 50 merged PRs, 3 vs 60 stars — normal and an
-order of magnitude beyond, so flat-vs-growing is visible in the table.
+vs 200 releases, 5 vs 50 merged PRs, 3 vs 60 vs 600 stars — normal and an
+order (then two) of magnitude beyond, so flat-vs-growing is visible in the table.
 
 **Results.**
 
@@ -577,7 +577,7 @@ order of magnitude beyond, so flat-vs-growing is visible in the table.
 | star | 2 GETs, 1 HEAD, 2 PUTs | — | record probe + manifest HEAD + Create + counter CAS |
 | unstar | 2 GETs, 1 HEAD, 1 PUT, 1 DELETE | — | record probe + Delete + manifest HEAD + counter CAS (ghost unstar skips the CAS: 1 GET + 1 HEAD + 1 DELETE, 0 PUTs) |
 | fork increment | 1 GET, 1 PUT | — | counter CAS only |
-| starred list (n=50) | 3 stars: 1 LIST + 3 GETs + 3 HEADs | 60 stars: 1 LIST + 60 GETs + 60 HEADs | 1 LIST + 1 GET + 1 manifest HEAD per record, `more` past the page |
+| starred list (n=50) | 3 stars: 1 LIST + 3 GETs + 3 HEADs | 60 and 600 stars: 1 LIST + 51 GETs + 51 HEADs, `more`; page 2 at 60 stars probes only the 10 remaining | 1 LIST + 1 GET + 1 manifest HEAD per served record (+1 `more` probe); keyset pages over the key space, flat in the total (#65) |
 
 **Analysis.**
 
@@ -613,8 +613,11 @@ order of magnitude beyond, so flat-vs-growing is visible in the table.
   is one counter CAS (1 GET + 1 PUT) on the parent. Since #63 every
   star-path carries one manifest HEAD (fail-open miss-tolerance for
   deleted repos; ghost unstars skip the counter CAS instead) and the
-  starred list carries one HEAD per record — linear with slope ≤ 2
-  per item, still zero LIST beyond the paged list's one.
+  starred list carries one HEAD per SERVED record — O(page) per page (the
+  n+1st probe decides `more` exactly), flat in the total starred count:
+  keyset pagination over the key space replaced the full-prefix scan
+  (#65: 51 GETs + 51 HEADs on page 1 at both 60 and 600 stars, page 2
+  probing only the remainder).
 
 **Over the network (S3/GCS/filesystem).** Same shape with per-op RTT:
 the hot paths are small-JSON control-plane ops at human rate; the

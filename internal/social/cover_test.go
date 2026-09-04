@@ -160,9 +160,6 @@ func TestCoverSplitStarKey(t *testing.T) {
 			t.Fatalf("cursor %q: %v", tc.after, ok)
 		}
 	}
-	if starCursorAfter("2026-09-04T12:00:00Z", "o/b", "2026-09-04T12:00:00Z", "o/a") != true {
-		t.Fatal("tie order")
-	}
 }
 
 func TestCoverStarStoreErrors(t *testing.T) {
@@ -301,7 +298,7 @@ func TestCoverStarredEdges(t *testing.T) {
 	// Recreate a: valid record without repo → key-derived fallback.
 	seedSocialKey(t, x2, StarredPrefix("jane")+"o/a.json", `{"repo":"","starred_at":"2026-09-03T12:00:00Z"}`)
 	entries, _, err := x2.svc.Starred(ctx(), "jane", 10, "")
-	if err != nil || len(entries) != 2 || entries[1].Repo != "o/a" {
+	if err != nil || len(entries) != 2 || entries[0].Repo != "o/a" || entries[1].Repo != "o/b" {
 		t.Fatalf("fallback: %+v %v", entries, err)
 	}
 	// Unreadable record skipped (selective read error).

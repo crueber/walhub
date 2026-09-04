@@ -3,8 +3,8 @@ package social
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -210,12 +210,28 @@ func (s *Service) ViewerState(ctx context.Context, p auth.Principal, owner, repo
 	return starred, watching
 }
 
-// Starred lists one principal's star records newest-first (n default 50,
-// max 100; after is the "<starred_at>|<repo>" cursor). Entries naming a
-// deleted repo are SKIPPED (miss-tolerant reads, §7 — the prefix sweep
-// cannot enumerate userspace, so readers probe the manifest per entry;
-// probe errors keep the entry). Corrupt records are skipped (they render
-// nothing).
+// errStarPageFull aborts the prefix LIST once the page (plus the one
+// aliveness probe that decides `more`) is collected. It never surfaces:
+// Starred filters it below. Every backend propagates a non-nil callback
+// error out of List, so the walk stops at the page edge instead of
+// scanning the whole prefix.
+var errStarPageFull = errors.New("star page full")
+
+// Starred lists one principal's star records in KEY order (owner/name
+// ascending). The order is part of the contract (07 §7): keys are
+// repo-keyed, not time-ordered, so a starred_at-desc page would have to
+// GET every record to sort — the unbounded scan #65 removed. Pagination
+// is keyset over the key space: `after` is the "<starred_at>|<repo>"
+// cursor naming the previous page's last entry (the timestamp echoes the
+// record; resumption keys off the repo via LIST startAfter), so later
+// pages never re-probe earlier ones. Entries naming a deleted repo are
+// SKIPPED (miss-tolerant reads, §7 — the prefix sweep cannot enumerate
+// userspace, so readers probe the manifest per entry; probe errors keep
+// the entry). Corrupt records are skipped (they render nothing).
+//
+// Budget (law 6): one page costs 1 LIST + at most n+1 record GETs + at
+// most n+1 manifest HEADs — O(page), flat in the total starred count.
+// The n+1st probe exists only to decide `more` exactly.
 func (s *Service) Starred(ctx context.Context, principal string, n int, after string) ([]StarEntry, bool, error) {
 	who := normPrincipal(principal)
 	if who == "" {
@@ -227,35 +243,28 @@ func (s *Service) Starred(ctx context.Context, principal string, n int, after st
 	if n > ListMaxPage {
 		n = ListMaxPage
 	}
-	var afterTime, afterRepo string
+	prefix := StarredPrefix(who)
+	startAfter := ""
 	if after != "" {
-		ts, rp, ok := splitStarCursor(after)
+		_, rp, ok := splitStarCursor(after)
 		if !ok {
 			return nil, false, fmt.Errorf("%w: malformed after cursor", ErrInvalid)
 		}
-		afterTime, afterRepo = ts, rp
+		startAfter = prefix + rp + ".json"
 	}
-	prefix := StarredPrefix(who)
-	var keys []string
-	if err := s.Store.List(ctx, prefix, "", func(m store.ObjectMeta) error {
-		keys = append(keys, m.Key)
-		return nil
-	}); err != nil {
-		return nil, false, err
-	}
-	out := make([]StarEntry, 0, len(keys))
-	for _, k := range keys {
-		o, r, ok := splitStarKey(prefix, k)
+	out := make([]StarEntry, 0, n+1)
+	if err := s.Store.List(ctx, prefix, startAfter, func(m store.ObjectMeta) error {
+		o, r, ok := splitStarKey(prefix, m.Key)
 		if !ok {
-			continue
+			return nil // index objects, if any — skipped without a probe
 		}
-		raw, _, err := s.getJSON(ctx, k)
+		raw, _, err := s.getJSON(ctx, m.Key)
 		if err != nil || raw == nil {
-			continue
+			return nil // raced delete / unreadable — skip, never fail a list
 		}
 		rec, perr := parseStarRecord(raw)
 		if perr != nil {
-			continue
+			return nil
 		}
 		repo := rec.Repo
 		if repo == "" {
@@ -263,20 +272,17 @@ func (s *Service) Starred(ctx context.Context, principal string, n int, after st
 		}
 		if or, nm, ok := splitStarRepo(repo); ok {
 			if !s.repoAlive(ctx, or, nm) {
-				continue
+				return nil // dead repo tolerated per #63
 			}
 		}
-		if after != "" && !starCursorAfter(rec.StarredAt, repo, afterTime, afterRepo) {
-			continue
-		}
 		out = append(out, StarEntry{Repo: repo, StarredAt: rec.StarredAt})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].StarredAt != out[j].StarredAt {
-			return out[i].StarredAt > out[j].StarredAt
+		if len(out) > n {
+			return errStarPageFull
 		}
-		return out[i].Repo < out[j].Repo
-	})
+		return nil
+	}); err != nil && !errors.Is(err, errStarPageFull) {
+		return nil, false, err
+	}
 	var more bool
 	if len(out) > n {
 		out = out[:n]
@@ -300,14 +306,6 @@ func splitStarCursor(after string) (string, string, bool) {
 		return "", "", false
 	}
 	return ts, rp, true
-}
-
-// starCursorAfter orders newest-starred_at-first, repo ascending on ties.
-func starCursorAfter(ts, repo, afterTime, afterRepo string) bool {
-	if ts != afterTime {
-		return ts < afterTime
-	}
-	return repo > afterRepo
 }
 
 // IncForks CAS-increments the parent's forks counter (§6: called from 03's

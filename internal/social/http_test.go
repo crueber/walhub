@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -182,5 +183,80 @@ func TestSocialDeletedRepoTable(t *testing.T) {
 	}
 	if raw, _, err := store.GetBytes(ctx(), x.svc.Store, SocialKey("o", "ghost"), store.GetOptions{}); err == nil && raw != nil {
 		t.Fatalf("resurrected social.json: %s", raw)
+	}
+}
+
+// TestStarredPagesTable walks the keyset pages through the HTTP twins
+// (#65): key-ordered n=2 pages, ghost + corrupt skips mid-walk, the
+// n clamp, []-not-null on the exhausted page, and the plain-text 400 on
+// a malformed cursor. All stars share the harness timestamp, so the
+// after cursors below are deterministic.
+func TestStarredPagesTable(t *testing.T) {
+	x := newHarness(t)
+	for _, r := range []string{"a", "b", "d", "e"} {
+		seedRepo(t, x, "o", r)
+		if _, err := x.svc.Star(ctx(), jane(), "o", r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Ghost (record without a manifest) sorts mid-walk and is skipped;
+	// corrupt tail record is skipped without failing the page.
+	seedSocialKey(t, x, StarredPrefix("jane")+"o/c.json", `{"repo":"o/c","starred_at":"2026-09-04T12:00:00Z"}`)
+	seedSocialKey(t, x, StarredPrefix("jane")+"o/z.json", `{oops`)
+	ts := "2026-09-04T12:00:00Z"
+	rows := []struct {
+		name       string
+		path       string
+		head       map[string]string
+		status     int
+		wantRepos  []string
+		wantMore   bool
+		wantBody   string // "" = unchecked; otherwise must be contained
+		wantNonNil bool   // assert "starred":[] (never null) in the raw body
+	}{
+		{"page1 me", "/api/v1/me/starred?n=2", asUser("jane"), 200, []string{"o/a", "o/b"}, true, "", false},
+		{"page1 users twin", "/api/v1/users/jane/starred?n=2", nil, 200, []string{"o/a", "o/b"}, true, "", false},
+		{"page2 skips ghost", "/api/v1/me/starred?n=2&after=" + url.QueryEscape(ts+"|o/b"), asUser("jane"), 200, []string{"o/d", "o/e"}, false, "", false},
+		{"page3 exhausted", "/api/v1/me/starred?n=2&after=" + url.QueryEscape(ts+"|o/e"), asUser("jane"), 200, nil, false, "", true},
+		{"clamp", "/api/v1/me/starred?n=500", asUser("jane"), 200, []string{"o/a", "o/b", "o/d", "o/e"}, false, "", false},
+		{"bad cursor", "/api/v1/me/starred?after=" + url.QueryEscape("bogus"), asUser("jane"), 400, nil, false, "malformed after cursor", false},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			rec := do(t, x, "GET", row.path, nil, row.head)
+			if rec.Code != row.status {
+				t.Fatalf("GET %s: got %d want %d (%q)", row.path, rec.Code, row.status, rec.Body.String())
+			}
+			if row.status != 200 {
+				if row.wantBody != "" && !strings.Contains(rec.Body.String(), row.wantBody) {
+					t.Fatalf("body %q lacks %q", rec.Body.String(), row.wantBody)
+				}
+				return
+			}
+			if row.wantNonNil && !strings.Contains(rec.Body.String(), `"starred":[]`) {
+				t.Fatalf("nullable list: %s", rec.Body.String())
+			}
+			var body struct {
+				Starred []struct {
+					Repo      string `json:"repo"`
+					StarredAt string `json:"starred_at"`
+				} `json:"starred"`
+				More bool `json:"more"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.More != row.wantMore {
+				t.Fatalf("more: got %v want %v (%s)", body.More, row.wantMore, rec.Body.String())
+			}
+			if len(body.Starred) != len(row.wantRepos) {
+				t.Fatalf("repos: got %+v want %+v", body.Starred, row.wantRepos)
+			}
+			for i, want := range row.wantRepos {
+				if body.Starred[i].Repo != want {
+					t.Fatalf("repos: got %+v want %+v", body.Starred, row.wantRepos)
+				}
+			}
+		})
 	}
 }

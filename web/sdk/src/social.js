@@ -35,7 +35,7 @@ export function attachSocial(repo) {
  */
 export function attachSocialTop(client) {
   client.social = {
-    /** Own stars: `GET /api/v1/me/starred?n=&after=` (authenticated, newest first). */
+    /** Own stars: `GET /api/v1/me/starred?n=&after=` (authenticated, repo owner/name ascending; after = "<starred_at>|<repo>" of the previous page's last entry). */
     myStarred: (query = {}, opts) =>
       client._call(`/api/v1/me/starred${qs(query)}`, { method: "GET", ...opts }),
     /** One principal's stars: `GET /api/v1/users/{principal}/starred?n=&after=` (public). */
