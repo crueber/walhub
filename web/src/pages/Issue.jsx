@@ -177,7 +177,7 @@ export default function Issue() {
                   const entries = () => summaryEntries(summary(), ev.seq);
                   return (
                     <Show when={(ev.type === "opened" || ev.type === "commented") && entries().length > 0}>
-                      <p class="reaction-summary mt-2 flex flex-wrap gap-1" aria-label={`reactions on comment ${ev.seq}`}>
+                      <div class="reaction-summary mt-2 flex flex-wrap gap-1" role="group" aria-label={`reactions on comment ${ev.seq}`}>
                         <For each={entries()}>
                           {([content, count]) => (
                             <button
@@ -191,7 +191,7 @@ export default function Issue() {
                             </button>
                           )}
                         </For>
-                      </p>
+                      </div>
                     </Show>
                   );
                 }}
