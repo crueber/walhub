@@ -6,6 +6,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useData, SHA_TTL } from "../lib/data.js";
 import { parsePatchFiles, splitRows, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
+import { CopySha, shortSha } from "../lib/sha.jsx";
 import { fmtDate, useRepo } from "./Repo.jsx";
 import { CheckPill, ContextRows } from "./Checks.jsx";
 
@@ -206,27 +207,30 @@ function CommitDetail(props) {
 
   return (
     <div class="commit-page">
-      <Show when={parsed()} fallback={<p class="muted">loading commit…</p>}>
+      <Show when={parsed()} fallback={<p class="muted animate-pulse">loading commit…</p>}>
         {(d) => {
           const c = () => d().c;
+          const parents = () => c().parents ?? [];
+          const full = () => String(c().sha ?? props.sha);
           const totalAdd = () => d().stats.reduce((n, s) => n + (s.additions ?? 0), 0);
           const totalDel = () => d().stats.reduce((n, s) => n + (s.deletions ?? 0), 0);
           return (
             <>
-              <nav class="crumbs mb-2 text-sm">
+              <nav class="crumbs mb-2 flex flex-wrap items-center gap-x-1.5 text-sm">
                 <A
                   class="text-emerald-700 hover:underline dark:text-emerald-400"
                   href={`/${props.full}/commits`}
                 >
                   Commits
                 </A>
-                {" / "}
-                <code class="sha font-mono">{String(c().sha ?? props.sha).slice(0, 12)}</code>
+                <span class="muted" aria-hidden="true">/</span>
+                <code class="sha font-mono text-xs tabular-nums" title={full()}>{shortSha(full())}</code>
+                <CopySha sha={full()} />
               </nav>
 
-              <section class="commit-head card p-4">
-                <h2 class="text-lg font-semibold">{c().subject ?? "(no message)"}</h2>
-                <div class="muted commit-meta mt-1 text-xs">
+              <section class="commit-head card space-y-2.5 p-4">
+                <h2 class="text-lg font-semibold leading-snug">{c().subject ?? "(no message)"}</h2>
+                <p class="commit-meta muted text-xs tabular-nums">
                   <span>{c().author ?? ""}</span>
                   <Show when={c().author_email}>
                     <span>{` <${c().author_email}>`}</span>
@@ -234,22 +238,30 @@ function CommitDetail(props) {
                   <span>
                     {` · authored ${fmtDate(c().author_date)} · committed ${fmtDate(c().committer_date ?? c().commit_date)}`}
                   </span>
-                  <Show when={(c().parents ?? []).length > 0}>
-                    <span>
-                      {" · parent "}
-                      <For each={c().parents}>
-                        {(p) => (
+                </p>
+                <Show when={parents().length > 0}>
+                  <p class="commit-parents text-xs tabular-nums">
+                    <span class="muted">
+                      {parents().length > 1 ? `merge parents (${parents().length}): ` : "parent: "}
+                    </span>
+                    <For each={parents()}>
+                      {(p, i) => (
+                        <>
+                          <Show when={i() > 0}>
+                            <span class="muted">{" · "}</span>
+                          </Show>
                           <A
                             class="sha font-mono text-emerald-700 hover:underline dark:text-emerald-400"
                             href={`/${props.full}/commit/${p}`}
+                            title={`parent ${p}`}
                           >
-                            {String(p).slice(0, 12)}
+                            {shortSha(p)}
                           </A>
-                        )}
-                      </For>
-                    </span>
-                  </Show>
-                </div>
+                        </>
+                      )}
+                    </For>
+                  </p>
+                </Show>
                 <Show when={c().body}>
                   {/* linkifyBody is escape-first (lib/diff.js) — same sanctioned
                       innerHTML pattern as the highlighter output in Blob.jsx */}
@@ -260,7 +272,7 @@ function CommitDetail(props) {
                     <TrailerTable full={props.full} groups={d().groups} />
                   </div>
                 </Show>
-                <p class="muted diffstat mt-3 text-xs">
+                <p class="muted diffstat mt-3 text-xs tabular-nums">
                   <span class="text-emerald-600 dark:text-emerald-400">{`+${totalAdd()}`}</span>{" "}
                   <span class="text-red-600 dark:text-red-400">{`−${totalDel()}`}</span>
                   {` across ${d().stats.length} file${d().stats.length === 1 ? "" : "s"} (server stats)`}
