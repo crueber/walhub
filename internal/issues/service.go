@@ -180,7 +180,7 @@ func (s *Service) CreateIssue(ctx context.Context, owner, repo string, actor aut
 	// Opened-body refs source from the thread itself; comment bodies
 	// source from their event seq.
 	s.writeRefs(ctx, owner, repo, num, -1, normPrincipal(actor.Name), body)
-	s.emitSubscribed(ctx, owner, repo, th, normPrincipal(actor.Name))
+	s.emitSubscribed(ctx, owner, repo, th, normPrincipal(actor.Name), "opened")
 	s.emitMentioned(ctx, owner, repo, num, normPrincipal(actor.Name), body)
 	s.stream(ctx, StreamEvent{Name: "issue", Repo: repoName(owner, repo), IssueNum: num})
 	nt, _, _ := s.loadThread(ctx, owner, repo, num)
@@ -224,7 +224,7 @@ func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, a
 	}
 	s.updateIndex(ctx, owner, repo, cardOf(th))
 	s.writeRefs(ctx, owner, repo, num, ev.Seq, who, body)
-	s.emitSubscribed(ctx, owner, repo, th, who)
+	s.emitSubscribed(ctx, owner, repo, th, who, "commented")
 	s.emitMentioned(ctx, owner, repo, num, who, body)
 	s.stream(ctx, StreamEvent{Name: "issue_event", Repo: repoName(owner, repo), IssueNum: num})
 	return ev, nil
@@ -535,10 +535,22 @@ func (s *Service) PatchIssue(ctx context.Context, owner, repo string, num int, a
 	}
 	s.updateIndex(ctx, owner, repo, cardOf(th))
 	if title != nil || labels != nil || assignees != nil || milestone != nil || state != nil {
-		s.emitSubscribed(ctx, owner, repo, th, who)
+		s.emitSubscribed(ctx, owner, repo, th, who, patchAction(state))
 		s.stream(ctx, StreamEvent{Name: "issue", Repo: repoName(owner, repo), IssueNum: num})
 	}
 	return th, nil
+}
+
+// patchAction names the activity action for a patch emission (the true
+// action behind the coarse "subscribed" class, for 06's activity log).
+func patchAction(state *string) string {
+	if state == nil {
+		return "commented"
+	}
+	if *state == StateClosed {
+		return "closed"
+	}
+	return "reopened"
 }
 
 // moveMilestone transfers denormalized counters between milestones on
@@ -766,7 +778,7 @@ func (s *Service) ApplyClosingReferences(ctx context.Context, owner, repo string
 		if nt.Milestone != nil {
 			s.bumpMilestone(ctx, owner, repo, *nt.Milestone, -1, +1)
 		}
-		s.emitSubscribed(ctx, owner, repo, nt, who)
+		s.emitSubscribed(ctx, owner, repo, nt, who, "closed")
 		s.stream(ctx, StreamEvent{Name: "issue", Repo: repoName(owner, repo), IssueNum: m.Num})
 		closed = append(closed, m.Num)
 	}
@@ -1095,8 +1107,9 @@ func (s *Service) eventWindow(ctx context.Context, owner, repo string, num, afte
 
 // emitSubscribed fans the subscribed class to participants[] minus the
 // actor (opened/commented/state/label changes by a non-participant path
-// all converge here; referenced events never subscribe).
-func (s *Service) emitSubscribed(ctx context.Context, owner, repo string, th *Thread, actor string) {
+// all converge here; referenced events never subscribe). action names
+// the true activity action behind the coarse class (06's log).
+func (s *Service) emitSubscribed(ctx context.Context, owner, repo string, th *Thread, actor, action string) {
 	var recips []string
 	for _, p := range th.Participants {
 		if p != "" && p != actor {
@@ -1106,12 +1119,14 @@ func (s *Service) emitSubscribed(ctx context.Context, owner, repo string, th *Th
 	if len(recips) == 0 {
 		return
 	}
-	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "subscribed", Actor: actor, IssueNum: th.Num, Recipients: recips})
+	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "subscribed", Action: action, Actor: actor, IssueNum: th.Num, Recipients: recips})
 }
 
 // emitMentioned fans the mentioned class to @-parsed principals in the
 // body (resolvable names only — the Emitter's consumer resolves; here we
-// pass through what the parser found, minus the actor).
+// pass through what the parser found, minus the actor) plus @org/team
+// spellings (the consumer expands via the team doc; "/" cannot appear in
+// a principal, so the spelling is self-describing).
 func (s *Service) emitMentioned(ctx context.Context, owner, repo string, num int, actor, body string) {
 	if body == "" {
 		return
@@ -1120,6 +1135,13 @@ func (s *Service) emitMentioned(ctx context.Context, owner, repo string, num int
 	for _, m := range ParseMentions(body) {
 		if m != actor && identity.ValidPrincipal(m) {
 			recips = append(recips, m)
+		}
+	}
+	if _, teams := identity.ParseMentions(body); len(teams) > 0 {
+		for _, t := range teams {
+			if t != actor {
+				recips = append(recips, t)
+			}
 		}
 	}
 	if len(recips) == 0 {

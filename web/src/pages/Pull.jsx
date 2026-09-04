@@ -14,6 +14,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
 import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { MentionDatalist } from "./Mentions.jsx";
 import { CheckPill, ContextRows } from "./Checks.jsx";
 import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
 
@@ -679,7 +680,8 @@ export default function Pull() {
         <form class="card mt-3" onSubmit={comment}>
           <label class="field">
             <span>Comment</span>
-            <textarea value={getBody()} onInput={(e) => setBody(e.target.value)} rows="3" />
+            <textarea value={getBody()} onInput={(e) => setBody(e.target.value)} rows="3" list="mention-pull-comment" />
+            <MentionDatalist id="mention-pull-comment" names={thread()?.participants} />
           </label>
           <button type="submit" class="btn btn-primary mt-2 px-3 py-1" disabled={getBusy()}>
             {getBusy() ? "posting…" : "comment"}

@@ -313,6 +313,31 @@ func (s *Service) emit(ctx context.Context, ev NotifyEvent) {
 	s.Notify(ctx, ev)
 }
 
+// emitMentioned fans "mentioned" for @-parsed principals and @org/team
+// spellings in a review/thread-comment body (06 §3; the consumer
+// validates and expands). Bodies without tokens emit nothing.
+func (s *Service) emitMentioned(ctx context.Context, owner, repo string, num int, actor, body string) {
+	if body == "" {
+		return
+	}
+	users, teams := identity.ParseMentions(body)
+	var recips []string
+	for _, m := range users {
+		if m != actor && identity.ValidPrincipal(m) {
+			recips = append(recips, m)
+		}
+	}
+	for _, t := range teams {
+		if t != actor {
+			recips = append(recips, t)
+		}
+	}
+	if len(recips) == 0 {
+		return
+	}
+	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "mentioned", Actor: actor, PullNum: num, Recipients: recips})
+}
+
 // stream appends one live-update event, nil-safe.
 func (s *Service) stream(ctx context.Context, ev StreamEvent) {
 	if s.Stream == nil {

@@ -319,6 +319,7 @@ func (s *Service) AddThreadComment(ctx context.Context, owner, repo string, num 
 		return nil, fmt.Errorf("%w: review thread %s changed concurrently; reload and retry", ErrConflict, tid)
 	}
 	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "thread_commented", Actor: who, PullNum: num, Recipients: prParticipants(h, who)})
+	s.emitMentioned(ctx, owner, repo, num, who, body)
 	s.stream(ctx, StreamEvent{Name: "thread", Repo: repoName(owner, repo), Action: "commented", Num: num, TID: tid})
 	return out, nil
 }

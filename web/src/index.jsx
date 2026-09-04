@@ -23,6 +23,7 @@ import Issue from "./pages/Issue.jsx";
 import Pulls from "./pages/Pulls.jsx";
 import Pull from "./pages/Pull.jsx";
 import Checks from "./pages/Checks.jsx";
+import Notifications from "./pages/Notifications.jsx";
 import Labels from "./pages/Labels.jsx";
 import Milestones from "./pages/Milestones.jsx";
 import Wal from "./pages/Wal.jsx";
@@ -41,6 +42,7 @@ render(
       <Route path="/setup" component={Setup} />
       <Route path="/api" component={Apidocs} />
       <Route path="/keys" component={Keys} />
+      <Route path="/notifications" component={Notifications} />
       <Route path="/:owner" component={Repos} />
       <Route path="/:org/settings" component={Org} />
       <Route path="/:owner/:name" component={Repo}>

@@ -445,6 +445,7 @@ func (s *Service) SubmitReview(ctx context.Context, owner, repo string, num int,
 		return nil, nil, nil, err
 	}
 	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "review_submitted", Actor: who, PullNum: num, Recipients: prParticipants(h, who)})
+	s.emitMentioned(ctx, owner, repo, num, who, in.Body)
 	s.stream(ctx, StreamEvent{Name: "review", Repo: repoName(owner, repo), Action: "submitted", Num: num, Summary: sum})
 	return ev, opened, sum, nil
 }
