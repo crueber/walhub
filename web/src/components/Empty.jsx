@@ -3,7 +3,8 @@
 // by the pulls, checks, releases, and issues lists. Dark + light via the
 // .empty-* classes (ui.css); the action is a plain router link, so it is
 // keyboard-focusable with the global :focus-visible ring — no extra tab
-// stops, no JS. `role="status"` announces the settled state to
+// stops, no JS. `compact` shrinks the callout for narrow sidebars (the
+// releases Latest panel, issue #35). `role="status"` announces the settled state to
 // screen readers (a result, not progress — never a silent spinner).
 
 import { Show } from "solid-js";
@@ -40,7 +41,7 @@ const ICONS = {
 
 export default function Empty(props) {
   return (
-    <div class="empty-state" role="status" aria-label={props.title}>
+    <div class="empty-state" classList={{ "empty-state-compact": props.compact }} role="status" aria-label={props.title}>
       <span class="empty-icon">{ICONS[props.icon] ?? ICONS.issue}</span>
       <p class="empty-title">{props.title}</p>
       <Show when={props.hint}>
