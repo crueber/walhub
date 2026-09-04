@@ -284,6 +284,30 @@ test("tomlFragment renders parsed struct lists as editable fragments", () => {
   assert.equal(tomlFragment([{ Name: "x", Kind: "full" }], "strategy", KEYS), '[[strategy]]\nname = "x"\nkind = "full"');
 });
 
+test("import keys round-trip: normalize coerces each new key and examples validate", () => {
+  const { overrides } = normalizeSetup({
+    "import.url_allowlist": "git.example.com, github.com",
+    "import.allow_private_networks": "false",
+    "import.allow_file_urls": "false",
+    "import.clone_timeout": "30m",
+    "import.git_timeout": "5m",
+    "import.max_bytes": "64GiB",
+    "import.max_refs": "100000",
+    "import.max_concurrent": "2",
+  });
+  assert.deepEqual(overrides["import.url_allowlist"], ["git.example.com", "github.com"]);
+  assert.equal(overrides["import.allow_private_networks"], false);
+  assert.equal(overrides["import.allow_file_urls"], false);
+  assert.equal(overrides["import.clone_timeout"], "30m"); // durations/sizes stay spec-spelled for the server parser
+  assert.equal(overrides["import.git_timeout"], "5m");
+  assert.equal(overrides["import.max_bytes"], "64GiB");
+  assert.equal(overrides["import.max_refs"], 100000);
+  assert.equal(overrides["import.max_concurrent"], 2);
+  for (const f of FIELDS.filter((f) => f.key.startsWith("import."))) {
+    assert.deepEqual(fatals({ [f.key]: f.ex }), [], `${f.key}: example ${JSON.stringify(f.ex)} must validate`);
+  }
+});
+
 test("fieldAppliesToMode gates auth fields by server.auth.mode", () => {
   for (const f of FIELDS) {
     if (!f.key.startsWith("server.auth.")) {

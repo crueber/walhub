@@ -340,6 +340,10 @@ clean.
   `format` pinning, browser-lane twins, `endpoints[]` discovery.
 - **Absent `policy.json` IS the default** (allow-all): import writes
   no policy; the effective default holds by construction.
+- **Import dialog dangerous confirm (fix #23):** `/import` carries an unchecked-by-default
+  dangerous checkbox (DNS-TOCTOU + redirect-following help text) wired through `imports.start()`.
+- **Setup [import] section (fix #23):** the Setup UI exposes all eight `[import]` keys
+  (url_allowlist, timeouts, caps, SSRF bools) with spec-spelling examples; fail-closed defaults unchanged.
 - **`import.max_bytes` compiled default equals
   `server.max_push_bytes`' compiled default (64 GiB)** rather than a
   dynamic follow — visible in `config dump`/setup; operators

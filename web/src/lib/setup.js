@@ -295,6 +295,16 @@ export const FIELDS = [
   { key: "events.webhook_url", type: "url", ex: "http://ci.example.com/hooks/walhub" },
   { key: "events.webhook_secret", type: "string", ex: "hmac-shared-secret" },
   { key: "events.sweep_interval", type: "duration", ex: "1m" },
+  // import (docs/features/10 §6 — fail-closed defaults: empty allowlist,
+  // dangerous opt-in per import)
+  { key: "import.url_allowlist", type: "list", ex: "git.example.com", note: "empty = GitHub always; other hosts need the list or the per-import dangerous confirm" },
+  { key: "import.allow_private_networks", type: "bool", ex: "false", note: "true allows loopback/RFC1918 sources" },
+  { key: "import.allow_file_urls", type: "bool", ex: "false", note: "true enables file:// sources (tests/fixtures only)" },
+  { key: "import.clone_timeout", type: "duration", ex: "30m" },
+  { key: "import.git_timeout", type: "duration", ex: "5m" },
+  { key: "import.max_bytes", type: "size", ex: "64GiB", note: "set with server.max_push_bytes when constraining" },
+  { key: "import.max_refs", type: "int", min: 1, ex: "100000" },
+  { key: "import.max_concurrent", type: "int", min: 1, ex: "2" },
 ];
 
 const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
