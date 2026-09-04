@@ -6,7 +6,7 @@ import { A } from "@solidjs/router";
 import { useResolved } from "../lib/data.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
-import { fmtSize } from "../lib/format.js";
+import { fmtSize, fmtMode } from "../lib/format.js";
 import { useRepo, shortRef } from "./Repo.jsx";
 
 function Breadcrumb(props) {
@@ -47,10 +47,9 @@ export default function Tree() {
           return (
             <>
               <Breadcrumb full={ctx.full} path={t().path ?? ""} head={shortRef(t().ref)} />
-              <p class="muted mb-2 text-xs">{String(t().sha).slice(0, 12)} · {(t().entries ?? []).length} entries</p>
               <table class="data-table tree-table">
                 <thead>
-                  <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24">size</th></tr>
+                  <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24 text-right">size</th></tr>
                 </thead>
                 <tbody>
                   <For each={t().entries ?? []}>
@@ -65,8 +64,8 @@ export default function Tree() {
                             <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${ctx.full}/blob/${treeRest()}/${e.name}`}>{e.name}</A>
                           </Show>
                         </td>
-                        <td class="entry-mode muted font-mono text-xs">{e.mode ?? ""}</td>
-                        <td class="entry-size muted tabular text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{e.type === "blob" ? (e.size == null ? "-" : fmtSize(e.size)) : ""}</td>
+                        <td class="entry-mode muted font-mono text-xs" title={e.mode ?? undefined}>{fmtMode(e.mode)}</td>
+                        <td class="entry-size muted tabular text-right text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{e.type === "blob" ? (e.size == null ? "-" : fmtSize(e.size)) : ""}</td>
                       </tr>
                     )}
                   </For>
