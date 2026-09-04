@@ -16,10 +16,9 @@ import { useRepo, shortRef } from "./Repo.jsx";
 function Breadcrumb(props) {
   const parts = () => (props.path ? props.path.split("/") : []);
   return (
+    <Show when={parts().length > 0}>
     <nav class="crumbs mb-2 text-sm">
-      <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}`}>
-        {props.head ?? "root"}
-      </A>
+      <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}`}>root</A>
       <For each={parts()}>
         {(part, i) => {
           const sub = () => parts().slice(0, i() + 1).join("/");
@@ -39,6 +38,7 @@ function Breadcrumb(props) {
         }}
       </For>
     </nav>
+    </Show>
   );
 }
 
@@ -65,7 +65,7 @@ export default function Blob() {
 
           return (
             <>
-              <Breadcrumb full={ctx.full} path={b().path ?? ""} head={shortRef(b().ref)} rev={b().ref} />
+              <Breadcrumb full={ctx.full} path={b().path ?? ""} rev={b().ref} />
               <div class="blob-head mb-2 flex flex-wrap items-baseline gap-2">
                 <h2 class="font-semibold">{name()}</h2>
                 <Show when={lang()}>
