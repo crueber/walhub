@@ -74,6 +74,14 @@ test("imports.attach sends Accept: text/event-stream", async () => {
   assert.equal(calls[0].init.headers["Accept"], "text/event-stream");
 });
 
+test("imports.start forwards the dangerous confirm flag (dialog checkbox)", async () => {
+  const { fetch, calls } = fakeFetch(() => jsonResponse({ task: { id: "i-1" }, target: "acme/r" }));
+  const client = new ReposClient({ base: BASE, fetch, token: "t" });
+  await client.imports.start({ source_url: "https://git.example.com/a/b.git", owner: "acme", name: "r", dangerous: true });
+  const sent = JSON.parse(calls[0].init.body);
+  assert.equal(sent.dangerous, true);
+});
+
 test("normalizeSource: shorthand, GitHub URL, passthrough, ssh warning", () => {
   assert.deepEqual(normalizeSource("acme/monorepo"), {
     url: "https://github.com/acme/monorepo.git",

@@ -343,6 +343,75 @@ func TestSetupCoerceDurationsAndSizes(t *testing.T) {
 	}
 }
 
+// Fix #23: every new [import] FIELDS example is accepted by
+// POST /api/v1/setup/test in isolation, and the full set round-trips
+// through PUT /api/v1/setup into <data-dir>/walhub.toml with effect.
+func TestSetupImportKeysRoundTrip(t *testing.T) {
+	dataDir := t.TempDir()
+	s, _ := setupMergeServer(t, dataDir)
+	s.boot.Mode = "normal"
+
+	singles := map[string]any{
+		"import.url_allowlist":          "git.example.com",
+		"import.allow_private_networks": "false",
+		"import.allow_file_urls":        "false",
+		"import.clone_timeout":          "30m",
+		"import.git_timeout":            "5m",
+		"import.max_bytes":              "64GiB",
+		"import.max_refs":               "100000",
+		"import.max_concurrent":         "2",
+	}
+	for k, v := range singles {
+		body, _ := json.Marshal(map[string]any{"overrides": map[string]any{k: v}})
+		req := httptest.NewRequest("POST", "/api/v1/setup/test", strings.NewReader(string(body)))
+		rec := httptest.NewRecorder()
+		s.setupTest(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup/test %s=%v = %d %s, want 200", k, v, rec.Code, rec.Body.String())
+		}
+	}
+
+	// The normalized UI payload (lists/bools/ints coerced, durations/sizes
+	// spec-spelled) saves and persists with effect.
+	payload, _ := json.Marshal(map[string]any{"overrides": map[string]any{
+		"import.url_allowlist":          []any{"git.example.com"},
+		"import.allow_private_networks": false,
+		"import.allow_file_urls":        false,
+		"import.clone_timeout":          "30m",
+		"import.git_timeout":            "5m",
+		"import.max_bytes":              "64GiB",
+		"import.max_refs":               100000,
+		"import.max_concurrent":         2,
+	}})
+	code, resp := putSetup(t, s, string(payload))
+	if code != http.StatusOK {
+		t.Fatalf("put import keys = %d %v", code, resp)
+	}
+	after, err := config.LoadSetupBase(dataDir, s.boot.ConfigPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Import.URLAllowlist) != 1 || after.Import.URLAllowlist[0] != "git.example.com" {
+		t.Fatalf("url_allowlist not persisted: %+v", after.Import.URLAllowlist)
+	}
+	if after.Import.AllowPrivateNetworks || after.Import.AllowFileURLs {
+		t.Fatalf("bools not persisted: private=%t file=%t",
+			after.Import.AllowPrivateNetworks, after.Import.AllowFileURLs)
+	}
+	if time.Duration(after.Import.CloneTimeout) != 30*time.Minute {
+		t.Fatalf("clone_timeout not persisted: %v", after.Import.CloneTimeout)
+	}
+	if time.Duration(after.Import.GitTimeout) != 5*time.Minute {
+		t.Fatalf("git_timeout not persisted: %v", after.Import.GitTimeout)
+	}
+	if int64(after.Import.MaxBytes) != 64<<30 {
+		t.Fatalf("max_bytes not persisted: %d", after.Import.MaxBytes)
+	}
+	if after.Import.MaxRefs != 100000 || after.Import.MaxConcurrent != 2 {
+		t.Fatalf("caps not persisted: refs=%d concurrent=%d", after.Import.MaxRefs, after.Import.MaxConcurrent)
+	}
+}
+
 // The setup surface is open at ANY time while auth mode is "none" — first
 // run, normal running mode, and setup-only mode alike — with no credential.
 func TestSetupOpenWheneverAuthNone(t *testing.T) {

@@ -20,6 +20,7 @@ export default function Import() {
   const [getBranchOnly, setBranchOnly] = createSignal(false);
   const [getPullHeads, setPullHeads] = createSignal(false);
   const [getNotes, setNotes] = createSignal(false);
+  const [getDangerous, setDangerous] = createSignal(false);
   const [getFormat, setFormat] = createSignal("");
   const [getPhase, setPhase] = createSignal("form"); // form | running | done | error
   const [getBars, setBars] = createSignal({}); // label → {done, total, unit, percent}
@@ -77,6 +78,7 @@ export default function Import() {
         default_branch_only: getBranchOnly(),
         include_pull_heads: getPullHeads(),
         include_notes: getNotes(),
+        dangerous: getDangerous(),
         format: getFormat() || undefined,
       };
       if (getToken()) payload.token = getToken();
@@ -204,6 +206,17 @@ export default function Import() {
             LFS-tracked files import as pointer blobs (never smudged). Server-side ssh is not
             supported in v1 — use https with a token for private sources.
           </p>
+          <label class="flex items-start gap-2 text-sm">
+            <input type="checkbox" class="mt-0.5" checked={getDangerous()} onChange={(e) => setDangerous(e.currentTarget.checked)} />
+            <span>
+              <span class="font-medium">Allow hosts outside import.url_allowlist (dangerous)</span>
+              <span class="muted block text-xs">
+                Residual risk remains: DNS TOCTOU (check-time vs clone-time resolution can differ) and
+                redirect following (git follows HTTP redirects; the token helper stays host-pinned and
+                redirects never carry it).
+              </span>
+            </span>
+          </label>
           <Show when={anonymous()}>
             <p class="text-xs text-amber-700 dark:text-amber-400">
               You are not signed in — the server will refuse the import (401). Sign in first.
