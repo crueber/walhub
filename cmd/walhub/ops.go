@@ -324,8 +324,27 @@ func runImport(ctx context.Context, c *cli, args []string) int {
 	reusePacks := fs.Bool("reuse-packs", true, "reuse the source's pack files")
 	var refGlobs multiString
 	fs.Var(&refGlobs, "refs", "only import refs matching the glob (repeatable)")
+	// Feature 10 (docs/features/10 §CLI): URL import through the same
+	// Service (same publish/CAS path as the server, 14 §14.9).
+	sourceURL := fs.String("url", "", "source git URL to clone (owner/repo shorthand or full URL)")
+	var onlyRefs multiString
+	fs.Var(&onlyRefs, "ref", "only import this exact ref (repeatable)")
+	defaultBranchOnly := fs.Bool("default-branch-only", false, "import only the source default branch")
+	includePullHeads := fs.Bool("include-pull-heads", false, "also import refs/pull/N/head (never /merge)")
+	includeNotes := fs.Bool("include-notes", false, "also import refs/notes/*")
+	tokenEnv := fs.String("token-env", "", "env var NAME holding the source token (never the token)")
+	format := fs.String("format", "", "require source object format (sha1|sha256; empty follows source)")
+	dangerous := fs.Bool("dangerous", false, "confirm a non-allowlisted non-GitHub source")
 	mustParse(fs, args)
 	positional := fs.Args()
+	if *sourceURL != "" {
+		return runImportURL(ctx, c, importURLArgs{
+			url: *sourceURL, repo: firstPositional(positional),
+			refs: onlyRefs.values, defaultBranchOnly: *defaultBranchOnly,
+			includePullHeads: *includePullHeads, includeNotes: *includeNotes,
+			tokenEnv: *tokenEnv, format: *format, dangerous: *dangerous,
+		})
+	}
 	if *direct {
 		return notImplemented("import --direct")
 	}

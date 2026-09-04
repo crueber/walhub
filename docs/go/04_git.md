@@ -586,7 +586,49 @@ Both helpers run under `Pool.Run` with a 900 s timeout per fetch batch; stdin/st
 `credential.helper` argv order is significant (clear-then-set). The follow scratch is shared per repo —
 serialized by the same repo mutex as maintenance (doc 10 owns it).
 
-## 12. Config keys consumed by this package
+## 12. Import clone + scratch ingest (docs/features/10)
+
+The import task (`internal/repoimport`) clones the source into task
+scratch, then hands packs/refs to the existing publish path. Exact argv
+(all spawns in the feature's own bounded pool with ctx timeouts —
+`import.clone_timeout` 1800 s for the clone, `import.git_timeout` 300 s
+for the rest; `GIT_TERMINAL_PROMPT=0` always; token via child env only):
+
+```
+git [-c credential.<scheme>://<host>.helper= -c credential.<scheme>://<host>.helper=!<helper>] clone --mirror --progress -- <url> <dir>
+```
+
+(the credential `-c` pairs are present only for token sources, built
+dynamically per spawn with a per-task env name — static copy-paste is
+forbidden; the helper is host-pinned so redirects can't harvest the
+token; the empty-helper-first clear-then-set order from §11 applies).
+
+```
+git --git-dir=<dir> for-each-ref --format=%(objectname) %(*objectname) %(refname)
+git --git-dir=<dir> rev-parse --show-object-format
+git index-pack <pack>                                   # ONLY when the source pack lacks a sibling .idx
+git show HEAD:.gitattributes                            # LFS probe (best-effort; unborn HEAD / no file = skip)
+```
+
+Refnames cannot contain spaces (§4.3 validation), so the three
+for-each-ref fields split unambiguously on the first two spaces
+(`%(*objectname)` renders empty for non-tags). The `.idx` discipline is
+load-bearing: `AddPack` installs/uploads the `.pack` only, so the
+importer installs each sibling `.idx` into the serving copy BEFORE
+`AddPack` (its internal `LevelServe` Sync needs it locally) and uploads
+it to `wal/<checksum>.idx` create-if-absent after (a fresh instance
+materializes from the store alone). A regenerated index's stray `.keep`
+is swept (same rule as §9).
+
+### Concurrency
+
+Hazard: a clone holding a pool slot forever; progress parsing blocking
+on a pipe git never closes. Avoidance: `Pool.Run` + `CloneTimeout` ctx
+(`exec.CommandContext` SIGKILLs git); stderr drained by a dedicated
+goroutine to EOF; a 15 s heartbeat ticker fires while git is silent (no
+silent spinners — law 7).
+
+## 13. Config keys consumed by this package
 
 | Key | Default | Used in |
 |---|---|---|

@@ -258,6 +258,21 @@ type Releases struct {
 	MaxAssetBytes ByteSize `toml:"max_asset_bytes"`
 }
 
+// Import bounds the repository-import surface (docs/features/10 §6:
+// additive [import] section, 14_extensibility.md §14.12 — existing keys
+// never change meaning). All timeouts are per-spawn ctx timeouts; sizes
+// gate the scratch checkout (post-clone du) and published packs.
+type Import struct {
+	CloneTimeout         Duration `toml:"clone_timeout"`          // clone --mirror ctx (default 1800s)
+	GitTimeout           Duration `toml:"git_timeout"`            // for-each-ref/verify/repack ctx (default 300s)
+	MaxBytes             ByteSize `toml:"max_bytes"`              // scratch du + pack gate (default = server.max_push_bytes at load)
+	MaxRefs              int      `toml:"max_refs"`               // ref-enumeration cap (default 100000)
+	MaxConcurrent        int      `toml:"max_concurrent"`         // server-side concurrent clones (default 2)
+	AllowPrivateNetworks bool     `toml:"allow_private_networks"` // SSRF: allow loopback/RFC1918 sources (default false)
+	URLAllowlist         []string `toml:"url_allowlist"`          // empty = public hosts allowed; non-empty = only these hosts
+	AllowFileURLs        bool     `toml:"allow_file_urls"`        // file:// sources (default false; tests/fixtures only)
+}
+
 // Config is the whole file. Section/field names match the TOML keys exactly.
 type Config struct {
 	Server      Server      `toml:"server"`
@@ -274,6 +289,7 @@ type Config struct {
 	Telemetry   Telemetry   `toml:"telemetry"`
 	Events      Events      `toml:"events"`
 	Releases    Releases    `toml:"releases"`
+	Import      Import      `toml:"import"`
 
 	// DataDir is the zero-config root (divergence D5): --data-dir / WALHUB_DATA_DIR,
 	// default ~/.local/share/walhub. Holds store/, cache/, and the saved walhub.toml.
@@ -396,6 +412,13 @@ func Defaults() *Config {
 		Events: Events{SweepInterval: Duration(5 * time.Minute)},
 		Releases: Releases{
 			MaxAssetBytes: 2 << 30,
+		},
+		Import: Import{
+			CloneTimeout:  Duration(1800 * time.Second),
+			GitTimeout:    Duration(300 * time.Second),
+			MaxBytes:      64 << 30,
+			MaxRefs:       100000,
+			MaxConcurrent: 2,
 		},
 	}
 }

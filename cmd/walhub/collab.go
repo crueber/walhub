@@ -18,6 +18,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/releases"
+	"git.packden.us/crueber/walhub/internal/repoimport"
 	"git.packden.us/crueber/walhub/internal/review"
 	"git.packden.us/crueber/walhub/internal/server"
 	"git.packden.us/crueber/walhub/internal/server/auth"
@@ -45,6 +46,8 @@ type collabWiring struct {
 	socialHandler   *social.Handler
 	notifySvc       *notify.Service
 	notifyHandler   *notify.Handler
+	importSvc       *repoimport.Service
+	importHandler   *repoimport.Handler
 }
 
 // buildCollab assembles every collaboration service + handler over the
@@ -119,6 +122,11 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	wireNotifyFanout(c.notifySvc, c.issuesSvc, c.pullsSvc, c.reviewSvc, c.checksSvc)
 	wireReleasesFanout(c.releasesSvc, c.notifySvc)
 	wireSocialForks(c.socialSvc, c.pullsSvc)
+	// Feature 10 repository import (docs/features/10): the URL-import
+	// surface (Seam 1, both lanes, top-level twins) over the P6 roles
+	// owned by identity; the repo-import task runs on the core wal
+	// task table (Seam 5) via the Service (B6 opsTasks-style wiring).
+	c.importSvc, c.importHandler = newImportService(st, c.ident, reg, cfg)
 	// Feature 08 §4: access.json CAS commits publish the "access"
 	// collab frame (nil-safe seam on the identity service; the doc
 	// stays the backfill truth).
@@ -170,5 +178,8 @@ func chainCollab(srv *server.Server, c *collabWiring) {
 	}
 	if c.notifyHandler != nil {
 		chainNotify(srv, c.notifyHandler)
+	}
+	if c.importHandler != nil {
+		chainImport(srv, c.importHandler)
 	}
 }

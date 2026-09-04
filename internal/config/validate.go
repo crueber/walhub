@@ -25,6 +25,7 @@ func Validate(c *Config) (warnings []string, errs []error) {
 	errs = append(errs, checkRoles(c)...)
 	errs = append(errs, checkPaths(c)...)
 	errs = append(errs, checkSSH(c)...)
+	errs = append(errs, checkImport(c)...)
 	return warnings, errs
 }
 
@@ -365,4 +366,24 @@ func validRefGlob(g string) bool {
 		}
 	}
 	return depth == 0
+}
+
+// checkImport validates the additive [import] section (docs/features/10
+// §6): positive bounds, and allowlist entries that are plain hosts
+// (no scheme, no path, no port — matched against the source URL host).
+func checkImport(c *Config) []error {
+	var errs []error
+	im := c.Import
+	if im.MaxRefs < 1 {
+		errs = append(errs, fmt.Errorf("import.max_refs must be >= 1 (got %d)", im.MaxRefs))
+	}
+	if im.MaxConcurrent < 1 {
+		errs = append(errs, fmt.Errorf("import.max_concurrent must be >= 1 (got %d)", im.MaxConcurrent))
+	}
+	for _, h := range im.URLAllowlist {
+		if h == "" || strings.ContainsAny(h, "/:@?#") || strings.Contains(h, " ") {
+			errs = append(errs, fmt.Errorf("import.url_allowlist entry %q must be a plain host", h))
+		}
+	}
+	return errs
 }

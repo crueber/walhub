@@ -11,6 +11,7 @@ import App from "./App.jsx";
 import { initData } from "./lib/data.js";
 
 import Owners from "./pages/Owners.jsx";
+import Import from "./pages/Import.jsx";
 import Repos from "./pages/Repos.jsx";
 import Repo from "./pages/Repo.jsx";
 import Tree from "./pages/Tree.jsx";
@@ -47,6 +48,7 @@ render(
   () => (
     <Router root={App}>
       <Route path="/" component={Owners} />
+      <Route path="/import" component={Import} />
       <Route path="/setup" component={Setup} />
       <Route path="/api" component={Apidocs} />
       <Route path="/keys" component={Keys} />

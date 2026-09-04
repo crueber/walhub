@@ -52,6 +52,7 @@ export default function App(props) {
             <A href="/" end>
               owners
             </A>
+            <A href="/import">import</A>
             <A href="/api">API</A>
             <A href="/keys">keys</A>
             <A href="/setup">setup</A>
