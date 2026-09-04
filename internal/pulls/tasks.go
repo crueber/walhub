@@ -161,12 +161,19 @@ func (t *taskTable) begin(repo, kind string) (*taskEntry, bool) {
 
 // end completes a task (leader only): records the outcome and wakes joiners.
 // The finished record stays in the bounded recent cache for late attachers.
+// The Finished stamp takes the RECORD mutex: production paths snapshot the
+// live record directly (StartMerge/UpdateBranch return entry.rec.snapshot;
+// merge/task polls read it), so writing it under the table mutex alone is
+// a data race (09 audit). Lock order table → record matches every other
+// path (no path takes record → table).
 func (t *taskTable) end(repo, kind string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := taskKey(repo, kind)
 	if e, ok := t.running[key]; ok {
+		e.rec.mu.Lock()
 		e.rec.Finished = time.Now().UTC().Format(dateTimeFmt)
+		e.rec.mu.Unlock()
 		e.wg.Done()
 		delete(t.running, key)
 		t.recent[key] = e.rec

@@ -322,6 +322,14 @@ every call goes through the SDK).
 - Fork = fresh manifest referencing the parent's packs; sharing is by construction, and compaction's
   pack removal consults fork-network manifests before deleting.
 - Closing keywords ride 02's cross-ref contract; `merged` events are the PR-side trigger.
+- **Task-table lock rule (09 audit fix): the `Finished` stamp in `taskTable.end`
+  takes the RECORD mutex, not just the table mutex** (`internal/pulls/tasks.go`):
+  production paths snapshot the live record directly (`StartMerge`/`UpdateBranch`
+  return `entry.rec.snapshot()`; `GET …/merge/task` reads it), so the table-only
+  write raced a poll landing during completion (caught by `-race` under full-suite
+  parallel load; pinned by `TestCoverTaskEndSnapshotRace`). Lock order is table →
+  record everywhere; no path takes record → table. Rationale: the record mutex is
+  the one all readers share — the table mutex only serializes leaders.
 
 ## Explicitly out of scope
 
