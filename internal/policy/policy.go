@@ -99,6 +99,13 @@ func (r *Rule) Protect() *ProtectEffect { e, _ := r.Effect.(*ProtectEffect); ret
 func (r *Rule) History() *HistoryEffect { e, _ := r.Effect.(*HistoryEffect); return e }
 func (r *Rule) Size() *SizeEffect       { e, _ := r.Effect.(*SizeEffect); return e }
 
+// RequiredReviews is the typed view of Rule.Effect for the 04 code-review
+// gate (nil unless the rule carries a required-reviews effect).
+func (r *Rule) RequiredReviews() *RequiredReviewsEffect {
+	e, _ := r.Effect.(*RequiredReviewsEffect)
+	return e
+}
+
 // Document is the parsed policy.json.
 type Document struct {
 	Version int
@@ -464,6 +471,68 @@ func Evaluate(ctx context.Context, d *Document, req Request) Verdict {
 		pe, ok := r.Effect.(PushEffect)
 		if !ok {
 			continue // parsed, not enforced
+		}
+		if !ruleMatches(r, effective, d.roster) {
+			continue
+		}
+		if v := pe.Evaluate(effective, d.roster); !v.Allow {
+			return Verdict{Allow: false, Rule: r.Name}
+		}
+	}
+	return Verdict{Allow: true}
+}
+
+// MatchingRules returns the rules selecting req (match only, no effect
+// evaluation), in file order. Consumers that enforce outside receive-pack
+// (e.g. internal/review's merge-time gate) resolve rule applicability with
+// the same match law the push path uses, then apply their own verdict over
+// state the push path cannot observe.
+func MatchingRules(d *Document, req Request) []*Rule {
+	if d == nil {
+		return nil
+	}
+	effective := req
+	effective.Op = effectiveOp(req)
+	var out []*Rule
+	for _, r := range d.Rules {
+		if ruleMatches(r, effective, d.roster) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Bypassed reports whether principal (plus edge-bound tags) bypasses the
+// spellings against the roster. An empty spellings list bypasses nobody —
+// callers must check len first (an absent bypass list is fail-closed, not
+// "everyone bypasses"); matchActorList alone would admit on empty.
+func Bypassed(spellings []string, principal string, tags []string, g Groups) bool {
+	if len(spellings) == 0 {
+		return false
+	}
+	return matchActorList(spellings, Actor{Principal: principal, Tags: tags}, g)
+}
+
+// EvaluateProtect answers, per update, using ONLY protect effects: every
+// matching protect rule applies (AND-combined; a rule is bypassed only if
+// THAT rule's bypass matches) and the first denying rule in file order is
+// named. Observation effects with their own gates (required-reviews,
+// required-checks) NEVER participate here — this is the server-side
+// publisher's check (the merge task's base-ref publish is NOT a
+// receive-pack push, so push-time halves must not apply; their verdicts
+// come from their own gates, consulted separately by the caller).
+// Receive-pack uses Evaluate (all PushEffects); server-side publishers use
+// this. A missing/empty document is allow-all.
+func EvaluateProtect(ctx context.Context, d *Document, req Request) Verdict {
+	if d == nil || len(d.Rules) == 0 {
+		return Verdict{Allow: true}
+	}
+	effective := req
+	effective.Op = effectiveOp(req)
+	for _, r := range d.Rules {
+		pe, ok := r.Effect.(*ProtectEffect)
+		if !ok {
+			continue // parsed, not a push restriction: own gate or stored only
 		}
 		if !ruleMatches(r, effective, d.roster) {
 			continue

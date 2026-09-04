@@ -147,8 +147,9 @@ type IssueCloser interface {
 // Service is the pulls store client: numbering (shared P2), threads (shared
 // P3), the shared index (P4), pr.json sidecars, mergeable.json caches,
 // forks, git mergeability/merge execution, and the WAL ref publishes.
-// Construct with New; Roles/Git/Dirs/Refs/Closer may be nil in tests that
-// exercise pure paths (nil Git/Dirs/Refs makes git-touching ops 503).
+// Construct with New; Roles/Git/Dirs/Refs/Closer/Reviews may be nil in tests that
+// exercise pure paths (nil Git/Dirs/Refs makes git-touching ops 503;
+// nil Reviews skips the 04 required-reviews gate).
 type Service struct {
 	Store  store.ObjectStore
 	Roles  RoleService
@@ -156,7 +157,10 @@ type Service struct {
 	Dirs   RepoDirs
 	Refs   RefPublisher
 	Closer IssueCloser
-	Now    func() time.Time
+	// Reviews is the 04-provided merge-time gate (docs/features/04 §6;
+	// see review.go). Wired in composition (cmd/walhub); nil skips it.
+	Reviews ReviewGate
+	Now     func() time.Time
 
 	// ServerID is the committer identity for merge commits
 	// ("walhub <server.identity_email>", default "walhub@localhost").

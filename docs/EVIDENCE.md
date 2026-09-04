@@ -29,6 +29,7 @@ requested or when a review questions a hot path).
 | E2 | 2026-09-04 | Identity authz read path (`internal/identity`) | What does one role resolution cost, and can it explode with team count? | O(1) per request: 1 conditional access.json GET + 1 per referenced team; steady state transfers zero bodies (304-class). Cannot explode: bounded binding list, exact-key probes, no LIST. |
 | E3 | 2026-09-04 | Issue list/read path (`internal/issues`) | Is the issue list index-first O(1), what does a thread read cost, and is the LIST fallback bounded? | List flat (2 GETs, 0 LIST at any population when the index is complete); thread read linear in thread length; fallback bounded (1 LIST + ≤2000 header GETs, page ≤100). Cannot explode: every scan is prefix-bounded and paged. |
 | E4 | 2026-09-04 | PR mergeability + merge task (`internal/pulls`) | Does mergeability stay bounded as open PRs accumulate, what does a merge cost, and is git-pool usage bounded? | Recompute flat (3 GETs + 1 PUT, 0 LIST, 6 git calls at 1 and 50 open PRs); merge bounded (12 GETs + 5 PUTs, 0 LIST, 11 git calls, peak concurrency 1); 16 concurrent readers collapse to 1 merge-tree. Cannot explode: no LIST on any path, page-bounded sidecars, pool-gated git. |
+| E5 | 2026-09-04 | Review summary + required-reviews gate (`internal/review`) | What does a review-summary recompute cost, what does the merge-time gate scan cost, and why can't either explode? | Recompute linear in review/thread count (9 GETs + 1 PUT + 2 LISTs at 5 reviews/2 threads; 122 + 1 + 2 at 100/20); gate scan linear in review count (8 + 0 + 1 at 5; 103 + 0 + 1 at 100), own deadline, never trusts the summary. Cannot explode: scans are prefix-bounded to one PR's low-volume collaboration subtree, no git on any path, no cross-PR fan-out. |
 
 ---
 
@@ -328,3 +329,71 @@ page-bounded sidecars, ≤ 100 GETs per page).
 reader stampedes collapse to one trial merge. No redesign required; the
 levers if volume ever surprises are the mergeable batch window (already
 per-repo) and the list page size (already ≤ 100).
+
+---
+
+## E5 — Review-summary recompute + required-reviews gate at 5 and 100 reviews (2026-09-04)
+
+**Area:** code review rollup + merge gate (`internal/review`, spec
+`docs/features/04_code_review.md` §6).
+
+**Question:** what does a review-summary recompute cost, what does the
+merge-time gate scan cost inside the merge task, and why can't either one
+explode as review volume grows?
+
+**Method.** Harness: `internal/review/evidence_test.go`
+(`TestEvidenceReviewSummaryBudget`, `TestEvidenceGateScanBudget`;
+`go test ./internal/review/ -run TestEvidence -v`). Real service paths
+over the **memory store** wrapped in an op-counting decorator — the
+budgets count store round-trips (GET/PUT/LIST), which is the
+round-trip cost model (AGENTS law 6); memory isolates the algorithmic
+shape from network RTT. Populations: 5 reviews/2 threads ("normal") and
+100 reviews/20 threads (order of magnitude beyond — past any human PR).
+
+**Results.**
+
+| path | 5 reviews / 2 threads | 100 reviews / 20 threads | shape |
+|---|---|---|---|
+| summary recompute | 9 GETs, 1 PUT, 2 LISTs | 122 GETs, 1 PUT, 2 LISTs | linear in review+thread count |
+| gate scan (merge task) | 8 GETs, 0 PUTs, 1 LIST | 103 GETs, 0 PUTs, 1 LIST | linear in review count |
+
+**Analysis.**
+
+- **The recompute is linear because the summary is a fold over the
+  immutable set.** 2 LISTs (one prefix LIST over `reviews/`, one over
+  `threads/` — both bounded to ONE PR's collaboration subtree) + 1 GET
+  per review event + 1 GET per thread header + the requests GET + the
+  header read, and exactly 1 CAS PUT for the header write. 5+2+2 = 9;
+  100+20+2 = 122 — the formula is exact, no hidden fan-out. The LISTs
+  never leave the PR prefix (no cross-PR scan exists anywhere in the
+  package), and there are zero git calls on every review path by
+  construction (the package has no git seam).
+- **The gate scan is the same fold minus the writes, under its own
+  deadline.** Policy GET + header GET + sidecar GET + 1 LIST + 1 GET per
+  review (5+3 = 8; 100+3 = 103, exact). It runs inside the merge task's
+  context with `GateTimeout` (default 15 s); a blown deadline fails
+  closed. It NEVER reads `review_summary` — the verdict re-derives from
+  the event scan, so a poisoned or racing cache cannot decide a merge
+  (pinned by test: the gate passes with a deliberately poisoned summary
+  and fails only on the scan's verdict).
+- **Why it can't explode.** Three bounds compose: (1) the scan prefix is
+  one PR (`pulls/<num>/…`) — review volume is per-PR human output, and a
+  100-review PR is already past pathological; (2) no step fans out —
+  sequential GETs, one LIST per family, one PUT, zero git; (3) the write
+  side is CAS-arbitrated on the PR header, so concurrent submits
+  serialize on allocation (16-way submit burst converges with unique
+  seqs, measured in `TestConcurrentSubmits`) instead of amplifying reads.
+  There is no background dismisser, no cross-PR aggregation, and no
+  second writer — the summary is a render cache any racing writer
+  recomputes identically, and the gate doesn't trust it anyway.
+
+**Over the network (S3/GCS/filesystem).** Same shape with per-op RTT: a
+recompute at 100 reviews is ~122 control-plane GETs + 1 CAS PUT (no bulk
+lane, no git); the gate is ~103 GETs inside the merge task's deadline.
+Both stay on the control plane and off the git hot path at any
+population — the lever if a deployment ever saw thousand-review PRs is
+the page/window size, not a redesign.
+
+**Verdict.** Recompute and gate costs are exactly linear in per-PR review
+count with constant LISTs (2 and 1) and at most 1 PUT, measured on the
+real code path at both populations. No redesign required.

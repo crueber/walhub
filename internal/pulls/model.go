@@ -153,7 +153,10 @@ type ForkDoc struct {
 
 // Thread is the shared P3 header as pulls reads it (02 owns the shape;
 // unknown fields ignored on read — PR threads carry no PR fields by
-// contract, §2.1). Only the fields pulls needs are modeled.
+// contract, §2.1). Only the fields pulls needs are modeled. The three
+// review-owned fields (04 §7) are preserved opaquely: pulls round-trips
+// them verbatim on every header write but never interprets them (04 owns
+// the semantics; the merge-time gate reads the events, never this cache).
 type Thread struct {
 	Num          int      `json:"num"`
 	Kind         string   `json:"kind"`
@@ -168,6 +171,11 @@ type Thread struct {
 	NextEventSeq int      `json:"next_event_seq"`
 	CommentCount int      `json:"comment_count"`
 	Version      int      `json:"version"`
+	// NextReviewSeq reserves review seqs (04 §3); NextThreadNum reserves
+	// tids (04 §4); ReviewSummary is 04's denormalized render cache (§6).
+	NextReviewSeq int             `json:"next_review_seq,omitempty"`
+	NextThreadNum int             `json:"next_thread_num,omitempty"`
+	ReviewSummary json.RawMessage `json:"review_summary,omitempty"`
 }
 
 // Card is the shared P4 index projection as pulls reads it (02 owns the

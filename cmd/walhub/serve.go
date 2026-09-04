@@ -29,6 +29,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/issues"
 	"git.packden.us/crueber/walhub/internal/maintain"
 	"git.packden.us/crueber/walhub/internal/pulls"
+	"git.packden.us/crueber/walhub/internal/review"
 	"git.packden.us/crueber/walhub/internal/server"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -103,6 +104,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var issuesHandler *issues.Handler
 	var pullsSvc *pulls.Service
 	var pullsHandler *pulls.Handler
+	var reviewHandler *review.Handler
 	if !setupOnly {
 		wal.SetWarnLogger(func(format string, args ...any) { log.Warn(fmt.Sprintf(format, args...)) })
 		reg = wal.NewRegistry(ctx, st, cfg)
@@ -135,6 +137,15 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// the WAL publish path (never force); the merge task calls 02's
 		// ApplyClosingReferences seam via issuesSvc.
 		pullsSvc, pullsHandler = newPullsService(st, ident, issuesSvc, reg, cfg.Git.Binary)
+		// Wave C2 review (docs/features/04): immutable reviews, CAS'd
+		// line-anchored threads, the review-requests index, the
+		// review_summary render cache, and the required-reviews
+		// merge-time half (consulted by the pull-merge task through
+		// pulls' ReviewGate seam — the merge logic is NOT forked).
+		// Suggest's commit authors ride pulls' HeadAuthors; the
+		// push-time half (policy.RequiredReviewsEffect) enforces at
+		// receive-pack with no wiring. Registers NO task kinds.
+		_, reviewHandler = newReviewService(st, ident, pullsSvc)
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --
@@ -197,6 +208,9 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	}
 	if pullsHandler != nil {
 		chainPulls(srv, pullsHandler)
+	}
+	if reviewHandler != nil {
+		chainReview(srv, reviewHandler)
 	}
 
 	// the SSH key registry backs both the sshd auth lookup and the
