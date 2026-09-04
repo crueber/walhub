@@ -310,6 +310,47 @@ func TestHookIDShape(t *testing.T) {
 
 func strPtr(s string) *string { return &s }
 
+// TestWebhookInsecureTLS pins the §1.4 insecure_tls contract: a hook
+// against a self-signed TLS sink fails closed by default (cursor held,
+// delivery row records the transport error) and delivers once the hook
+// opts into insecure_tls (cursor advances).
+func TestWebhookInsecureTLS(t *testing.T) {
+	x := newHarness(t)
+	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer tlsSrv.Close()
+
+	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
+		URL: strPtr(tlsSrv.URL),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := x.svc.reserveSeq(ctx(), "acme", "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: x.now.Format(dateTimeFmt)}
+	if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), encode(ev)); err != nil {
+		t.Fatal(err)
+	}
+	// Default (verify): self-signed fails, cursor stays at 0.
+	x.svc.DeliverRepo(ctx(), "acme", "repo")
+	if cur := x.svc.readCursor(ctx(), "acme", "repo", hk.ID); cur != 0 {
+		t.Fatalf("self-signed cursor advanced to %d without insecure_tls", cur)
+	}
+	// Opt-in: the same event delivers, cursor advances past it.
+	insecure := true
+	if _, err := x.svc.PatchHook(ctx(), "acme", "repo", hk.ID, HookSpec{InsecureTLS: &insecure}); err != nil {
+		t.Fatal(err)
+	}
+	x.svc.DeliverRepo(ctx(), "acme", "repo")
+	if cur := x.svc.readCursor(ctx(), "acme", "repo", hk.ID); cur != seq {
+		t.Fatalf("insecure cursor = %d, want %d", cur, seq)
+	}
+}
+
 func testTime() (t time.Time) { return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC) }
 
 // testReader yields deterministic entropy distinct per i.

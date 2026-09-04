@@ -24,6 +24,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -297,6 +298,29 @@ func (s *Service) DeleteHook(ctx context.Context, owner, repo, id string) error 
 // client with control-plane traffic — here webhooks get their own lane).
 var hookClient = &http.Client{Timeout: WebhookTimeout}
 
+// hookClientInsecure is the same lane with TLS verification disabled,
+// selected per hook by insecure_tls (§1.4, default false). Cloned from the
+// default transport so proxy/env behavior is preserved; stdlib only.
+var hookClientInsecure = &http.Client{Timeout: WebhookTimeout, Transport: insecureTransport()}
+
+func insecureTransport() http.RoundTripper {
+	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+		clone := tr.Clone()
+		clone.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		return clone
+	}
+	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+}
+
+// hookClientFor selects the delivery client for h (insecure only when the
+// hook opts in — the default verifies like any https client).
+func hookClientFor(h *Hook) *http.Client {
+	if h != nil && h.InsecureTLS {
+		return hookClientInsecure
+	}
+	return hookClient
+}
+
 // DeliverRepo runs one webhooks pass for repo: every active hook,
 // sequentially per hook, parallel across hooks (cap 8). Best-effort per
 // hook; a failed hook holds back only its own cursor.
@@ -397,7 +421,7 @@ func (s *Service) postEvent(ctx context.Context, h *Hook, ev *ActivityEvent) (in
 		mac.Write(body)
 		req.Header.Set("X-Walgit-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
-	resp, err := hookClient.Do(req)
+	resp, err := hookClientFor(h).Do(req)
 	if err != nil {
 		return 0, err
 	}

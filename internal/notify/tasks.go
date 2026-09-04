@@ -456,8 +456,15 @@ func (s *Service) retainRepoEvents(ctx context.Context, owner, repo string, now 
 		return
 	}
 	const maxDeletes = 500
-	deleted := 0
-	for seq := 1; seq < minCursor && deleted < maxDeletes; seq++ {
+	// maxScan bounds the reads of one pass: the loop below is one GET per
+	// seq from 1, so without a cap it grows O(minCursor) forever on a busy
+	// repo (a maintainer-pass unit must stay bounded, P7). Gaps count as
+	// scanned — they are rare (crash-reserved seqs) and re-probing them is
+	// wasted work. Deletions converge across daily passes.
+	const maxScan = 600
+	deleted, scanned := 0, 0
+	for seq := 1; seq < minCursor && deleted < maxDeletes && scanned < maxScan; seq++ {
+		scanned++
 		ev := s.readActivity(ctx, owner, repo, seq)
 		if ev == nil {
 			continue // gap — never delete what we cannot see

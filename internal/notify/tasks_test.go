@@ -156,6 +156,32 @@ func TestRetentionCompactsActivityFloor(t *testing.T) {
 	}
 }
 
+// TestRetentionActivityScanBound pins the §9 maintainer-pass bound: a repo
+// whose minimum webhook cursor sits thousands of seqs out compacts in
+// bounded reads per pass (converging across passes), never O(minCursor)
+// GETs in one pass.
+func TestRetentionActivityScanBound(t *testing.T) {
+	x := newHarness(t)
+	c := &opCounts{}
+	x.svc.Store = countingStore{ObjectStore: x.svc.Store, c: c}
+	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{URL: strPtr("https://example.com/h")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cursor far out, no events beneath it (pure gaps): the old unbounded
+	// loop would read every seq from 1.
+	x.svc.advanceCursor(ctx(), "acme", "repo", hk.ID, 5000)
+	before := c.snapshot()
+	x.svc.retainRepoEvents(ctx(), "acme", "repo", x.now)
+	cost := c.snapshot()
+	if gets := cost.get - before.get; gets > 1000 {
+		t.Fatalf("retention pass GETs = %d, want bounded (< 1000) for a 5000-seq window", gets)
+	}
+	if dels := cost.del - before.del; dels != 0 {
+		t.Fatalf("gaps must never delete: dels = %d", dels)
+	}
+}
+
 func TestUserBusDropOldest(t *testing.T) {
 	x := newHarness(t)
 	ch, unsub := x.svc.ubus.subscribe("amy@example.com")
