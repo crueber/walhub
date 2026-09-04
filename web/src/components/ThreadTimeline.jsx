@@ -9,6 +9,8 @@
 //
 // props: { events, textFor(ev) → string|null (null = markdown body),
 //   actionsFor?(ev) → JSX (per-row extras, e.g. reaction buttons),
+//   summaryFor?(ev) → JSX|null (per-row summary row under the body,
+//     e.g. the reaction emoji+count chips; null = no row),
 //   fmtDate }.
 
 import { For, Show } from "solid-js";
@@ -32,6 +34,7 @@ export default function ThreadTimeline(props) {
               <Show when={textFor(ev)} fallback={<div class="prose-sm" innerHTML={sanitize(renderMarkdown(ev.body ?? ""))} />}>
                 <p class="text-sm italic">{textFor(ev)}</p>
               </Show>
+              {props.summaryFor?.(ev)}
             </article>
           </li>
         )}

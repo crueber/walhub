@@ -14,11 +14,7 @@ import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole } from "../components/perms.jsx";
-
-const REACTIONS = ["+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"];
-
-// reaction_summary keys are %06x event seqs (02 §1.1: "000003", never "3").
-const seqKey = (seq) => Number(seq).toString(16).padStart(6, "0");
+import { REACTIONS, reactionEmoji, summaryEntries, reactionChangedText } from "../lib/reactions.js";
 
 function eventText(ev) {
   switch (ev.type) {
@@ -40,7 +36,7 @@ function eventText(ev) {
     case "cross_referenced":
       return `referenced from ${ev.source?.repo ?? "?"}#${ev.source?.num ?? "?"}`;
     case "reaction_changed":
-      return `${ev.op === "remove" ? "unreacted" : "reacted"} ${ev.content} on #${ev.target_event_seq}`;
+      return reactionChangedText(ev);
     case "closed_by_pr":
       return `closed by #${ev.pr_num} (${ev.keyword})`;
     default:
@@ -92,13 +88,21 @@ export default function Issue() {
     }
   };
 
-  const unreact = async (seq, content) => {
+  // Summary chips toggle: remove when the clicker reacted, add when they
+  // did not (the summary carries no per-user state, so a remove-404 falls
+  // back to add — GitHub semantics; only a double failure reports).
+  const toggleReaction = async (seq, content) => {
     try {
       await ctx.repoClient.issues.reactions.remove(num(), seq, content);
-      reload();
     } catch (err) {
-      reportError(err, "issue-unreact");
+      try {
+        await ctx.repoClient.issues.reactions.add(num(), { target_event_seq: seq, content });
+      } catch (addErr) {
+        reportError(addErr, "issue-react");
+        return;
+      }
     }
+    reload();
   };
 
   const patch = async (fields) => {
@@ -152,25 +156,45 @@ export default function Issue() {
                 fmtDate={fmtDate}
                 actionsFor={(ev) => (
                   <Show when={ev.type === "opened" || ev.type === "commented"}>
-                    <span class="ml-2 inline-flex gap-1">
+                    <span class="ml-2 inline-flex gap-1" role="group" aria-label={`reactions for comment ${ev.seq}`}>
                       <For each={REACTIONS}>
                         {(r) => (
                           <button
                             type="button"
                             class="chip hover:border-zinc-400"
+                            aria-label={`react ${r}`}
                             title={`react ${r}`}
                             onClick={() => react(ev.seq, r)}
                           >
-                            {r}
-                            <Show when={(summary()[seqKey(ev.seq)] ?? {})[r]}>
-                              {" "}{(summary()[seqKey(ev.seq)] ?? {})[r]}
-                            </Show>
+                            <span aria-hidden="true">{reactionEmoji(r)}</span>
                           </button>
                         )}
                       </For>
                     </span>
                   </Show>
                 )}
+                summaryFor={(ev) => {
+                  const entries = () => summaryEntries(summary(), ev.seq);
+                  return (
+                    <Show when={(ev.type === "opened" || ev.type === "commented") && entries().length > 0}>
+                      <div class="reaction-summary mt-2 flex flex-wrap gap-1" role="group" aria-label={`reactions on comment ${ev.seq}`}>
+                        <For each={entries()}>
+                          {([content, count]) => (
+                            <button
+                              type="button"
+                              class="chip"
+                              aria-label={`toggle ${content} reaction, ${count} total`}
+                              title={`${content} · ${count}`}
+                              onClick={() => toggleReaction(ev.seq, content)}
+                            >
+                              <span aria-hidden="true">{reactionEmoji(content)}</span> {count}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  );
+                }}
               />
               <Show when={more()}>
                 <button type="button" class="btn mt-2" disabled={getOlder()} onClick={loadOlder}>
