@@ -16,6 +16,7 @@ import { RepoClient } from "./repo.js";
 import { attachAdmin } from "./admin.js";
 import { attachAccess } from "./access.js";
 import { attachInvites, attachRepoInvites } from "./invites.js";
+import { attachIssues } from "./issues.js";
 import { attachOrgs } from "./orgs.js";
 import { attachUsers } from "./users.js";
 import { openAuthPopup, canAuthenticate } from "./auth.js";
@@ -186,6 +187,7 @@ export class ReposClient {
     attachAdmin(r);
     attachAccess(r);
     attachRepoInvites(r);
+    attachIssues(r);
     return r;
   }
 

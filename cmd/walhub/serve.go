@@ -26,6 +26,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/events"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/identity"
+	"git.packden.us/crueber/walhub/internal/issues"
 	"git.packden.us/crueber/walhub/internal/maintain"
 	"git.packden.us/crueber/walhub/internal/server"
 	"git.packden.us/crueber/walhub/internal/server/auth"
@@ -97,6 +98,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var apiEnv *api.Env
 	var ident *identity.Service
 	var identHandler *identity.Handler
+	var issuesHandler *issues.Handler
 	if !setupOnly {
 		wal.SetWarnLogger(func(format string, args ...any) { log.Warn(fmt.Sprintf(format, args...)) })
 		reg = wal.NewRegistry(ctx, st, cfg)
@@ -112,6 +114,12 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		identHandler = &identity.Handler{Svc: ident}
 		apiEnv.Access = ident
 		apiEnv.GroupExpander = ident.PolicyExpander()
+		// Wave B issues (docs/features/02): the thread/event/label/
+		// milestone surface (Seam 1, both lanes) over the P6 roles owned
+		// by identity. Notifications emit through the 02 §10 seam —
+		// nil until internal/notify lands (best-effort synchronous
+		// fan-out contract, P8).
+		issuesHandler = &issues.Handler{Svc: issues.New(st, ident)}
 		if ot, ok := apiEnv.Tasks.(*opsTasks); ok {
 			ot.ident = ident
 		}
@@ -156,6 +164,14 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 			return srv.Auth().Authenticate(r, cfg)
 		}
 		srv.ChainExtra(identHandler)
+	}
+	if issuesHandler != nil {
+		// Chain the issues surface in front of the core api mux (Seam 1);
+		// authentication resolves through the server chain (Seam 2).
+		issuesHandler.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
+			return srv.Auth().Authenticate(r, cfg)
+		}
+		srv.ChainExtra(issuesHandler)
 	}
 
 	// the SSH key registry backs both the sshd auth lookup and the

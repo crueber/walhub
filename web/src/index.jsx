@@ -17,6 +17,11 @@ import Tree from "./pages/Tree.jsx";
 import Blob from "./pages/Blob.jsx";
 import Commits from "./pages/Commits.jsx";
 import Commit from "./pages/Commit.jsx";
+import Issues from "./pages/Issues.jsx";
+import IssueNew from "./pages/IssueNew.jsx";
+import Issue from "./pages/Issue.jsx";
+import Labels from "./pages/Labels.jsx";
+import Milestones from "./pages/Milestones.jsx";
 import Wal from "./pages/Wal.jsx";
 import Settings from "./pages/Settings.jsx";
 import Org from "./pages/Org.jsx";
@@ -41,6 +46,11 @@ render(
         <Route path="/blob/*rest" component={Blob} />
         <Route path="/commits" component={Commits} />
         <Route path="/commit/:sha" component={Commit} />
+        <Route path="/issues" component={Issues} />
+        <Route path="/issues/new" component={IssueNew} />
+        <Route path="/issues/:num" component={Issue} />
+        <Route path="/labels" component={Labels} />
+        <Route path="/milestones" component={Milestones} />
         <Route path="/wal" component={Wal} />
         <Route path="/settings" component={Settings} />
       </Route>

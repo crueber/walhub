@@ -317,6 +317,67 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
 - Auth gates per P6: label/milestone CRUD and moderation at triage; issue create/comment at read.
 - Compaction task kind `issue-index-compact`, trigger sampled — no timer goroutine invented.
 
+### Wave B implementation notes (2026-09-04, `internal/issues` landed)
+
+- **Notify seam is a synchronous emitter, nil until 06 lands.** `Service.Notify`
+  (`NotifyEvent{repo, class, actor, issue_num, recipients, at}`) fires in the
+  mutating handler after the CAS commits (P8); with no `internal/notify` wired
+  it is a documented no-op. All durable inputs 06 needs (`participants[]`,
+  mention bodies) are in the bucket regardless, so the timeline stays the
+  backfill truth. Same for `Service.Stream` (`issue`/`issue_event` names are
+  reserved for the repo SSE bus).
+- **Seam 1 in code is the `server.ExtraRoutes` chain**, not `api.Lanes` — the
+  package fronts the core mux via `Handle(w, r) bool` on both lanes, exactly
+  like `internal/identity` (see the Wave A amendment in 14_extensibility.md
+  Decisions). Route-for-route the §7 table is implemented verbatim.
+- **`DELETE …/labels/{name}` answers 200 `{"threads_affected": N}`, not 204.**
+  §3.1 mandates the report and a 204 cannot carry it; the table's 204 is
+  superseded by the report requirement.
+- **Cursor semantics pinned:** `after=` is positional in display order
+  (newest-first; unknown cursor pages from the top); `after_seq=` is an
+  exclusive upper bound (seqs strictly below, newest-last — older on demand).
+  `n` clamps at 100 (list) / 200 (events); over-max list `n` is 400, over-max
+  event `n` clamps (list bounds the merge work, events bound a single thread).
+- **Completeness is checked, not hoped for.** `ListIssues` reads the index
+  plus the P2 counter (2 GETs, O(1)) and serves index-only when every
+  allocated number has a card; otherwise it LIST-merges with the header
+  winning. A lost index update therefore degrades to LIST instead of hiding
+  an issue (E3 in `docs/EVIDENCE.md` measures 2/0 at every population).
+- **Compaction trigger is size-checked, not sampled.** Handlers hold the
+  written bytes, so `updateIndex` compacts inline past ~256 KiB —
+  observationally identical to 1-in-N sampling with no timer and no extra
+  read. `compacted_through` advances monotonically (max evicted num).
+- **`reaction_summary` keys are `%06x` event seqs** (minimum width 6, growing
+  naturally) — matches the §1.1 example for small seqs, unambiguous, sortable.
+- **Opened-body refs source from the thread** (`source.kind: "thread"`); only
+  comment bodies source `kind: "comment"` with `event_seq`. Cross-repo sources
+  always carry `repo` + `num`.
+- **Milestone DELETE clears every referencing thread**, not just open ones
+  (a superset of §3.2: a dangling id on a closed header helps nothing, and
+  the clear is one CAS per thread).
+- **PR-kind threads are invisible to issue endpoints** (GET/PATCH/comment/
+  react → 404 `unknown issue`): 03 owns those timelines; the shared family
+  never leaks across kinds at the API. The index still carries both kinds'
+  cards (one numbering space) and issue reads filter `kind: "issue"`.
+- **Close without a reason defaults to `completed`** (reopen still clears to
+  `null`); duplicate reaction adds answer 200 with the summary (not an
+  event); milestone `due_on: ""` clears.
+- **Milestone ids ride the wire as stored** (`<id:06x>` hex) — no decimal
+  twin, unlike issue nums.
+- **Default close-reason + `*none`/`none` filter spellings** (`assignee=*none`,
+  `milestone=none`) are implemented exactly as §7 rows state.
+- **Event windows return arrays newest-first** (most recent event at index
+  0; `after_seq=` pages strictly below toward older). The §2/P3 phrase
+  "newest-last" names the pagination direction (older on demand), not the
+  array order — code, tests, and the thread page all agree on newest-first.
+- **Duplicate-reaction dedup is best-effort under true concurrency.** The
+  (actor, target, content) check reads the log before the reserving CAS, so
+  sequential double-submits (the real double-click case) are no-ops while
+  two truly-simultaneous duplicate adds could both commit and double-count
+  the summary; the event log stays the truth (a remove still resolves the
+  live set). Fully CAS-atomic dedup would need the live set in the header
+  schema — deferred as human-rate over-engineering.
+
 ## Explicitly out of scope
 
 - Conversation locking/pinning, issue templates, saved replies, issue transfer between repos.

@@ -29,6 +29,10 @@
           dark:border-zinc-700 dark:bg-zinc-800/80; }
   .chip { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
           bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300; }
+  .chip-open { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
+          bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300; }
+  .chip-closed { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
+          bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-300; }
 
   /* Forms */
   .input { @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900

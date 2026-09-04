@@ -107,7 +107,12 @@ the Go mechanism that enforces it.
    `leases/*`, bucket-root `maintain/<host>.pb`, `events/cursor.json`, `policy.json`, `fsck.pb`, render
    cache, plus the Wave A identity families (`users/*/profile.json`, `users/*/invitations/index.json`,
    `orgs/*/org.json`, `orgs/*/members.json`, `orgs/*/teams/*.json`, `repos/<o>/<r>/access.json` —
-   14_extensibility.md Decisions). Nothing is visible before the manifest CAS; everything after it is idempotent and replayable.
+   14_extensibility.md Decisions), plus the Wave B issues families
+   (`repos/<o>/<r>/meta/next_num`, `repos/<o>/<r>/issues/index.json`,
+   `repos/<o>/<r>/issues/<num>/thread.json`, `repos/<o>/<r>/meta/labels.json`,
+   `repos/<o>/<r>/meta/milestones/<id>.json`, `repos/<o>/<r>/meta/milestones/index.json` —
+   docs/features/02 §1; immutable `events/<seq>.json` objects are Create-only, not overwritable).
+   Nothing is visible before the manifest CAS; everything after it is idempotent and replayable.
 3. **Side effects are readers of the WAL, never steps of a write.** Events, mirrors, notifications tail the
    log from a durable cursor. A webhook failure must never fail a push. In Go: the events bridge is its own
    goroutine (or role) with a context-scoped shutdown; the push path has no webhook dependency at all.
