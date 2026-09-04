@@ -182,6 +182,21 @@ Triage-without-write is the only genuinely new gate for 02; maintain's protected
 `policy.json` effects (the rule engine still decides refs; the role decides *who may be evaluated as a
 pusher at all* — a `read`-role principal is rejected at `require_write` before policy runs).
 
+### 5.1 Delete repository semantics
+
+`DELETE /{o}/{r}/api` (both lanes, core `api.summary.repoDelete`) deletes the repo's manifest first
+(linearization: new opens fail immediately), then every remaining key under `repos/<o>/<r>/`, then the
+local serving copy. It is admin-only per the matrix above (non-admin → 403/401 with a plain-text body)
+and idempotent (a second DELETE → 204). No new backend code was needed for the settings Danger Zone
+(issue #39) — the endpoint, its SDK mirror (`repo.delete()`), and its table-driven httptest coverage
+predate it.
+
+Fork/GC: the delete touches exactly one repo prefix. Fork children are separate prefixes with their own
+manifests, so deleting a parent neither strands nor removes its forks (they keep serving), and deleting
+a fork removes only the fork. A deleted fork can leave a stale entry in the parent's `meta/forks.json`
+(03 §7); fork-network readers MUST treat a missing child manifest as absent (conditional-GET miss =
+skip), never as an error — the GC liveness rule stays total over a partially-deleted network.
+
 ## 6. Policy engine integration (Seam 3 amendment)
 
 `policy.json` stays the frozen envelope; effects are untouched. The amendment is to **group member
@@ -277,6 +292,7 @@ RouteProvider (Seam 1).
 | `POST …/invitations` | admin | `{subject, role}` → 201 `{id, accept_url}` |
 | `GET …/invitations` | admin | → pending list |
 | `DELETE …/invitations/{id}` | admin | → 204 |
+| `DELETE …/api` | admin | → 204 (core §9.1 lifecycle; delete + fork/GC semantics §5.1) |
 
 ## 9. UI and SDK
 
@@ -321,6 +337,7 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
 - **`members.json` is one CAS object; team `members[]` is a string array** — human-rate writes, owner checks in one GET, and mention/policy expansion needs principals only.
 - **Invites are Create-only, delete-on-transition; the inbox is a P4-style index** — an invite that can be rewritten is a second writer of role state, and "my invites" must never enumerate orgs/repos.
 - **Legacy repos synthesize on read, then materialize lazily; `access.json` edits are full-document `PUT`s** (no per-binding endpoints) — zero-downtime adoption, no per-binding endpoint surface; matches the policy/settings PUT class.
+- **Repo delete stays a core lifecycle op; this doc owns only its gate and fork semantics** (issue #39) — `DELETE …/api` predates the collaboration layer, so the settings Danger Zone needed no new endpoint, no new SDK method, and no new backend tests; §5.1 pins the admin gate and the fork/GC delete rule instead.
 
 ## Explicitly out of scope
 

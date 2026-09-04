@@ -44,7 +44,7 @@ lazy `import()`ed. Repo tabs extend to: **Code, Issues, Pulls, Releases, Commits
 | `/:owner/:repo/releases/{tag}` | `releases.js` | read | Detail: markdown-lite body, assets table |
 | `/:owner/:repo/releases/new` | `releaseNew.js` | maintain+ | Tag picker (`refStream`), autodraft fill, asset upload with client-side `crypto.subtle` sha256 |
 | `/notifications` | `notifications.js` | authenticated | Full tray page; the dropdown tray (below) is global chrome |
-| `/:owner/:repo/settings/{tab}` | `settings.js` (extended) | varies | Sub-tabs: `access`, `collaborators`, `webhooks`, `ci-tokens` (admin); `labels`, `milestones` (triage+); existing scheduled/policy/config tabs unchanged |
+| `/:owner/:repo/settings/{tab}` | `settings.js` (extended) | varies | Sub-tabs: `access`, `collaborators`, `webhooks`, `ci-tokens` (admin); `labels`, `milestones` (triage+); existing scheduled/policy/config tabs unchanged; the Danger Zone section (red accents, both themes) renders below the tab content on every tab — first entry Delete Repository via `DangerConfirm`, server is the admin gate, success navigates to `/` |
 | `/:owner/settings/{tab}` | `orgSettings.js` | org owner/admin | Org sub-tabs: profile, members, teams, invites, webhooks |
 | `/:owner/teams/:slug` | `Team.jsx` | read | Team page: members, team repos (per 01) |
 
@@ -66,6 +66,7 @@ the repo header (07, optimistic update + rollback), "New issue"/"New pull reques
 | `ReviewModal` | "Finish review" — comment / approve / request-changes + pending line comments collected on the diff | Submits `reviews.create(num, {event, body?, commit_sha, threads?})`; dismiss button (maintain+) |
 | `ReviewerPicker` | Request reviewers | Fed by `reviews.suggest(num, q?)` (access.json roles + commit authors) |
 | `NotificationTray` | Bell + dropdown + `/notifications` page | Source: per-user stream + `notifications:me` cache; unread count as a signal; "mark read"/"mark all read" |
+| `DangerConfirm` | Typed-confirm row for every Danger Zone entry (`Settings.jsx`; rule in `lib/danger.js`) | Input + confirm button; the button arms only on the EXACT `owner/name` match (`dangerMatches` — case-sensitive, untrimmed); a busy flag guards double-submit; failures render a plain-text error line, never the tray |
 
 **MergeBox state machine** (per 03/04/05): `draft → ready → blocked{checks, reviews, conflicts} → mergeable
 → merging(task) → merged | failed`. Transitions recompute on: header fetch, `check` SSE frame, `review` SSE
@@ -358,6 +359,7 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   Close button finishes the job.
 - **English-only v1, no i18n scaffolding** — additive later, zero cost now.
 - **Releases/stars SDK per 07's submodule plan** (`releases.js`, `social.js`) — absorbed verbatim to avoid conflicting paths.
+- **Settings Danger Zone with typed-confirm (2026-09-04, issue #39).** `DangerConfirm` is the single confirm pattern for all future entries; Delete Repository reuses the existing `repo.delete()` (`DELETE …/api` → 204) and navigates to `/` on success because the repo page is gone. No new endpoint, no new SDK method, no new deps.
 
 ## Explicitly out of scope
 

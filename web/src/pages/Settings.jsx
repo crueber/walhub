@@ -8,7 +8,9 @@
 // 5. CI tokens — wct_ token mint/list/revoke (05 §3, admin-only).
 
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
+import { useNavigate } from "@solidjs/router";
 import { useData, reportError, asList } from "../lib/data.js";
+import { dangerMatches } from "../lib/danger.js";
 import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
 import AccessTab from "./Access.jsx";
 
@@ -481,6 +483,101 @@ function CITokensTab(props) {
   );
 }
 
+// --- danger zone (issue #39) --------------------------------------------------------
+
+// DangerConfirm is the reusable typed-confirm row for every danger-zone
+// entry: the caller names the exact `owner/name` the user must retype and
+// the async action behind the confirm button. The button arms only on the
+// exact match (dangerMatches — no trimming), and a busy flag guards
+// double-submit while the action is in flight. Failures surface as a
+// plain-text error line; success is the caller's to handle (the repo may
+// no longer exist, so navigating away is the usual move).
+export function DangerConfirm(props) {
+  const [getTyped, setTyped] = createSignal("");
+  const [getBusy, setBusy] = createSignal(false);
+  const [getErr, setErr] = createSignal("");
+
+  const armed = () => !getBusy() && dangerMatches(getTyped(), props.expected);
+
+  async function confirm() {
+    if (!armed()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await props.onConfirm();
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div class="mt-2">
+      <p class="mb-2 text-sm text-zinc-600 dark:text-zinc-300">
+        {`Type ${props.expected} to confirm.`}
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <input
+          class="input w-72 border-red-300 font-mono text-xs dark:border-red-800"
+          type="text"
+          placeholder={props.expected}
+          value={getTyped()}
+          onInput={(e) => setTyped(e.currentTarget.value)}
+          aria-label={`Type ${props.expected} to confirm`}
+          disabled={getBusy()}
+        />
+        <button
+          type="button"
+          class="rounded border border-red-600 bg-red-600 px-3 py-1 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40 dark:border-red-500 dark:bg-red-700"
+          disabled={!armed()}
+          onClick={confirm}
+        >
+          {getBusy() ? "working…" : (props.confirmLabel ?? "Confirm")}
+        </button>
+      </div>
+      <Show when={getErr()}>
+        <p class="err-line !mt-2 !text-sm">{getErr()}</p>
+      </Show>
+    </div>
+  );
+}
+
+// DangerZone renders at the bottom of the settings page shell (below the
+// tab content, visible on every tab). First entry: Delete Repository —
+// admin-only on the server (`DELETE …/api` → 204, 403 otherwise and the
+// 403 text lands in the entry's error line); success navigates to the
+// owners list because the repo page no longer exists.
+function DangerZone(props) {
+  const navigate = useNavigate();
+  const full = () => props.ctx.full;
+
+  async function deleteRepo() {
+    // No reportError here: the throw lands in DangerConfirm's plain-text
+    // error line (tray + inline would surface the same failure twice).
+    await props.repo.delete();
+    navigate("/");
+  }
+
+  return (
+    <section class="card mt-4 border-red-500/60 p-4" aria-label="Danger Zone">
+      <h3 class="mb-1 font-semibold text-red-700 dark:text-red-400">Danger Zone</h3>
+      <p class="muted mb-3 text-sm">Irreversible actions. Each requires typing the repository name.</p>
+      <div class="rounded border border-red-500/40 p-3">
+        <h4 class="font-medium text-red-700 dark:text-red-400">Delete Repository</h4>
+        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+          Permanently deletes this repository and all of its data. Forks created from it
+          keep their own copies and are unaffected. This cannot be undone.
+        </p>
+        <DangerConfirm
+          expected={full()}
+          confirmLabel="Delete this repository"
+          onConfirm={deleteRepo}
+        />
+      </div>
+    </section>
+  );
+}
+
 // --- shell ---------------------------------------------------------------------------
 
 function WebhooksTab(props) {
@@ -665,6 +762,7 @@ export default function Settings() {
         <Show when={getTab() === "CI tokens"}><CITokensTab ctx={ctx} repo={repo} /></Show>
         <Show when={getTab() === "Webhooks"}><WebhooksTab ctx={ctx} repo={repo} /></Show>
       </div>
+      <DangerZone ctx={ctx} repo={repo} />
     </div>
   );
 }
