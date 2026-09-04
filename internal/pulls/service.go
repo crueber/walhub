@@ -142,11 +142,12 @@ func (s *Service) savePR(ctx context.Context, owner, repo string, p *PRDoc, ver 
 				if gerr != nil || cur == nil {
 					return fmt.Errorf("%w: pull request %d changed concurrently", ErrConflict, p.Num)
 				}
-				// Re-apply onto the fresh doc (sidecar fields are
-				// last-writer-wins per field group; the merge outcome is
-				// written once, so convergence is safe).
+				// Re-apply onto the fresh doc (§2.3 write discipline): each
+				// writer owns a disjoint field set, so the retry merges field
+				// groups instead of overwriting wholesale. The merge outcome
+				// is write-once — a landed merged:true is never unset.
 				freshVersion := cur.Version
-				*cur = *p
+				reapplyPR(cur, p)
 				cur.Version = freshVersion
 				p = cur
 				p.Version++
@@ -159,6 +160,34 @@ func (s *Service) savePR(ctx context.Context, owner, repo string, p *PRDoc, ver 
 		return nil
 	}
 	return fmt.Errorf("%w: pull request %d changed concurrently", ErrConflict, p.Num)
+}
+
+// reapplyPR merges a stale writer's doc onto the fresh doc on a pr.json
+// CAS retry (§2.3 write discipline: disjoint owned field sets per writer —
+// UpdatePR owns Body, refreshHead owns Head.SHA/HeadForcePushedAt, the merge
+// task owns the outcome fields). The merge outcome is write-once/monotonic:
+// once the fresh doc records merged:true, no retry unsets it (or its
+// merged_at/merged_by/merge_commit_sha/merge_strategy). Symmetrically, a
+// merge-completion writer owns ONLY the outcome fields, so its retry keeps
+// the fresh doc's editorial/head/base/draft fields. Unmerged-vs-unmerged
+// retries stay last-writer-wins (head sha self-heals via live drift
+// detection on the next read; bodies are human-rate).
+func reapplyPR(cur, p *PRDoc) {
+	if cur.Merged {
+		merged, at, by, sha, strategy := cur.Merged, cur.MergedAt, cur.MergedBy, cur.MergeCommitSHA, cur.MergeStrategy
+		*cur = *p
+		cur.Merged, cur.MergedAt, cur.MergedBy, cur.MergeCommitSHA, cur.MergeStrategy = merged, at, by, sha, strategy
+		return
+	}
+	if p.Merged {
+		body, head, forced, published := cur.Body, cur.Head, cur.HeadForcePushedAt, cur.HeadPublished
+		draft, fork, base := cur.Draft, cur.Fork, cur.Base
+		*cur = *p
+		cur.Body, cur.Head, cur.HeadForcePushedAt, cur.HeadPublished = body, head, forced, published
+		cur.Draft, cur.Fork, cur.Base = draft, fork, base
+		return
+	}
+	*cur = *p
 }
 
 // --- shared P4 index ---------------------------------------------------------
@@ -917,13 +946,21 @@ func (s *Service) UpdatePR(ctx context.Context, owner, repo string, num int, act
 		s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: class, Actor: who, PullNum: num, Recipients: prParticipants(th, who)})
 		s.stream(ctx, StreamEvent{Name: "pull", Repo: repoName(owner, repo), Action: action, Num: num, Title: th.Title, State: th.State, Author: th.Author, BaseRef: pr.Base.Ref, HeadRef: pr.Head.Ref, HeadSHA: pr.Head.SHA})
 	}
-	if p.Body != nil && *p.Body != pr.Body {
-		pr.Body = *p.Body
-		if serr := s.savePR(ctx, owner, repo, pr, prVer); serr != nil {
-			return nil, nil, serr
+	if p.Body != nil {
+		// Owned-delta re-apply (§2.3): set the body on the fresh doc, so
+		// a concurrently-landed merge outcome (or head refresh) survives
+		// even when no CAS retry fires.
+		if fresh, fver, ferr := s.loadPR(ctx, owner, repo, num); ferr == nil && fresh != nil {
+			pr, prVer = fresh, fver
 		}
-		if npr, _, nerr := s.loadPR(ctx, owner, repo, num); nerr == nil && npr != nil {
-			pr = npr
+		if *p.Body != pr.Body {
+			pr.Body = *p.Body
+			if serr := s.savePR(ctx, owner, repo, pr, prVer); serr != nil {
+				return nil, nil, serr
+			}
+			if npr, _, nerr := s.loadPR(ctx, owner, repo, num); nerr == nil && npr != nil {
+				pr = npr
+			}
 		}
 	}
 	s.updateIndex(ctx, owner, repo, prCardOf(th))

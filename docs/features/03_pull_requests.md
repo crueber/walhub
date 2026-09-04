@@ -72,6 +72,16 @@ Numbering, thread, index, and events all reuse their primitives verbatim: number
 synchronously in the mutating handler (P8). No new locking primitives are introduced by this doc; every
 concurrent mechanism below is a CAS loop or the canonical single-flight (`13_concurrency.md` §3).
 
+`pr.json` writers own disjoint field sets and re-apply only their delta onto
+the fresh doc (read-modify-write touches owned fields, never a wholesale
+struct copy): `UpdatePR` owns `body`, `refreshHead` owns `head.sha` /
+`head_force_pushed_at`, the merge task owns the outcome fields
+(`merged`, `merged_at`, `merged_by`, `merge_commit_sha`, `merge_strategy`).
+The outcome is write-once/monotonic — once `merged:true`, no writer unsets
+it — and the `savePR` CAS retry field-merges instead of overwriting (fresh
+outcome always wins; a merge-completion retry keeps the fresh
+editorial/head fields). See the Decisions entry for issue #64.
+
 ## 3. Opening a PR
 
 `POST …/pulls` with `{title, base_ref, head_ref, fork?}`. The handler MUST:
@@ -437,3 +447,14 @@ every call goes through the SDK).
   git argv proven separately against stock git) — 0 LIST on every path,
   bounded GETs/PUTs/git calls at 1 and 50 open PRs, 16-reader single-flight
   collapse to 1 merge-tree.
+- **pr.json CAS retries field-merge; the merge outcome is write-once
+  (issue #64, 2026-09-04):** `savePR`'s 412 retry did wholesale `*cur = *p`
+  from the writer's stale struct, so an `UpdatePR` body/title write racing a
+  landing merge overwrote `merged/*` back to unmerged (unrecoverable — no
+  repair rewrites it). Worse, `refreshHead` and the merge commit step saved a
+  stale struct under a FRESH version, clobbering with no 412 at all. Now each
+  writer re-applies only its owned delta onto the fresh doc (§2.3), and the
+  retry merges field groups with a monotonic guard (landed `merged:true` is
+  never unset; a merge-completion retry keeps fresh editorial/head fields).
+  Rationale: the outcome is not re-derivable from live refs, while head sha
+  self-heals via drift detection — so the outcome gets the hard guarantee.
