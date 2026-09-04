@@ -108,7 +108,7 @@ func TestRepoInvites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.ListRepoInvites(ctx, "acme", "repo")
+	list, err := s.ListRepoInvites(ctx, "acme", "repo", 100)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListRepoInvites: %v %+v", err, list)
 	}
@@ -246,15 +246,15 @@ func TestListInvites(t *testing.T) {
 	if _, err := s.CreateRepoInvite(ctx, "acme", "r", "b@x.c", RoleRead, "alice@example.com", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	orgs, err := s.ListOrgInvites(ctx, "acme")
+	orgs, err := s.ListOrgInvites(ctx, "acme", 100)
 	if err != nil || len(orgs) != 1 {
 		t.Errorf("ListOrgInvites: %v %+v", err, orgs)
 	}
-	repos, err := s.ListRepoInvites(ctx, "acme", "r")
+	repos, err := s.ListRepoInvites(ctx, "acme", "r", 100)
 	if err != nil || len(repos) != 1 {
 		t.Errorf("ListRepoInvites: %v %+v", err, repos)
 	}
-	if empty, err := s.ListOrgInvites(ctx, "empty"); err != nil || len(empty) != 0 {
+	if empty, err := s.ListOrgInvites(ctx, "empty", 100); err != nil || len(empty) != 0 {
 		t.Errorf("empty org invites: %v %+v", err, empty)
 	}
 	// Corrupt objects are skipped.
@@ -262,14 +262,14 @@ func TestListInvites(t *testing.T) {
 		store.PutOptions{Mode: store.PutCreate}); err != nil {
 		t.Fatal(err)
 	}
-	if orgs, err := s.ListOrgInvites(ctx, "acme"); err != nil || len(orgs) != 1 {
+	if orgs, err := s.ListOrgInvites(ctx, "acme", 100); err != nil || len(orgs) != 1 {
 		t.Errorf("corrupt invite must be skipped: %v %+v", err, orgs)
 	}
 	sErr := New(&errStore{ObjectStore: store.NewMemory(), listErr: errBoom}, config.Defaults())
-	if _, err := sErr.ListOrgInvites(ctx, "acme"); !errors.Is(err, errBoom) {
+	if _, err := sErr.ListOrgInvites(ctx, "acme", 100); !errors.Is(err, errBoom) {
 		t.Errorf("ListOrgInvites error: %v", err)
 	}
-	if _, err := sErr.ListRepoInvites(ctx, "acme", "r"); !errors.Is(err, errBoom) {
+	if _, err := sErr.ListRepoInvites(ctx, "acme", "r", 100); !errors.Is(err, errBoom) {
 		t.Errorf("ListRepoInvites error: %v", err)
 	}
 	// inviteKeys for repo kind.

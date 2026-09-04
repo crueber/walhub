@@ -123,14 +123,15 @@ func TestDeleteOrgEdges(t *testing.T) {
 	if _, err := s.CreateTeam(ctx, "acme", "t", "T", ""); err != nil {
 		t.Fatal(err)
 	}
-	// Failing team listing is tolerated (org objects still removed).
+	// Failing team listing aborts before anything is deleted (the org
+	// stays intact instead of half-removed with leaked team objects).
 	s2 := New(&errStore{ObjectStore: s.Store, listErr: errBoom}, config.Defaults())
 	s2.Repos = func(ctx context.Context) ([][2]string, error) { return nil, nil }
-	if err := s2.DeleteOrg(ctx, "acme"); err != nil {
-		t.Errorf("DeleteOrg with failing team list: %v", err)
+	if err := s2.DeleteOrg(ctx, "acme"); !errors.Is(err, errBoom) {
+		t.Errorf("DeleteOrg with failing team list must surface, got: %v", err)
 	}
-	if o, _ := s.GetOrg(ctx, "acme"); o != nil {
-		t.Error("org must be gone")
+	if o, _ := s.GetOrg(ctx, "acme"); o == nil {
+		t.Error("org must still be present after an aborted delete")
 	}
 	// Invite-object delete failure surfaces.
 	if _, err := s.CreateOrg(ctx, "beta", "B", "", "alice@example.com"); err != nil {
@@ -265,7 +266,7 @@ func TestInviteLookupEdges(t *testing.T) {
 	}
 	// List skips vanished objects, surfaces hard errors.
 	s4 := New(&notFoundStore{ObjectStore: s.Store, keys: map[string]bool{RepoInviteKey("acme", "repo", inv2.ID): true}}, config.Defaults())
-	if list, err := s4.ListRepoInvites(ctx, "acme", "repo"); err != nil {
+	if list, err := s4.ListRepoInvites(ctx, "acme", "repo", 100); err != nil {
 		t.Errorf("vanished invite skip: %v", err)
 	} else {
 		for _, e := range list {
@@ -280,12 +281,12 @@ func TestInviteLookupEdges(t *testing.T) {
 	if _, err := s.CreateRepoInvite(ctx, "acme", "repo", "lister@example.com", RoleRead, "alice@example.com", 3600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s5.ListRepoInvites(ctx, "acme", "repo"); err == nil {
+	if _, err := s5.ListRepoInvites(ctx, "acme", "repo", 100); err == nil {
 		t.Error("list inner error must surface")
 	}
 	ks4 := &keyFailStore{ObjectStore: s.Store, err: errBoom, failGet: []string{OrgInvitePrefix("acme")}}
 	s6 := New(ks4, config.Defaults())
-	if _, err := s6.ListOrgInvites(ctx, "acme"); err == nil {
+	if _, err := s6.ListOrgInvites(ctx, "acme", 100); err == nil {
 		t.Error("org list inner error must surface")
 	}
 }

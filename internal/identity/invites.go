@@ -424,10 +424,16 @@ func (s *Service) CancelInvite(ctx context.Context, principal, id string) (*Invi
 
 // ListRepoInvites returns pending repo invites (admin-only, checked by the
 // handler) via LIST over the repo invitation prefix — a collaboration page,
-// not a git hot path.
-func (s *Service) ListRepoInvites(ctx context.Context, owner, repo string) ([]*Invitation, error) {
+// not a git hot path. n caps the page (P5; default 100, max 1000, like teams).
+func (s *Service) ListRepoInvites(ctx context.Context, owner, repo string, n int) ([]*Invitation, error) {
+	if n <= 0 || n > 1000 {
+		n = 100
+	}
 	var out []*Invitation
 	if err := s.Store.List(ctx, RepoInvitePrefix(owner, repo), "", func(m store.ObjectMeta) error {
+		if len(out) >= n {
+			return nil
+		}
 		raw, _, gerr := store.GetBytes(ctx, s.Store, m.Key, store.GetOptions{})
 		if gerr != nil {
 			if store.IsNotFound(gerr) {
@@ -452,10 +458,16 @@ func (s *Service) ListRepoInvites(ctx context.Context, owner, repo string) ([]*I
 }
 
 // ListOrgInvites returns pending org invites (owner-only, checked by the
-// handler).
-func (s *Service) ListOrgInvites(ctx context.Context, org string) ([]*Invitation, error) {
+// handler). n caps the page (P5; default 100, max 1000, like teams).
+func (s *Service) ListOrgInvites(ctx context.Context, org string, n int) ([]*Invitation, error) {
+	if n <= 0 || n > 1000 {
+		n = 100
+	}
 	var out []*Invitation
 	if err := s.Store.List(ctx, OrgInvitePrefix(org), "", func(m store.ObjectMeta) error {
+		if len(out) >= n {
+			return nil
+		}
 		raw, _, gerr := store.GetBytes(ctx, s.Store, m.Key, store.GetOptions{})
 		if gerr != nil {
 			if store.IsNotFound(gerr) {

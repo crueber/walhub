@@ -336,6 +336,10 @@ func (s *Service) GetTeam(ctx context.Context, org, slug string) (*Team, store.V
 	res, err := s.Store.Get(ctx, key, store.GetOptions{IfNoneMatch: known})
 	if err != nil {
 		if store.IsNotFound(err) {
+			// Evict any stale entry: the team is gone and the cached
+			// roster must not survive it (the entry is ignored on this
+			// path, but lingering garbage is a leak, not a cache).
+			s.teams.invalidate(org, slug)
 			return nil, "", nil
 		}
 		return nil, "", err
@@ -511,15 +515,19 @@ func (s *Service) DeleteOrg(ctx context.Context, org string) error {
 	if owned > 0 {
 		return fmt.Errorf("%w: org owns %d repos; transfer or delete them first", ErrConflict, owned)
 	}
+	// List teams BEFORE deleting anything: a LIST failure aborts with the
+	// org intact instead of half-deleted with leaked team objects.
+	teams, terr := s.ListTeams(ctx, org, 1000)
+	if terr != nil {
+		return terr
+	}
 	for _, key := range []string{OrgKey(org), MembersKey(org)} {
 		if derr := s.Store.Delete(ctx, key, ""); derr != nil && !store.IsNotFound(derr) {
 			return derr
 		}
 	}
-	if teams, terr := s.ListTeams(ctx, org, 1000); terr == nil {
-		for _, t := range teams {
-			_ = s.Store.Delete(ctx, TeamKey(org, t.Slug), "")
-		}
+	for _, t := range teams {
+		_ = s.Store.Delete(ctx, TeamKey(org, t.Slug), "")
 	}
 	var invErr error
 	_ = s.Store.List(ctx, OrgInvitePrefix(org), "", func(m store.ObjectMeta) error {
@@ -544,35 +552,37 @@ func (s *Service) DeleteTeam(ctx context.Context, org, slug string) error {
 	}
 	for _, rr := range repos {
 		owner, repo := rr[0], rr[1]
-		raw, meta, gerr := store.GetBytes(ctx, s.Store, AccessKey(owner, repo), store.GetOptions{})
-		if gerr != nil {
-			if store.IsNotFound(gerr) {
-				continue
+		_, cerr := s.casUpdate(ctx, AccessKey(owner, repo), func(cur []byte, _ store.Version) ([]byte, bool, error) {
+			if cur == nil {
+				return nil, false, nil
 			}
-			return gerr
-		}
-		doc, perr := parseAccess(raw)
-		if perr != nil {
-			continue
-		}
-		kept := doc.RoleBindings[:0]
-		found := false
-		for _, b := range doc.RoleBindings {
-			if b.Subject == subject {
-				found = true
-				continue
+			doc, perr := parseAccess(cur)
+			if perr != nil {
+				// Unreadable access.json: leave it for fsck, keep sweeping.
+				return nil, false, nil
 			}
-			kept = append(kept, b)
-		}
-		if !found {
-			continue
-		}
-		doc.RoleBindings = kept
-		doc.Version++
-		doc.UpdatedAt = s.nowUTC().Format(time.RFC3339)
-		if _, perr := s.Store.Put(ctx, AccessKey(owner, repo), store.PutBody{Bytes: encodeAccess(doc)},
-			store.PutOptions{Mode: store.PutUpdate, IfVersion: meta.Version, ContentType: "application/json"}); perr != nil && !store.IsPreconditionFailed(perr) {
-			return perr
+			kept := make([]AccessBinding, 0, len(doc.RoleBindings))
+			found := false
+			for _, b := range doc.RoleBindings {
+				if b.Subject == subject {
+					found = true
+					continue
+				}
+				kept = append(kept, b)
+			}
+			if !found {
+				return nil, false, nil
+			}
+			doc.RoleBindings = kept
+			doc.Version++
+			doc.UpdatedAt = s.nowUTC().Format(time.RFC3339)
+			return encodeAccess(doc), true, nil
+		})
+		if cerr != nil {
+			// 412s retry inside casUpdate (bounded, then 409): a concurrent
+			// admin edit surfaces honestly instead of silently dropping the
+			// strip for this repo.
+			return cerr
 		}
 		s.access.invalidate(owner, repo)
 	}

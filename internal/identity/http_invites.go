@@ -2,6 +2,7 @@ package identity
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,7 +164,7 @@ func (h *Handler) routeOrgInvites(w http.ResponseWriter, r *http.Request, org st
 	}
 	switch r.Method {
 	case http.MethodGet:
-		invs, err := h.Svc.ListOrgInvites(r.Context(), org)
+		invs, err := h.Svc.ListOrgInvites(r.Context(), org, pageSize(r))
 		if err != nil {
 			writeErr(w, err)
 			return true
@@ -279,7 +280,7 @@ func (h *Handler) routeRepoInvites(w http.ResponseWriter, r *http.Request, owner
 	if len(rest) == 0 {
 		switch r.Method {
 		case http.MethodGet:
-			invs, err := h.Svc.ListRepoInvites(r.Context(), owner, repo)
+			invs, err := h.Svc.ListRepoInvites(r.Context(), owner, repo, pageSize(r))
 			if err != nil {
 				writeErr(w, err)
 				return true
@@ -360,6 +361,18 @@ func inviteSummaries(invs []*Invitation) []map[string]any {
 		out = append(out, inviteSummary(inv))
 	}
 	return out
+}
+
+// pageSize parses the ?n= page cap shared by the LIST-backed invite
+// collections (P5; default 100, max 1000 — the team-list convention).
+func pageSize(r *http.Request) int {
+	n := 100
+	if q := r.URL.Query().Get("n"); q != "" {
+		if v, verr := strconv.Atoi(q); verr == nil && v > 0 && v <= 1000 {
+			n = v
+		}
+	}
+	return n
 }
 
 // acceptURL is the emailed-link path the UI renders.

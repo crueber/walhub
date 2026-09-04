@@ -368,3 +368,46 @@ func TestDeleteTeam(t *testing.T) {
 		t.Errorf("DeleteTeam lister error: %v", err)
 	}
 }
+
+// flakeStore 412s the first maxFails Update PUTs, then delegates: a
+// transient concurrent edit the CAS loop must heal.
+type flakeStore struct {
+	store.ObjectStore
+	maxFails int
+}
+
+func (f *flakeStore) Put(ctx context.Context, key string, body store.PutBody, opts store.PutOptions) (store.ObjectMeta, error) {
+	if opts.Mode == store.PutUpdate && f.maxFails > 0 {
+		f.maxFails--
+		return store.ObjectMeta{}, store.NewPrecondition(key, "concurrent edit")
+	}
+	return f.ObjectStore.Put(ctx, key, body, opts)
+}
+
+func TestDeleteTeamHealsTransientConflict(t *testing.T) {
+	s := testService()
+	ctx := context.Background()
+	seedOrg(t, s)
+	if _, err := s.PutAccess(ctx, "acme", "repo", "", VisibilityPrivate, []AccessBinding{
+		{Subject: "team:acme/platform", Role: RoleWrite},
+		{Subject: "user:carol@example.com", Role: RoleRead},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Repos = func(ctx context.Context) ([][2]string, error) {
+		return [][2]string{{"acme", "repo"}}, nil
+	}
+	s.Store = &flakeStore{ObjectStore: s.Store, maxFails: 1}
+	if err := s.DeleteTeam(ctx, "acme", "platform"); err != nil {
+		t.Fatalf("DeleteTeam must heal one transient 412: %v", err)
+	}
+	doc, _, err := s.GetAccess(ctx, "acme", "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range doc.RoleBindings {
+		if b.Subject == "team:acme/platform" {
+			t.Errorf("binding not stripped after healed conflict: %+v", doc.RoleBindings)
+		}
+	}
+}

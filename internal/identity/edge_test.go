@@ -612,14 +612,16 @@ func TestStoreEdgeCases(t *testing.T) {
 	if err := s19.DeleteTeam(ctx, "acme", "t"); err != nil {
 		t.Errorf("DeleteTeam corrupt skip: %v", err)
 	}
-	// DeleteTeam PUT conflict is tolerated (precondition → skip).
+	// DeleteTeam PUT conflict surfaces (bounded CAS retries, then 409):
+	// the strip is honest instead of silently skipped, and the team object
+	// stays so a retry can complete the cleanup.
 	s20 := testService()
 	mustAccess(t, s20, "o", "r", VisibilityPrivate, []AccessBinding{{Subject: "team:o/s", Role: RoleRead}})
 	ks9 := &conflictStore{ObjectStore: s20.Store}
 	s20.Store = ks9
 	s20.Repos = func(ctx context.Context) ([][2]string, error) { return [][2]string{{"o", "r"}}, nil }
-	if err := s20.DeleteTeam(ctx, "o", "s"); err != nil {
-		t.Errorf("DeleteTeam put conflict: %v", err)
+	if err := s20.DeleteTeam(ctx, "o", "s"); !errors.Is(err, ErrConflict) {
+		t.Errorf("DeleteTeam put conflict must surface, got: %v", err)
 	}
 	// DeleteTeam PUT hard error surfaces.
 	ks10 := &keyFailStore{ObjectStore: s20.Store, err: errBoom, failPut: []string{"repos/o/r/access.json"}}
