@@ -34,6 +34,7 @@ func TestCover2StarFloorAndCorruptCount(t *testing.T) {
 	// Corrupt counters + live record: restar reports 0, no error (the
 	// record is the truth; the count reheals on the next mutation).
 	x2 := newHarness(t)
+	seedRepo(t, x2, "o", "r")
 	seedSocialKey(t, x2, StarKey("jane", "o", "r"), `{"repo":"o/r","starred_at":"2026-09-04T12:00:00Z"}`)
 	seedSocialKey(t, x2, SocialKey("o", "r"), `{oops`)
 	n2, err := x2.svc.Star(ctx(), jane(), "o", "r")
@@ -44,6 +45,7 @@ func TestCover2StarFloorAndCorruptCount(t *testing.T) {
 
 func TestCover2StarredSkips(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "a")
 	// Non-record key under the prefix (index-style object) is skipped.
 	seedSocialKey(t, x, StarredPrefix("jane")+"index.json", `{"v":1}`)
 	// Corrupt record is skipped.

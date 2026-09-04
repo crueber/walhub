@@ -89,6 +89,19 @@ func seedSocialKey(t *testing.T, x *harness, key, raw string) {
 	}
 }
 
+// seedRepo marks owner/repo as existing: the manifest probe is the
+// repo-existence signal (star/count/list paths gate on it), and the body
+// is never read.
+func seedRepo(t *testing.T, x *harness, owner, repo string) {
+	t.Helper()
+	if _, err := store.PutBytes(ctx(), x.svc.Store, manifestKey(owner, repo), []byte("manifest"),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/x-protobuf"}); err != nil {
+		if !store.IsPreconditionFailed(err) {
+			t.Fatal(err)
+		}
+	}
+}
+
 // seedWatchRecord writes a 06-shaped watch record (07 reads it; 06 writes it).
 func seedWatchRecord(t *testing.T, x *harness, principal, owner, repo string) {
 	t.Helper()

@@ -13,6 +13,7 @@ import (
 
 func TestStarUnstarIdempotent(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	// Anonymous star → 401.
 	if _, err := x.svc.Star(ctx(), auth.Anonymous(), "o", "r"); !isErr(err, ErrUnauthorized) {
 		t.Fatalf("anon star: %v", err)
@@ -53,6 +54,7 @@ func TestStarUnstarIdempotent(t *testing.T) {
 
 func TestStarConcurrentConverge(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
@@ -102,6 +104,7 @@ func (g *unstarGate) Delete(ctx context.Context, key string, ver store.Version) 
 
 func TestUnstarConcurrentSingleDecrement(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	if _, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +135,7 @@ func TestUnstarConcurrentSingleDecrement(t *testing.T) {
 
 func TestSocialPreservesWatcherList(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	// A 06-written social.json (watcher_list owned by notify) round-trips
 	// through star/fork mutations untouched.
 	seedSocial(t, x, `{"stars":0,"watchers":1,"forks":0,"watcher_list":["amy@example.com"],"updated_at":"2026-09-04T12:00:00Z"}`)
@@ -162,6 +166,7 @@ func seedSocial(t *testing.T, x *harness, raw string) {
 
 func TestIncForksLazyCreate(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	// No social object: first increment creates it (zeros + forks 1).
 	if err := x.svc.IncForks(ctx(), "o", "r"); err != nil {
 		t.Fatal(err)
@@ -181,6 +186,7 @@ func TestIncForksLazyCreate(t *testing.T) {
 
 func TestViewerState(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	// Anonymous viewer: flags false, no error.
 	if s, w := x.svc.ViewerState(ctx(), auth.Anonymous(), "o", "r"); s || w {
 		t.Fatal("anon viewer")
@@ -215,7 +221,11 @@ func TestStarredLists(t *testing.T) {
 	// Three stars, newest first.
 	for i, repo := range []string{"o/a", "o/b", "o/c"} {
 		x.svc.Now = func() (later time.Time) { return x.now.Add(time.Duration(i) * time.Minute) }
-		o, r := splitRepo(repo)
+		o, r, ok := splitStarRepo(repo)
+		if !ok {
+			t.Fatalf("bad repo %q", repo)
+		}
+		seedRepo(t, x, o, r)
 		if _, err := x.svc.Star(ctx(), jane(), o, r); err != nil {
 			t.Fatal(err)
 		}
@@ -233,10 +243,6 @@ func TestStarredLists(t *testing.T) {
 	if err != nil || len(entries2) != 1 || more2 || entries2[0].Repo != "o/a" {
 		t.Fatalf("page2: %+v %v %v", entries2, more2, err)
 	}
-	// Deleted repos are tolerated (no existence check — returned as-is).
-	if entries2[0].Repo != "o/a" {
-		t.Fatal("toleration")
-	}
 	// n clamps.
 	if _, _, err := x.svc.Starred(ctx(), "jane", 0, ""); err != nil {
 		t.Fatalf("n=0: %v", err)
@@ -245,13 +251,85 @@ func TestStarredLists(t *testing.T) {
 	if err != nil || len(entries3) != 3 {
 		t.Fatalf("clamp: %+v %v", entries3, err)
 	}
+	// Deleted repos are skipped (miss-tolerant reads): sweeping o/a's
+	// manifest hides it while o/b and o/c still list.
+	if err := x.svc.Store.Delete(ctx(), manifestKey("o", "a"), ""); err != nil {
+		t.Fatal(err)
+	}
+	entries4, _, err := x.svc.Starred(ctx(), "jane", 500, "")
+	if err != nil || len(entries4) != 2 || entries4[0].Repo != "o/c" || entries4[1].Repo != "o/b" {
+		t.Fatalf("dead skip: %+v %v", entries4, err)
+	}
 }
 
-func splitRepo(full string) (string, string) {
-	for i := 0; i < len(full); i++ {
-		if full[i] == '/' {
-			return full[:i], full[i+1:]
+// TestStarDeleteRecreateResync pins the #63 scenario: the prefix sweep
+// removes the manifest + social.json while the userspace star record
+// survives, and a recreate must reconverge instead of desyncing.
+func TestStarDeleteRecreateResync(t *testing.T) {
+	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
+	if n, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil || n != 1 {
+		t.Fatalf("star: %d %v", n, err)
+	}
+	// Simulate the registry prefix sweep: manifest + social.json go, the
+	// users/ record survives.
+	if err := x.svc.Store.Delete(ctx(), manifestKey("o", "r"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.svc.Store.Delete(ctx(), SocialKey("o", "r"), ""); err != nil {
+		t.Fatal(err)
+	}
+	// Reads tolerate the ghost: starred skips it, counts 404, starring 404s.
+	if entries, _, err := x.svc.Starred(ctx(), "jane", 50, ""); err != nil || len(entries) != 0 {
+		t.Fatalf("starred ghost: %+v %v", entries, err)
+	}
+	if _, err := x.svc.Counts(ctx(), jane(), "o", "r"); !isErr(err, ErrNotFound) {
+		t.Fatalf("counts ghost: %v", err)
+	}
+	if _, err := x.svc.Star(ctx(), jane(), "o", "r"); !isErr(err, ErrNotFound) {
+		t.Fatalf("star ghost: %v", err)
+	}
+	if s, w := x.svc.ViewerState(ctx(), jane(), "o", "r"); s || w {
+		t.Fatalf("viewer ghost: %v %v", s, w)
+	}
+	// Unstar still cleans the record — and resurrects no social.json.
+	if n, err := x.svc.Unstar(ctx(), jane(), "o", "r"); err != nil || n != 0 {
+		t.Fatalf("unstar ghost: %d %v", n, err)
+	}
+	if raw, _, _ := store.GetBytes(ctx(), x.svc.Store, SocialKey("o", "r"), store.GetOptions{}); raw != nil {
+		t.Fatalf("unstar resurrected social.json: %s", raw)
+	}
+}
+
+// TestStarRecreateRepairsCounter pins the (c) resync: after a
+// delete+recreate the stale record's next Star repairs the zeroed counter
+// instead of early-returning 0.
+func TestStarRecreateRepairsCounter(t *testing.T) {
+	for _, seedZero := range []bool{false, true} {
+		x := newHarness(t)
+		seedRepo(t, x, "o", "r")
+		if _, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil {
+			t.Fatal(err)
+		}
+		// Delete (sweep) + recreate (fresh manifest, no counters).
+		if err := x.svc.Store.Delete(ctx(), manifestKey("o", "r"), ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := x.svc.Store.Delete(ctx(), SocialKey("o", "r"), ""); err != nil {
+			t.Fatal(err)
+		}
+		seedRepo(t, x, "o", "r")
+		if seedZero {
+			// A sibling writer (watch/fork) created a zeroed counter
+			// first — the repair must still fire.
+			seedSocialKey(t, x, SocialKey("o", "r"), `{"stars":0,"watchers":1,"forks":0,"watcher_list":["amy"],"updated_at":"2026-09-04T12:00:00Z"}`)
+		}
+		if n, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil || n != 1 {
+			t.Fatalf("seedZero=%v: restar after recreate = %d %v (want 1)", seedZero, n, err)
+		}
+		// A fresh starrer converges on top.
+		if n, err := x.svc.Star(ctx(), auth.Principal{Name: "bob"}, "o", "r"); err != nil || n != 2 {
+			t.Fatalf("seedZero=%v: bob = %d %v (want 2)", seedZero, n, err)
 		}
 	}
-	return full, ""
 }

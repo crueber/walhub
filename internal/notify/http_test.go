@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 // req builds an authed request (principal "" = anonymous).
@@ -62,6 +64,7 @@ func TestUserRoutesAuthTable(t *testing.T) {
 
 func TestTrayUnreadFlipReadAll(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	x.addProfile("amy@example.com", "bob@example.com", "carol@example.com")
 	who := "amy@example.com"
 
@@ -270,6 +273,7 @@ func TestStreamDeliversFrame(t *testing.T) {
 
 func TestWatchEndpoints(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	// Anonymous → 401 everywhere.
 	for _, m := range []string{"GET", "PUT", "DELETE"} {
 		rec := do(x.handler, req(t, m, "/acme/repo/api/watch", ""))
@@ -432,5 +436,90 @@ func TestHandleRouting(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s handled = %d, want fallthrough 404", path, rec.Code)
 		}
+	}
+}
+
+// TestNotifyGhostRepoTable pins the #63 HTTP surface for deleted repos
+// (no manifest seeded): watching fails closed, unwatching cleans up, and
+// the tray filters the dead rows.
+func TestNotifyGhostRepoTable(t *testing.T) {
+	x := newHarness(t)
+	seedRepo(t, x, "acme", "live")
+	// Stale userspace rows with no repo behind them: a watch record and
+	// two tray rows (index + overflow object).
+	writeRaw(t, x.svc.Store, WatchingKey("amy@example.com", "acme", "gone"),
+		[]byte(`{"repo":"acme/gone","watched_at":"2026-09-04T12:00:00Z"}`))
+	at := x.now.Format(dateTimeFmt)
+	writeRaw(t, x.svc.Store, NotifIndexKey("amy@example.com"), encode(IndexDoc{
+		Version: 1, UnreadCount: 2,
+		Entries: []IndexEntry{
+			{ID: strings.Repeat("a", 32), Repo: "acme/gone", Num: 1, Kind: "issue", Reason: ReasonSubscribed, Title: "G", State: StateUnread, At: at},
+			{ID: strings.Repeat("b", 32), Repo: "acme/live", Num: 2, Kind: "issue", Reason: ReasonSubscribed, Title: "L", State: StateUnread, At: at},
+		},
+	}))
+	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", strings.Repeat("a", 32)), encode(Notification{
+		ID: strings.Repeat("a", 32), Repo: "acme/gone", Num: 1, Kind: "issue",
+		Reason: ReasonSubscribed, Title: "G", State: StateUnread, CreatedAt: at,
+	}))
+	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", strings.Repeat("c", 32)), encode(Notification{
+		ID: strings.Repeat("c", 32), Repo: "acme/gone", Num: 3, Kind: "issue",
+		Reason: ReasonMentioned, Title: "O", State: StateUnread, CreatedAt: at,
+	}))
+	rows := []struct {
+		name   string
+		method string
+		path   string
+		status int
+		body   string
+	}{
+		{"watch ghost 404", "PUT", "/acme/gone/api/watch", 404, "not found"},
+		{"get watch ghost hides record", "GET", "/acme/gone/api/watch", 200, `"watching":false`},
+		{"unwatch ghost cleans record", "DELETE", "/acme/gone/api/watch", 200, `"watching":false`},
+		{"tray skips dead rows", "GET", "/api/v1/notifications", 200, strings.Repeat("b", 32)},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			rec := do(x.handler, req(t, row.method, row.path, "amy@example.com"))
+			if rec.Code != row.status {
+				t.Fatalf("%s %s: got %d want %d (%q)", row.method, row.path, rec.Code, row.status, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), row.body) {
+				t.Fatalf("%s %s: body %q lacks %q", row.method, row.path, rec.Body.String(), row.body)
+			}
+		})
+	}
+	// The dead rows are gone from the tray body (only the live row serves).
+	rec := do(x.handler, req(t, "GET", "/api/v1/notifications", "amy@example.com"))
+	if strings.Contains(rec.Body.String(), strings.Repeat("a", 32)) ||
+		strings.Contains(rec.Body.String(), strings.Repeat("c", 32)) {
+		t.Fatalf("tray leaks dead rows: %q", rec.Body.String())
+	}
+	// Unwatching the ghost resurrected no social.json.
+	if raw, _, err := store.GetBytes(ctx(), x.svc.Store, SocialKey("acme", "gone"), store.GetOptions{}); err == nil && raw != nil {
+		t.Fatalf("resurrected social.json: %s", raw)
+	}
+}
+
+// TestWatchGhostRepo pins the service-level #63 watch contract: watch on
+// a ghost 404s, GetWatch hides stale records, unwatch cleans without
+// resurrecting counters.
+func TestWatchGhostRepo(t *testing.T) {
+	x := newHarness(t)
+	if _, err := x.svc.SetWatch(ctx(), "amy@example.com", "acme", "gone", true); !isErr(err, ErrNotFound) {
+		t.Fatalf("watch ghost: %v", err)
+	}
+	// Seed a stale record directly, then sweep the (absent) manifest —
+	// GetWatch must not render it.
+	writeRaw(t, x.svc.Store, WatchingKey("amy@example.com", "acme", "gone"),
+		[]byte(`{"repo":"acme/gone","watched_at":"2026-09-04T12:00:00Z"}`))
+	if got := x.svc.GetWatch(ctx(), "amy@example.com", "acme", "gone"); got.Watching || got.Watchers != 0 {
+		t.Fatalf("getwatch ghost: %+v", got)
+	}
+	st, err := x.svc.SetWatch(ctx(), "amy@example.com", "acme", "gone", false)
+	if err != nil || st.Watching || st.Watchers != 0 {
+		t.Fatalf("unwatch ghost: %+v %v", st, err)
+	}
+	if _, _, err := store.GetBytes(ctx(), x.svc.Store, WatchingKey("amy@example.com", "acme", "gone"), store.GetOptions{}); !store.IsNotFound(err) {
+		t.Fatalf("record must be gone: %v", err)
 	}
 }

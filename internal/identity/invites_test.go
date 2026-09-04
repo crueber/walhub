@@ -98,6 +98,7 @@ func TestRepoInvites(t *testing.T) {
 	s := testService()
 	ctx := context.Background()
 	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
 	if _, err := s.CreateRepoInvite(ctx, "acme", "repo", "not-an-email", RoleWrite, "a@b.c", time.Hour); !errors.Is(err, ErrInvalid) {
 		t.Errorf("bad subject: %v", err)
 	}
@@ -240,6 +241,7 @@ func TestListInvites(t *testing.T) {
 	s := testService()
 	ctx := context.Background()
 	seedOrg(t, s)
+	seedRepo(t, s, "acme", "r")
 	if _, err := s.CreateOrgInvite(ctx, "acme", "a@x.c", "member", "alice@example.com", time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -280,5 +282,112 @@ func TestListInvites(t *testing.T) {
 	// CancelInvite store error.
 	if _, err := sErr.CancelInvite(ctx, "a@x.c", "whatever"); err == nil {
 		t.Error("CancelInvite must surface lookup errors")
+	}
+}
+
+// TestRepoInviteGhostRepo pins the #63 inbox contract: the prefix sweep
+// removes the issuer-side invite object but cannot enumerate inboxes, so
+// readers skip the dead rows and accept/create fail closed instead of
+// binding roles into a ghost repo.
+func TestRepoInviteGhostRepo(t *testing.T) {
+	s := testService()
+	ctx := context.Background()
+	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
+	inv, err := s.CreateRepoInvite(ctx, "acme", "repo", "ghost@example.com", RoleRead, "alice@example.com", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the registry prefix sweep: manifest + issuer object go, the
+	// inbox row survives.
+	if err := s.Store.Delete(ctx, "repos/acme/repo/manifest.pb", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.Delete(ctx, RepoInviteKey("acme", "repo", inv.ID), ""); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Store.Delete(ctx, AccessKey("acme", "repo"), "")
+	// The inbox skips the dead row (org invites would still list).
+	if entries, err := s.MyInvites(ctx, "ghost@example.com"); err != nil || len(entries) != 0 {
+		t.Fatalf("inbox ghost: %v %+v", err, entries)
+	}
+	// Accepting is 409 (the invite died with the repo) — and binds nothing.
+	if _, err := s.AcceptInvite(ctx, "ghost@example.com", inv.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("accept ghost: %v", err)
+	}
+	doc, _, err := s.GetAccess(ctx, "acme", "repo")
+	if err != nil {
+		t.Fatalf("access read: %v", err)
+	}
+	for _, b := range doc.RoleBindings {
+		if b.Subject == "user:ghost@example.com" {
+			t.Fatalf("ghost binding written: %+v", doc.RoleBindings)
+		}
+	}
+	// Inviting to the ghost is 404.
+	if _, err := s.CreateRepoInvite(ctx, "acme", "repo", "new@example.com", RoleRead, "alice@example.com", time.Hour); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("create ghost: %v", err)
+	}
+	// Recreate: the dead row is still skipped until the invite is
+	// re-issued (no phantom pending state).
+	seedRepo(t, s, "acme", "repo")
+	if entries, err := s.MyInvites(ctx, "ghost@example.com"); err != nil || len(entries) != 0 {
+		t.Fatalf("inbox after recreate: %v %+v", err, entries)
+	}
+	inv2, err := s.CreateRepoInvite(ctx, "acme", "repo", "ghost@example.com", RoleRead, "alice@example.com", time.Hour)
+	if err != nil {
+		t.Fatalf("re-invite: %v", err)
+	}
+	if entries, err := s.MyInvites(ctx, "ghost@example.com"); err != nil || len(entries) != 1 || entries[0].ID != inv2.ID {
+		t.Fatalf("inbox re-issued: %v %+v", err, entries)
+	}
+	if _, err := s.AcceptInvite(ctx, "ghost@example.com", inv2.ID); err != nil {
+		t.Fatalf("accept re-issued: %v", err)
+	}
+}
+
+// headFailStore fails HEAD probes only (reads/writes delegate): the
+// existence probe must fail OPEN, never mass-hide inboxes.
+type headFailStore struct {
+	store.ObjectStore
+	err error
+}
+
+func (s *headFailStore) Head(ctx context.Context, key string) (*store.ObjectMeta, error) {
+	return nil, s.err
+}
+
+func TestInviteProbeFailOpen(t *testing.T) {
+	s := testService()
+	ctx := context.Background()
+	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
+	inv, err := s.CreateRepoInvite(ctx, "acme", "repo", "open@example.com", RoleRead, "alice@example.com", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = inv
+	// Manifest HEAD down: the row still lists (fail open, no hiding).
+	s.Store = &headFailStore{ObjectStore: s.Store, err: errBoom}
+	if entries, err := s.MyInvites(ctx, "open@example.com"); err != nil || len(entries) != 1 {
+		t.Fatalf("fail-open inbox: %v %+v", err, entries)
+	}
+}
+
+func TestInviteIssuerErrorFailOpen(t *testing.T) {
+	s := testService()
+	ctx := context.Background()
+	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
+	inv, err := s.CreateRepoInvite(ctx, "acme", "repo", "kept@example.com", RoleRead, "alice@example.com", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Issuer GET down (non-NotFound): the row still lists (fail open —
+	// only affirmative absence hides).
+	ks := &keyFailStore{ObjectStore: s.Store, err: errBoom, failGet: []string{RepoInviteKey("acme", "repo", inv.ID)}}
+	s2 := New(ks, config.Defaults())
+	if entries, err := s2.MyInvites(ctx, "kept@example.com"); err != nil || len(entries) != 1 {
+		t.Fatalf("fail-open issuer: %v %+v", err, entries)
 	}
 }

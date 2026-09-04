@@ -187,6 +187,7 @@ func TestInviteLookupEdges(t *testing.T) {
 	s := testService()
 	ctx := context.Background()
 	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
 	// findInvite inner-GET error (inbox ok, object unreadable).
 	inv, err := s.CreateOrgInvite(ctx, "acme", "edge@example.com", "member", "alice@example.com", 3600)
 	if err != nil {
@@ -322,6 +323,7 @@ func TestOrgCreateProfileError(t *testing.T) {
 func TestScopedDeleteErrors(t *testing.T) {
 	s := testService()
 	mustOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
 	h := testHandler(s, admin)
 	// Scoped org DELETE: GetBytes ok but Delete fails.
 	w := doReq(h, "POST", "/api/v1/orgs/acme/invitations", `{"email":"doomed@example.com","role":"member"}`)
@@ -401,7 +403,12 @@ func TestScopedDeleteErrors(t *testing.T) {
 		t.Error("ghost owner check must fail")
 	}
 	// Mine with failing store → 503.
-	s6 := New(&errStore{ObjectStore: store.NewMemory(), getErr: errBoom, putErr: errBoom, delErr: errBoom, listErr: errBoom}, config.Defaults())
+	mem6 := store.NewMemory()
+	if _, err := store.PutBytes(context.Background(), mem6, "repos/acme/repo/manifest.pb", []byte("manifest"),
+		store.PutOptions{Mode: store.PutCreate}); err != nil {
+		t.Fatal(err)
+	}
+	s6 := New(&errStore{ObjectStore: mem6, getErr: errBoom, putErr: errBoom, delErr: errBoom, listErr: errBoom}, config.Defaults())
 	if w := doReq(testHandler(s6, admin), "GET", "/api/v1/invitations", ""); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("mine error = %d", w.Code)
 	}

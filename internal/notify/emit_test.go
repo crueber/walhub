@@ -199,6 +199,7 @@ func TestEmitTeamExpansion(t *testing.T) {
 
 func TestEmitWatchersUnion(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	x.addProfile("amy@example.com", "bob@example.com", "watcher@example.com")
 	x.writeThread(t, "acme", "repo", 7, "T", "amy@example.com")
 	if _, err := x.svc.SetWatch(ctx(), "watcher@example.com", "acme", "repo", true); err != nil {

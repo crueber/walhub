@@ -145,3 +145,16 @@ func (x *harness) writeThread(t *testing.T, owner, repo string, num int, title, 
 }
 
 func ctx() context.Context { return context.Background() }
+
+// seedRepo marks owner/repo as existing: the manifest probe is the
+// repo-existence signal (watch/tray/retention paths gate on it), and the
+// body is never read.
+func seedRepo(t *testing.T, x *harness, owner, repo string) {
+	t.Helper()
+	if _, err := store.PutBytes(ctx(), x.svc.Store, manifestKey(owner, repo), []byte("manifest"),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/x-protobuf"}); err != nil {
+		if !store.IsPreconditionFailed(err) {
+			t.Fatal(err)
+		}
+	}
+}

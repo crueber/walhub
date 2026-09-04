@@ -196,6 +196,7 @@ func TestAccessEndpoints(t *testing.T) {
 func TestInviteEndpoints(t *testing.T) {
 	s := testService()
 	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
 	ha := testHandler(s, alice) // org owner
 	hb := testHandler(s, bob)   // member, team write on repos only
 	hanon := testHandler(s, anon)

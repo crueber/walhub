@@ -164,6 +164,26 @@ func WatchingKey(principal, owner, repo string) string {
 // repoName renders "owner/repo".
 func repoName(owner, repo string) string { return owner + "/" + repo }
 
+// manifestKey returns repos/<o>/<r>/manifest.pb — the repo-existence
+// signal (the registry deletes it first on Delete and creates it first
+// on Create, so absent = deleted-or-never-existed; the registry's own
+// listing refresh probes the same key).
+func manifestKey(owner, repo string) string {
+	return "repos/" + owner + "/" + repo + "/" + store.Manifest
+}
+
+// repoAlive reports whether the repo exists. A probe error fails OPEN
+// (returns true): a transient store fault must neither mass-hide star
+// lists nor fail closed on mutations — the CAS loops surface real
+// errors on their own reads.
+func (s *Service) repoAlive(ctx context.Context, owner, repo string) bool {
+	ok, err := store.Exists(ctx, s.Store, manifestKey(owner, repo))
+	if err != nil {
+		return true
+	}
+	return ok
+}
+
 // normPrincipal lowercases and trims a principal name for comparison.
 func normPrincipal(p string) string { return strings.ToLower(strings.TrimSpace(p)) }
 

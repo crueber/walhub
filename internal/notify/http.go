@@ -369,6 +369,21 @@ func (s *Service) Tray(ctx context.Context, who, state, after string, n int) ([]
 	for _, id := range order {
 		all = append(all, byID[id])
 	}
+	// Miss-tolerance (#63): notifications naming a deleted repo are
+	// skipped — the prefix sweep cannot enumerate userspace, so the tray
+	// probes the manifest per merged entry (one HEAD each; a probe error
+	// or malformed repo keeps the entry). UnreadCount stays O(1) off the
+	// index; the retention pass drops the dead rows and reconciles it.
+	live := all[:0]
+	for _, notif := range all {
+		if o, r, ok := repoOf(notif.Repo); ok {
+			if !s.repoAlive(ctx, o, r) {
+				continue
+			}
+		}
+		live = append(live, notif)
+	}
+	all = live
 	sortNotifications(all)
 	filtered := all[:0]
 	seenAfter := after == ""

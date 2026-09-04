@@ -664,6 +664,7 @@ func TestHandleRepoEdges(t *testing.T) {
 
 func TestTrayEdges(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
 	x.addProfile("amy@example.com", "bob@example.com")
 	who := "amy@example.com"
 	// Corrupt index + corrupt object: tray degrades to served entries.
@@ -786,6 +787,9 @@ func TestReadAllEdges(t *testing.T) {
 
 func TestSetWatchEdges(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
+	seedRepo(t, x, "acme", "repo2")
+	seedRepo(t, x, "acme", "repo3")
 	// Idempotent double-watch: no dup, count stable.
 	if _, err := x.svc.SetWatch(ctx(), "amy@example.com", "acme", "repo", true); err != nil {
 		t.Fatal(err)

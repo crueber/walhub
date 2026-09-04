@@ -23,8 +23,13 @@ type WatchState struct {
 }
 
 // GetWatch reports whether principal watches the repo (self only,
-// no-store). Absent social.json counts zero watchers.
+// no-store). Absent social.json counts zero watchers. A deleted repo
+// reports not-watching with zero watchers (miss-tolerant: the stale
+// userspace record must not render).
 func (s *Service) GetWatch(ctx context.Context, principal, owner, repo string) WatchState {
+	if !s.repoAlive(ctx, owner, repo) {
+		return WatchState{Watching: false, Watchers: 0}
+	}
 	raw, _, err := s.getJSON(ctx, WatchingKey(principal, owner, repo))
 	if err != nil || raw == nil {
 		return WatchState{Watching: false, Watchers: s.watcherCount(ctx, owner, repo)}
@@ -33,11 +38,17 @@ func (s *Service) GetWatch(ctx context.Context, principal, owner, repo string) W
 }
 
 // SetWatch creates (on=true) or deletes (on=false) the watch record and
-// CASes the social counters. Idempotent both ways.
+// CASes the social counters. Idempotent both ways. Watching a deleted
+// repo is 404 (no fresh userspace records for ghosts); unwatching one
+// still deletes the record (cleanup) but skips the counter CAS so no
+// social.json is resurrected for a swept repo.
 func (s *Service) SetWatch(ctx context.Context, principal, owner, repo string, on bool) (WatchState, error) {
 	principal = normPrincipal(principal)
 	key := WatchingKey(principal, owner, repo)
 	if on {
+		if !s.repoAlive(ctx, owner, repo) {
+			return WatchState{}, fmt.Errorf("%w: repo %s/%s not found", ErrNotFound, owner, repo)
+		}
 		rec := WatchRecord{Repo: owner + "/" + repo, WatchedAt: s.nowUTC().Format(dateTimeFmt)}
 		if err := s.putCreate(ctx, key, encode(rec)); err != nil {
 			if !store.IsPreconditionFailed(err) {
@@ -49,6 +60,9 @@ func (s *Service) SetWatch(ctx context.Context, principal, owner, repo string, o
 		}
 	} else {
 		_ = s.Store.Delete(ctx, key, "")
+		if !s.repoAlive(ctx, owner, repo) {
+			return WatchState{Watching: false, Watchers: 0}, nil
+		}
 		if err := s.socialWatch(ctx, owner, repo, principal, false); err != nil {
 			return WatchState{}, err
 		}

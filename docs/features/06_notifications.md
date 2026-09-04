@@ -297,6 +297,10 @@ per-user stream is a browser-lane, credentials-included stream).
   for each principal with a `notifications/index.json` older than its `swept_at`, compact — drop `read`
   entries older than `notifications.retention_days` (default 30), `Delete` their objects, advance
   `compacted_through`, reconcile `unread_count` against actual unreads (drift repair); unread never swept.
+- Repo-deleted rows (issue #63): the same pass drops index entries naming a deleted repo in ANY state
+  (their objects go too — a deleted repo never returns the same threads, so the rows are garbage) plus a
+  bounded overflow sweep (prefix LIST, cap 1 000 scanned / shared 200-delete budget) for dead-repo
+  objects past the hot window, which have no index row. Live-repo overflow is never touched.
 - The webhook `deliveries/recent.json` ring self-trims to 25; no separate task.
 - Repo activity events (`collab-events/`) are compacted by the same pass once the newest webhook cursor is
   ≥ 1 000 seqs ahead: events below the minimum webhook cursor AND older than 7 days are deleted; the
@@ -332,6 +336,15 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **No config key**: retention window is a `RetentionDays` field defaulting to 30, no `notifications.*` TOML. Rationale: one scalar does not justify a config surface + validation + schema churn; composition can set it from env later without a wire change.
 - **Issues `NotifyEvent` gains additive `Action`** (opened|commented|closed|reopened; "" = commented) so the activity log records the true action behind the coarse `subscribed` class; pulls/review/checks classes were already precise. `mentioned`-emission added to pulls (opened body, PR comments) and review (submitted reviews, thread comments) via the shared `identity.ParseMentions` §3 parser (email principals + `@org/team`, code-span stripping, 50-token cap); issues additionally passes team spellings through (`/` cannot appear in a principal, so the spelling is self-describing). Rationale: §3 mandates parsing on EVERY comment/review/body event, and the parser belongs to 01 (the principal authority) so all emitters share one grammar.
 - **PR #17 review fixes (2026-09-04):** `insecure_tls` is honored per hook (dedicated insecure lane cloned from the default transport — the field was stored but never selected); the retention activity sweep is read-bounded (600 seqs/pass, converging across daily passes — the loop was O(minCursor) reads); the §6 watch rows now spell the key `watchers` (matching 07 §5 and the implementation); E7's replay row now reports the measured (3+n) GETs (writes were and are flat at 2 PUTs). Rationale: a stored-but-dead TLS flag fails closed against the wrong party (self-signed dev hooks never deliver); maintainer passes must stay bounded; wire tables must match the owned shape.
+- **Repo-delete userspace hygiene (issue #63, 2026-09-04):** the tray skips entries naming a deleted
+  repo (one manifest HEAD per merged entry; probe errors and malformed repos keep the entry) while
+  `unread_count` stays O(1) off the index — the retention pass (§9) drops the dead rows and reconciles
+  the count, so badge and tray reconverge daily. Watch writes fail closed on ghosts (`PUT` → 404;
+  `DELETE` still removes the record but skips the counter CAS so no `social.json` is resurrected);
+  `GET` reports not-watching. Emission is deliberately NOT gated: handlers reach fan-out only after a
+  live commit (a delete racing the fan-out is a millisecond window), and the droppings are
+  self-cleaning through the tray filter + retention. No users LIST anywhere (enumerating people stays
+  a non-feature); no tombstones (per-repo state dies with the prefix).
 
 ## Explicitly out of scope
 

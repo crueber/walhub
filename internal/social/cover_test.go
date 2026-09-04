@@ -167,6 +167,7 @@ func TestCoverSplitStarKey(t *testing.T) {
 
 func TestCoverStarStoreErrors(t *testing.T) {
 	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
 	x.svc.Store = &failStore{ObjectStore: x.svc.Store, getErr: errors.New("down")}
 	if _, err := x.svc.Star(ctx(), jane(), "o", "r"); err == nil {
 		t.Fatal("star read error swallowed")
@@ -179,6 +180,7 @@ func TestCoverStarStoreErrors(t *testing.T) {
 	}
 	// Record-create race lost (412) → count without increment.
 	x2 := newHarness(t)
+	seedRepo(t, x2, "o", "r")
 	x2.svc.Store = &failStore{ObjectStore: x2.svc.Store, put412: true}
 	n, err := x2.svc.Star(ctx(), jane(), "o", "r")
 	if err != nil || n != 0 {
@@ -186,12 +188,14 @@ func TestCoverStarStoreErrors(t *testing.T) {
 	}
 	// Record-create backend error.
 	x3 := newHarness(t)
+	seedRepo(t, x3, "o", "r")
 	x3.svc.Store = &failStore{ObjectStore: x3.svc.Store, putErr: errors.New("down")}
 	if _, err := x3.svc.Star(ctx(), jane(), "o", "r"); err == nil {
 		t.Fatal("star put error swallowed")
 	}
 	// Unstar delete error.
 	x4 := newHarness(t)
+	seedRepo(t, x4, "o", "r")
 	if _, err := x4.svc.Star(ctx(), jane(), "o", "r"); err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +205,7 @@ func TestCoverStarStoreErrors(t *testing.T) {
 	}
 	// Corrupt counters break the bump.
 	x5 := newHarness(t)
+	seedRepo(t, x5, "o", "r")
 	seedSocialKey(t, x5, SocialKey("o", "r"), `{oops`)
 	if _, err := x5.svc.Star(ctx(), jane(), "o", "r"); !isErr(err, ErrCorrupt) {
 		t.Fatalf("bump corrupt: %v", err)
@@ -237,7 +242,6 @@ func TestCoverCasUpdateErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
 func TestCoverRequireRead(t *testing.T) {
 	nilS := New(store.NewMemory(), nil)
 	if err := nilS.requireRead(ctx(), "o", "r", auth.Principal{Name: "a", Admin: true}); err != nil {
@@ -287,6 +291,8 @@ func TestCoverStarredEdges(t *testing.T) {
 	}
 	// Corrupt record skipped; key-derived repo fallback; unreadable skipped.
 	x2 := newHarness(t)
+	seedRepo(t, x2, "o", "a")
+	seedRepo(t, x2, "o", "b")
 	seedSocialKey(t, x2, StarredPrefix("jane")+"o/a.json", `{oops`)
 	seedSocialKey(t, x2, StarredPrefix("jane")+"o/b.json", `{"starred_at":"2026-09-04T12:00:00Z"}`)
 	if err := x2.svc.Store.Delete(ctx(), StarredPrefix("jane")+"o/a.json", ""); err != nil {
@@ -337,6 +343,7 @@ func TestCoverHandleFalse(t *testing.T) {
 	}
 	// Service error through the lane.
 	x2 := newHarness(t)
+	seedRepo(t, x2, "o", "r")
 	x2.svc.Store = &failStore{ObjectStore: x2.svc.Store, getErr: errors.New("down")}
 	if rec := do(t, x2, "PUT", "/o/r/api/star", nil, asUser("jane")); rec.Code != 500 {
 		t.Fatalf("star err: %d", rec.Code)
@@ -352,5 +359,52 @@ func TestCoverHandleFalse(t *testing.T) {
 	x2.svc.Store = &failStore{ObjectStore: x2.svc.Store, listErr: errors.New("down")}
 	if rec := do(t, x2, "GET", "/api/v1/me/starred", nil, asUser("jane")); rec.Code != 500 {
 		t.Fatalf("twin err: %d", rec.Code)
+	}
+}
+
+// headFailStore fails HEAD probes only (reads/writes delegate): the
+// existence probe must fail OPEN, never mass-hide.
+type headFailStore struct {
+	store.ObjectStore
+	err error
+}
+
+func (s *headFailStore) Head(ctx context.Context, key string) (*store.ObjectMeta, error) {
+	return nil, s.err
+}
+
+func TestCoverProbeFailOpen(t *testing.T) {
+	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
+	if _, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil {
+		t.Fatal(err)
+	}
+	x.svc.Store = &headFailStore{ObjectStore: x.svc.Store, err: errors.New("down")}
+	// Manifest HEAD down: starred keeps the entry, viewer keeps flags,
+	// restar serves the count (no hiding, no failure).
+	entries, _, err := x.svc.Starred(ctx(), "jane", 10, "")
+	if err != nil || len(entries) != 1 || entries[0].Repo != "o/r" {
+		t.Fatalf("fail-open starred: %+v %v", entries, err)
+	}
+	if s, w := x.svc.ViewerState(ctx(), jane(), "o", "r"); !s || w {
+		t.Fatalf("fail-open viewer: %v %v", s, w)
+	}
+	if n, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil || n != 1 {
+		t.Fatalf("fail-open restar: %d %v", n, err)
+	}
+	// Malformed record repos are kept as-is (render what the record says).
+	x2 := newHarness(t)
+	seedSocialKey(t, x2, StarredPrefix("jane")+"o/x.json", `{"repo":"noslash","starred_at":"2026-09-04T12:00:00Z"}`)
+	entries2, _, err := x2.svc.Starred(ctx(), "jane", 10, "")
+	if err != nil || len(entries2) != 1 || entries2[0].Repo != "noslash" {
+		t.Fatalf("malformed kept: %+v %v", entries2, err)
+	}
+	// Counter read error on the repair path surfaces (no silent zero).
+	x3 := newHarness(t)
+	seedRepo(t, x3, "o", "r")
+	seedSocialKey(t, x3, StarKey("jane", "o", "r"), `{"repo":"o/r","starred_at":"2026-09-04T12:00:00Z"}`)
+	x3.svc.Store = &failStore{ObjectStore: x3.svc.Store, getErr: errors.New("down"), getErrSubstr: "social.json"}
+	if _, err := x3.svc.Star(ctx(), jane(), "o", "r"); err == nil {
+		t.Fatal("repair read error swallowed")
 	}
 }

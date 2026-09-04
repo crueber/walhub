@@ -570,6 +570,35 @@ func (s *Service) putCreate(ctx context.Context, key string, body []byte) error 
 // normPrincipal lowercases and trims a principal name for comparison.
 func normPrincipal(p string) string { return strings.ToLower(strings.TrimSpace(p)) }
 
+// manifestKey returns repos/<o>/<r>/manifest.pb — the repo-existence
+// signal (deleted first on Delete, created first on Create; absent =
+// deleted-or-never-existed).
+func manifestKey(owner, repo string) string {
+	return "repos/" + owner + "/" + repo + "/manifest.pb"
+}
+
+// repoAlive reports whether the repo exists. A probe error fails OPEN
+// (returns true): a transient store fault must neither mass-hide trays
+// nor fail closed on mutations — the CAS loops surface real errors on
+// their own reads.
+func (s *Service) repoAlive(ctx context.Context, owner, repo string) bool {
+	ok, err := store.Exists(ctx, s.Store, manifestKey(owner, repo))
+	if err != nil {
+		return true
+	}
+	return ok
+}
+
+// repoOf splits an "owner/repo" reference; false when malformed (the
+// caller keeps the entry — fail open toward serving).
+func repoOf(repo string) (string, string, bool) {
+	o, r, ok := strings.Cut(repo, "/")
+	if !ok || o == "" || r == "" || strings.Contains(r, "/") {
+		return "", "", false
+	}
+	return o, r, true
+}
+
 // sortStrings is insertion sort (small slices only: recipients, teams).
 func sortStrings(s []string) {
 	for i := 1; i < len(s); i++ {
