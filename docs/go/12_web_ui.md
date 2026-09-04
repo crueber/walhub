@@ -231,7 +231,7 @@ Server returns raw text (spec §9.5). Decision tree:
 
 ```text
 too_large (2 MiB cap hit)  → explanatory placeholder
-binary (NUL / invalid UTF-8) → explanatory placeholder ("binary file, N bytes")
+binary (NUL / invalid UTF-8) → explanatory placeholder ("binary file, {human size}"; exact bytes in title)
 name ends .md/.markdown    → MarkdownBlob   (Preview | Code toggle; markdown-lite + sanitizer in preview,
                                               raw text in code view)
 otherwise                  → CodeBlob       (line-numbered <pre>, tinted by the mini tokenizer)
@@ -401,3 +401,4 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
 - **GFM/markdown extras beyond the hand-rolled markdown-lite are not implemented** — preview fidelity is preview-level; code view remains available for exact text.
 - **NEW — Setup UI is a first-class page** (`/setup`, §2.10) backed by the D6 Setup API, with setup-only-mode error display and restart-required hints.
 - **NEW — JS testing is normative** (§5): `node --test`, zero npm test deps, strict logic/DOM separation, unit + server-smoke suites wired as `make test-web`.
+- **NEW — human-readable sizes in the Code tab (issue #27):** Tree entry sizes and all Blob size spots (header, too-large and binary placeholders) render via the shared headless-testable `fmtSize` helper (`web/src/lib/format.js`: `B/k/MB/GB…`, exact byte count kept in a `title` tooltip); the blob code `<pre>` (and the MD code-fallback `<pre>`) is `flex-1 min-w-0` so the pane fills the card.
