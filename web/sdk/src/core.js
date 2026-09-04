@@ -14,6 +14,10 @@ import { ReposError } from "./errors.js";
 import { readSse } from "./sse.js";
 import { RepoClient } from "./repo.js";
 import { attachAdmin } from "./admin.js";
+import { attachAccess } from "./access.js";
+import { attachInvites, attachRepoInvites } from "./invites.js";
+import { attachOrgs } from "./orgs.js";
+import { attachUsers } from "./users.js";
 import { openAuthPopup, canAuthenticate } from "./auth.js";
 
 /** Off-DOM default base, tests only (§1.3). */
@@ -145,6 +149,9 @@ export class ReposClient {
     this.authenticate = opts.authenticate ?? (canAuthenticate() ? () => openAuthPopup(this._base) : null);
     /** Single-flight popup promise — at most one per client (§1.2). @type {Promise<void>|null} */
     this._popupAuth = null;
+    attachUsers(this);
+    attachOrgs(this);
+    attachInvites(this);
   }
 
   /**
@@ -177,6 +184,8 @@ export class ReposClient {
   repo(fullName) {
     const r = new RepoClient(this, fullName);
     attachAdmin(r);
+    attachAccess(r);
+    attachRepoInvites(r);
     return r;
   }
 

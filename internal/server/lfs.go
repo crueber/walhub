@@ -50,7 +50,8 @@ func (s *Server) lfsDispatch(w http.ResponseWriter, r *http.Request, id git.Repo
 }
 
 // lfsAuth is the common LFS gate: read for download, write for upload.
-func (s *Server) lfsAuth(w http.ResponseWriter, r *http.Request, write bool) (auth.Principal, bool) {
+// Reads additionally consult the identity require_read hook (01 §4.1).
+func (s *Server) lfsAuth(w http.ResponseWriter, r *http.Request, id git.RepoId, write bool) (auth.Principal, bool) {
 	p, aerr := s.authSvc.Authenticate(r, s.cfg)
 	if aerr != nil {
 		s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
@@ -62,6 +63,9 @@ func (s *Server) lfsAuth(w http.ResponseWriter, r *http.Request, write bool) (au
 			return p, false
 		}
 	} else if aerr := requireRead(p, s.cfg.Server.Auth.AnonymousRead); aerr != nil {
+		s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
+		return p, false
+	} else if aerr := s.checkReadGate(r.Context(), id.Owner, id.Name, p); aerr != nil {
 		s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
 		return p, false
 	}
@@ -100,7 +104,7 @@ func (s *Server) lfsBatch(w http.ResponseWriter, r *http.Request, id git.RepoId)
 		// git-lfs always sends the media type; tolerate missing Accept anyway.
 		_ = r
 	}
-	if _, ok := s.lfsAuth(w, r, false); !ok {
+	if _, ok := s.lfsAuth(w, r, id, false); !ok {
 		return
 	}
 	var req lfsBatchReq
@@ -182,7 +186,7 @@ func lfsVerifyPath(id git.RepoId) string {
 
 // lfsGet streams one object (static contract; read-through spools upstream).
 func (s *Server) lfsGet(w http.ResponseWriter, r *http.Request, id git.RepoId, oid string) {
-	if _, ok := s.lfsAuth(w, r, false); !ok {
+	if _, ok := s.lfsAuth(w, r, id, false); !ok {
 		return
 	}
 	// HEAD with upstream read-through → 200 + Content-Length from the
@@ -213,7 +217,7 @@ func (s *Server) lfsPut(w http.ResponseWriter, r *http.Request, id git.RepoId, o
 			return
 		}
 	}
-	if _, ok := s.lfsAuth(w, r, true); !ok {
+	if _, ok := s.lfsAuth(w, r, id, true); !ok {
 		return
 	}
 	max := int64(s.cfg.LFS.MaxObjectBytes)
@@ -275,7 +279,7 @@ func (s *Server) lfsVerify(w http.ResponseWriter, r *http.Request, id git.RepoId
 		// tolerate
 		_ = r
 	}
-	if _, ok := s.lfsAuth(w, r, true); !ok {
+	if _, ok := s.lfsAuth(w, r, id, true); !ok {
 		return
 	}
 	var req lfsObject

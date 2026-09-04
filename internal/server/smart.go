@@ -119,6 +119,10 @@ func (s *Server) gitInfoRefs(w http.ResponseWriter, r *http.Request, id git.Repo
 			s.gitAuthFailure(w, r, svc, aerr)
 			return
 		}
+		if aerr := s.checkReadGate(r.Context(), id.Owner, id.Name, p); aerr != nil {
+			s.gitAuthFailure(w, r, svc, aerr)
+			return
+		}
 	} else if aerr := requireWrite(p); aerr != nil {
 		s.gitAuthFailure(w, r, svc, aerr)
 		return
@@ -252,6 +256,10 @@ func (s *Server) gitService(w http.ResponseWriter, r *http.Request, id git.RepoI
 	p = s.authSvc.identityForward(r, p)
 	if svc == git.ServiceUploadPack {
 		if aerr := requireRead(p, s.cfg.Server.Auth.AnonymousRead); aerr != nil {
+			s.gitAuthFailure(w, r, svc, aerr)
+			return
+		}
+		if aerr := s.checkReadGate(r.Context(), id.Owner, id.Name, p); aerr != nil {
 			s.gitAuthFailure(w, r, svc, aerr)
 			return
 		}
@@ -492,6 +500,10 @@ func (s *Server) bundlesDispatch(w http.ResponseWriter, r *http.Request, id git.
 		return
 	}
 	if aerr := requireRead(p, s.cfg.Server.Auth.AnonymousRead); aerr != nil {
+		s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
+		return
+	}
+	if aerr := s.checkReadGate(r.Context(), id.Owner, id.Name, p); aerr != nil {
 		s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
 		return
 	}

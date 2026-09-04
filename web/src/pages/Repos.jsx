@@ -43,6 +43,10 @@ export default function Repos() {
           </>
         )}
       </Show>
+      <p class="muted mt-4 text-xs">
+        <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
+        {' '}(members, teams, invitations — 404 unless this owner is an org)
+      </p>
     </div>
   );
 }

@@ -26,6 +26,21 @@ func (s *Server) Handler() http.Handler {
 	return r
 }
 
+// apiServe delegates to the api seam with the request principal resolved
+// and injected (06 §8): invalid credentials get a real 401 here (the seam
+// handlers then see the same principal the git paths resolve). Anonymous
+// requests pass through untouched, preserving legacy read behavior.
+func (s *Server) apiServe(w http.ResponseWriter, r *http.Request) {
+	p, aerr := s.authSvc.Authenticate(r, s.cfg)
+	if aerr != nil {
+		s.mapAuthStatus(w, aerr)
+		return
+	}
+	p = s.authSvc.identityForward(r, p)
+	s.maybeRefreshSession(w, r, p)
+	s.api.Serve(w, injectPrincipal(r, p))
+}
+
 // gated wraps a handler for the gated group (requireAuth = read).
 func (s *Server) gated(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +82,7 @@ func (s *Server) mount(r chi.Router) {
 		// Compress stays scoped to the web lanes: the api mux is opaque, so
 		// the compress factory wraps the lane handler directly (§2.2 #9).
 		apiLane := s.compress(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			s.api.Serve(w, r)
+			s.apiServe(w, r)
 		}))
 		r.HandleFunc("/api", apiLane.ServeHTTP)
 		r.HandleFunc("/api/*", apiLane.ServeHTTP)
@@ -218,12 +233,12 @@ func (s *Server) repoDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	// Route the lanes to the api seam first (§3.3: both lanes, same handlers).
 	if len(sub) > 0 && (sub[0] == "api" || sub[0] == "api-browser") && s.api != nil {
-		s.api.Serve(w, r)
+		s.apiServe(w, r)
 		return
 	}
 	// Repo lifecycle on the bare repo root: PUT create / DELETE delete.
 	if len(sub) == 0 && (r.Method == http.MethodPut || r.Method == http.MethodDelete) && s.api != nil {
-		s.api.Serve(w, r)
+		s.apiServe(w, r)
 		return
 	}
 

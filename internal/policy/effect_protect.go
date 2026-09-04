@@ -1,6 +1,9 @@
 package policy
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // ProtectEffect — the enforced effect. Default if omitted: restrict all
 // four ops, empty bypass. Combination: every matching rule applies (AND);
@@ -12,6 +15,20 @@ type ProtectEffect struct {
 }
 
 func (p *ProtectEffect) Kind() string { return "protect" }
+
+// ExpandedCopy implements ActorExpander (Seam 3, 01 §6): the bypass list's
+// team:/role: spellings resolve at load time; the receiver is never
+// mutated. Unresolvable bypass entries warn and match nothing (an empty
+// allow-set denies — fail-closed).
+func (p *ProtectEffect) ExpandedCopy(ctx context.Context, x Expander) (Effect, []string) {
+	cpy := &ProtectEffect{RestrictOps: append([]string{}, p.RestrictOps...)}
+	if len(p.Bypass) == 0 {
+		return cpy, nil
+	}
+	expanded, warnings := x.ExpandGroups(ctx, p.Bypass)
+	cpy.Bypass = dedup(expanded)
+	return cpy, warnings
+}
 
 var opEnum = map[string]bool{OpCreate: true, OpUpdate: true, OpDelete: true, OpForcePush: true}
 

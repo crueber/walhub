@@ -22,6 +22,7 @@ import (
 
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/git"
+	"git.packden.us/crueber/walhub/internal/policy"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 )
@@ -444,6 +445,17 @@ type Env struct {
 	// /api/v1/ssh-keys surface answers 503.
 	SSHKeys SSHKeyStore
 
+	// Access is the repo read gate (the identity require_read hook,
+	// docs/features/01 §4.1). Nil → legacy flag-only read gating.
+	// When set, every repo-scoped AuthRead route additionally consults
+	// CheckRead after the flag gate passes.
+	Access ReadAccess
+
+	// GroupExpander resolves team:/role: policy spellings at load time
+	// (docs/features/01 §6, Seam 3). Nil → no expansion. Wired by
+	// composition when internal/identity is compiled in.
+	GroupExpander policy.Expander
+
 	// RenderCacheBytes is the rendered-immutable LRU budget
 	// (cache.render_cache_bytes; default 256 MiB — see 07_api.md §14).
 	RenderCacheBytes int64
@@ -468,6 +480,28 @@ func (e *Env) Ready() {
 	}
 	if e.refs == nil {
 		e.refs = newRefCache(4096)
+	}
+}
+
+// ReadAccess is the repo read gate consulted after principal resolution
+// and before any repo-scoped read handler body (the require_read hook,
+// docs/features/01 §4.1). Anonymous-denied reads return ErrUnauthorized
+// (→ real 401 + WWW-Authenticate: Bearer); authenticated-but-insufficient
+// returns ErrForbidden (→ 403).
+type ReadAccess interface {
+	CheckRead(ctx context.Context, owner, repo string, p auth.Principal) *auth.AuthError
+}
+
+// mapAccessErr renders a ReadAccess denial: 401 (+Bearer) for anonymous,
+// 403 for authenticated-but-insufficient, 503 when identity state is down.
+func mapAccessErr(w http.ResponseWriter, aerr *auth.AuthError) {
+	switch aerr.Kind {
+	case auth.ErrForbidden:
+		writePlain(w, http.StatusForbidden, aerr.Why)
+	case auth.ErrUnavailable:
+		writePlain(w, http.StatusServiceUnavailable, aerr.Why)
+	default:
+		writePlain(w, http.StatusUnauthorized, aerr.Why)
 	}
 }
 

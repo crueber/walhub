@@ -47,6 +47,9 @@ type Server struct {
 	metrics *Registry
 	drain   *DrainState
 
+	// readGate is the identity require_read hook (01 §4.1); nil → legacy.
+	readGate ReadGate
+
 	inflight  Inflight
 	cacheRoot string
 	dataDir   string // cache.dir; LFS spool + TLS files live under it
@@ -84,6 +87,9 @@ type Options struct {
 	Notifier func(repo string)
 	Log      *slog.Logger
 	Now      func() time.Time
+	// ReadGate is the identity require_read hook (01 §4.1); nil → legacy
+	// flag-only read gating on the git/LFS read paths.
+	ReadGate ReadGate
 }
 
 // BootState is the §3.4 boot decision tree outcome.
@@ -138,6 +144,7 @@ func New(o Options) *Server {
 	s.metrics = newRegistry()
 	registerInventory(s.metrics)
 	s.authSvc = NewAuthService(&o.Config.Server.Auth, o.Now)
+	s.readGate = o.ReadGate
 	return s
 }
 

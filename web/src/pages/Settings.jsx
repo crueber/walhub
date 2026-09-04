@@ -8,6 +8,7 @@
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useData, reportError, asList } from "../lib/data.js";
 import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
+import AccessTab from "./Access.jsx";
 
 // --- tiny line diff (LCS) for the per-revision "line diff" ----------------------
 
@@ -41,7 +42,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-const TABS = ["Scheduled tasks", "Push policy", "Effective config & history"];
+const TABS = ["Scheduled tasks", "Push policy", "Effective config & history", "Access"];
 
 // --- tab 1: scheduled tasks ------------------------------------------------------
 
@@ -389,6 +390,7 @@ export default function Settings() {
         <Show when={getTab() === "Scheduled tasks"}><ScheduledTab ctx={ctx} repo={repo} /></Show>
         <Show when={getTab() === "Push policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
         <Show when={getTab() === "Effective config & history"}><ConfigTab ctx={ctx} repo={repo} /></Show>
+        <Show when={getTab() === "Access"}><AccessTab ctx={ctx} repo={repo} /></Show>
       </div>
     </div>
   );
