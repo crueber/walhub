@@ -31,8 +31,11 @@
 // unstar = Delete-then-decrement (floor 0); a 412 on the record Create is
 // "already starred" (no count change), so concurrent stars converge.
 // Watchers stays derived from watcher_list length (06 behavior, unchanged).
-// Handlers hold no repo locks across store calls (13 §2 rule 4); no new
-// locks are introduced.
+// The star resync decision (absent/zero counter + live record ⇒ one +1) is
+// evaluated INSIDE the counter CAS loop, never from a pre-read (issue #69).
+// Handlers hold no repo locks across store calls (13 §2 rule 4) — the one
+// stated exception is the Star leaf gate below, which serializes only
+// same-process Star calls (human-rate, bounded hold, never nested).
 package social
 
 import (
@@ -122,11 +125,35 @@ type Service struct {
 	Store store.ObjectStore
 	Roles RoleService
 	Now   func() time.Time
+	// starGate serializes Star's check-then-act within this process: the
+	// star decision spans two keys (the per-principal record and the
+	// shared counter), so the counter CAS alone cannot arbitrate a
+	// same-principal race in the post-recreate zero window (issue #69).
+	// Capacity-1 channel used as a mutex — no new imports, safe to copy:
+	// acquire by receiving, release by sending back. Initialized by New;
+	// a zero Service (nil gate) skips mutual exclusion and relies on CAS
+	// alone (degraded but safe — service_test pins the path).
+	starGate chan struct{}
 }
 
 // New builds a Service over st.
 func New(st store.ObjectStore, roles RoleService) *Service {
-	return &Service{Store: st, Roles: roles, Now: time.Now}
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return &Service{Store: st, Roles: roles, Now: time.Now, starGate: gate}
+}
+
+// lockStar acquires the Star serialization gate and returns the release
+// function for defer. Only Star takes this gate (never nested, single
+// lock so no ordering hazard); Unstar keeps its version-conditional
+// Delete token and all reads stay lock-free.
+func (s *Service) lockStar() func() {
+	g := s.starGate
+	if g == nil {
+		return func() {}
+	}
+	<-g
+	return func() { g <- struct{}{} }
 }
 
 // nowUTC is the clock, UTC (RFC 3339 wire timestamps).

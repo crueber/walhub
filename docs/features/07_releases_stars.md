@@ -177,8 +177,13 @@ Hazard: star/unstar/watch/unwatch and 03's fork completion all CAS the same `soc
 read-modify-write can clobber a concurrent field update. Avoidance: one canonical loop — read, mutate
 ONLY the caller's field, `PutUpdate(version)`, retry on 412; monotonicity is not required (inc/dec
 both exist), but every mutation path uses the same loop, so interleavings converge. Contention is
-negligible (human-rate events; documented per P2 reasoning). No lock, no singleflight: the CAS IS the
-arbitrator. `updated_at` is set by whichever write wins last.
+negligible (human-rate events; documented per P2 reasoning). Cross-process arbitration is the CAS
+alone (no singleflight, no cross-feature locks — the header rule stands); same-process `Star` calls
+additionally serialize on a leaf per-Service gate (#69: the star decision spans two keys — record +
+counter — so two CAS loops cannot make check-and-bump atomic). The gate is `Star`-only (never nested,
+`defer`-released; `Unstar` keeps its version-conditional Delete token, reads stay lock-free), and the
+resync decision is evaluated inside the counter CAS loop so retries re-check the latest state.
+`updated_at` is set by whichever write wins last.
 
 #### 4.1 Deleted repos — miss-tolerant reads, guarded writes, resync on recreate (issue #63)
 
@@ -339,6 +344,17 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
   (§3), `for-each-ref --sort=-creatordate --format=%(refname:strip=2) refs/tags` (previous-tag
   default). Asset bytes serve direct (accel offload eligible, left to the edge). New config key
   `releases.max_asset_bytes` (2 GiB default; reflective section — setup/env/validation free).
+- **Atomic concurrent Star (issue #69, 2026-09-04):** same-principal concurrent `Star`
+  double-counted in the post-recreate zero window — the record-Create winner's `+1` plus a late
+  observer's resync `+1` fired from a separate pre-read (check-then-act across two CAS windows;
+  `TestStarConcurrentConverge` flaked 3–4 instead of 2). The resync decision (absent/zero ⇒ one `+1`,
+  nonzero ⇒ returned as-is, corrupt ⇒ `0` with no write) is now evaluated inside the counter CAS loop
+  so every retry re-checks, and `Star`'s record→counter mutation serializes on a leaf per-Service
+  gate (`Star`-only, never nested, `defer`-released; a zero `Service` skips the gate and relies on CAS
+  alone). Single-call semantics are unchanged — idempotent re-Star, unstar floor 0, #63 lazy tolerance
+  (record-first, miss-tolerant reads) — and cross-process same-instant races keep the #63
+  unstar/restar convergence. Regression: `TestStarConcurrentConverge` stress
+  (`-race -count=20`) plus the deterministic `TestStarConcurrentResyncConverges` (absent/zeroed table).
 - **Repo-delete userspace hygiene (issue #63, 2026-09-04):** miss-tolerant reads + guarded writes +
   recreate resync per §4.1 — no reverse index (enumerating people stays a non-feature), no tombstones
   (per-repo state must die with the prefix), no repair-on-recreate scan. Rationale: readers can probe

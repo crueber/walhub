@@ -52,6 +52,73 @@ func TestStarUnstarIdempotent(t *testing.T) {
 	}
 }
 
+// TestStarConcurrentResyncConverges pins issue #69 deterministically: in
+// the post-recreate zero window (stale userspace record, absent or freshly
+// zeroed counter) N concurrent same-principal Stars must repair exactly
+// once. The old read-then-bump fired one +1 per caller (N bumps for one
+// star); the conditional resync CAS converges them on a single +1.
+func TestStarConcurrentResyncConverges(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		seedZero bool
+	}{
+		{"absent", false},
+		{"zeroed", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newHarness(t)
+			seedRepo(t, x, "o", "r")
+			// Stale record predating the recreate, written directly so no
+			// counter bump is attached to it.
+			seedSocialKey(t, x, StarKey("jane", "o", "r"), `{"repo":"o/r","starred_at":"2026-09-04T12:00:00Z"}`)
+			if tc.seedZero {
+				// A sibling writer (watch/fork) created a zeroed counter
+				// first — the repair must still fire exactly once and
+				// preserve the other fields.
+				seedSocialKey(t, x, SocialKey("o", "r"), `{"stars":0,"watchers":1,"forks":0,"updated_at":"2026-09-04T12:00:00Z"}`)
+			}
+			var wg sync.WaitGroup
+			for i := 0; i < 8; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if _, err := x.svc.Star(ctx(), jane(), "o", "r"); err != nil {
+						t.Errorf("star: %v", err)
+					}
+				}()
+			}
+			wg.Wait()
+			d, err := x.svc.Counts(ctx(), jane(), "o", "r")
+			if err != nil || d.Stars != 1 {
+				t.Fatalf("resync converged to %+v %v, want stars 1", d, err)
+			}
+			if tc.seedZero && d.Watchers != 1 {
+				t.Fatalf("resync clobbered watchers: %+v", d)
+			}
+		})
+	}
+}
+
+// TestStarZeroServiceGateSkips pins the degraded path: a Service built
+// without New has no star gate, so Star must still work (CAS alone) rather
+// than deadlock on a nil channel.
+func TestStarZeroServiceGateSkips(t *testing.T) {
+	st := store.NewMemory()
+	s := &Service{Store: st, Roles: newFakeRoles()}
+	if _, err := store.PutBytes(ctx(), st, manifestKey("o", "r"), []byte("manifest"),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/x-protobuf"}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.Star(ctx(), jane(), "o", "r")
+	if err != nil || n != 1 {
+		t.Fatalf("zero-service star: %d %v", n, err)
+	}
+	n, err = s.Star(ctx(), jane(), "o", "r")
+	if err != nil || n != 1 {
+		t.Fatalf("zero-service restar: %d %v", n, err)
+	}
+}
+
 func TestStarConcurrentConverge(t *testing.T) {
 	x := newHarness(t)
 	seedRepo(t, x, "o", "r")

@@ -22,6 +22,15 @@ import (
 // concurrent stars converge instead of double-counting. Starring a deleted
 // repo is 404: without the manifest gate every star would mint a fresh
 // userspace record the prefix sweep can never clean.
+//
+// Concurrency (issue #69): the mutation (record check/Create, counter
+// bump-or-resync) runs under the Service star gate, so same-process Stars
+// are sequential and each observes the previous call's committed counter.
+// The gate plus the conditional resync CAS in reconcileStar keep the
+// counter exact: the record Create 412 still arbitrates first-star races
+// (the loser recounts without repairing), and a late observer of an
+// in-flight record sees the winner's committed bump instead of firing a
+// second one.
 func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string) (int, error) {
 	if err := requireAuthenticated(p); err != nil {
 		return 0, err
@@ -32,6 +41,8 @@ func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string
 	if !s.repoAlive(ctx, owner, repo) {
 		return 0, fmt.Errorf("%w: repo %s not found", ErrNotFound, repoName(owner, repo))
 	}
+	release := s.lockStar()
+	defer release()
 	who := normPrincipal(p.Name)
 	key := StarKey(who, owner, repo)
 	if raw, _, err := s.getJSON(ctx, key); err != nil {
@@ -60,22 +71,45 @@ func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string
 // include this star (no reverse index exists to verify — see Decisions),
 // so a second stale starrer's star converges via unstar/restar instead.
 // A corrupt counter keeps the old tolerance (record is the truth, 0).
+//
+// Concurrency (issue #69): the resync decision lives INSIDE the social.json
+// CAS loop — the update function bumps only when the freshly-read counter
+// is absent or zero and no-ops otherwise, so every 412 retry re-evaluates
+// against the latest committed state. Concurrent resyncs therefore converge
+// on a single +1 instead of each firing from a stale pre-read (the old
+// read-then-bump across two CAS windows double-counted). Single-call
+// behavior is unchanged: absent/zero → one +1, nonzero → returned as-is,
+// corrupt → 0 with no error and no write.
 func (s *Service) reconcileStar(ctx context.Context, owner, repo string) (int, error) {
-	raw, _, err := s.getJSON(ctx, SocialKey(owner, repo))
+	var count int
+	var corrupt bool
+	_, err := s.casUpdate(ctx, SocialKey(owner, repo), 8, func(cur []byte, ver store.Version) ([]byte, bool, error) {
+		var d SocialDoc
+		if cur != nil {
+			var perr error
+			d, perr = parseSocialInto(cur)
+			if perr != nil {
+				corrupt = true
+				count = 0
+				return nil, false, nil
+			}
+			if d.Stars != 0 {
+				count = d.Stars
+				return nil, false, nil
+			}
+		}
+		d.Stars++
+		d.UpdatedAt = s.nowUTC().Format(dateTimeFmt)
+		count = d.Stars
+		return encodeSocial(&d), true, nil
+	})
 	if err != nil {
 		return 0, err
 	}
-	if raw == nil {
-		return s.bumpStars(ctx, owner, repo, +1)
-	}
-	d, err := parseSocial(raw)
-	if err != nil {
+	if corrupt {
 		return 0, nil
 	}
-	if d.Stars == 0 {
-		return s.bumpStars(ctx, owner, repo, +1)
-	}
-	return d.Stars, nil
+	return count, nil
 }
 
 // Unstar deletes the caller's star record (idempotent) and CAS-decrements
