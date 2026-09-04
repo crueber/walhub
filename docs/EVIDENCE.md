@@ -27,6 +27,7 @@ requested or when a review questions a hot path).
 |---|---|---|---|---|
 | E1 | 2026-09-03 | SSH key registry (`internal/server/sshkeys.go`) | 10k vs 1M registered keys: what happens to auth, the keys page, and writes? | Auth flat (O(1) per handshake); keys page linear in per-user keys; writes constant. Scale-safe to 1M+. |
 | E2 | 2026-09-04 | Identity authz read path (`internal/identity`) | What does one role resolution cost, and can it explode with team count? | O(1) per request: 1 conditional access.json GET + 1 per referenced team; steady state transfers zero bodies (304-class). Cannot explode: bounded binding list, exact-key probes, no LIST. |
+| E3 | 2026-09-04 | Issue list/read path (`internal/issues`) | Is the issue list index-first O(1), what does a thread read cost, and is the LIST fallback bounded? | List flat (2 GETs, 0 LIST at any population when the index is complete); thread read linear in thread length; fallback bounded (1 LIST + ≤2000 header GETs, page ≤100). Cannot explode: every scan is prefix-bounded and paged. |
 
 ---
 
@@ -170,3 +171,81 @@ are control-plane keys (`.json`) on the control-plane path.
 size: bounded probes, exact keys, zero steady-state bytes. No redesign
 required; if binding lists ever grew large the lever is a per-team roster
 projection, not a new index.
+
+---
+
+## E3 — Issue list/read path: index-first O(1), bounded LIST fallback (2026-09-04)
+
+**Area:** issues list + thread reads (`internal/issues` — `ListIssues`,
+`GetThread`, `scanHeaders`, `CompactIndex`). Spec: `features/02` §§2/7.
+
+**Question:** the default UI (issue list, thread page) must stay at O(1)
+store requests as repos accumulate issues and threads grow; the P4 LIST
+fallback that covers index staleness must itself be bounded so a degraded
+read cannot explode.
+
+**Method.** Harness: `TestEvidenceIssueReadPath` in
+`internal/issues/evidence_test.go`
+(`go test ./internal/issues/ -run TestEvidenceIssueReadPath -v`). Real
+`Service.ListIssues`/`GetThread` over the **memory store** wrapped in a
+counting decorator (GET/LIST/PUT per call). Memory store isolates the
+algorithmic shape from network RTT; every counted op is one bucket round
+trip on any backend. Populations: 10 issues (short thread: 5 comments) and
+300 issues (long thread: 60 comments + opened = 61 events).
+
+**Results.**
+
+| path | n=10 | n=300 | shape |
+|---|---|---|---|
+| list, default page (index-first) | 2 GET, 0 LIST | 2 GET, 0 LIST | **flat** — index + P2 counter, no LIST |
+| thread read, full first page | 7 GET, 1 LIST (6 events) | 62 GET, 1 LIST (61 events) | linear in **thread length** |
+| list, index deleted (fallback) | 12 GET, 1 LIST | 302 GET, 1 LIST | linear in **repo size**, bounded (below) |
+
+**Analysis.**
+
+- **The default list is flat because completeness is checked, not hoped
+  for.** `ListIssues` reads `issues/index.json` plus the P2 counter
+  (`meta/next_num`) — 2 GETs — and serves the window from the index alone
+  when every allocated number has a card. The counter check is what makes
+  "index-first" honest: a lost index update (10-CAS-fail drop, crash
+  between the header CAS and the index CAS) reads as incomplete and falls
+  through to the scan instead of silently hiding an issue. Same 2 GETs at
+  10 and 300 issues; no LIST on the happy path at any population.
+- **A thread read is linear in the thread, not the repo.**
+  `GetThread` = 1 header GET + 1 prefix LIST over that thread's `events/`
+  + 1 GET per event in the thread (61 events → 62 GETs). Threads are
+  human-rate append-only logs (comments, label/state changes, reactions);
+  a 10,000-comment thread would cost 10,001 GETs on a full read — which is
+  why the response windows at `n ≤ 200` (`after_seq` older-on-demand).
+  The scan itself stays exact-key GETs under one thread prefix; it never
+  touches another thread's keys. If threads ever grew hostile, the lever
+  is serving the tail window from a `startAfter` seq cursor (the `012x`
+  key order already supports it) — noted, not built: human threads do not
+  need it.
+- **The fallback cannot explode because every scan is prefix-bounded and
+  paged.** `scanHeaders` issues exactly 1 LIST over `issues/` and at most
+  `scanCap = 2000` header GETs; the response page is `n ≤ 100` (default
+  50). At 300 issues the degraded list costs 302 GETs — the whole repo,
+  once, and only while the index is incomplete (absent, mid-repair, or
+  compacted history). The 2000-cap means a 100,000-issue repo's fallback
+  still costs ≤ 2001 requests and serves the first 2000 headers' worth of
+  pages — degradation is linear-to-a-ceiling, never fan-out.
+- **Compaction keeps the happy-path object small.** Past ~256 KiB the
+  `issue-index-compact` CAS evicts oldest `closed_recent` first and
+  advances `compacted_through` monotonically in the same CAS; evicted
+  threads stay listable through the fallback above. Checked inline on
+  every index write (bytes in hand — cheaper than sampling), so the index
+  cannot grow past ~256 KiB + one card between compactions.
+
+**Over the network (S3/GCS/filesystem).** Same shape with per-op RTT: the
+default list is 2 control-plane GETs (`.json` keys); a full thread read is
+(2 + E) GETs for E events; a degraded list is (3 + H) for H headers up to
+the 2000 cap. No LIST on the happy path; one bounded LIST on the degraded
+path. These are all control-plane keys on the control-plane path —
+bulk transport separation is untouched.
+
+**Verdict.** The read path is flat where users look (list: 2 GETs forever)
+and linear-with-a-ceiling everywhere else (thread in its own length,
+fallback in repo size capped at 2000 headers, pages at 100). No redesign
+required; the tail-window cursor is the documented lever if threads ever
+grow beyond human scale.
