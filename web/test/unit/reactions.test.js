@@ -8,6 +8,7 @@ import {
   seqKey,
   summaryEntries,
   reactionChangedText,
+  adjustSummary,
 } from "../../src/lib/reactions.js";
 
 test("all eight wire contents map to distinct emoji glyphs", () => {
@@ -50,4 +51,38 @@ test("reactionChangedText keeps glyph and word form", () => {
     reactionChangedText({ op: "remove", content: "+1", target_event_seq: 12 }),
     "unreacted 👍 +1 on #12"
   );
+});
+
+test("adjustSummary adds into an empty/missing summary under the %06x key", () => {
+  assert.deepEqual(adjustSummary(undefined, 3, "+1", +1), { "000003": { "+1": 1 } });
+  assert.deepEqual(adjustSummary({}, 0, "eyes", +1), { "000000": { eyes: 1 } });
+});
+
+test("adjustSummary increments while preserving sibling contents and seqs", () => {
+  const before = { "000003": { "+1": 3, eyes: 1 }, "000007": { heart: 2 } };
+  assert.deepEqual(adjustSummary(before, 3, "+1", +1), {
+    "000003": { "+1": 4, eyes: 1 },
+    "000007": { heart: 2 },
+  });
+});
+
+test("adjustSummary decrements to zero by pruning content then seq keys", () => {
+  const before = { "000003": { "+1": 1, eyes: 2 } };
+  assert.deepEqual(adjustSummary(before, 3, "+1", -1), { "000003": { eyes: 2 } });
+  assert.deepEqual(adjustSummary({ "000003": { "+1": 1 } }, 3, "+1", -1), {});
+});
+
+test("adjustSummary clamps at zero: removing what is not there is a no-op", () => {
+  assert.deepEqual(adjustSummary({}, 3, "+1", -1), {});
+  assert.deepEqual(adjustSummary({ "000003": { eyes: 1 } }, 3, "+1", -1), {
+    "000003": { eyes: 1 },
+  });
+});
+
+test("adjustSummary never mutates its argument (signal reference-equality)", () => {
+  const before = Object.freeze({ "000003": Object.freeze({ "+1": 1 }) });
+  const after = adjustSummary(before, 3, "+1", +1);
+  assert.deepEqual(before, { "000003": { "+1": 1 } });
+  assert.notEqual(after, before);
+  assert.deepEqual(after, { "000003": { "+1": 2 } });
 });

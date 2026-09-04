@@ -186,6 +186,38 @@ export function invalidate(key) {
   start(key, entry, fn, { keepRefetch: true });
 }
 
+/**
+ * patchCached(key, fn) → boolean: the generation-safe optimistic-commit
+ * path (issues #36/#42). Maps the cached value through fn and commits the
+ * result to subscribers synchronously, so a mutation paints immediately
+ * instead of waiting for the guarded refetch round trip.
+ *
+ * Safety vs the #41 ordering guard: the entry generation is retired first
+ * (entry.seq++), so any pre-mutation body still in flight resolves as a
+ * stale loser and is dropped — the optimistic value can only be replaced
+ * by a fetch that started after it. The caller's invalidate() then starts
+ * a newer generation whose post-mutation body reconciles the guess; on
+ * mutation failure the same invalidate rolls the guess back. fn MUST
+ * return a new object (see reactions.adjustSummary) — Solid signals use
+ * reference equality and an in-place mutation would not notify.
+ *
+ * ### Concurrency
+ * Hazard: synchronous signal commit racing an in-flight fetch resolution.
+ * Avoidance: generation retirement happens before the signal commit, so
+ * the race resolves deterministically in favor of the optimistic value;
+ * every flow that calls patchCached must follow with invalidate() (or a
+ * compensating patchCached on error) so the guess is always reconciled.
+ */
+export function patchCached(key, fn) {
+  const entry = cache.get(key);
+  if (!entry || entry.value === undefined) return false;
+  entry.seq++; // retire pre-mutation in-flight bodies (they resolve stale)
+  entry.value = fn(entry.value);
+  entry.at = Date.now();
+  entry.signal[1](entry.value);
+  return true;
+}
+
 /** Force a refetch of every settled key under a prefix (list windows). */
 export function invalidatePrefix(prefix) {
   const keys = [];

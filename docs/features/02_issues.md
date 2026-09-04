@@ -382,8 +382,14 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
   `aria-label`/`title`; no emoji library per the frontend budget). Each
   commented/opened event carries its own emoji+count summary row sourced
   from `reaction_summary`; summary chips toggle (remove-404 falls back to
-  add, GitHub semantics). `reaction_changed` rows read
-  "reacted 👀 eyes on #N" — glyph for scanners, word for clarity.
+  add, GitHub semantics; any other remove failure only reports — issues
+  #36/#42). `reaction_changed` events fold into the summary entirely
+  (GitHub-style): they never render as timeline rows. Clicks paint
+  optimistically (immutable `adjustSummary` step committed via the
+  generation-safe `patchCached` path, which retires pre-mutation in-flight
+  bodies under the #41 ordering guard) and the guarded refetch reconciles
+  the guess; one in-flight mutation per (seq, content) disables its
+  buttons, so double-clicks never double-fire.
 
 ## Explicitly out of scope
 
