@@ -28,6 +28,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/issues"
 	"git.packden.us/crueber/walhub/internal/maintain"
+	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/server"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -98,7 +99,10 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	var apiEnv *api.Env
 	var ident *identity.Service
 	var identHandler *identity.Handler
+	var issuesSvc *issues.Service
 	var issuesHandler *issues.Handler
+	var pullsSvc *pulls.Service
+	var pullsHandler *pulls.Handler
 	if !setupOnly {
 		wal.SetWarnLogger(func(format string, args ...any) { log.Warn(fmt.Sprintf(format, args...)) })
 		reg = wal.NewRegistry(ctx, st, cfg)
@@ -119,21 +123,39 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// by identity. Notifications emit through the 02 §10 seam —
 		// nil until internal/notify lands (best-effort synchronous
 		// fan-out contract, P8).
-		issuesHandler = &issues.Handler{Svc: issues.New(st, ident)}
+		issuesSvc = issues.New(st, ident)
+		issuesHandler = &issues.Handler{Svc: issuesSvc}
 		if ot, ok := apiEnv.Tasks.(*opsTasks); ok {
 			ot.ident = ident
 		}
+		// Wave C1 pulls (docs/features/03): PR threads over the shared
+		// numbering/thread/index family, pr.json sidecars, the stamped
+		// mergeable.json cache, the pull-merge/pull-mergeable/pull-fork
+		// tasks, and the pulls event sink. Ref publishes funnel through
+		// the WAL publish path (never force); the merge task calls 02's
+		// ApplyClosingReferences seam via issuesSvc.
+		pullsSvc, pullsHandler = newPullsService(st, ident, issuesSvc, reg, cfg.Git.Binary)
 	}
 
 	// ---- events bridge before server.New (§10.4 order: AppState then loops) --
 	roles := roleSet(cfg.Server.Roles)
 	eventsRole := len(roles) == 0 || roles["events"]
 	var wake func(repo string)
-	if !setupOnly && eventsRole && cfg.Events.WebhookURL != "" {
+	if !setupOnly && eventsRole && (cfg.Events.WebhookURL != "" || pullsSvc != nil) {
+		var sinks []events.Sink
+		if cfg.Events.WebhookURL != "" {
+			sinks = append(sinks, &events.WebhookSink{URL: cfg.Events.WebhookURL, Secret: cfg.Events.WebhookSecret})
+		}
+		if pullsSvc != nil {
+			// The pulls invalidation sink rides the bridge (Seam 4);
+			// its Deliver never fails, so it never holds back the
+			// shared cursor.
+			sinks = append(sinks, &pullsSinkAdapter{svc: pullsSvc})
+		}
 		bridge := events.New(events.Deps{
 			Source:        events.NewRegistrySource(reg),
 			Store:         reg.Store(),
-			Sinks:         []events.Sink{&events.WebhookSink{URL: cfg.Events.WebhookURL, Secret: cfg.Events.WebhookSecret}},
+			Sinks:         sinks,
 			SweepInterval: time.Duration(cfg.Events.SweepInterval),
 			Logger:        log,
 		})
@@ -172,6 +194,9 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 			return srv.Auth().Authenticate(r, cfg)
 		}
 		srv.ChainExtra(issuesHandler)
+	}
+	if pullsHandler != nil {
+		chainPulls(srv, pullsHandler)
 	}
 
 	// the SSH key registry backs both the sshd auth lookup and the

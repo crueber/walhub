@@ -211,7 +211,7 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 | POST | `{lane}/ops/{op}?params` | require_write | start maintenance op; SSE attach; joins a running same-(repo,kind) task |
 | GET/POST | `/_auth/tokens` | session | token page / mint (CSRF-guarded same-origin) |
 
-**Gated (`require_auth` = read):** SPA shell + `/_ui/*` assets, `/services/setup.json`, `/metrics` (`text/plain; version=0.0.4`), `GET /` (SPA; `?format=text` or text Accept → plain one-per-line repo list), `/{owner}`, `/{owner}/{repo}` UI page routes (tree/blob/commits/commit/wal/settings/issues/labels/milestones all return `index.html`, `no-cache`). The setup routes above are NOT in this group — their access rule is §3.4 (open exactly while no config file exists, the config is invalid, or auth mode is `none`).
+**Gated (`require_auth` = read):** SPA shell + `/_ui/*` assets, `/services/setup.json`, `/metrics` (`text/plain; version=0.0.4`), `GET /` (SPA; `?format=text` or text Accept → plain one-per-line repo list), `/{owner}`, `/{owner}/{repo}` UI page routes (tree/blob/commits/commit/wal/settings/issues/labels/milestones/pulls/pull all return `index.html`, `no-cache`). The setup routes above are NOT in this group — their access rule is §3.4 (open exactly while no config file exists, the config is invalid, or auth mode is `none`).
 
 **Both API lanes hit the same handlers.** `/{owner}/{repo}/api/…` (bearer/same-origin) and `/{owner}/{repo}/api-browser/…` (cross-origin browser, `credentials: include`) differ only in the `Lane` value passed to the handler (which changes cache headers and auth-redirect behavior per 07_api.md). Same for `/api/v1` vs `/api-browser/v1` in the non-repo lane.
 
@@ -609,6 +609,7 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
 - No timeout/body-limit middleware is implemented, matching §20.4's truth about the Rust code; limits stay per-feature (push ingest, settings ≤ 16 KiB, blob ≤ 2 MiB, LFS ≤ `lfs.max_object_bytes`).
 
 - **NEW (2026-09-04) — `issues`/`labels`/`milestones` join the `/{owner}/{repo}` UI page routes** (Wave B, docs/features/02 §11): nested paths (`/issues/new`, `/issues/:num`) ride the `sub[0]` match and return the SPA shell; no wire change, the pages use the issues JSON API.
+- **NEW (2026-09-04) — `pulls`/`pull` join the `/{owner}/{repo}` UI page routes** (Wave C1, docs/features/03 §9): nested paths (`/pulls`, `/pull/:num`) ride the `sub[0]` match and return the SPA shell; no wire change, the pages use the pulls JSON API.
 
 **Divergence (2026-08-31):**
 

@@ -28,6 +28,7 @@ requested or when a review questions a hot path).
 | E1 | 2026-09-03 | SSH key registry (`internal/server/sshkeys.go`) | 10k vs 1M registered keys: what happens to auth, the keys page, and writes? | Auth flat (O(1) per handshake); keys page linear in per-user keys; writes constant. Scale-safe to 1M+. |
 | E2 | 2026-09-04 | Identity authz read path (`internal/identity`) | What does one role resolution cost, and can it explode with team count? | O(1) per request: 1 conditional access.json GET + 1 per referenced team; steady state transfers zero bodies (304-class). Cannot explode: bounded binding list, exact-key probes, no LIST. |
 | E3 | 2026-09-04 | Issue list/read path (`internal/issues`) | Is the issue list index-first O(1), what does a thread read cost, and is the LIST fallback bounded? | List flat (2 GETs, 0 LIST at any population when the index is complete); thread read linear in thread length; fallback bounded (1 LIST + ≤2000 header GETs, page ≤100). Cannot explode: every scan is prefix-bounded and paged. |
+| E4 | 2026-09-04 | PR mergeability + merge task (`internal/pulls`) | Does mergeability stay bounded as open PRs accumulate, what does a merge cost, and is git-pool usage bounded? | Recompute flat (3 GETs + 1 PUT, 0 LIST, 6 git calls at 1 and 50 open PRs); merge bounded (12 GETs + 5 PUTs, 0 LIST, 11 git calls, peak concurrency 1); 16 concurrent readers collapse to 1 merge-tree. Cannot explode: no LIST on any path, page-bounded sidecars, pool-gated git. |
 
 ---
 
@@ -249,3 +250,81 @@ and linear-with-a-ceiling everywhere else (thread in its own length,
 fallback in repo size capped at 2000 headers, pages at 100). No redesign
 required; the tail-window cursor is the documented lever if threads ever
 grow beyond human scale.
+
+---
+
+## E4 — PR mergeability compute cost + merge task round-trips (2026-09-04)
+
+**Area:** pull-request mergeability + merge (`internal/pulls` —
+`ComputeMergeable`, `runMerge`, `HandleRefEvent`, task single-flights).
+Spec: `features/03` §§4/5/7.
+
+**Question:** mergeability must stay bounded as open PRs accumulate (the
+recompute runs on every thread fetch after a push); a merge must cost a
+bounded number of bucket round trips (the budgets in `features/15` spirit:
+no sequential store round trip added to a hot path); git usage must stay
+inside the bounded per-repo pool (no fan-out, no LIST on any path).
+
+**Method.** Harness: `TestEvidenceMergeabilityBudget`,
+`TestEvidenceMergeRoundTrips`, `TestEvidenceSinkNoList`,
+`TestEvidenceConcurrentRecomputeSingleFlight` in
+`internal/pulls/evidence_test.go`
+(`go test ./internal/pulls/ -run TestEvidence -v`). Real
+`Service.ComputeMergeable`/`runMerge`/`HandleRefEvent` over the **memory
+store** wrapped in a counting decorator (GET/PUT/LIST per call) plus a
+scripted `GitRunner` (exact argv shapes, call log, concurrency gauge).
+Memory store isolates the algorithmic shape from network RTT; every
+counted op is one bucket round trip on any backend. The git argv itself is
+proven separately against stock git 2.53 (`gitexec_test.go`: real clean
+AND conflicting `merge-tree` runs, `commit-tree`, rev-list counts,
+reachability pipeline, diff, log ranges). Populations: 1 and 50 open PRs.
+
+**Results.**
+
+| path | 1 open PR | 50 open PRs | shape |
+|---|---|---|---|
+| mergeability recompute | 3 GETs, 1 PUT, 0 LIST, 6 git calls | 3 GETs, 1 PUT, 0 LIST, 6 git calls | **flat** — sidecar + stamp, no index scan, no LIST |
+| merge task (squash→merge path) | 12 GETs, 5 PUTs, 0 LIST, 11 git calls, peak concurrency 1 | — (per-PR cost is population-independent) | **bounded** — re-verify + trial + commit + publish + P3/P4/P8 commit |
+| sink scan (one ref event, 5 open PRs) | ≤ 8 GETs, 0 LIST, 0 git (unrelated ref) | same | **flat in index size** — index-authoritative lookup, git only on recompute |
+| 16 concurrent recomputes, one head | 1 `merge-tree` total | — | **collapsed** — `"mergeable:"+repo/num` single-flight, joiners share |
+
+**Analysis.**
+
+- **Recompute is flat because the stamp is the invalidation key, not a
+  scan.** One recompute reads the thread header + pr.json + writes
+  mergeable.json (3 GETs + 1 CAS PUT — the loser's retry converges) and
+  runs exactly 6 pool-gated git calls (2 resolves, merge-base, merge-tree,
+  rev-list count, plus the ancestry probe). It never reads the shared
+  index and never LISTs — open-PR count is irrelevant by construction.
+  The thread fetch serves `unknown` + enqueues on mismatch instead of
+  computing inline, so a push storm degrades to one background pass per
+  repo (`pull-mergeable` batches all dirty PRs), never N reader-driven
+  merge-trees.
+- **A merge is bounded because every step is one object or one process.**
+  12 GETs (thread + sidecar reads, live ref resolves are git, policy.json,
+  closer inputs) + 5 PUTs (thread CAS, event Create, pr.json CAS, index
+  CAS, mergeable refresh) + 11 git calls (resolves, ancestry, merge-base,
+  trial, subject, commit-tree, plus the recompute's share). Zero LIST:
+  the duplicate check and the sink both read the index object, never scan
+  it. Git runs sequential through the pool (measured peak concurrency 1
+  on the sequential task path); the only fan-out in the package is the
+  reader single-flight, which collapses by design (16 → 1 measured).
+- **The sink scan is index-authoritative, not a sweep.** One ref event
+  costs 1 index GET + 1 GET per open PR sidecar (5 open PRs → ≤ 8 GETs
+  including the thread reads on head drift) and touches git only for PRs
+  whose base/head actually matched. An unrelated ref costs the scan and
+  nothing else — no recompute, no git, no LIST.
+
+**Over the network (S3/GCS/filesystem).** Same shape with per-op RTT: a
+recompute is 3 control-plane GETs + 1 CAS PUT + 6 local git execs (git
+runs on the serving host's materialized copy, not over the network); a
+merge is 12 + 5 plus the WAL publish's own manifest ladder (doc 05
+budgets, unchanged). No LIST on any pulls path at any population —
+collaboration LISTs stay on paginated UI pages (PR list enriches
+page-bounded sidecars, ≤ 100 GETs per page).
+
+**Verdict.** Mergeability is flat (3+1, 0 LIST, 6 git), merges are bounded
+(12+5, 0 LIST, 11 git, pool-sequential), the sink is index-cheap, and
+reader stampedes collapse to one trial merge. No redesign required; the
+levers if volume ever surprises are the mergeable batch window (already
+per-repo) and the list page size (already ≤ 100).

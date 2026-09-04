@@ -322,3 +322,85 @@ every call goes through the SDK).
 - PR templates, milestone/assignee merge gates, project boards (P9).
 - Automatic conflict resolution, mergeability of secrets/large-file rewrites, rebase-with-merge
   strategies beyond the three named.
+
+## Wave C1 implementation notes (2026-09-04, `internal/pulls` landed)
+
+- **Seam 1 in code is the `server.ExtraRoutes` chain**, not `api.Lanes` — the
+  package fronts the core mux via `Handle(w, r) bool` on both lanes, exactly
+  like `internal/identity` and `internal/issues` (see the Wave A amendment in
+  14_extensibility.md Decisions). Route-for-route the §8 table is implemented
+  verbatim, plus two additive endpoints (below).
+- **`POST …/pulls/{num}/comments` is additive** (write, authenticated): the
+  conversation box needs it; 02's comment endpoints 404 PR-kind threads by
+  contract, so 03 owns PR comments with the same P3 two-step.
+- **`GET …/pulls/{num}/merge/task` is additive** (read): the SSE-attach poll
+  for the running pull-merge task — the record carries progress packets plus
+  the terminal outcome, so lagged attachers never miss it (13 §6). Finished
+  records stay in a bounded (128) recent cache for late attachers.
+- **`pr.json` carries an additive optional `body`** (editable description;
+  14 §14.12 field rule): the opened event carries the original body (P3
+  immutable), `Body` is the editable view. `GET …/pulls/{num}` also serves
+  the last-K timeline (`events`, newest-first, `after_seq`/`n` windows) —
+  the Conversation page needs it and no separate events endpoint is
+  warranted.
+- **Trial merge uses the two-positional form** `git merge-tree
+  --write-tree --name-only <base_sha> <head_sha>` everywhere (the §5 argv
+  verbatim): the §4 three-positional form (`<merge_base> <base> <head>`) is
+  a usage error (exit 129) on modern git — verified against stock git 2.53
+  in `gitexec_test.go`, which runs every SubprocessGit verb against real
+  repos (clean AND conflicting merges, commit-tree, rev-list counts,
+  reachability, diff, log ranges). The merge base is still computed
+  separately (the mergeable doc needs it; rebase needs it) and conflict
+  paths parse as lines-after-tree up to the first blank line.
+- **Log pagination uses `--skip=N --max-count=M`** (`-n=N` is rejected by
+  stock git).
+- **Required-checks runs as a raw-JSON pre-scan before the strict parse**:
+  `protect` is strict (an unknown `required_checks` key would die at parse),
+  so the gate scan runs first and fails closed (`rule '<name>' requires
+  checks: no checks backend`) only when a rule actually carries the gate;
+  plain protect rules merge fine. Pending Wave 05 (`internal/checks`
+  absent) — the scan is where the head-sha verdict plugs in.
+- **First fetch serves `unknown`** (§4 second line of defense): stamp
+  mismatch (or miss) serves `unknown` + enqueues `pull-mergeable`; the
+  background pass converges the cache and the next fetch serves the stamp
+  (proven by polling tests, never by sleeping).
+- **List enriches from `pr.json` sidecars** (one GET per listed row,
+  page-bounded ≤ 100, never a LIST): the shared card has no base/head
+  fields, and 02's card rendering must keep working header-alone.
+- **Update-branch merges base INTO head** (trial with base=head, head=base;
+  commit parents `[headSHA, baseSHA]`; head publish `old=headSHA`).
+- **Fork lands the collaboration records + task** (`fork.json` Create
+  arbitrates the target name; parent `forks.json` CAS lists the child; the
+  `pulls` stream fans a `forked` notice): the manifest-sharing step
+  (verbatim pack-set reference + fresh refs snapshot + checkpoint) is a
+  `ForkExecutor` seam, nil in this wave — the task narrates the delegation
+  instead of pretending. The fork-network GC rule (§7) is specified now
+  (pack removal consults children's manifests); enforcement lands with the
+  executor.
+- **Backend outages propagate as 503, never misreported**: `ResolveRef`
+  maps only genuine git exits to unknown-revision; transport failures
+  (pool, timeout, missing binary) propagate as unavailable — same for
+  `MergeBase` and `IsAncestor` (a missing binary reports an error, never a
+  false non-ancestor). Found by tests, fixed in the same change.
+- **Mergeable single-flight key** `"mergeable:"+repo+"/"+num` (joiners share
+  the leader, bounded wait); **merge arbitration** is the `(repo,
+  "pull-merge")` task join plus the WAL publish CAS (never force).
+- **ETag `<head sha>` + SWR** on `GET …/pulls/{num}`; `no-store` on task
+  starts; plain-text errors with the 07 §2 status mapping (unknown PR →
+  `404`, unmet protection → `409` with the rule-named reason, unreachable
+  head → `422`).
+- **Ancestry correction (found live, 2026-09-04):** §4's first ancestry
+  parenthetical reads "`merge-base --is-ancestor <base> <head>` (exit 0 ⇒
+  … `up_to_date`)". Taken literally, every ordinary PR (head branched off
+  base ⇒ base ⊆ head) reports `up_to_date` and the merge task refuses it —
+  demonstrated against the running stack before the fix. The implementation
+  follows the section's own second clause instead: `up_to_date` ⟺
+  `merge-base --is-ancestor <head> <base>` exit 0 (head fully merged into
+  base, nothing to merge); base-⊆-head is the normal shape and proceeds to
+  the trial merge. Code and doc agree as of this note; the normative fix is
+  recorded here, not silently applied.
+- **Evidence E4** (`docs/EVIDENCE.md`): mergeability recompute and merge
+  task budgets measured on the real code path (memory store + scripted git;
+  git argv proven separately against stock git) — 0 LIST on every path,
+  bounded GETs/PUTs/git calls at 1 and 50 open PRs, 16-reader single-flight
+  collapse to 1 merge-tree.

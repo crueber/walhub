@@ -292,7 +292,7 @@ func isUIPageMethod(r *http.Request) bool {
 func uiPageRoute(sub0 string) bool {
 	switch sub0 {
 	case "tree", "blob", "commits", "commit", "wal", "settings",
-		"issues", "labels", "milestones":
+		"issues", "labels", "milestones", "pulls", "pull":
 		return true
 	}
 	return false
