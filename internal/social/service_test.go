@@ -218,7 +218,9 @@ func TestStarredLists(t *testing.T) {
 	if _, _, err := x.svc.Starred(ctx(), "jane", 50, "bogus"); !isErr(err, ErrInvalid) {
 		t.Fatalf("bad cursor: %v", err)
 	}
-	// Three stars, newest first.
+	// Three stars: pages arrive in KEY order (owner/name ascending, #65),
+	// not starred_at order — the timestamps here increase a→c on purpose
+	// so the test pins the documented order instead of the old one.
 	for i, repo := range []string{"o/a", "o/b", "o/c"} {
 		x.svc.Now = func() (later time.Time) { return x.now.Add(time.Duration(i) * time.Minute) }
 		o, r, ok := splitStarRepo(repo)
@@ -235,12 +237,12 @@ func TestStarredLists(t *testing.T) {
 	if err != nil || len(entries) != 2 || !more {
 		t.Fatalf("page1: %+v %v %v", entries, more, err)
 	}
-	if entries[0].Repo != "o/c" || entries[1].Repo != "o/b" {
+	if entries[0].Repo != "o/a" || entries[1].Repo != "o/b" {
 		t.Fatalf("order: %+v", entries)
 	}
 	after := entries[1].StarredAt + "|" + entries[1].Repo
 	entries2, more2, err := x.svc.Starred(ctx(), "jane", 2, after)
-	if err != nil || len(entries2) != 1 || more2 || entries2[0].Repo != "o/a" {
+	if err != nil || len(entries2) != 1 || more2 || entries2[0].Repo != "o/c" {
 		t.Fatalf("page2: %+v %v %v", entries2, more2, err)
 	}
 	// n clamps.
@@ -257,7 +259,7 @@ func TestStarredLists(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries4, _, err := x.svc.Starred(ctx(), "jane", 500, "")
-	if err != nil || len(entries4) != 2 || entries4[0].Repo != "o/c" || entries4[1].Repo != "o/b" {
+	if err != nil || len(entries4) != 2 || entries4[0].Repo != "o/b" || entries4[1].Repo != "o/c" {
 		t.Fatalf("dead skip: %+v %v", entries4, err)
 	}
 }

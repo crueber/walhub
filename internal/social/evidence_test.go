@@ -77,9 +77,13 @@ func TestEvidenceSocialCosts(t *testing.T) {
 	if cs.gets != 1 || cs.puts != 1 {
 		t.Fatalf("forks budget: %s", cs)
 	}
-	// Starred list at 3 and 60 entries: 1 LIST + 1 GET + 1 manifest HEAD
-	// per record.
-	for _, n := range []int{3, 60} {
+	// Starred list (n=50): 1 LIST + 1 GET + 1 manifest HEAD per served
+	// record (+1 aliveness probe to decide `more` exactly) — O(page),
+	// flat in the total starred count. #65 replaced the full-prefix scan
+	// with keyset pagination over the key space: the LIST aborts at the
+	// page edge, and later pages resume after the previous page's last
+	// entry instead of re-probing it.
+	for _, n := range []int{3, 60, 600} {
 		y := newHarness(t)
 		for i := 0; i < n; i++ {
 			seedRepo(t, y, "o", fmt.Sprintf("r%d", i))
@@ -96,9 +100,40 @@ func TestEvidenceSocialCosts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("starred list (n=50) at %d stars: %s more=%v", n, cy, more)
-		if cy.lists != 1 || cy.gets != n || cy.heads != n || len(entries) != min(n, 50) {
+		// Served records plus the one `more` probe; identical at 60
+		// and 600 stars (flat), smaller only when stars run out.
+		wantEntries, wantProbes := min(n, 50), min(n, 51)
+		t.Logf("starred page1 (n=50) at %d stars: %s more=%v", n, cy, more)
+		if cy.lists != 1 || cy.gets != wantProbes || cy.heads != wantProbes ||
+			len(entries) != wantEntries || more != (n > 50) {
 			t.Fatalf("starred budget at %d: %s", n, cy)
+		}
+		if n == 60 {
+			// Page 2 resumes after page 1's last entry: it probes
+			// only the remainder (10 records), never the first 50.
+			cy.reset()
+			last := entries[len(entries)-1]
+			rest, more2, err := y.svc.Starred(ctx(), "jane", 50, last.StarredAt+"|"+last.Repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("starred page2 (n=50) at 60 stars: %s more=%v", cy, more2)
+			if cy.lists != 1 || cy.gets != 10 || cy.heads != 10 || len(rest) != 10 || more2 {
+				t.Fatalf("starred page2 at 60: %s", cy)
+			}
+			seen := map[string]bool{}
+			for _, e := range entries {
+				seen[e.Repo] = true
+			}
+			for _, e := range rest {
+				if seen[e.Repo] {
+					t.Fatalf("starred overlap at 60: %q on both pages", e.Repo)
+				}
+				seen[e.Repo] = true
+			}
+			if len(seen) != 60 {
+				t.Fatalf("starred union at 60: %d of 60", len(seen))
+			}
 		}
 	}
 }

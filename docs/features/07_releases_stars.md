@@ -248,7 +248,7 @@ byte route is registered in the static group (no compress, accel eligible).
 | DELETE `/{o}/{r}/api/star` | authenticated | `{}` → `{stars}` | social |
 | PUT/DELETE `/{o}/{r}/api/watch` | authenticated + visible | `{}` → `{watching, watchers}` | social |
 | GET `/{o}/{r}/api/social` | read | → `{stars, watchers, forks, viewer: {starred, watching}}` | social |
-| GET `/api/v1/me/starred?n=&after=` | authenticated | → `{starred: [{repo, starred_at}], more}`; starred_at desc, n default 50 max 100 | social |
+| GET `/api/v1/me/starred?n=&after=` | authenticated | → `{starred: [{repo, starred_at}], more}`; repo (owner/name) ascending, n default 50 max 100, `after` = `<starred_at>|<repo>` of the previous page's last entry | social |
 | GET `/api/v1/users/{principal}/starred?n=&after=` | read | same shape; entries naming a deleted repo are skipped (miss-tolerant reads, §4.1) | social |
 
 Release JSON on the wire = the §1.1 body + `browser_download_url` per asset + `assets: []` when empty.
@@ -308,6 +308,16 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
 - No task kinds in v1; the Seam 5 import hook is named, not built.
 - New repo sub-path family `/{o}/{r}/releases/{tag}/assets/{name}` for bytes (static contract) — the
   spec note 14.3 requires.
+- **Starred lists are repo-ordered keyset pages, not starred_at-desc (#65, 2026-09-04):** star keys
+  are repo-keyed, not time-ordered, so a newest-first page would have to GET every record to sort —
+  O(total stars) GETs per page load with no backend bound. Each page is now one LIST resumed at the
+  `after` repo's key with at most n+1 record GETs + n+1 manifest HEADs (O(page), flat in the total;
+  the n+1st probe decides `more` exactly; later pages never re-probe earlier ones). The `after`
+  cursor keeps its `<starred_at>|<repo>` shape (the timestamp echoes the record; resumption keys off
+  the repo), so in-flight clients keep parsing — but cursors are single-session hints and the order
+  change resets in-flight pagination. Skip-on-error is preserved (dead repos, corrupt records).
+  No reverse index, no users LIST, no new global scan: star history graphs / the stargazers page
+  stay deferred per "Explicitly out of scope".
 - **Implementation notes (2026-09-04, recorded with the code):** watch PUT/DELETE routes stay
   registered by `internal/notify` (06 §6 is landed and tested — one HTTP owner; the §7 provider
   column for watch is superseded). `social.json` converges through dual field-scoped CAS loops
