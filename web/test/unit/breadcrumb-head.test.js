@@ -1,8 +1,8 @@
 // web/test/unit/breadcrumb-head.test.js — issue #29 follow-up regression:
-// the Tree/Blob Breadcrumb head link ("main" below the tabs) duplicated the
-// header's `main @ sha` pill and the Code tab, so it was dropped — at repo
-// root no breadcrumb renders at all; on subpaths only the path segments
-// render (each linked except the last).
+// the Tree/Blob Breadcrumb first crumb is a "root" link to the repo root
+// (href=/{full}); it never shows the branch name (no head prop) so it can't
+// duplicate the header's `main @ sha` pill. At repo root only the root link
+// renders; on subpaths root + intermediates are linked, final is strong.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -15,26 +15,29 @@ function srcOf(rel) {
 }
 
 for (const file of ["../../src/pages/Tree.jsx", "../../src/pages/Blob.jsx"]) {
-  test(`${file}: Breadcrumb has no head link`, () => {
+  test(`${file}: Breadcrumb first crumb is a root link`, () => {
     const src = srcOf(file);
     assert.ok(!src.includes("props.head"), `${file} must not reference props.head`);
-    assert.ok(!src.includes('"root"'), `${file} must not render a root fallback label`);
+    assert.ok(!src.includes("head="), `${file} call site must not pass head`);
     assert.match(
       src,
-      /<Show when=\{parts\(\)\.length > 0\}>[\s\S]*<nav class="crumbs/,
-      `${file} renders no breadcrumb at repo root`,
+      /href=\{`\/\$\{props\.full\}`\}>root<\/A>/,
+      `${file} first crumb links to the repo root labeled root`,
     );
     assert.match(
       src,
-      /<Show when=\{i\(\) > 0\}>\{" \/ "\}<\/Show>/,
-      `${file} separates path-only segments without a leading separator`,
+      /<nav class="crumbs/,
+      `${file} renders the breadcrumb nav even at repo root`,
+    );
+    assert.ok(
+      !src.includes("<Show when={parts().length > 0}>"),
+      `${file} must not hide the breadcrumb at repo root`,
     );
   });
 }
 
-test("Tree/Blob call sites pass no head prop", () => {
-  for (const file of ["../../src/pages/Tree.jsx", "../../src/pages/Blob.jsx"]) {
-    const src = srcOf(file);
-    assert.ok(!src.includes("head="), `${file} call site must not pass head`);
-  }
+test("Blob keeps rev for subpath hrefs", () => {
+  const src = srcOf("../../src/pages/Blob.jsx");
+  assert.ok(src.includes("shortRef(props.rev)"), "Blob subpath hrefs still use rev");
+  assert.ok(src.includes("rev={"), "Blob call site still passes rev");
 });
