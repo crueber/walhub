@@ -55,6 +55,8 @@ export default function CommentComposer(props) {
     setBusy(true);
     try {
       await props.onClose();
+    } catch (err) {
+      reportError(err, props.errorKey ?? "comment");
     } finally {
       setBusy(false);
     }
