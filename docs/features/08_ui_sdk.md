@@ -347,8 +347,9 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
 - **Cache-frames-not-patch for lists; append-only for timelines** — lists stay simple TTL caches; timelines use `(num, seq)` dedup so SSE and pagination compose.
 - **Watch is a subscription verb owned by 06 (`client.watch.{get,set}`), not 07's `repo.social`** — both docs named `PUT/DELETE …/api/watch`; reconciled to 06 (subscriptions/notifications domain). `repo.social.get()` still returns `viewer.watching` for the header toggle's state; star stays in `repo.social`.
 - **Hide for absent roles, disable for forbidden states** — anonymous users see no chrome they cannot use; authenticated users see what exists and learn why it is off.
-- **Issue close actions live under the composer (2026-09-04, issue #33).** The sidebar STATE card
-  keeps a read-only state badge (+ a "close / reopen from the comment box" hint); Close/Reopen and
+- **Issue close actions live under the composer (2026-09-04, issue #33; hint dropped per #51).** The sidebar STATE card
+  keeps a read-only state badge only — the "close / reopen from the comment box" hint was removed as
+  hand-holding prose (#51); Close/Reopen and
   Comment-and-Close render in the composer's right-aligned action row (Close/Reopen always when the
   composer shows, Comment-and-Close only while open). Gating is unchanged: the controls show exactly
   when the composer shows (any resolved role) and the server stays authoritative (state PATCH is

@@ -51,7 +51,7 @@ export default function LabelPicker(props) {
   const appliedSet = () => new Set((props.applied ?? []).map((l) => String(l).toLowerCase()));
   return (
     <div class="grid gap-1" role="group" aria-label="labels">
-      <For each={props.all ?? []} fallback={<span class="muted text-xs">no labels defined — create one on the labels page</span>}>
+      <For each={props.all ?? []}>
         {(l) => {
           const on = () => appliedSet().has(String(l.name).toLowerCase());
           const isBusy = () => props.busy?.has(String(l.name).toLowerCase()) ?? false;
