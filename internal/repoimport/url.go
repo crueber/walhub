@@ -24,9 +24,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"git.packden.us/crueber/walhub/internal/egress"
 )
 
 // SourceKind classifies the canonical source URL.
@@ -196,8 +199,9 @@ func CheckSSRF(n Normalized, cfg SSRFConfig, resolve func(host string) ([]net.IP
 	return checkPrivate(host, cfg.AllowPrivate, resolve)
 }
 
-// checkPrivate denies loopback/RFC1918/ULA/link-local/multicast resolutions
-// unless explicitly allowed. resolve defaults to net.DefaultResolver.LookupIP.
+// checkPrivate denies resolutions isPrivateIP refuses (loopback plus the
+// shared egress table) unless explicitly allowed. resolve defaults to
+// net.DefaultResolver.LookupIP.
 func checkPrivate(host string, allow bool, resolve func(host string) ([]net.IP, error)) error {
 	if allow {
 		return nil
@@ -230,36 +234,21 @@ func resolveHost(host string) ([]net.IP, error) {
 	return out, nil
 }
 
-// isPrivateIP denies loopback, RFC1918, ULA, link-local, and multicast
-// (stdlib net parse only — no new dependency, law 1).
+// isPrivateIP denies loopback plus every non-public range in the shared
+// egress table (RFC1918, CGNAT, benchmark 198.18/15, TEST-NET-1/2/3, ULA,
+// link-local, multicast, unspecified, reserved — incl. mapped-v6, which
+// BlockedIP unmaps before judging). Loopback is denied here explicitly:
+// egress.BlockedIP allows it (dev/CI webhooks target localhost), but an
+// import source must never resolve inward. Unparseable input fails closed.
 func isPrivateIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+	if ip.IsLoopback() {
 		return true
 	}
-	if ip4 := ip.To4(); ip4 != nil {
-		// 10/8, 172.16/12, 192.168/16, 0/8, 100.64/10 (CGNAT), 192.0.0.0/24.
-		if ip4[0] == 10 || ip4[0] == 0 {
-			return true
-		}
-		if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
-			return true
-		}
-		if ip4[0] == 192 && ip4[1] == 168 {
-			return true
-		}
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return true
-		}
-		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0 {
-			return true
-		}
-		return false
-	}
-	// IPv6: unique-local fc00::/7 + documentation/example ranges.
-	if len(ip) >= 1 && (ip[0]&0xfe) == 0xfc {
+	addr, ok := netip.AddrFromSlice(ip.To16())
+	if !ok {
 		return true
 	}
-	return false
+	return egress.BlockedIP(addr)
 }
 
 // --- scrubbing (S2) -----------------------------------------------------------------
