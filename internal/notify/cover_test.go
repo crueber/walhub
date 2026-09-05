@@ -397,10 +397,11 @@ func TestCreateOneStoreError(t *testing.T) {
 	svc := New(failCreateStore{st}, nil)
 	svc.Now = time.Now
 	svc.EmitIssue(ctx(), "acme/repo", 0, "subscribed", "bob@example.com", "", "commented", []string{"amy@example.com"})
-	// Shortfall armed the task; the activity never landed (Create failed),
-	// so the task finds nothing — but the shortfall path ran.
-	if rec := svc.TaskStatus("acme/repo", TaskKindFanout); rec == nil {
-		t.Fatal("shortfall must arm notify-fanout")
+	// Shortfall ran, but the activity never landed (Create failed), so no
+	// fanout is armed for the nonexistent event (issue #92: arming it
+	// would drain a gap and lose the recipients with zero trace).
+	if rec := svc.TaskStatus("acme/repo", TaskKindFanout); rec != nil {
+		t.Fatalf("phantom fanout armed for nonexistent event: %+v", rec)
 	}
 }
 

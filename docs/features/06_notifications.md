@@ -354,6 +354,13 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **Email is out; the activity log is the named seam** — a future email sink needs no schema change here.
 - **`X-Walgit-*` header keepers on collaboration webhooks** — wire identifiers are contracts, not branding (D-NAME-1).
 - **User notification SSE stream is a new top-level route**, not a repo-stream extension: notifications are user-scoped and must not require per-repo subscriptions.
+- **Emission failures are logged and never arm phantom fan-out (issue #92)** — every `emit` drop path
+  (`reserveSeq` failure, overflow/shortfall/sync `appendActivity` failure) logs a `notify: emission …`
+  Warn with repo/num/class/actor/seq cause (Service.Logger, nil → discard, the events-bridge
+  convention). An `appendActivity` failure arms NO `notify-fanout` task: there is no event to drain
+  (`fanoutOne` would probe a gap and do nothing), so arming would lose every recipient with zero trace.
+  The sync path still publishes its landed tray entries and wakes webhooks; overflow/shortfall drops
+  leave the thread timeline as the backfill source (P8).
 
 ## Decisions (Feature 06 implementation wave, 2026-09-04)
 

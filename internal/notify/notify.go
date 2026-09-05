@@ -51,6 +51,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -408,6 +409,11 @@ type Service struct {
 	// leaves zero for the default — no config key in v1, see Decisions).
 	RetentionDays int
 
+	// Logger receives emission drop/failure records (06 §4: no silent
+	// drops — every reserve/append failure path logs). Nil → discard
+	// (same convention as the events bridge Logger).
+	Logger *slog.Logger
+
 	ubus  *userBus
 	rbus  *repoBus
 	tasks *taskTable
@@ -438,6 +444,15 @@ func (s *Service) nowUTC() time.Time {
 		return time.Now().UTC()
 	}
 	return s.Now().UTC()
+}
+
+// log returns the emission logger, discarding when unwired (the events
+// bridge Logger convention: nil → discard).
+func (s *Service) log() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 // retentionDays resolves the retention window.
