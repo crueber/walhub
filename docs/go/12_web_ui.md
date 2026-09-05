@@ -223,6 +223,32 @@ All deep-linkable; every UI route returns the SPA `index.html` from the server. 
 components (`component={Commit}` with a top-level `import` in `web/src/index.jsx`), bundled into the app
 by vite — no code-splitting wired up.
 
+### 2.3.1 Owners page (`/`, issue #117)
+
+`web/src/pages/Owners.jsx`: an intro card, then one section per owner with that owner's repos.
+
+- **Intro card** (`.card`, one short paragraph): what walhub is (git host whose only database is an
+  object store), what it does (push over smart HTTP; browse/manage repos here), how (refs, packs,
+  config, policy as bucket objects; disposable instances).
+- **Data** (dogfood rule intact): `useData("owners", …owners.list())`, then one `OwnerSection` per
+  shown owner with `useData(`repos:${owner}`, …owners.repos(owner))` — the same cache key the
+  `/:owner` page uses, so the two pages share fetches. No new endpoint, no new SDK method (the core
+  listing endpoints in 07 §8 already list everything).
+- **Order**: owners newest-first, repos newest-first. Ordering key: reverse of server order — the
+  listing path exposes no creation timestamps (endpoints return store-sorted ascending name
+  lists of plain strings; per-repo `first_state_at`/first-entry `created_at` proxies exist
+  deeper in the bucket but cost a manifest/log GET per repo, so true reverse-chronological
+  order wants a server-side shape), so reverse-lexicographic is the closest deterministic
+  newest-first proxy. The single function to replace when the backend carries creation times
+  is `newestFirst` in `web/src/lib/owners.js`.
+- **Caps**: `MAX_OWNERS` 50 owners, `MAX_REPOS_PER_OWNER` 10 repos per section (constants in
+  `web/src/lib/owners.js`, headless-tested). Overflow folds behind links, never a spinner: per-owner
+  `+N more →` to `/:owner` (uncapped there), and a "showing newest 50 of N owners" line. The page
+  costs 1 + shown-owners SWR GETs; per-owner sections render independently (one slow owner never
+  blocks the rest).
+- **Styling**: shared `.card`/`.muted`/emerald-link classes — correct in dark (default) and light
+  with no page-specific colors.
+
 ### 2.4 Data layer (hand-rolled)
 
 Implement a module `web/src/lib/data.js` providing:
@@ -416,3 +442,4 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
 - **FIXED (issue #49) — new-release composer redesign:** the bare boxed form adrift in the page's right whitespace becomes a centered `max-w-2xl` composer (the IssueNew/PullNew convention) — heading row with an "all releases" back link, section fieldsets (Target / Content / Visibility) with per-field help text, the tag datalist picker kept (fed by the existing `tags({n: 100})` stream) plus a tag-count/empty/loading line under it, title placeholder defaulting to the typed tag, draft/prerelease as bordered checkbox option rows with one-line descriptions, an action row (primary create + secondary autodraft, busy labels, post-creation asset-upload note), and an inline `role="alert"` error line (IssueNew pattern) for validation ("choose a tag") and server failures — no native `required` bubble, so the disabled-until-tagged button plus the inline error are the single error channel. No backend or SDK change — autodraft fill, create→detail navigation, and disabled logic are unchanged; assets stay on the detail page.
 - **FIXED (issue #50) — empty releases page dedupe:** when the release list is empty the Latest sidebar is not rendered at all and the shared `Empty` callout sits in a centered `max-w-xl` composition, leaving exactly ONE "New release" CTA (the callout's router-link action — the toolbar button and the sidebar's own Empty+CTA go away with their containers; the `refresh` button stays right-aligned). Non-empty state is unchanged: toolbar CTA + list + Latest panel (#35), including the drafts-only case where the sidebar still shows its compact Empty. No backend or SDK change.
 - **FIXED (issue #115) — opaque dropdown panels + styled scrollbars:** the refs dropdown (`.ref-drop`) rendered semi-transparent — the shared `.card` is `dark:bg-zinc-900/70`, so page text bled through. The issue-#37 `.clone-body` solid-panel treatment is generalized: `.ref-drop`, `.tasks-drop`, `.notif-drop`, `.reaction-drop`, `.label-drop`, `.close-drop` all get solid `bg-white` / `dark:bg-zinc-900` (same-specificity rule ordered after `.card`, so no JSX churn for the background). Scrollable popovers (refs list, label menu, notification tray) carry the new `.scroll-slim` class: thin styled webkit scrollbar plus Firefox `scrollbar-width: thin` + `scrollbar-color`, themed in both modes. Scope: clone menu (already solid), refs picker, tasks overlay, notification tray, reaction menu, label picker, comment close/reopen menu — every absolutely-positioned `.card` popover. No backend or SDK change; no new deps.
+- **FIXED (issue #117) — owners page shows per-owner repos + intro:** `/` was a bare owner-name list; it now renders the intro card (§2.3.1) plus one capped section per owner with that owner's repos, newest-first both levels. No new endpoint (core `GET /api/v1/owners` + `/{owner}/repos` already list everything), no new SDK method (`owners.list()/repos()`), no new deps. Caps (`MAX_OWNERS` 50 / `MAX_REPOS_PER_OWNER` 10) and the newest-first proxy (reverse of server order — the listing path exposes no creation timestamps) live in the headless-testable `web/src/lib/owners.js` (`web/test/unit/owners.test.js`); the §2.3 route-table row already promised "each → their repos" and is now true.

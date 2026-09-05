@@ -300,6 +300,8 @@ missing required checks). Pages resolve gating off the cached role signal — no
 | `social:{o}/{r}` | 30 s | 07 |
 | `assignables:{o}/{r}` | 300 s | 01 |
 | `notifications:me` | 5 s | 06 |
+| `owners` | 5 s | `GET /api/v1/owners` (core, 07 §8) — the `/` page owner list |
+| `repos:{owner}` | 5 s | `GET /api/v1/owners/{owner}/repos` (core, 07 §8) — per-owner sections on `/`, shared with the `/:owner` page |
 
 The LRU cap (400) and error-tray behavior are unchanged (12 §2.4).
 
@@ -371,6 +373,15 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
 - **English-only v1, no i18n scaffolding** — additive later, zero cost now.
 - **Releases/stars SDK per 07's submodule plan** (`releases.js`, `social.js`) — absorbed verbatim to avoid conflicting paths.
 - **Settings Danger Zone with typed-confirm (2026-09-04, issue #39).** `DangerConfirm` is the single confirm pattern for all future entries; Delete Repository reuses the existing `repo.delete()` (`DELETE …/api` → 204) and navigates to `/` on success because the repo page is gone. No new endpoint, no new SDK method, no new deps.
+- **Owners page shows per-owner repos + intro (2026-09-05, issue #117).** `/` renders the intro card
+  then one section per owner (newest-first, capped at `MAX_OWNERS` 50) with that owner's repos
+  (newest-first, capped at `MAX_REPOS_PER_OWNER` 10, "+N more →" folding to `/:owner`). Data comes
+  from the existing core listing endpoints via the existing SDK (`owners.list()`, `owners.repos(o)`)
+  under the `owners` / `repos:{owner}` §6 keys — no new endpoint, no new SDK method, no new deps.
+  Ordering key is the reverse of server order (the listing path exposes no creation timestamps; see the
+  `newestFirst` JSDoc in `web/src/lib/owners.js`). Pure cap/order helpers live in
+  `web/src/lib/owners.js` with headless cover in `web/test/unit/owners.test.js` (logic/DOM
+  separation per 12 §5); the page contract itself lives in 12 §2.3.1.
 
 ## Explicitly out of scope
 
