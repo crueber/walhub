@@ -194,6 +194,10 @@ func (s *Service) emit(ctx context.Context, e Emission) {
 	// Reserve the activity seq first: the notification ids embed it.
 	seq, err := s.reserveSeq(ctx, owner, name)
 	if err != nil {
+		// No silent drops (issue #92): the timeline stays the backfill
+		// truth (P8), but the drop is logged with the cause.
+		s.log().WarnContext(ctx, "notify: emission dropped: activity seq reserve failed",
+			"repo", e.Repo, "num", e.Num, "class", e.Class, "actor", actor, "err", err)
 		return // CAS exhaustion — timeline stays the backfill truth (P8)
 	}
 
@@ -202,7 +206,16 @@ func (s *Service) emit(ctx context.Context, e Emission) {
 		// in its payload) is the durable queue; notify-fanout drains
 		// it. The request never extends past this point (§4). The
 		// pending flag arms the restart redrain sweep (issue #77).
-		_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, true)
+		// No silent drops (issue #92): an append failure must NOT arm
+		// a fanout for a nonexistent event (fanoutOne would probe a
+		// gap and drain nothing, losing every recipient with zero
+		// trace) — log and drop instead.
+		if err := s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, true); err != nil {
+			s.log().WarnContext(ctx, "notify: emission dropped: activity append failed (overflow, fanout not armed)",
+				"repo", e.Repo, "num", e.Num, "class", e.Class, "actor", actor, "seq", seq,
+				"recipients", len(targets), "err", err)
+			return
+		}
 		s.enqueueFanout(e.Repo, seq)
 		s.wakeRepo(e.Repo)
 		return
@@ -219,7 +232,19 @@ func (s *Service) emit(ctx context.Context, e Emission) {
 		// (a task racing a later read-flip could otherwise mint a
 		// duplicate live entry for the same thread+reason). The pending
 		// flag arms the restart redrain sweep (issue #77).
-		_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, true)
+		// No silent drops (issue #92): an append failure must NOT arm
+		// a fanout for a nonexistent event — log it; the completed
+		// tray entries below still publish.
+		if err := s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, true); err != nil {
+			s.log().WarnContext(ctx, "notify: emission shortfall activity append failed (fanout not armed)",
+				"repo", e.Repo, "num", e.Num, "class", e.Class, "actor", actor, "seq", seq,
+				"recipients", len(targets), "done", len(done), "err", err)
+			// Publish what did complete — a partial tray beats silence.
+			for _, d := range done {
+				s.ubus.publish(d.principal, d.notif)
+			}
+			return
+		}
 		s.enqueueFanout(e.Repo, seq)
 		s.wakeRepo(e.Repo)
 		// Publish what did complete — a partial tray beats silence.
@@ -228,7 +253,20 @@ func (s *Service) emit(ctx context.Context, e Emission) {
 		}
 		return
 	}
-	_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, false)
+	// No silent drops (issue #92): a sync-path append failure loses the
+	// webhook/backfill event even though the tray entries landed — log
+	// it. No fanout is armed: there is no event to drain (fanoutOne
+	// would probe a gap and do nothing).
+	if err := s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, false); err != nil {
+		s.log().WarnContext(ctx, "notify: emission activity append failed (tray entries kept, webhooks/backfill lost)",
+			"repo", e.Repo, "num", e.Num, "class", e.Class, "actor", actor, "seq", seq,
+			"recipients", len(targets), "err", err)
+		for _, d := range done {
+			s.ubus.publish(d.principal, d.notif)
+		}
+		s.wakeRepo(e.Repo)
+		return
+	}
 	for _, d := range done {
 		s.ubus.publish(d.principal, d.notif)
 	}

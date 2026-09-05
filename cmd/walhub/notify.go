@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"git.packden.us/crueber/walhub/internal/checks"
@@ -29,6 +30,7 @@ import (
 // (documented fail-closed for emission, fail-open nowhere).
 func newNotifyService(st store.ObjectStore, ident *identity.Service) (*notify.Service, *notify.Handler) {
 	svc := notify.New(st, ident)
+	svc.Logger = slog.Default()
 	if ident != nil {
 		svc.Profiles = ident
 		svc.Teams = ident
