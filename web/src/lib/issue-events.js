@@ -1,6 +1,6 @@
 // web/src/lib/issue-events.js — honest single-line text for issue system events.
 //
-// `issueEventText(ev)` returns null for comment kinds (opened/commented —
+// `issueEventText(ev, milestones)` returns null for comment kinds (opened/commented —
 // rendered as markdown bodies) and a plain sentence fragment for every
 // other kind. The fragment never names an actor: ThreadTimeline renders
 // system rows as "{actor} {fragment}", so the row reads e.g. "anon added
@@ -10,11 +10,20 @@
 // completed, so the UI always sends an explicit reason instead; see
 // closePatch).
 //
+// Milestone fragments resolve ids to titles through the optional
+// `milestones` list (the page-owned `milestones:{o}/{r}` cache — the same
+// source the sidebar renders). The event carries ids only (02 §7), so
+// without the list the fragment falls back to the bare id; a deleted
+// milestone likewise renders as its bare id (the 02 §3.1 self-heal
+// stance, shared with milestoneTitle).
+//
 // `closePatch(reason)` builds the PATCH body for an explicit-reason close.
 // The API contract (02 §7, internal/issues service.go) defaults an omitted
 // state_reason to completed, so callers must pass "completed" or
 // "not_planned" — anything else throws rather than silently claiming
 // completion.
+
+import { milestoneTitle } from "./milestones.js";
 
 export const CLOSE_COMPLETED = "completed";
 export const CLOSE_NOT_PLANNED = "not_planned";
@@ -41,14 +50,16 @@ function assigneeFragment(ev) {
   return parts.length ? parts.join(" and ") : "changed the assignees";
 }
 
-function milestoneFragment(ev) {
-  if (ev.from == null && ev.to != null) return `added this to the “${ev.to}” milestone`;
-  if (ev.to == null && ev.from != null) return `removed this from the “${ev.from}” milestone`;
-  if (ev.from != null && ev.to != null) return `moved this from “${ev.from}” to “${ev.to}”`;
+function milestoneFragment(ev, milestones) {
+  const from = ev.from == null ? null : milestoneTitle(milestones, ev.from);
+  const to = ev.to == null ? null : milestoneTitle(milestones, ev.to);
+  if (from == null && to != null) return `added this to the “${to}” milestone`;
+  if (to == null && from != null) return `removed this from the “${from}” milestone`;
+  if (from != null && to != null) return `moved this from “${from}” to “${to}”`;
   return "changed the milestone";
 }
 
-export function issueEventText(ev) {
+export function issueEventText(ev, milestones) {
   switch (ev?.type) {
     case "opened":
     case "commented":
@@ -67,7 +78,7 @@ export function issueEventText(ev) {
       }
       return "reopened";
     case "milestone_changed":
-      return milestoneFragment(ev);
+      return milestoneFragment(ev, milestones);
     case "referenced":
       return `referenced this from #${ev.source?.num ?? "?"}`;
     case "cross_referenced":

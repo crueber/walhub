@@ -25,8 +25,11 @@ import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-event
 
 // System-row text comes from the shared honest-event lib (null = comment
 // body). Never asserts a close reason the event does not carry.
-function eventText(ev) {
-  return issueEventText(ev);
+// Milestone ids resolve to titles through the page-owned milestones
+// cache (same source as the sidebar display); deleted milestones fall
+// back to the bare id (02 §3.1 self-heal).
+function eventText(ev, milestones) {
+  return issueEventText(ev, milestones);
 }
 
 export default function Issue() {
@@ -285,7 +288,7 @@ export default function Issue() {
               </header>
               <ThreadTimeline
                 events={events()}
-                textFor={eventText}
+                textFor={(ev) => eventText(ev, allMilestones())}
                 fmtDate={fmtDate}
                 summaryFor={(ev) => {
                   // The ONLY reaction surface (#113): one row per comment

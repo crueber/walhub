@@ -60,15 +60,43 @@ test("state_changed is honest about the reason", () => {
   assert.equal(issueEventText({ type: "state_changed", to: "open" }), "reopened");
 });
 
-test("milestone/reference rows are single-line fragments without actors", () => {
+test("milestone fragments resolve ids to titles via the milestones list", () => {
+  const ms = [
+    { id: "000001", title: "v1.1" },
+    { id: "000002", title: "v2.0" },
+  ];
   assert.equal(
-    issueEventText({ type: "milestone_changed", from: null, to: "v1" }),
-    "added this to the “v1” milestone",
+    issueEventText({ type: "milestone_changed", from: null, to: "000001" }, ms),
+    "added this to the “v1.1” milestone",
   );
   assert.equal(
-    issueEventText({ type: "milestone_changed", from: "v1", to: null }),
-    "removed this from the “v1” milestone",
+    issueEventText({ type: "milestone_changed", from: "000001", to: null }, ms),
+    "removed this from the “v1.1” milestone",
   );
+  assert.equal(
+    issueEventText({ type: "milestone_changed", from: "000001", to: "000002" }, ms),
+    "moved this from “v1.1” to “v2.0”",
+  );
+});
+
+test("milestone fragments fall back to the bare id (deleted milestone self-heal)", () => {
+  const ms = [{ id: "000001", title: "v1.1" }];
+  // Unknown id renders bare — same stance as the sidebar (milestoneTitle).
+  assert.equal(
+    issueEventText({ type: "milestone_changed", from: null, to: "0000ff" }, ms),
+    "added this to the “0000ff” milestone",
+  );
+  // No list at all (e.g. cache not yet loaded) — bare id, never blank.
+  assert.equal(
+    issueEventText({ type: "milestone_changed", from: null, to: "000001" }),
+    "added this to the “000001” milestone",
+  );
+  assert.equal(
+    issueEventText({ type: "milestone_changed", from: "000001", to: null }, []),
+    "removed this from the “000001” milestone",
+  );
+});
+test("reference rows are single-line fragments without actors", () => {
   assert.equal(
     issueEventText({ type: "referenced", source: { num: 3 } }),
     "referenced this from #3",
