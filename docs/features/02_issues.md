@@ -408,6 +408,17 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
   bodies under the #41 ordering guard) and the guarded refetch reconciles
   the guess; one in-flight mutation per (seq, content) disables its
   buttons, so double-clicks never double-fire.
+- **Reactions add through a "+" menu, never an always-visible picker**
+  (issue #113): each commented/opened event shows one reaction row where
+  its chips appear — summary chips plus a tiny "+" trigger opening a
+  dropdown with exactly the addable set (`addableReactions`: REACTIONS
+  minus whatever the summary already shows for that seq, in wire order;
+  the optimistic add bump drops the content from the menu). Contents
+  already on the comment toggle off via their chips only. The menu is a
+  native-button `menu` sibling of the LabelPicker "+" idiom (Esc/outside
+  click close, ArrowUp/Down/Home/End move, dark+light via the shared
+  chip/card classes); the thread timeline keeps its generic `actionsFor`
+  slot for other surfaces.
 
 ## Explicitly out of scope
 
