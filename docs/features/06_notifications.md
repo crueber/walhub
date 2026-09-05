@@ -463,7 +463,19 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   a subscriber attaching after a fully idle period, or to an LRU-evicted repo, replays nothing and
   starts from the live tail; durable history is the feature timeline/API (08: frames invalidate
   caches, the timeline is the backfill truth), never this ring. Worst case is now 256 repos × 64
-  frames.
+   frames.
+- **Unwatch order is list-CAS-then-record-delete (issue #94, 2026-09-05):** `SetWatch(off)` deleted
+  the userspace record BEFORE the `social.json` watcher_list CAS, so a CAS failure (or a crash
+  between the two) stranded a phantom — record gone while `watcher_list` still held the principal,
+  who kept receiving subscribed-class fan-out with no record to delete (repair only via a deliberate
+  re-PUT+DELETE). The order is reversed: the CAS lands first, then the record delete. A failure or
+  crash between now leaves a record WITHOUT list membership — fail-closed (fan-out consumes the
+  list, so the stale record notifies no one) and self-healing (the next toggle's CAS reconciles,
+  then the record write lands; the ghost-repo path still deletes-then-skips-CAS so no `social.json`
+  is resurrected). Regression: `TestSetWatchUnwatchCASFailureNoPhantom` (fault-injected 412 CAS
+  failure asserts no phantom + retry convergence; verified it fails on the old order). Rationale:
+  the manifest CAS is the only commit point (law 4) — the list is the commit, the record is the
+  cache.
 
 ## Explicitly out of scope
 

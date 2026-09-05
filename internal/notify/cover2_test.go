@@ -568,6 +568,74 @@ func TestSetWatchUnwatchCorrupt(t *testing.T) {
 	}
 }
 
+// TestSetWatchUnwatchCASFailureNoPhantom pins the issue #94 order:
+// list-CAS-then-record-delete. A CAS failure during unwatch must NOT
+// strand a phantom (record gone while watcher_list still holds the
+// principal) — the record survives, the state stays consistently
+// "still watching", and the next toggle heals it.
+func TestSetWatchUnwatchCASFailureNoPhantom(t *testing.T) {
+	x := newHarness(t)
+	seedRepo(t, x, "acme", "repo")
+	if _, err := x.svc.SetWatch(ctx(), "amy@example.com", "acme", "repo", true); err != nil {
+		t.Fatal(err)
+	}
+	member := func(t *testing.T) bool {
+		t.Helper()
+		raw, _, err := store.GetBytes(ctx(), x.svc.Store, SocialKey("acme", "repo"), store.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var soc SocialDoc
+		if err := json.Unmarshal(raw, &soc); err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range soc.WatcherList {
+			if w == "amy@example.com" {
+				return true
+			}
+		}
+		return false
+	}
+	record := func(t *testing.T) bool {
+		t.Helper()
+		_, _, err := store.GetBytes(ctx(), x.svc.Store,
+			WatchingKey("amy@example.com", "acme", "repo"), store.GetOptions{})
+		if store.IsNotFound(err) {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return true
+	}
+	if !member(t) || !record(t) {
+		t.Fatal("watch must leave record + list membership")
+	}
+	// Fault: every CAS Update 412s until the loop exhausts (ErrConflict).
+	real := x.svc.Store
+	x.svc.Store = always412Store{real}
+	if _, err := x.svc.SetWatch(ctx(), "amy@example.com", "acme", "repo", false); err == nil {
+		t.Fatal("CAS failure must surface")
+	}
+	x.svc.Store = real
+	// No phantom: the record survives alongside the list membership
+	// (fail-closed — fan-out still sees a consistent watcher).
+	if !record(t) {
+		t.Fatal("failed unwatch deleted the record: phantom watcher stranded in watcher_list")
+	}
+	if !member(t) {
+		t.Fatal("failed unwatch dropped list membership while keeping the record")
+	}
+	// Repair path: the next toggle heals (CAS reconciles, record lands deleted).
+	st, err := x.svc.SetWatch(ctx(), "amy@example.com", "acme", "repo", false)
+	if err != nil || st.Watching || st.Watchers != 0 {
+		t.Fatalf("retry unwatch = %+v, %v", st, err)
+	}
+	if record(t) || member(t) {
+		t.Fatal("retry must converge to record-gone + list-gone")
+	}
+}
+
 func TestSocialTruncation(t *testing.T) {
 	x := newHarness(t)
 	seedRepo(t, x, "acme", "repo")

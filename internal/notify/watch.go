@@ -42,6 +42,14 @@ func (s *Service) GetWatch(ctx context.Context, principal, owner, repo string) W
 // repo is 404 (no fresh userspace records for ghosts); unwatching one
 // still deletes the record (cleanup) but skips the counter CAS so no
 // social.json is resurrected for a swept repo.
+//
+// Unwatch order is list-CAS-then-record-delete (issue #94): a CAS failure
+// or crash between the two leaves a record without list membership —
+// fail-closed (fan-out consumes the list, so the stale record notifies
+// no one) and self-healing (the next toggle's CAS reconciles, then the
+// record write lands). The reverse order stranded phantoms: record gone
+// while watcher_list still held the principal, with repair only via a
+// deliberate re-PUT+DELETE.
 func (s *Service) SetWatch(ctx context.Context, principal, owner, repo string, on bool) (WatchState, error) {
 	principal = normPrincipal(principal)
 	key := WatchingKey(principal, owner, repo)
@@ -59,13 +67,14 @@ func (s *Service) SetWatch(ctx context.Context, principal, owner, repo string, o
 			return WatchState{}, err
 		}
 	} else {
-		_ = s.Store.Delete(ctx, key, "")
 		if !s.repoAlive(ctx, owner, repo) {
+			_ = s.Store.Delete(ctx, key, "")
 			return WatchState{Watching: false, Watchers: 0}, nil
 		}
 		if err := s.socialWatch(ctx, owner, repo, principal, false); err != nil {
 			return WatchState{}, err
 		}
+		_ = s.Store.Delete(ctx, key, "")
 	}
 	return WatchState{Watching: on, Watchers: s.watcherCount(ctx, owner, repo)}, nil
 }
