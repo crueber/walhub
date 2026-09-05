@@ -295,6 +295,19 @@ RouteProvider (Seam 1).
 | `POST /api/v1/invitations/{id}/accept` | authed, subject match | → 200 `{bound: "org"\|"repo"}`; 409 not pending |
 | `DELETE /api/v1/invitations/{id}` | invitee (decline) or issuer (cancel) | → 204 |
 
+### 8.1 Owner/repo listing (core, reused — no endpoint added here)
+
+`GET /api/v1/owners` → sorted owner names from the STORE (never disk) and
+`GET /api/v1/owners/{owner}/repos` → short repo names (`200 []` for an unknown
+owner, never 404) are **core** endpoints (specified in `docs/go/07_api.md` §8,
+registered by the core mux, not by this package's RouteProvider). They are the
+read surface the owners (`/`) page renders per-owner repo sections from
+(issue #117): `owners.list()` then one `owners.repos(owner)` per shown owner.
+No pagination, no creation timestamps — the bucket stores neither, so caps and
+newest-first ordering live client-side (`web/src/lib/owners.js`: `MAX_OWNERS`
+50, `MAX_REPOS_PER_OWNER` 10, reverse of server order as the newest-first
+proxy; 08 §6 owns the cache keys, 12 §2.3.1 the page contract).
+
 ### Repo-scoped `/{o}/{r}/api` (+ `/api-browser` twin via `api.Lanes`)
 
 | Method + path | Auth | Request → response |
@@ -358,13 +371,19 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   is the same truth source accept already uses — no sweeper, no users LIST, no tombstone, and no
   prune path that could orphan a pending row. P6/auth is untouched: the gates still decide visibility,
   existence only decides whether a row renders.
-- **Org creation is atomic-or-recoverable (issue #75, 2026-09-05)** — a failed `members.json`
-  seed rolls the `org.json` reservation back (version-guarded, best-effort, original error surfaces),
+- **Org creation is atomic-or-recoverable (issue #75, 2026-09-05)** — a failed `members.json`  seed rolls the `org.json` reservation back (version-guarded, best-effort, original error surfaces),
   and a retry on an ownerless reservation completes the owner binding via CAS (same path heals the
   crash-between-writes residue); re-create by the bound owner is idempotent. Rationale: the old
   reserve-then-seed left an ownerless namespace on any non-412 seed failure with retries 409ing
   forever. Arbitration is unchanged for genuine races: exactly one winner, losers 409 and write
-  nothing, because only an ownerless roster is ever rewritten.
+   nothing, because only an ownerless roster is ever rewritten.
+- **Owners page reuses the core listing endpoints; no endpoint added (issue #117, 2026-09-05)** —
+  `GET /api/v1/owners` + `GET /api/v1/owners/{owner}/repos` already list everything the `/` page
+  needs, so this change adds no wire surface (§8.1 pins the reuse). Caps and newest-first ordering
+  stay client-side on purpose: the bucket stores no creation timestamps and the registry returns
+  sorted names, so a server-side "newest" sort or paginated shape would invent metadata the store
+  does not have. Rationale: read-only reuse keeps the round-trip budget (1 + shown-owners GETs,
+  SWR-cached) and the CAS surface untouched.
 
 ## Explicitly out of scope
 
