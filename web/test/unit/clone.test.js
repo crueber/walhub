@@ -1,12 +1,13 @@
-// web/test/unit/clone.test.js — clone-dialog URL builders (issue #37):
-// the HTTPS URL keeps the server's clone_url verbatim, the SSH URL reuses
+// web/test/unit/clone.test.js — clone-dialog URL builders (issue #37, #124):
+// the HTTP(S) URL keeps the server's clone_url verbatim, the pill label
+// derives from its scheme (HTTP unless https://), the SSH URL reuses
 // its host at the default ssh port (never the HTTP port), and copyText
 // prefers the Clipboard API with an execCommand fallback.
 
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { httpsCloneUrl, sshCloneUrl, cloneCommand, copyText } from "../../src/lib/clone.js";
+import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, cloneCommand, copyText } from "../../src/lib/clone.js";
 
 test("httpsCloneUrl prefers the server clone_url, falls back to origin", () => {
   assert.equal(
@@ -15,6 +16,16 @@ test("httpsCloneUrl prefers the server clone_url, falls back to origin", () => {
   );
   assert.equal(httpsCloneUrl(null, "o/r", "https://h"), "https://h/o/r.git");
   assert.equal(httpsCloneUrl({}, "o/r", "https://h"), "https://h/o/r.git");
+});
+
+test("httpProtoLabel agrees with the advertised scheme (issue #124)", () => {
+  assert.equal(httpProtoLabel("https://h/o/r.git"), "HTTPS");
+  assert.equal(httpProtoLabel("HTTPS://h/o/r.git"), "HTTPS");
+  assert.equal(httpProtoLabel("http://h/o/r.git"), "HTTP");
+  assert.equal(httpProtoLabel("http://192.168.2.48:8080/o/r.git"), "HTTP");
+  assert.equal(httpProtoLabel("not a url"), "HTTP");
+  assert.equal(httpProtoLabel(null), "HTTP");
+  assert.equal(httpProtoLabel(undefined), "HTTP");
 });
 
 test("sshCloneUrl reuses the https host, drops scheme and http port", () => {

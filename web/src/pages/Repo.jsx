@@ -7,7 +7,7 @@ import repos from "../../sdk/src/index.js";
 import { createContext, useContext, createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL } from "../lib/data.js";
-import { httpsCloneUrl, sshCloneUrl, cloneCommand, copyText } from "../lib/clone.js";
+import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, cloneCommand, copyText } from "../lib/clone.js";
 import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 
@@ -52,7 +52,7 @@ function CloneMenu(props) {
   // Dogfood exception (§2.6): the recipe payload is server-rendered JSON.
   const [getRecipes, setRecipes] = createSignal(null);
   const [getOpen, setOpen] = createSignal(false);
-  const [getProto, setProto] = createSignal("https"); // issue #37 protocol toggle
+  const [getProto, setProto] = createSignal("http"); // issue #37 protocol toggle (#124: "http" = the server's HTTP(S) transport, labeled by scheme)
   const [getCopied, setCopied] = createSignal(""); // "", "copied", "failed"
   let root; // the <details> popover
   let box; // the clone-command textbox
@@ -64,11 +64,15 @@ function CloneMenu(props) {
       .then(setRecipes)
       .catch((e) => { setRecipes([]); reportError(e, "recipes"); });
   };
-  // URL-building logic is unchanged (§2.6): the HTTPS URL is the server's
-  // clone_url (origin fallback); the SSH URL reuses its host at the default
+  // URL-building logic is unchanged (§2.6): the HTTP(S) URL is the server's
+  // clone_url (origin fallback), shown VERBATIM so the command always works
+  // (issue #124: never upgrade http→https for display — a plain-http server
+  // has no TLS; the pill label below derives from this URL's scheme so pill
+  // and text always agree). The SSH URL reuses its host at the default
   // ssh port (lib/clone.js — the server never advertises its ssh listen
   // port to the browser, so no port is guessed).
   const https = () => httpsCloneUrl(props.summary, props.full, location.origin);
+  const httpLabel = () => httpProtoLabel(https());
   const url = () => (getProto() === "ssh" ? sshCloneUrl(https(), props.full, location.hostname) : https());
   const cmd = () => cloneCommand(url());
   const flag = (msg) => {
@@ -96,7 +100,7 @@ function CloneMenu(props) {
       <div class="clone-body card absolute right-0 z-30 mt-2 w-96 space-y-3 p-3">
         <div class="flex items-center gap-2">
           <div role="group" aria-label="Clone protocol" class="flex gap-1">
-            <For each={["https", "ssh"]}>
+            <For each={["http", "ssh"]}>
               {(p) => (
                 <button
                   type="button"
@@ -105,7 +109,7 @@ function CloneMenu(props) {
                   aria-pressed={getProto() === p}
                   onClick={() => { setProto(p); setCopied(""); }}
                 >
-                  {p === "https" ? "HTTPS" : "SSH"}
+                  {p === "http" ? httpLabel() : "SSH"}
                 </button>
               )}
             </For>
@@ -137,7 +141,7 @@ function CloneMenu(props) {
                 <Show when={r.doc}>
                   <p class="muted text-xs">{r.doc}</p>
                 </Show>
-                {/* Recipes stay on the HTTPS URL: their bodies are https-only
+                {/* Recipes stay on the HTTP(S) URL: their bodies are https-only
                     commands (bundle-URI https URLs, http.extraHeader), so an
                     ssh:// substitution would break them. */}
                 <code class="clone-cmd block overflow-x-auto rounded bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-800">
@@ -146,12 +150,6 @@ function CloneMenu(props) {
               </div>
             )}
           </For>
-          <div class="clone-recipe">
-            <strong>git</strong>
-            <code class="clone-cmd block overflow-x-auto rounded bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-800">
-              {cmd()}
-            </code>
-          </div>
         </Show>
       </div>
     </details>
