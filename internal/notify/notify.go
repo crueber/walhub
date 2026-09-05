@@ -31,7 +31,11 @@
 // closed, no cross-feature locks, no new repo locks). Each notification
 // Create is independent and idempotent (deterministic id, §1.1); the
 // unread index is a single CAS retry loop; a lost index race is retried,
-// a lost Create is a no-op (412). The webhook delivery loop advances a
+// a lost Create is a no-op (412). The notify-fanout task end is the one
+// mutex coordination: drain-then-end is atomic under taskTable.mu
+// nesting taskEntry.mu (endIfQuiescent refuses while seqs are pending),
+// and a joiner re-enqueues when its entry detached mid-attach (tasks.go;
+// issue #72). The webhook delivery loop advances a
 // per-hook cursor by CAS only after successful POSTs (at-least-once; a
 // lost cursor CAS redelivers, never skips). Fan-out parallelism is bounded
 // (semaphore cap 8, 13_concurrency.md §4, no raw `go func()` over store

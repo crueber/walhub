@@ -345,6 +345,19 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   live commit (a delete racing the fan-out is a millisecond window), and the droppings are
   self-cleaning through the tray filter + retention. No users LIST anywhere (enumerating people stays
   a non-feature); no tombstones (per-repo state dies with the prefix).
+- **Fan-out drain/end race closed (issue #72, 2026-09-05):** the `notify-fanout` leader saw an empty
+  drain while a concurrent `enqueueFanout` still found the running entry, joined it, and attached —
+  then the leader's `end()` removed the task while the joiner (already returned) started no worker,
+  orphaning the seq with no worker left to drain it (silent notification loss; Run sweeps
+  webhooks/retention only, never unprocessed fan-out). Close is two-sided, both in `tasks.go`:
+  (a) the leader ends ONLY via `endIfQuiescent`, which re-checks the attachment and removes the task
+  atomically — the table lock nests the entry lock, the ONLY place both are held (lock order is
+  always table → entry; no lock is held across store/network calls); a refusal means "seqs pending,
+  drain again". (b) a joiner re-checks `current()` after attaching and re-enqueues onto the live
+  entry on a miss (the seq is re-attached there, so the orphaned copy on the detached entry is never
+  drained twice — and any double drain is idempotent anyway via deterministic ids + Create-412).
+  Rationale: neither half alone closes it (a re-checking end still loses an attach landing between the
+  check and the removal; a re-verifying joiner still loses to a bare end that never re-checks).
 
 ## Explicitly out of scope
 
