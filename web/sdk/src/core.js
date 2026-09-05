@@ -18,6 +18,7 @@ import { attachAccess } from "./access.js";
 import { attachCollab } from "./collab.js";
 import { attachInvites, attachRepoInvites } from "./invites.js";
 import { attachIssues } from "./issues.js";
+import { attachAttachments } from "./attachments.js";
 import { attachPulls } from "./pulls.js";
 import { attachReviews } from "./reviews.js";
 import { attachChecks } from "./checks.js";
@@ -202,6 +203,7 @@ export class ReposClient {
     attachCollab(r);
     attachRepoInvites(r);
     attachIssues(r);
+    attachAttachments(r);
     attachPulls(r);
     attachReviews(r);
     attachChecks(r);

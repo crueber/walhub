@@ -118,6 +118,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `bundles.advertise` / `advertise_filtered` | `true` / `false` | v2 advertisement; filtered families only with the patched git |
 | `bundles.require` | `[]` | repos whose unbounded zero-have clones must use bundle-uri (D17) |
 | `lfs.enabled` / `serve_via` / `signed_url_ttl` / `max_object_bytes` | `true` / `"proxy"` / `"1h"` / `"16GiB"` | LFS |
+| `attachments.max_image_bytes` | `"8MiB"` | per-file cap for pasted/dropped issue images (02 §12; over cap → 413) |
 | `upstream.git` / `upstream.lfs` / `upstream.token_env` / `upstream.follow` | — | repair source; LFS read-through; token env var (never the token); refs kept equal |
 | `git.binary` | `"git"` | path to git binary (walhub always execs it; see 04_git.md) |
 | `git.upload_pack_engine` | `"auto"` | `auto` = stock git wherever packs are local/mounted; remote-served bases per 04_git.md |

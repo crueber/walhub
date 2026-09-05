@@ -7,6 +7,7 @@ import { useRepo } from "./Repo.jsx";
 import { reportError } from "../lib/data.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
+import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
 
 export default function IssueNew() {
   const ctx = useRepo();
@@ -16,6 +17,30 @@ export default function IssueNew() {
   const [getPreview, setPreview] = createSignal(false);
   const [getBusy, setBusy] = createSignal(false);
   const [getError, setError] = createSignal("");
+  // Paste/drop image upload (02 §12): same shared helper as the thread
+  // comment composer — placeholder at the cursor, sequential uploads.
+  let bodyRef;
+  const runUpload = (files) =>
+    uploadFilesSequential({
+      files,
+      textarea: bodyRef,
+      getText: getBody,
+      setText: setBody,
+      upload: (f) => ctx.repoClient.attachments.upload(f),
+      onError: (err) => reportError(err, "issue-create"),
+    });
+  const onPaste = async (e) => {
+    const files = filesFromPasteEvent(e);
+    if (!files.length) return;
+    e.preventDefault();
+    await runUpload(files);
+  };
+  const onDrop = async (e) => {
+    const files = filesFromDropEvent(e);
+    if (!files.length) return;
+    e.preventDefault();
+    await runUpload(files);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -57,9 +82,12 @@ export default function IssueNew() {
           <span class="text-sm font-medium">Body</span>
           <Show when={getPreview()} fallback={
             <textarea
+              ref={bodyRef}
               class="input min-h-32 font-mono text-sm"
               value={getBody()}
               onInput={(e) => setBody(e.target.value)}
+              onPaste={onPaste}
+              onDrop={onDrop}
               placeholder="Steps to reproduce… (markdown-lite; #N links issues)"
             />
           }>

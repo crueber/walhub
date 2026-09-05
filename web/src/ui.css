@@ -125,6 +125,8 @@
   .markdown-body ol { @apply list-decimal; }
   .markdown-body code { @apply rounded bg-zinc-100 px-1 py-px font-mono text-[0.85em] dark:bg-zinc-800; }
   .markdown-body a { @apply text-emerald-700 underline dark:text-emerald-400; }
+  /* Pasted issue images (02 §12): never overflow the prose container. */
+  .markdown-body img { @apply max-w-full h-auto; }
   .markdown-body blockquote { @apply my-2 border-l-4 border-zinc-300 pl-3 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400; }
   .code-view { @apply overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 font-mono text-xs leading-5 dark:border-zinc-800 dark:bg-zinc-950; }
   /* highlighter tokens (lib/highlight.js spans) */

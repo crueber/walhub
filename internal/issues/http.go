@@ -241,6 +241,20 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request, owner, repo
 		return h.routeLabels(w, r, owner, repo, rest[1:])
 	case "milestones":
 		return h.routeMilestones(w, r, owner, repo, rest[1:])
+	case "attachments":
+		// POST /{o}/{r}/api/attachments (§12, both lanes via the
+		// api|api-browser prefix above). Exactly one segment: the
+		// upload has no issue number (usable from the new-issue form
+		// whose issue does not exist yet).
+		if len(rest) != 1 {
+			return false
+		}
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return true
+		}
+		h.uploadAttachment(w, r, owner, repo)
+		return true
 	}
 	return false
 }

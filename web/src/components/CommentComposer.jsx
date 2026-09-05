@@ -22,6 +22,7 @@ import { createSignal, For, Show } from "solid-js";
 import { reportError } from "../lib/data.js";
 import { MentionDatalist } from "../pages/Mentions.jsx";
 import { CLOSE_COMPLETED, CLOSE_NOT_PLANNED } from "../lib/issue-events.js";
+import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
 
 const CLOSE_CHOICES = [
   { reason: CLOSE_COMPLETED, verb: "Close as completed" },
@@ -113,6 +114,44 @@ function ChooserMenu(props) {
 export default function CommentComposer(props) {
   const [getBody, setBody] = createSignal("");
   const [getBusy, setBusy] = createSignal(false);
+  // Paste/drop image upload (02 §12): Issue.jsx passes `uploader` (the
+  // repo attachments surface); surfaces without it (PRs, until #120's
+  // follow-up switches Pull.jsx rendering to markdown+sanitize) keep a
+  // plain textarea. Sequential uploads, placeholder at the cursor.
+  let textRef;
+  const uploader = () => props.uploader ?? null;
+
+  const onPaste = async (e) => {
+    const up = uploader();
+    if (!up) return;
+    const files = filesFromPasteEvent(e);
+    if (!files.length) return; // text paste: leave the default behavior alone
+    e.preventDefault();
+    await uploadFilesSequential({
+      files,
+      textarea: textRef,
+      getText: getBody,
+      setText: setBody,
+      upload: (f) => up.upload(f),
+      onError: (err) => reportError(err, props.errorKey ?? "comment"),
+    });
+  };
+
+  const onDrop = async (e) => {
+    const up = uploader();
+    if (!up) return;
+    const files = filesFromDropEvent(e);
+    if (!files.length) return;
+    e.preventDefault();
+    await uploadFilesSequential({
+      files,
+      textarea: textRef,
+      getText: getBody,
+      setText: setBody,
+      upload: (f) => up.upload(f),
+      onError: (err) => reportError(err, props.errorKey ?? "comment"),
+    });
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -159,9 +198,12 @@ export default function CommentComposer(props) {
   return (
     <form class="card mt-3 grid gap-2 p-3" onSubmit={submit} aria-label={props.label ?? "New comment"}>
       <textarea
+        ref={textRef}
         class="input min-h-24 font-mono text-sm"
         value={getBody()}
         onInput={(e) => setBody(e.target.value)}
+        onPaste={onPaste}
+        onDrop={onDrop}
         placeholder={props.placeholder ?? "Write a comment… (#N links issues, @user mentions)"}
         aria-label="comment body"
         list={listId()}
