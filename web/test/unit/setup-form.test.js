@@ -245,7 +245,12 @@ test("every FIELDS entry carries a working example (setup page hints)", () => {
 
 test("every example value validates on its own (client mirror)", () => {
   for (const f of FIELDS) {
-    const errs = validateSetup({ [f.key]: f.ex }).filter((e) => e.key === f.key && e.severity === "error");
+    // backend-scoped examples validate under a backend where they are
+    // visible (hidden fields are skipped, so a bare probe would pass
+    // vacuously); unscoped examples validate under the default.
+    const probe = { [f.key]: f.ex };
+    if (f.backends) probe["store.backend"] = f.backends[0];
+    const errs = validateSetup(probe).filter((e) => e.key === f.key && e.severity === "error");
     assert.deepEqual(errs, [], `${f.key}: example ${JSON.stringify(f.ex)} must validate: ${errs.map((e) => e.message).join("; ")}`);
   }
 });

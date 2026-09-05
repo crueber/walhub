@@ -370,10 +370,10 @@ export function normalizeSetup(values) {
  */
 export function validateSetup(values) {
   const errors = [];
-  const effectiveBackend = (() => {
-    const b = values?.["store.backend"];
-    return b === undefined || b === null || b === "" ? "filesystem" : String(b).trim(); // first-run default
-  })();
+  // Single source of truth with effectiveStoreBackend (and the Setup.jsx
+  // row-fallback above it): unset/blank selects the filesystem first-run
+  // default. A local copy here once disagreed on whitespace-only input.
+  const effectiveBackend = effectiveStoreBackend(values);
   const fail = (key, message) => errors.push({ key, message, severity: "error" });
   const warn = (key, message) => errors.push({ key, message, severity: "warn" });
   const get = (key) => {
