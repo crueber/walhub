@@ -167,7 +167,8 @@ const TABS = [
   { id: "pulls", label: "Pulls", href: (full) => `/${full}/pulls` },
   { id: "checks", label: "Checks", href: (full) => `/${full}/checks` },
   { id: "releases", label: "Releases", href: (full) => `/${full}/releases` },
-  { id: "wal", label: "WAL", href: (full) => `/${full}/wal` },
+  // WAL lives in the settings sidebar, not the tab bar (issue #123); the
+  // /wal route itself is kept, so old links still render the WAL page.
   { id: "settings", label: "Settings", href: (full) => `/${full}/settings` },
 ];
 

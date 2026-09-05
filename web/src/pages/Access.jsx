@@ -151,8 +151,8 @@ export default function AccessTab(props) {
                   </table>
                 </div>
               </Show>
-              <div class="mt-3 flex flex-wrap items-end gap-2">
-                <label class="text-sm">
+              <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
+                <label class="min-w-0 text-sm">
                   <span class="muted block text-xs">subject (user:email or team:org/slug)</span>
                   <input
                     class="input font-mono text-xs"
@@ -168,7 +168,7 @@ export default function AccessTab(props) {
                     <For each={ROLES}>{(r) => <option value={r}>{r}</option>}</For>
                   </select>
                 </label>
-                <button type="button" class="btn px-3 py-1" onClick={addRow}>add</button>
+                <button type="button" class="btn justify-self-start px-3 py-1 sm:justify-self-auto" onClick={addRow}>add</button>
               </div>
             </section>
 
