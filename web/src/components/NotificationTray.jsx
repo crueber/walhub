@@ -86,7 +86,7 @@ export default function NotificationTray() {
       </button>
       <Show when={getOpen()}>
         <div
-          class="card absolute right-0 z-50 mt-1 max-h-96 w-80 overflow-y-auto p-2"
+          class="notif-drop scroll-slim card absolute right-0 z-50 mt-1 max-h-96 w-80 overflow-y-auto p-2"
           role="menu"
           aria-label="Unread notifications"
         >

@@ -89,7 +89,7 @@ export default function LabelPicker(props) {
         <span aria-hidden="true">+</span>
       </button>
       <Show when={getOpen()}>
-        <div class="card absolute right-0 z-30 mt-1 max-h-72 w-64 overflow-y-auto p-1" role="menu" aria-label="Issue labels">
+        <div class="label-drop scroll-slim card absolute right-0 z-30 mt-1 max-h-72 w-64 overflow-y-auto p-1" role="menu" aria-label="Issue labels">
           <For each={props.all ?? []} fallback={<p class="muted px-2 py-1 text-xs">no labels in this repo yet</p>}>
             {(l) => {
               const on = () => appliedSet().has(String(l.name).toLowerCase());

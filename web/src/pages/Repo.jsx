@@ -284,7 +284,7 @@ function RefPicker(props) {
               onInput={(e) => { setQuery(e.currentTarget.value.trim()); search(); }}
             />
           </div>
-          <div class="ref-list max-h-72 space-y-0.5 overflow-y-auto" classList={{ "stream-error": stream.state() === "error" }}>
+          <div class="ref-list scroll-slim max-h-72 space-y-0.5 overflow-y-auto" classList={{ "stream-error": stream.state() === "error" }}>
             <For each={getRefs()}>
               {(r) => (
                 <button
