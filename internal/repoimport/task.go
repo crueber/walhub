@@ -516,8 +516,21 @@ func (s *Service) installIdx(ctx context.Context, h *wal.RepoHandle, packPath, c
 		if rerr != nil {
 			return "", &StatusError{Status: 500, Message: fmt.Sprintf("read idx: %v", scrubError(rerr.Error()))}
 		}
-		if werr := os.WriteFile(servingIdx, raw, 0o644); werr != nil {
+		// Atomic install: temp-file + rename in the same dir (the 13
+		// §2.1 convention, same as wal saveState / git atomicWrite). A
+		// direct WriteFile would expose a torn index to concurrent
+		// readers of the serving copy (a push/clone racing the import
+		// on the just-created repo). No fsync: serving-copy files
+		// follow the no-fsync convention — durability is the store
+		// upload in uploadIdx (law 4).
+		tmp := servingIdx + ".tmp"
+		if werr := os.WriteFile(tmp, raw, 0o644); werr != nil {
+			_ = os.Remove(tmp)
 			return "", &StatusError{Status: 500, Message: fmt.Sprintf("install idx: %v", scrubError(werr.Error()))}
+		}
+		if rerr := os.Rename(tmp, servingIdx); rerr != nil {
+			_ = os.Remove(tmp)
+			return "", &StatusError{Status: 500, Message: fmt.Sprintf("install idx: %v", scrubError(rerr.Error()))}
 		}
 	}
 	return servingIdx, nil
