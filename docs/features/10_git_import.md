@@ -290,7 +290,8 @@ clean.
 - **R1 B6 — registration in code terms.** No `maintain.RegisterKind`
   (doc sketch only): kind constant + `repoimport.RegisterKind`
   (panics on duplicate) from `cmd/walhub` composition; task body via
-  `reg.Tasks().Run(WithoutCancel…)`; `opFn`-adjacent dispatch is the
+  `reg.Tasks().Run(…)` on a drain-scoped ctx (fix #74 — never
+  `WithoutCancel`, see below); `opFn`-adjacent dispatch is the
   Service itself (no frozen `opFn` touch).
 - **R1 S1 — `import.max_bytes` as post-clone scratch `du` gate +
   per-pack publish gate** (git writes scratch directly; streaming
@@ -340,6 +341,27 @@ clean.
   `format` pinning, browser-lane twins, `endpoints[]` discovery.
 - **Absent `policy.json` IS the default** (allow-all): import writes
   no policy; the effective default holds by construction.
+- **Drain-scoped import cancellation (fix #74):** the leader no longer
+  runs detached (`context.WithoutCancel(context.Background())` is
+  gone — no `WithoutCancel` remains in the package: detachment from
+  client disconnect is structural, the leader never sees the request
+  ctx, so nothing needs stripping). `Service` owns a drain ctx:
+  `drive` derives its `Tasks().Run` wait from it, `Begin` refuses
+  fast with 503 once drained, and the commit-point guard in
+  `runImport` refuses the manifest `PutCreate` after drain begins
+  (service flag first, body ctx second — a post-drain CAS fails,
+  never lands). Composition drains both halves at phase 1
+  (`reg.Tasks().Drain()` kills the clone via `CommandContext` +
+  fails store work; `importSvc.Drain()` cancels the leader wait).
+  The drain terminal is always the narrated 503 "import interrupted:
+  instance is draining; safe to retry" (law 7), never a bare
+  `context.Canceled`. Same change fixed a latent `wal.TaskTable`
+  race it exposed: `Run` assigned `rt.cancel` after `mu.Unlock`
+  while `Drain` reads it — the cancel is now published with the map
+  entry under the lock (join/refuse paths release their unused
+  ctx). Regression: `drain_test.go` (hanging-clone fixture →
+  prompt 503 + no manifest; Begin-after-drain 503; drained
+  headless run refuses at the commit point).
 - **Import dialog dangerous confirm (fix #23):** `/import` carries an unchecked-by-default
   dangerous checkbox (DNS-TOCTOU + redirect-following help text) wired through `imports.start()`.
 - **Setup [import] section (fix #23):** the Setup UI exposes all eight `[import]` keys

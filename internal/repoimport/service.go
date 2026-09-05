@@ -186,6 +186,12 @@ type BeginResult struct {
 // (import.json matches), 409s foreign/different targets (B3), or starts a
 // fresh task on the core wal.TaskTable (B6). p is the resolved principal.
 func (s *Service) Begin(ctx context.Context, p auth.Principal, params Params, token string) (*BeginResult, *wal.TaskRecord, error) {
+	// Drain refusal precedes auth (the 503-draining gate shape, §3
+	// status table): a server that has begun phase 1 starts no new
+	// imports — fail fast and loudly (law 7), never queue silently.
+	if s.Draining() {
+		return nil, nil, interruptedErr()
+	}
 	if err := s.checkCreate(ctx, p, params.Owner, params.Name); err != nil {
 		return nil, nil, err
 	}
@@ -272,10 +278,18 @@ func (s *Service) probe(ctx context.Context, params Params) (bool, *ImportDoc, e
 }
 
 // drive runs the import body on the core table (B6: opsTasks-style —
-// WithoutCancel so client disconnect never cancels the leader) and
-// publishes narration to the id-keyed ring.
+// the leader never sees the request ctx, so client disconnect cannot
+// cancel it; detachment from the request is structural, which is why no
+// WithoutCancel appears here) and publishes narration to the id-keyed
+// ring. The leader wait derives from the service drain ctx: phase-1
+// Drain cancels it promptly with a narrated 503 terminal (law 7). The
+// task BODY runs on the table runCtx (cancelled by reg.Tasks().Drain(),
+// which composition calls alongside Service.Drain); the body dying does
+// not strand this wait — Run reports the outcome and drive finishes the
+// ring exactly once (stream.finish is idempotent).
 func (s *Service) drive(target, id string, params Params, token string, st *stream, r *running) {
-	ctx := context.WithoutCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.drainCtx)
+	defer cancel()
 	var rec *wal.TaskRecord
 	var runErr error
 	in := &importNarr{stream: st}
@@ -286,6 +300,11 @@ func (s *Service) drive(target, id string, params Params, token string, st *stre
 		})
 	} else {
 		runErr = &StatusError{Status: 503, Message: "import registry not configured"}
+	}
+	// A drained leader wait is Run reporting our own drainCtx cancel —
+	// never leak the bare context.Canceled to the terminal frame (law 7).
+	if runErr != nil && ctx.Err() != nil {
+		runErr = interruptedErr()
 	}
 	var outcome *Outcome
 	if runErr != nil {

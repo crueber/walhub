@@ -180,9 +180,16 @@ func (t *TaskTable) publishRecord(task *Task) {
 func (t *TaskTable) Run(ctx context.Context, repo, kind string, params map[string]string, fn func(ctx context.Context, task *Task) error) (*TaskRecord, error) {
 	key := repo + "/" + kind
 	for {
+		// The runCtx exists before the map install so cancel can be
+		// published WITH the entry: Drain reads rt.cancel off-lock
+		// after collecting under mu, so a post-Unlock assignment here
+		// races it (import drain-cancel hits exactly this window).
+		// t.ctx is set once at construction — safe to read off-lock.
+		runCtx, cancel := context.WithCancel(t.ctx)
 		t.mu.Lock()
 		if rt, ok := t.running[key]; ok {
 			t.mu.Unlock()
+			cancel() // joiner path: nothing starts on this ctx
 			// Joiner: await completion up to the caller's ctx (bounded wait,
 			// 13 §3), then reuse the outcome.
 			select {
@@ -194,6 +201,7 @@ func (t *TaskTable) Run(ctx context.Context, repo, kind string, params map[strin
 		}
 		if t.draining {
 			t.mu.Unlock()
+			cancel() // refused: nothing starts on this ctx
 			return nil, fmt.Errorf("503 interrupted: instance shut down; will be retried by the next pass")
 		}
 		rt := &runningTask{
@@ -205,15 +213,14 @@ func (t *TaskTable) Run(ctx context.Context, repo, kind string, params map[strin
 				Started:  time.Now().UTC().Format(time.RFC3339Nano),
 				Params:   params,
 			},
-			done:  make(chan struct{}),
-			drone: &Broadcast[Packet]{},
+			done:   make(chan struct{}),
+			drone:  &Broadcast[Packet]{},
+			cancel: cancel,
 		}
 		t.running[key] = rt
 		t.byID[rt.rec.ID] = rt.rec
 		t.mu.Unlock()
 
-		runCtx, cancel := context.WithCancel(t.ctx)
-		rt.cancel = cancel
 		task := &Task{rec: rt.rec, table: t, ctx: runCtx, bcast: rt.drone}
 		t.publishRecord(task)
 

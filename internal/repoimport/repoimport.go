@@ -14,8 +14,10 @@
 // Seams (14_extensibility.md): Seam 1 via Handler (server.ExtraRoutes,
 // both lanes, top-level twins); Seam 5 via KindRepoImport run on the core
 // wal.TaskTable through the cmd/walhub composition (opsTasks-style wiring
-// — Begin subscribes the table-level replay ring, then Tasks().Run with
-// WithoutCancel); Seam 7 via the `walhub import --url` CLI. Core
+// — Begin subscribes the table-level replay ring, then Tasks().Run on a
+// drain-scoped ctx under `<target>/repo-import`: the leader never sees
+// the request ctx, so client disconnect cannot cancel it, while phase-1
+// Drain cancels it promptly); Seam 7 via the `walhub import --url` CLI. Core
 // (internal/store, internal/wal, internal/git) is never imported upward:
 // this package depends only on seam interfaces + frozen types. Git is
 // always the subprocess binary with pinned argv (docs/go/04_git.md);
@@ -109,6 +111,17 @@ type Service struct {
 	running map[string]*running // key: "<owner>/<repo>" target
 	streams map[string]*stream  // key: task id (B4 id-keyed attach, incl. finished)
 	clones  chan struct{}       // import.max_concurrent semaphore (S9, sender-owns-close n/a: channel is a pool)
+
+	// Phase-1 drain state (13 §8): drainCtx is cancelled by Drain;
+	// drive leaders derive their Run-wait ctx from it, so drain
+	// cancels an in-flight import promptly. draining flips at the
+	// same point so new Begins refuse fast and post-drain manifest
+	// commits refuse at the commit-point guard (task.go). drainCtx
+	// is immutable after New (no lock to read); draining is
+	// mu-guarded; drainCancel is non-blocking, never called under mu.
+	drainCtx    context.Context
+	drainCancel context.CancelFunc
+	draining    bool
 }
 
 // Deps wires a Service. Store/Reg/Roles/Cfg are required; GitBinary falls
@@ -141,6 +154,7 @@ func New(d Deps) *Service {
 	if host == "" {
 		host = "unknown"
 	}
+	drainCtx, drainCancel := context.WithCancel(context.Background())
 	return &Service{
 		store:    d.Store,
 		reg:      d.Reg,
@@ -151,7 +165,39 @@ func New(d Deps) *Service {
 		running:  map[string]*running{},
 		streams:  map[string]*stream{},
 		clones:   make(chan struct{}, maxConc),
+
+		drainCtx:    drainCtx,
+		drainCancel: drainCancel,
 	}
+}
+
+// Drain enters phase-1 drain for the import surface (13 §8, law 7):
+// in-flight leaders see cancellation promptly (their Run wait derives
+// from drainCtx), new Begins refuse fast with the 503 below, and the
+// commit-point guard refuses post-drain manifest CAS commits. The task
+// BODIES die via reg.Tasks().Drain(), which composition calls alongside
+// this (serve.go phase 1) — this method scopes itself to the service so
+// the registry owner keeps the table lifecycle. Idempotent; safe to call
+// with no imports running.
+func (s *Service) Drain() {
+	s.mu.Lock()
+	s.draining = true
+	s.mu.Unlock()
+	s.drainCancel() // non-blocking; leaders + clone-gate selects observe it
+}
+
+// Draining reports whether Drain has begun (phase ≥ 1).
+func (s *Service) Draining() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draining
+}
+
+// interruptedErr is the phase-1 drain terminal (13 §8: 503 "interrupted",
+// safe to retry — law 7 narrates the drain, never a silent spinner or a
+// bare context.Canceled).
+func interruptedErr() *StatusError {
+	return &StatusError{Status: 503, Message: "import interrupted: instance is draining; safe to retry"}
 }
 
 // running is one in-flight import (service-level single-flight; the

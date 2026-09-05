@@ -248,6 +248,18 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 
 	// Phase 1 (bounded 30 s): maintenance stops; serving + /readyz stay up.
 	srv.RunPhase1(drainCtx, ctx)
+	// Feature-task drain (10 §B5 + 13 §8): cancel in-flight import
+	// leaders AND bodies promptly and refuse new ones. reg.Tasks().Drain()
+	// is the registry owner's hook (cancels every running task runCtx —
+	// SIGKILLs the import clone, fails its store work); importSvc.Drain()
+	// is the service hook (cancels the leader Run wait, gates Begin, arms
+	// the commit-point guard that refuses post-drain manifest CAS commits).
+	if reg != nil {
+		reg.Tasks().Drain()
+	}
+	if collab != nil && collab.importSvc != nil {
+		collab.importSvc.Drain()
+	}
 	if maintainerDone != nil {
 		select {
 		case <-maintainerDone:
