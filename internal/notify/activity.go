@@ -86,15 +86,29 @@ func (s *Service) appendActivity(ctx context.Context, owner, repo string, seq in
 
 // readActivity loads one activity event; nil when absent.
 func (s *Service) readActivity(ctx context.Context, owner, repo string, seq int) *ActivityEvent {
+	ev, _ := s.readActivityErr(ctx, owner, repo, seq)
+	return ev
+}
+
+// readActivityErr loads one activity event, distinguishing a transient
+// store failure (non-nil error — the caller must retry, never skip) from
+// absence or corruption (nil event, nil error — an honest gap, or a
+// permanently unreadable event, which reads as absent per the existing
+// contract). The redrain sweep needs the distinction: advancing the
+// high-water past a transiently-failed seq would orphan a pending drain.
+func (s *Service) readActivityErr(ctx context.Context, owner, repo string, seq int) (*ActivityEvent, error) {
 	raw, _, err := s.getJSON(ctx, ActivityKey(owner, repo, seq))
-	if err != nil || raw == nil {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return nil, nil
 	}
 	var ev ActivityEvent
 	if err := json.Unmarshal(raw, &ev); err != nil {
-		return nil
+		return nil, nil
 	}
-	return &ev
+	return &ev, nil
 }
 
 // FanoutDoneDoc is one repos/<o>/<r>/collab-fanout/<seq:012x>.json: the

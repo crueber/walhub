@@ -309,7 +309,8 @@ two durable pieces and one sweep — no new task kind, no new global LIST:
   hookless repos are covered — pending fan-out exists independently of webhooks). Per repo the sweep
   reads `collab_state` (quiet repos cost exactly one GET per pass) and probes only the unprobed
   window `(seen, next_seq]` capped at 32 seqs/pass (deeper backlogs converge across passes; gaps are
-  skipped with honest-gap semantics). An in-memory high-water per repo bounds repeat work; it is
+  skipped with honest-gap semantics, but a transient store failure stops the window instead of
+  skipping — the high-water never advances past an unprobed seq, so the next pass retries it). An in-memory high-water per repo bounds repeat work; it is
   rebuilt every restart, which is exactly what makes the restart pass complete. Pending seqs without
   a completion record re-enqueue onto the existing `notify-fanout` single-flight.
 
