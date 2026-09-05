@@ -233,15 +233,26 @@ export default function Issue() {
         <Show when={thread()} fallback={<p class="muted">loading…</p>}>
           {(t) => (
             <>
-              <h2 class="mb-1 text-lg font-semibold">
-                <span class={t().state === "open" ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-500"}>
-                  #{t().num} {t().state === "open" ? "Open" : closedStateLabel(t().state_reason)}
-                </span>{" "}
-                {t().title}
-              </h2>
-              <p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-                {t().author} opened {fmtDate(t().created_at)} · {t().comment_count} comments
-              </p>
+              {/* Header block (#114): the bottom rule + padding set it apart
+                  from the first timeline entry (ThreadTimeline rows are
+                  divider-separated with first:pt-0, so without this the
+                  byline blurred into the first comment). Number + title
+                  left, state badge right — the badge text keeps the
+                  existing state source of truth (open vs.
+                  closedStateLabel(reason)); the h2 level is unchanged. */}
+              <header class="mb-4 border-b border-zinc-200 pb-3 dark:border-zinc-800">
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <h2 class="min-w-0 flex-1 text-lg font-semibold">
+                    <span class="text-zinc-500 dark:text-zinc-400">#{t().num}</span> {t().title}
+                  </h2>
+                  <span class={t().state === "open" ? "chip chip-open mt-1 shrink-0" : "chip chip-closed mt-1 shrink-0"}>
+                    {t().state === "open" ? "Open" : closedStateLabel(t().state_reason)}
+                  </span>
+                </div>
+                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  {t().author} opened {fmtDate(t().created_at)} · {t().comment_count} comments
+                </p>
+              </header>
               <ThreadTimeline
                 events={events()}
                 textFor={eventText}
