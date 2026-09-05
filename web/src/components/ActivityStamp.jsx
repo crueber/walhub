@@ -25,14 +25,16 @@
 // first paint. Worst case stays bounded by the #117 caps (50 owners ×
 // 10 repos = 500 GETs on a cold cache, each independent so one slow repo
 // never blocks the rest); failures follow the data-layer contract (tray,
-// not the page) — except the empty-repo 404 (unborn HEAD), which the fetch
-// maps to `{commits: []}` so the row renders "no commits yet" with no tray
-// spam. No new endpoint, no new SDK method (`repo.commits()`,
+// not the page) — except 404, which the fetch maps to `{commits: []}` via
+// the shared `tolerateMissing` helper so the row renders "no commits yet"
+// with no tray spam. That covers the empty-repo 404 (unborn HEAD) AND
+// deleted/private/fork-provisioned rows (issue #150). No new endpoint, no
+// new SDK method (`repo.commits()`,
 // 07 §9.6).
 
 import repos from "../../sdk/src/index.js";
 import { Show } from "solid-js";
-import { useData } from "../lib/data.js";
+import { useData, tolerateMissing } from "../lib/data.js";
 import { ACTIVITY_TTL, latestActivity } from "../lib/activity.js";
 import DateTime from "./DateTime.jsx";
 
@@ -41,15 +43,12 @@ export default function ActivityStamp(props) {
   const full = () => props.full;
   const [getPage] = useData(
     () => `activity:${full()}`,
-    () =>
-      repos.repo(full()).commits({ n: 1 }).catch((err) => {
-        // Empty repo: unborn HEAD answers 404 — that IS the empty state
-        // ("no commits yet"), not a failure, so it must not reach the
-        // error tray. (A repo deleted between listing and fetch also 404s;
-        // the row vanishes on the next list refresh.)
-        if (err?.notFound) return { commits: [] };
-        throw err;
-      }),
+    // Empty repo: unborn HEAD answers 404 — that IS the empty state
+    // ("no commits yet"), not a failure, so it must not reach the error
+    // tray. (A repo deleted between listing and fetch, or a
+    // fork-provisioned prefix without a manifest yet, 404s the same way —
+    // issue #150 — and renders the same empty state.)
+    () => tolerateMissing(repos.repo(full()).commits({ n: 1 }), { commits: [] }),
     ACTIVITY_TTL,
   );
   return (

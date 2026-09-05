@@ -59,6 +59,28 @@ export function dismissError(entry) {
   errorsSet((list) => list.filter((e) => e !== entry));
 }
 
+// --- expected-404 auxiliary fetches (issue #150) -------------------------------
+// A per-row auxiliary fetch (star counts, last-active stamps) 404s in
+// EXPECTED states: the row's repo was deleted between listing and fetch, is
+// invisible to this viewer, or is a provisioned-but-unborn prefix — a fork
+// writes repos/<o>/<r>/fork.json before the child manifest exists, so the
+// prefix listing names the child while every manifest-gated read 404s. A
+// 404 there is missing DATA, not a failure: the tray is for real errors.
+// Wrap the fetcher so the 404 resolves to `missing` (the row renders its
+// placeholder/hidden state); any other error still throws into the tray
+// path unchanged.
+
+/**
+ * tolerateMissing(promise, missing) → resolves `missing` when the fetch
+ * answers SDK 404 (`err.notFound`); rethrows everything else untouched.
+ */
+export function tolerateMissing(promise, missing) {
+  return Promise.resolve(promise).catch((err) => {
+    if (err?.notFound) return missing;
+    throw err;
+  });
+}
+
 // --- the promise cache --------------------------------------------------------
 
 const cache = new Map(); // key → {signal, promise, value, at, error}
