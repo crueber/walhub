@@ -374,14 +374,26 @@ func TestOIDCCallbackFailurePaths(t *testing.T) {
 			t.Fatalf("sanitizeNext(%q) = %q, want %q", next, got, want)
 		}
 	}
-	if s.scheme() != "http" {
-		t.Fatal("scheme must be http without TLS")
+	// requestScheme truth table (#165): the proxy header decides, else the
+	// connection, else plain http.
+	for req, want := range map[*http.Request]string{
+		nil: "http",
+		httptest.NewRequest("GET", "http://x/", nil): "http",
+	} {
+		if got := requestScheme(req); got != want {
+			t.Fatalf("scheme = %q, want %q", got, want)
+		}
 	}
-	s.tlsOn = true
-	if s.scheme() != "https" {
-		t.Fatal("scheme must be https with TLS")
+	fwd := httptest.NewRequest("GET", "http://x/", nil)
+	fwd.Header.Set("X-Forwarded-Proto", "https")
+	if got := requestScheme(fwd); got != "https" {
+		t.Fatalf("forwarded scheme = %q", got)
 	}
-	s.tlsOn = false
+	multi := httptest.NewRequest("GET", "http://x/", nil)
+	multi.Header.Set("X-Forwarded-Proto", "https, http")
+	if got := requestScheme(multi); got != "https" {
+		t.Fatalf("multi forwarded scheme = %q", got)
+	}
 	if hostOnlyPortSuffix("x:80") != "localhost:80" || hostOnlyPortSuffix("x") != "localhost" {
 		t.Fatal("hostOnlyPortSuffix truth table broken")
 	}
@@ -457,12 +469,13 @@ func TestAuthRedirectURIForms(t *testing.T) {
 	if got := s.authRedirectURI(req); got != "http://localhost:9099/_auth/callback" {
 		t.Fatalf("loopback redirect = %q", got)
 	}
-	s.tlsOn = true
+	// Behind a TLS-terminating proxy the loopback bounce keeps the proxy's
+	// scheme (#165).
 	req = httptest.NewRequest("GET", "http://localhost/_auth/login", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
 	if got := s.authRedirectURI(req); got != "https://localhost/_auth/callback" {
-		t.Fatalf("tls loopback redirect = %q", got)
+		t.Fatalf("proxied loopback redirect = %q", got)
 	}
-	s.tlsOn = false
 	// Non-loopback host falls back to baseURL from the request.
 	req = httptest.NewRequest("GET", "http://host.example/_auth/login", nil)
 	if got := s.authRedirectURI(req); got != "http://host.example/_auth/callback" {

@@ -17,7 +17,6 @@ test("a complete valid config passes with no errors", () => {
     "server.listen": "0.0.0.0:8080",
     "server.auth.mode": "token",
     "server.auth.session_secret": "0123456789abcdef0123456789abcdef",
-    "server.tls.mode": "self_signed",
     "store.backend": "filesystem",
     "store.root": "/var/lib/walhub/store",
     "cache.dir": "/var/cache/walhub",
@@ -46,7 +45,6 @@ test("auth none on a loopback bind is clean; on a public bind it warns (not fail
 
 const enumCases = [
   ["server.auth.mode", "basic", "none|token|oidc"],
-  ["server.tls.mode", "wildcard", "off|self_signed|files"],
   ["store.backend", "s4", "s3|gcs|memory|filesystem"],
   ["maintenance.disk", "nvme", "tmpfs|ssd"],
   ["git.object_format", "md5", "sha1|sha256"],
@@ -151,12 +149,12 @@ test("session_secret must be ≥ 32 bytes when set", () => {
   assert.deepEqual(fatals({ "server.auth.session_secret": "0123456789abcdef0123456789abcdef" }), []);
 });
 
-// --- §5 rules 5/8/10: store, tls, paths ---------------------------------------------
+// --- §5 rules 5/9: store, paths (rule 8 tls removed with issue #165) --------------
 
-test("tls files mode requires cert and key", () => {
-  assert.ok(messages({ "server.tls.mode": "files" }, "server.tls.cert")[0].includes("requires server.tls.cert"));
-  assert.deepEqual(fatals({ "server.tls.mode": "files", "server.tls.cert": "/c.pem", "server.tls.key": "/k.pem" }), []);
-  assert.deepEqual(fatals({ "server.tls.mode": "self_signed" }), []);
+test("no server.tls.* fields remain in the setup schema", () => {
+  assert.deepEqual(FIELDS.filter((f) => f.key === "server.tls.mode" || f.key.startsWith("server.tls.")), []);
+  // A stale saved value surfaces as an unknown-key error, never validated.
+  assert.ok(messages({ "server.tls.mode": "self_signed" }, "server.tls.mode")[0].includes("unknown key"));
 });
 
 test("filesystem store: store.root must be absolute or empty", () => {

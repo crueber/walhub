@@ -167,6 +167,28 @@ func TestLoadInvalidValidationFails(t *testing.T) {
 	}
 }
 
+// Residual server.tls.* settings fail closed with the reverse-proxy pointer
+// (#165): table-driven over the removed modes, never a bare "unknown key".
+func TestLoadRemovedTLSKeysFailClosed(t *testing.T) {
+	bodies := map[string]string{
+		"self_signed": "[server.tls]\nmode = \"self_signed\"\n",
+		"files":       "[server.tls]\nmode = \"files\"\ncert = \"/c.pem\"\nkey = \"/k.pem\"\n",
+		"off":         "[server.tls]\nmode = \"off\"\n",
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			dir := tmpDataDir(t)
+			path := writeConfig(t, dir, ConfigFileName, body)
+			_, _, err := Load([]string{path}, func(string) string { return "" })
+			if err == nil {
+				t.Fatalf("err = nil, want fail-closed server.tls rejection")
+			}
+			if !strings.Contains(err.Error(), "server.tls") || !strings.Contains(err.Error(), "reverse proxy") {
+				t.Fatalf("err = %v, want the reverse-proxy pointer", err)
+			}
+		})
+	}
+}
 func TestConfigFilePointer(t *testing.T) {
 	tests := []struct {
 		name    string

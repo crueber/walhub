@@ -191,10 +191,6 @@ export const FIELDS = [
   { key: "server.accel_redirect", type: "bool", ex: "true", note: "only honoured behind an edge that announces accel-redirect" },
   { key: "server.public_url", type: "url", ex: "https://git.example.com" },
   { key: "server.cors_origins", type: "list", ex: "https://git.example.com" },
-  { key: "server.tls.mode", type: "enum", enum: ["off", "self_signed", "files"], ex: "self_signed", note: "files also requires tls.cert and tls.key" },
-  { key: "server.tls.cert", type: "string", ex: "/etc/walhub/tls/fullchain.pem" },
-  { key: "server.tls.key", type: "string", ex: "/etc/walhub/tls/privkey.pem" },
-  { key: "server.tls.hostnames", type: "list", ex: "git.example.com, walhub.local" },
   { key: "server.auth.mode", type: "enum", enum: ["none", "token", "oidc"], ex: "token", note: "oidc additionally needs issuer, an allowlist, and anonymous_read=false" },
   { key: "server.auth.anonymous_read", type: "bool", ex: "false", modes: ["token", "oidc"], note: "must be false in oidc mode" },
   { key: "server.auth.tokens", type: "toml", modes: ["token", "oidc"], tomlKeys: TOKEN_KEYS, ex: '[[tokens]]\nprincipal = "ci"\ntoken_env = "WALHUB_CI_TOKEN"\nwrite = true', note: "robots/static credentials — one [[tokens]] table each; admin = true grants admin" },
@@ -415,7 +411,7 @@ export function validateSetup(values) {
     } else if (t === "listen") {
       if (s !== "" && parseListen(s) === null) fail(key, `${key}: must be host:port, got "${s}"`);
     } else if (t === "path") {
-      // §5 rule 10: cache.dir must be absolute UNLESS the backend is memory
+      // §5 rule 9: cache.dir must be absolute UNLESS the backend is memory
       if (s !== "" && !(key === "cache.dir" && effectiveBackend === "memory") && !ABS_PATH_RE_OK(s)) {
         fail(key, `${key}: must be an absolute path, got "${s}"`);
       }
@@ -453,12 +449,6 @@ export function validateSetup(values) {
   const secret = get("server.auth.session_secret");
   if (secret !== "" && secret.length < 32) fail("server.auth.session_secret", `server.auth.session_secret must be ≥ 32 bytes when set`);
 
-  // §5 rule 8 — tls files mode needs cert+key
-  const tls = get("server.tls.mode") || "off";
-  if (tls === "files" && (get("server.tls.cert") === "" || get("server.tls.key") === "")) {
-    fail("server.tls.cert", `server.tls.mode = "files" requires server.tls.cert and server.tls.key`);
-  }
-
   // §5 rule 5 — store backend specifics
   if (backend === "filesystem") {
     const root = get("store.root");
@@ -474,7 +464,7 @@ export function validateSetup(values) {
     }
   }
 
-  // §5 rule 10 — cache.dir absolute unless the memory backend
+  // §5 rule 9 — cache.dir absolute unless the memory backend
   const cacheDir = get("cache.dir");
   if (cacheDir !== "" && backend !== "memory" && !ABS_PATH_RE_OK(cacheDir)) {
     fail("cache.dir", `cache.dir must be an absolute path, got "${cacheDir}"`);

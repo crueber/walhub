@@ -123,24 +123,6 @@ func (s *Server) sdkReposJS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// caPem publishes the self-signed cert — only when this host terminates TLS
-// itself (§3.3); else 404.
-func (s *Server) caPem(w http.ResponseWriter, r *http.Request) {
-	if !s.tlsOn && s.cfg.Server.TLS.Mode == "" {
-		plainStatus(w, http.StatusNotFound, "not found")
-		return
-	}
-	b, err := s.loadCACert()
-	if err != nil {
-		plainStatus(w, http.StatusNotFound, "not found")
-		return
-	}
-	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b)
-}
-
 // eventsNotify answers POST /_events/notify — handler-authenticated
 // (09_events.md); the events bridge is not wired in this package.
 func (s *Server) eventsNotify(w http.ResponseWriter, r *http.Request) {
@@ -258,11 +240,6 @@ func (s *Server) setupJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.cfg.Server.Auth.Mode == "oidc" {
 		body["token_url"] = base + "/_auth/tokens"
-	}
-	if s.tlsOn || s.cfg.Server.TLS.Mode == "self_signed" {
-		body["ca_url"] = base + "/services/public/ca.pem"
-		body["trust"] = "git config --global http." + base + "/.sslCAInfo ~/.config/git/" +
-			hostSlug(r.Host) + "-ca.pem"
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSONBody(w, http.StatusOK, body)

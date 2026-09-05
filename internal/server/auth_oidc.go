@@ -108,10 +108,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authRedirectURI(r *http.Request) string {
 	base := s.baseURL(r)
 	if isLoopbackHost(hostOnly(r.Host)) {
-		scheme := "http"
-		if s.tlsOn || r.TLS != nil {
-			scheme = "https"
-		}
+		scheme := requestScheme(r)
 		_, port, _ := netSplit(r.Host)
 		if port != "" {
 			base = scheme + "://localhost:" + port
@@ -171,7 +168,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		// the cookie lands on walgit.localhost (different cookie host).
 		ticket := s.signState(p.Name+"|"+sess.Wire, s.Now())
 		ticket = strings.ReplaceAll(ticket, "\n", "") // wire form is url-safe already
-		target := s.scheme() + "://walgit." + hostOnlyPortSuffix(r.Host) + "/_auth/claimed?ticket=" +
+		target := requestScheme(r) + "://walgit." + hostOnlyPortSuffix(r.Host) + "/_auth/claimed?ticket=" +
 			url.QueryEscape(ticket) + "&next=" + url.QueryEscape(next)
 		w.Header().Set("Location", target)
 		w.WriteHeader(http.StatusFound)
@@ -226,13 +223,6 @@ func (s *Server) verifyStateTicket(ticket string) (string, bool) {
 	return lines[2], ok && next != ""
 }
 
-func (s *Server) scheme() string {
-	if s.tlsOn {
-		return "https"
-	}
-	return "http"
-}
-
 func hostOnlyPortSuffix(host string) string {
 	_, port, err := netSplit(host)
 	if err != nil || port == "" {
@@ -284,7 +274,7 @@ func (s *Server) exchangeCode(ctx context.Context, tokenEndpoint, code, redirect
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "walgit_session", Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: s.tlsOn || len(s.cfg.Server.CorsOrigins) > 0,
+		HttpOnly: true, Secure: len(s.cfg.Server.CorsOrigins) > 0,
 		SameSite: sameSiteFor(s.cfg.Server.CorsOrigins),
 	})
 	target := sanitizeNext(r.URL.Query().Get("next"))

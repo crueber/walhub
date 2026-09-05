@@ -4,8 +4,9 @@
 // The server serves exactly two git transports, both verified against the
 // served surface (never invented client-side):
 // - HTTP(S): summary.clone_url (internal/api/summary.go: base + /owner/name.git),
-//   verbatim — the scheme is whatever the server advertised (https behind TLS,
-//   plain http otherwise). The pill label derives from this URL (issue #124):
+//   verbatim — the scheme is whatever the server advertised (https via
+//   public_url or X-Forwarded-Proto behind a TLS-terminating proxy, plain
+//   http otherwise). The pill label derives from this URL (issue #124):
 //   the pill and the text must AGREE and the command must WORK, so an http://
 //   advertisement is never upgraded to https:// for display — a plain-http
 //   server has no TLS and the upgraded command would be broken.

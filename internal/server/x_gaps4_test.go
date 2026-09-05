@@ -270,16 +270,22 @@ func TestRepoDispatchBadRepoName(t *testing.T) {
 	}
 }
 
-// TestSetupJSONTLSAndOIDCOnRealTLS covers the tlsOn variant of setupJSON.
-func TestSetupJSONTLSOn(t *testing.T) {
+// TestSetupJSONForwardedProto covers the X-Forwarded-Proto variant of
+// setupJSON (#165): behind a TLS-terminating proxy the recipes advertise
+// the proxy's https:// base.
+func TestSetupJSONForwardedProto(t *testing.T) {
 	s, _ := newTestServer(t, nil)
-	s.tlsOn = true
 	req := httptest.NewRequest("GET", "http://x/services/setup.json?repo=o/r", nil)
 	req.Header.Set("Authorization", "Bearer tok123")
+	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 	s.setupJSON(rec, req)
-	if !strings.Contains(rec.Body.String(), "ca_url") {
-		t.Fatalf("tls setup.json missing ca_url: %s", rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, "https://x/o/r.git") {
+		t.Fatalf("proxied setup.json must advertise https base: %s", body)
+	}
+	if strings.Contains(body, "ca_url") {
+		t.Fatalf("ca_url must be gone: %s", body)
 	}
 }
 

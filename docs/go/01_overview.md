@@ -240,7 +240,7 @@ root (SIGTERM → `signal.NotifyContext`), so drain cancels everything once.
 
 | Goroutine(s) | Role | Go shape |
 |---|---|---|
-| HTTP serve | serve | `net/http` server with h2c (`golang.org/x/net/http2h2c`), ALPN TLS (`crypto/tls`), `TCP_NODELAY` per conn; one goroutine per request |
+| HTTP serve | serve | `net/http` server with h2c (`golang.org/x/net/http2/h2c`), `TCP_NODELAY` per conn; one goroutine per request |
 | Runtime watchdog (1 s tick) | all | `time.Ticker`; gauges tasks running + inflight; warns "runtime stalled" when a tick is > 2.5 s late (`inflight = 0` at a late tick ⇒ platform paused the process) |
 | **Bulk pool** (4 workers) | serve/maintain | fixed-size worker goroutines fed by a buffered channel of capacity = worker count; pack materialization ONLY — never on request goroutines |
 | Prewarm | serve | bounded parallelism (`cache.prewarm_parallelism`, default 2) over `cache.prewarm[]`; `/readyz` 503 until done or `cache.prewarm_ready_timeout` |
@@ -334,7 +334,7 @@ Go module: `git.packden.us/crueber/walhub`. These paths are normative; every oth
 | `internal/git` | The git subprocess layer: exact-argv `os/exec` calls — ingest/index-pack, refs, connectivity, receive-pack, upload-pack, repack/bitmaps, bundle creation |
 | `internal/bundle` | The bundle-uri subsystem: strategies, calendar slots, backfill, chained incrementals, blobless family, `bundles/list` + `bundles/catchup` |
 | `internal/policy` | The per-repo push policy rule language: parse, validate, evaluate, dry-run |
-| `internal/server` | chi router (`github.com/go-chi/chi/v5`, core only), hand-ordered middleware as `func(http.Handler) http.Handler`, git smart-HTTP + LFS + static endpoints, auth (none/token/oidc), setup recipes, h2c/TLS listener |
+| `internal/server` | chi router (`github.com/go-chi/chi/v5`, core only), hand-ordered middleware as `func(http.Handler) http.Handler`, git smart-HTTP + LFS + static endpoints, auth (none/token/oidc), setup recipes, plain-HTTP/h2c listener |
 | `internal/setup` | The setup subsystem (wired into routes by `internal/server`): the config schema description for the UI, validate-for-save, atomic write of `<data-dir>/walhub.toml`, bootstrap-mode detection, the `/setup` UI and `/api/v1/setup` endpoints, and the setup-only mode gate (§9.5, 06_server_http.md) |
 | `internal/api` | The JSON API wire contract, SSE envelope, tasks surface, two-lane auth, render caches |
 | `internal/events` | The WAL → webhook bridge: durable cursor, delivery + HMAC signing, bucket-notification wake-ups, sweep |
@@ -542,3 +542,4 @@ For a real deployment (S3/GCS bucket, token/OIDC auth), edit the config through 
 - **Divergence (2026-08-31, D6):** `/setup` web UI + `/api/v1/setup` API are first-class (§9.5; full spec in 06_server_http.md), including the setup-only recovery mode for invalid configs and the optional `WALHUB_SETUP_TOKEN` gate for exposed hosts.
 - **Divergence (2026-08-31, D7):** CI enforces ≥ 95% statement coverage per `internal/...` package (Make `cover` target with per-package fail-under; `cmd/` main glue excluded); table-driven httptest for every handler.
 - **Shared webhook egress package (2026-09-05, issue #78):** `internal/egress` joins the §8 tree — stdlib-only refuse-all redirect policy + delivery-time non-public IP screen with pinned dialing, reused verbatim by `internal/events` (09_events.md §4.2) and tenant repo webhooks (docs/features/06_notifications.md §5.3) so the two sinks cannot drift apart. No new third-party module (dependency budget unchanged).
+- **Server-side TLS removed (2026-09-05, Forgejo #165):** the server listens plain HTTP (h2c retained via `golang.org/x/net`); `server.tls.*`, cert/key loading, self-signed generation, and `/services/public/ca.pem` are gone, and `X-Forwarded-Proto` is honored when building absolute URLs. TLS terminates at the reverse proxy (16_packaging.md §3.4). `golang.org/x/crypto` stays for the SSH transport only; no new module.

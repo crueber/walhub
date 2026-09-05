@@ -130,6 +130,13 @@ func applyEnv(c *Config, getenv func(string) string, environ []string) ([]Overri
 		}
 		e := entries[key]
 		parts := strings.Split(key, ".")
+		// Removed in #165: residual server.tls.* env settings fail closed
+		// (fatal, with the reverse-proxy pointer) instead of joining the
+		// ignored-override list — a silent ignore would leave the operator
+		// believing the server terminates TLS.
+		if len(parts) > 1 && parts[0] == "server" && parts[1] == "tls" {
+			return overrides, fmt.Errorf("%s: %s", e.name, removedTLSHint)
+		}
 		if err := assignPath(c, parts, e.raw); err != nil {
 			if errors.Is(err, errUnknownKey) {
 				overrides = append(overrides, Override{Name: e.name, Key: key, Reason: "unknown key " + key})

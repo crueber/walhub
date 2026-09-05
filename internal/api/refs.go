@@ -30,13 +30,20 @@ func (h *handlers) open(w http.ResponseWriter, r *http.Request, level AuthLevel)
 }
 
 // baseURL is the public base: server.public_url, else the request Host (§9.1).
+// The scheme honors X-Forwarded-Proto so a server behind a TLS-terminating
+// proxy advertises https:// clone URLs (#165); it affects displayed URLs
+// only, never auth or access control.
 func (e *Env) baseURL(r *http.Request) string {
 	if e.Cfg != nil && e.Cfg.Server.PublicURL != "" {
 		return strings.TrimSuffix(e.Cfg.Server.PublicURL, "/")
 	}
 	scheme := "http"
-	if r != nil && r.TLS != nil {
-		scheme = "https"
+	if r != nil {
+		if proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ","); strings.EqualFold(strings.TrimSpace(proto), "https") {
+			scheme = "https"
+		} else if r.TLS != nil {
+			scheme = "https"
+		}
 	}
 	host := ""
 	if r != nil {

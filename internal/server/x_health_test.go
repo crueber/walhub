@@ -103,36 +103,6 @@ func TestUIAssetResolvers(t *testing.T) {
 	}
 }
 
-func TestCAPem(t *testing.T) {
-	s, _ := newTestServer(t, nil)
-	s.cacheRoot = t.TempDir()
-	// No TLS → 404.
-	rec := httptest.NewRecorder()
-	s.caPem(rec, httptest.NewRequest("GET", "/services/public/ca.pem", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("no tls ca.pem = %d", rec.Code)
-	}
-	// TLS mode self-signed without a cert file → 404.
-	s.cfg.Server.TLS.Mode = "self_signed"
-	rec = httptest.NewRecorder()
-	s.caPem(rec, httptest.NewRequest("GET", "/services/public/ca.pem", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("missing cert = %d", rec.Code)
-	}
-	// With a generated cert → 200 PEM.
-	if err := s.EnsureSelfSigned(); err != nil {
-		t.Fatal(err)
-	}
-	rec = httptest.NewRecorder()
-	s.caPem(rec, httptest.NewRequest("GET", "/services/public/ca.pem", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "BEGIN CERTIFICATE") {
-		t.Fatalf("ca.pem = %d", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/x-pem-file" {
-		t.Fatalf("content-type = %q", ct)
-	}
-}
-
 func TestEventsNotify(t *testing.T) {
 	var woken string
 	s, _ := newTestServer(t, func(o *Options) {
@@ -237,16 +207,16 @@ func TestSetupJSONRecipes(t *testing.T) {
 			t.Fatalf("setup.json missing %q: %s", want, body)
 		}
 	}
-	// oidc mode exposes the token URL; self-signed TLS exposes the CA URL.
+	// oidc mode exposes the token URL; there is no CA URL anymore (#165:
+	// TLS terminates at the reverse proxy, never in-process).
 	s.cfg.Server.Auth.Mode = "oidc"
-	s.cfg.Server.TLS.Mode = "self_signed"
 	rec = httptest.NewRecorder()
 	s.setupJSON(rec, req)
 	if !strings.Contains(rec.Body.String(), "/_auth/tokens") {
 		t.Fatalf("token_url missing: %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "ca.pem") {
-		t.Fatalf("ca_url missing: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "ca.pem") {
+		t.Fatalf("ca_url must be gone: %s", rec.Body.String())
 	}
 }
 
@@ -352,11 +322,10 @@ func TestInstallSh(t *testing.T) {
 	if !strings.Contains(body, "credential") && !strings.Contains(body, "helper") {
 		t.Logf("helper not referenced in auth-token mode body (len %d)", len(body))
 	}
-	// TLS self-signed adds CA trust steps.
-	s.cfg.Server.TLS.Mode = "self_signed"
+	// No CA trust steps anymore (#165): the proxy terminates TLS.
 	rec = httptest.NewRecorder()
 	s.installSh(rec, req)
-	if !strings.Contains(rec.Body.String(), "ca.pem") {
-		t.Fatal("self-signed install.sh must reference ca.pem")
+	if strings.Contains(rec.Body.String(), "ca.pem") {
+		t.Fatal("install.sh must not reference ca.pem")
 	}
 }

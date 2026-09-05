@@ -416,15 +416,24 @@ func TestInflightWarnOverCap(t *testing.T) {
 	}
 }
 
-func TestCanonicalBrowserHostTLS(t *testing.T) {
+func TestCanonicalBrowserHostForwardedProto(t *testing.T) {
 	s, _ := newTestServer(t, nil)
-	s.tlsOn = true
-	req := httptest.NewRequest("GET", "http://localhost:8443/wal", nil)
+	// Plain loopback request → http redirect.
+	req := httptest.NewRequest("GET", "http://localhost:8080/wal", nil)
 	req.Header.Set("Accept", "text/html")
 	rec := httptest.NewRecorder()
 	s.canonicalBrowserHost(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "http://walgit.localhost") {
+		t.Fatalf("plain redirect = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	// Behind a TLS-terminating proxy → https redirect (#165).
+	req = httptest.NewRequest("GET", "http://localhost:8080/wal", nil)
+	req.Header.Set("Accept", "text/html")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec = httptest.NewRecorder()
+	s.canonicalBrowserHost(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "https://") {
-		t.Fatalf("tls redirect = %d %q", rec.Code, rec.Header().Get("Location"))
+		t.Fatalf("proxied redirect = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
 

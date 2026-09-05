@@ -124,21 +124,18 @@ Behavior is §15 of the Rust spec, unchanged, plus these naming rules:
 
 ### 3.2 `walhub.standalone.toml` — OPTIONAL one-box bucket shape
 
-Copy-pasteable; every key is a §15.1 key. **This file is OPTIONAL** — the documented default path is NO config at all (D5/D6: `./walhub serve`, first-run `/setup`). Use this shape when you deliberately want TLS in-process and a bucket as the durable state. The file the setup UI saves lands at `<data-dir>/walhub.toml` (atomic tmp+rename), not at this path. Memory-friendly: small cache budget, small remote-reader LRUs.
+Copy-pasteable; every key is a §15.1 key. **This file is OPTIONAL** — the documented default path is NO config at all (D5/D6: `./walhub serve`, first-run `/setup`). Use this shape when you want one binary, one bucket, and one origin behind a TLS-terminating proxy (§3.4). The file the setup UI saves lands at `<data-dir>/walhub.toml` (atomic tmp+rename), not at this path. Memory-friendly: small cache budget, small remote-reader LRUs.
 
 ```toml
 # walhub.standalone.toml — one binary, one bucket, one origin.
 #   walhub serve --config walhub.standalone.toml
-#   → https://walhub.localhost:8080/   (self-signed TLS; PORT=… moves it)
+#   → http://walhub.localhost:8080/ behind the §3.4 proxy as https://walhub.localhost/
 
 [server]
 listen = "127.0.0.1:8080"                      # PORT env wins; also binds the ::1 twin
-public_url = "https://walhub.localhost:8080"
+public_url = "https://walhub.localhost"        # the proxy's origin (it terminates TLS)
 auto_create_on_push = true
 roles = []                                     # empty = every role: serve, maintain, events
-
-[server.tls]
-mode = "self_signed"          # generated once under <cache.dir>/tls/, published at /services/public/ca.pem
 
 [server.auth]
 mode = "none"                 # loopback play: everyone is `anon` with write
@@ -182,7 +179,7 @@ schedule = "0 0 * * * *"
 chain = true
 
 [cache]
-dir = "/tmp/walhub"                            # materialized repos + tls/; wiped = warmth lost
+dir = "/tmp/walhub"                            # materialized repos; wiped = warmth lost
 max_bytes = "8GiB"
 remote_block_bytes = "512MiB"                  # memory-friendly LRU caps for a laptop/one-box
 remote_object_bytes = "128MiB"
@@ -198,11 +195,7 @@ OPTIONAL, like §3.2 — the zero-config filesystem default (D4/D5) needs none o
 ```toml
 [server]
 listen = "0.0.0.0:8080"
-public_url = "https://git.example.com"
-[server.tls]
-mode = "files"
-cert = "/etc/walhub/tls/fullchain.pem"
-key = "/etc/walhub/tls/privkey.pem"
+public_url = "https://git.example.com"   # the §3.4 proxy's origin
 [server.auth]
 mode = "oidc"
 issuer = "https://id.example.com"
@@ -218,6 +211,36 @@ region = "us-east-1"
 ```
 
 GCS is the same shape with `backend = "gcs"` + `store.gcs.signing_service_account` for signed URLs (see 03_store_backends.md for credentials and the JSON-API transport).
+
+### 3.4 Terminating TLS at the reverse proxy (Caddy / nginx minimal)
+
+walhub serves plain HTTP on `server.listen` (h2c retained); TLS terminates at the proxy in front (Forgejo #165). The proxy forwards plain HTTP to walhub and MUST set `X-Forwarded-Proto: https` so the server advertises `https://` clone URLs (06_server_http.md §9.1); `server.public_url` pins the canonical external origin. Minimal shapes — adapt domains/ports, keep the header:
+
+```caddy
+# Caddy: automatic ACME, one line per site.
+git.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+```nginx
+# nginx: cert paths from certbot/ACME; the X-Forwarded-Proto line is load-bearing.
+server {
+    listen 443 ssl http2;
+    server_name git.example.com;
+    ssl_certificate /etc/letsencrypt/live/git.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/git.example.com/privkey.pem;
+    client_max_body_size 0;          # pushes/LFS uploads stream, unbuffered
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+Caddy sets `X-Forwarded-Proto` itself; nginx needs the explicit line. Without it the server still works — it just advertises `http://` URLs in recipes (the 12_web_ui.md clone menu shows whatever the server advertises, verbatim).
 
 ## 4. The nginx edge contract
 
@@ -244,14 +267,14 @@ Repo-prefix routing for a fleet: `location ~ ^/<owner>/<repo>([./?]|$)` blocks p
 
 ### 4.2 When NOT to use nginx
 
-`walhub serve` terminates TLS itself (`server.tls.mode = "self_signed" | "files"`), streams every byte, and authenticates every request. nginx buys: ACME/public certs + HTTP/2, the disk cache for bundle/LFS bytes (`X-Accel-Redirect` offload), one cached auth verdict per credential, and prefix routing across hosts.
+`walhub serve` listens plain HTTP (h2c), streams every byte, and authenticates every request — TLS termination belongs on the edge (§3.4). nginx buys: ACME/public certs + HTTP/2, the disk cache for bundle/LFS bytes (`X-Accel-Redirect` offload), one cached auth verdict per credential, and prefix routing across hosts.
 
 ## 5. Deployment shapes
 
 | Shape | Config essence | Notes |
 |---|---|---|
 | **Personal / self-hosted (default)** | no config at all: `./walhub serve` — filesystem store under `<data-dir>/store`, cache under `<data-dir>/cache`, `auth.mode = "none"` (loud warnings + setup banner), all roles | one binary, no bucket, no edge; tune later via `/setup` → `<data-dir>/walhub.toml`; add the nginx edge (§4) when it leaves the LAN |
-| **One box** | §3.2 standalone: all roles, TLS in-process, one S3/GCS bucket, nothing in front | `roles = []`; self-signed or files TLS; the bucket is the only durable state |
+| **One box** | §3.2 standalone: all roles, one S3/GCS bucket, nothing in front except the §3.4 TLS proxy | `roles = []`; the bucket is the only durable state |
 | **Fleet** | many `walhub serve` hosts behind the nginx edge; the monorepo's host pins `cache.mode = "disk"` + `maintenance.disk = "ssd"`, everyone else budget-mode (`cache.max_bytes`) | placement globs decide who does what (below); the edge does TLS/routing/offload; `server.auth.session_secret` MUST be identical on every host (rotation revokes all sessions+tokens) |
 | **Serverless** | `server.roles = ["serve"]` only, config purely via env (`--config /dev/null` + `WALHUB__*`), `cache.dir` on the ephemeral FS, bounded prefetch (`wal.prefetch_max_bytes`, set it low; `wal.prefetch_packs = false` under tight CPU) | CPU throttles between requests; a maintain fleet elsewhere holds the maintain role; keep-alives off, cold starts re-warm on demand |
 
@@ -497,8 +520,7 @@ Install one-liner (from any walhub host):
 
 ```sh
 curl -fsSL https://git.packden.us/crueber/walhub/raw/branch/main/scripts/install.sh | sh
-# installs ./walhub into ~/.local/bin (release tarball by arch, or `go install` fallback),
-# and, when the target server serves self-signed TLS, fetches its CA and configures git.
+# installs ./walhub into ~/.local/bin (release tarball by arch, or `go install` fallback).
 ```
 
 ## Decisions & deviations from the Rust design
@@ -514,6 +536,7 @@ curl -fsSL https://git.packden.us/crueber/walhub/raw/branch/main/scripts/install
 - **Dev-rig rustfs keys/bucket keep the Rust values (`walgit-dev` / `walgit-dev-secret`, bucket `walgit-test`)** — muscle-memory continuity for contributors coming from the Rust rig; local-only credentials.
 - **Nix flake packaging not ported** — the flake was a Rust toolchain convenience; Go's static cross-build plus the Dockerfile covers the same ground without a second packaging system (revisit only on demand).
 - **CI is a Makefile + Woodpecker pipeline, not GitHub Actions** — the repo lives on Forgejo; Woodpecker's services block covers the rustfs contract job.
+- **NEW (2026-09-05) — server-side TLS removed; the proxy terminates it** (Forgejo #165, §3.4): walhub listens plain HTTP (h2c) and never loads a cert — the `server.tls.*` keys, the §3.2/§3.3 `[server.tls]` examples, and the install.sh CA-download step are all gone. The one-box and production shapes put Caddy/nginx in front (minimal snippets in §3.4) with `X-Forwarded-Proto: https` so recipes advertise `https://`; `server.public_url` pins the external origin. Rationale: every inbound flow works behind a terminating proxy and outbound HTTPS (OIDC, webhooks, S3/GCS) validates against the system roots — owning an in-process TLS stack bought nothing.
 - **`install.sh` is served from the Forgejo raw URL** — the Rust edge example leaves the installer out of the open-route set; keeping it repo-hosted avoids inventing a new public server route in the Go rewrite.
 - **Divergence (2026-08-31), applied in this revision:**
 - **D2 — SUPERSEDED 2026-09-02 by explicit user request (DEVIATIONS.md D-WEB-6): the frontend is a SolidJS + Tailwind v4 SPA built by vite into `web/dist/` (plain JSX, no TypeScript; runtime deps exactly solid-js + @solidjs/router; dark by default; no CDN); the node stage runs `pnpm run build` (vite SPA + esbuild SDK bundle). Historical:** the frontend was vanilla ESM (hand-written ES modules with native import map, `<template>`, ~40 lines of reactive helpers, embedded raw — no TypeScript, no framework; SolidJS/vite gone), superseding the "Node 20 + pnpm@10" decision above; the node stage was esbuild-only. The SDK is **authored as submodules** (`web/sdk/src/*.js`) and esbuild-bundled to `web/dist/repos.js` (the `repos.mjs` twin is deleted; `dist/` is gitignored build output); JS tests run on Node's built-in `node --test` and import source, never the build.

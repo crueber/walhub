@@ -127,6 +127,20 @@ func TestApplyEnvBareStringForArrayIsError(t *testing.T) {
 	}
 }
 
+// Residual server.tls.* env settings fail closed (fatal with the
+// reverse-proxy pointer, #165) instead of joining the ignored-override list.
+func TestApplyEnvRemovedTLSIsFatal(t *testing.T) {
+	for _, spell := range []string{"WALHUB__SERVER__TLS__MODE=self_signed", "WALGIT__SERVER__TLS__CERT=/c.pem"} {
+		_, _, err := applyEnvOn(t, nil, spell)
+		if err == nil {
+			t.Fatalf("%s: want fatal server.tls rejection", spell)
+		}
+		if !strings.Contains(err.Error(), "server.tls") || !strings.Contains(err.Error(), "reverse proxy") {
+			t.Fatalf("%s: error %q missing the reverse-proxy pointer", spell, err)
+		}
+	}
+}
+
 func TestApplyEnvInlineTable(t *testing.T) {
 	c, _, err := applyEnvOn(t, nil, `WALHUB__STORE__S3={endpoint = "http://127.0.0.1:9000", region = "eu-central-1"}`)
 	if err != nil {
