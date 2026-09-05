@@ -429,6 +429,22 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   localhost; contract tests deliver to httptest servers). Screening runs at every delivery (DNS can
   change between config and POST), not just at config time. No new goroutines or locks, so no new
   concurrency hazard (the shared transports are goroutine-safe, dials are sequential).
+- **Atomic unread dedup under concurrency (issue #91, 2026-09-05):** `createOne` checked
+  `hasUnread` then Created, but the id embeds the reserved activity seq — so two emissions for the
+  same (user, thread, reason) racing past the check Created distinct objects AND two unread index
+  rows (the index CAS could not save them: different ids never collide). The fix re-checks the
+  triple INSIDE the unread-index CAS loop (`indexClaim`, shared body `indexUpsert`): the `hasUnread`
+  pre-check stays as a fast path only, and the CAS-serialized re-check is the arbitration — a loser
+  deletes its just-Created orphan object (best-effort; a 412-replayed Create made no object, so it
+  deletes nothing) and reports `createSkipped`, converging tray AND bucket to one row and one
+  object. `indexAdd` keeps id-only semantics (retention/tests must not inherit emission
+  arbitration); the `notify-fanout` backfill (`fanoutOne`, same race shape) delegates to `createOne`
+  instead of duplicating the sequence. Entry-level discipline, no new locks (CAS loops stay the only
+  tool, 13 §2); the Create→index→activity→stream order (§4) is unchanged, and a crash between the
+  Create and the loser-delete leaves the same orphan class the pre-fix crash window already had.
+  Rationale: a reason-keyed reservation object would need read-path and retention lifecycle to honor
+  "a read does not block a new one"; the index row IS the live set, so arbitrating there adds no new
+  object family and no new lifecycle.
 
 ## Explicitly out of scope
 

@@ -29,6 +29,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -450,9 +451,23 @@ const (
 	createFailed                      // budget/store shortfall: task backfills
 )
 
+// errDedupLive aborts an index CAS write from inside the loop: a live
+// (unread, same-triple) entry committed first, so this emission's row must
+// not land. It never escapes indexClaim — it maps to (live=false, nil).
+var errDedupLive = errors.New("notify: live entry covers (user, thread, reason)")
+
 // createOne Creates one notification (deduped) and CASes its index entry.
 // Idempotent: a retried fan-out re-derives the id and 412s into success,
 // and the index CAS skips present ids.
+//
+// The §2 "one live notification per (user, thread, reason)" dedup is
+// arbitrated by the unread-index CAS, not by the hasUnread pre-check: the
+// pre-check is a fast path only (it saves a Create in the sequential case),
+// while indexClaim re-checks the triple INSIDE the CAS loop — two emissions
+// racing past the pre-check converge there because their ids differ (each
+// embeds its own reserved seq). A loser deletes its just-Created orphan
+// object (best-effort) and reports createSkipped, so the tray converges to
+// one row AND one object. No locks: CAS loops are the only tool (13 §2).
 func (s *Service) createOne(ctx context.Context, e Emission, title, actor, at string, seq int, t target) (Notification, createStatus) {
 	id := NotificationID(t.principal, e.Repo, e.Num, t.reason, seq)
 	if s.hasUnread(ctx, t.principal, e.Repo, e.Num, t.reason) {
@@ -464,17 +479,32 @@ func (s *Service) createOne(ctx context.Context, e Emission, title, actor, at st
 		Reason: t.reason, Title: title, Actor: actor,
 		State: StateUnread, CreatedAt: at,
 	}
+	fresh := true
 	if err := s.putCreate(ctx, NotifKey(t.principal, id), encode(n)); err != nil {
 		if !store.IsPreconditionFailed(err) {
 			return Notification{}, createFailed
 		}
-		// 412 = already emitted (retry/backfill) — success.
+		// 412 = already emitted (retry/backfill) — success, and no
+		// orphan exists to clean up below.
+		fresh = false
 	}
-	if err := s.indexAdd(ctx, t.principal, IndexEntry{
+	live, err := s.indexClaim(ctx, t.principal, IndexEntry{
 		ID: id, Repo: e.Repo, Num: e.Num, Kind: e.Kind,
 		Reason: t.reason, Title: title, State: StateUnread, At: at,
-	}); err != nil {
+	})
+	if err != nil {
 		return Notification{}, createFailed
+	}
+	if !live {
+		// Lost the dedup race inside the index CAS: a live entry for
+		// the same triple committed first. Our object (fresh only —
+		// a 412 created nothing) is an orphan no index row will ever
+		// reference: remove it so LIST overflow never surfaces a
+		// phantom second tray entry.
+		if fresh {
+			_ = s.Store.Delete(ctx, NotifKey(t.principal, id), "")
+		}
+		return Notification{}, createSkipped
 	}
 	return n, createCreated
 }
@@ -502,7 +532,28 @@ func (s *Service) hasUnread(ctx context.Context, principal, repo string, num int
 // is never duplicated — a state change updates in place with a count
 // delta) and maintains unread_count. Bounded attempts; exhaustion fails
 // the target (the notify-fanout task repairs via the activity backfill).
+// indexAdd carries id-only semantics: the (user, thread, reason) unread
+// dedup lives in indexClaim (the emission path), never here — direct
+// index writers (retention, tests) must not inherit emission arbitration.
 func (s *Service) indexAdd(ctx context.Context, principal string, en IndexEntry) error {
+	_, err := s.indexUpsert(ctx, principal, en, false)
+	return err
+}
+
+// indexClaim is indexAdd plus the §2 unread-dedup re-check INSIDE the CAS
+// loop: if an unread entry for the same (repo, num, reason) with a
+// different id is present, the write aborts and live=false reports that a
+// live entry already covers the triple. Same bounded attempts; exhaustion
+// is an error (the notify-fanout task repairs via the activity backfill).
+func (s *Service) indexClaim(ctx context.Context, principal string, en IndexEntry) (live bool, err error) {
+	return s.indexUpsert(ctx, principal, en, true)
+}
+
+// indexUpsert is the shared CAS body. It reports live=false ONLY on the
+// triple-dedup abort (dedupTriple and a live same-triple row won); every
+// other path — inserted, id already present, id state-flipped — leaves the
+// entry live in the index and reports live=true.
+func (s *Service) indexUpsert(ctx context.Context, principal string, en IndexEntry, dedupTriple bool) (bool, error) {
 	_, err := s.casUpdate(ctx, NotifIndexKey(principal), 8, func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		var ix IndexDoc
 		if cur != nil {
@@ -529,6 +580,14 @@ func (s *Service) indexAdd(ctx context.Context, principal string, en IndexEntry)
 			break
 		}
 		if !found {
+			if dedupTriple {
+				for _, have := range ix.Entries {
+					if have.ID != en.ID && have.State == StateUnread &&
+						have.Repo == en.Repo && have.Num == en.Num && have.Reason == en.Reason {
+						return nil, false, errDedupLive
+					}
+				}
+			}
 			ix.Version = 1
 			ix.Entries = append([]IndexEntry{en}, ix.Entries...)
 			if len(ix.Entries) > TrayPageSize {
@@ -544,7 +603,13 @@ func (s *Service) indexAdd(ctx context.Context, principal string, en IndexEntry)
 		}
 		return encode(ix), true, nil
 	})
-	return err
+	if errors.Is(err, errDedupLive) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // splitRepo splits "owner/name".
