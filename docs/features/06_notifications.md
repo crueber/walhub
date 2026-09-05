@@ -356,7 +356,7 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **User notification SSE stream is a new top-level route**, not a repo-stream extension: notifications are user-scoped and must not require per-repo subscriptions.
 - **Emission failures are logged and never arm phantom fan-out (issue #92)** — every `emit` drop path
   (`reserveSeq` failure, overflow/shortfall/sync `appendActivity` failure) logs a `notify: emission …`
-  Warn with repo/num/class/actor/seq cause (Service.Logger, nil → discard, the events-bridge
+  Warn with repo/num/class/actor (+seq once reserved — the reserve path has none yet) and cause (Service.Logger, nil → discard, the events-bridge
   convention). An `appendActivity` failure arms NO `notify-fanout` task: there is no event to drain
   (`fanoutOne` would probe a gap and do nothing), so arming would lose every recipient with zero trace.
   The sync path still publishes its landed tray entries and wakes webhooks; overflow/shortfall drops
