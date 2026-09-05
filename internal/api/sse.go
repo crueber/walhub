@@ -24,6 +24,7 @@ type SSE struct {
 	rc    *http.ResponseController
 	ctx   context.Context
 	ka    *time.Ticker
+	done  chan struct{} // closed by stopLocked; the keepalive goroutine's exit signal (sender owns)
 	mu    sync.Mutex
 	ended bool
 }
@@ -43,17 +44,25 @@ func NewSSE(w http.ResponseWriter, r *http.Request) (*SSE, bool) {
 	_, _ = io.WriteString(w, ": walgit\n\n")
 	fl.Flush()
 	s := &SSE{
-		w:   w,
-		fl:  fl,
-		rc:  http.NewResponseController(w),
-		ctx: r.Context(),
+		w:    w,
+		fl:   fl,
+		rc:   http.NewResponseController(w),
+		ctx:  r.Context(),
+		done: make(chan struct{}),
 	}
 	s.ka = time.NewTicker(10 * time.Second)
 	go func() {
-		for range s.ka.C {
-			if !s.comment(": keepalive") {
-				s.ka.Stop()
+		defer s.ka.Stop()
+		for {
+			select {
+			case <-s.done:
 				return
+			case <-s.ctx.Done():
+				return
+			case <-s.ka.C:
+				if !s.comment(": keepalive") {
+					return
+				}
 			}
 		}
 	}()
@@ -69,16 +78,15 @@ func (s *SSE) Event(name, dataJSON string) bool {
 		return false
 	}
 	if s.ctx.Err() != nil {
-		s.ka.Stop()
+		s.stopLocked()
 		return false
 	}
 	if s.write("event: "+name+"\ndata: "+dataJSON+"\n\n") != nil {
-		s.ka.Stop()
+		s.stopLocked()
 		return false
 	}
 	if name == "result" || name == "error" {
-		s.ended = true
-		s.ka.Stop()
+		s.stopLocked()
 	}
 	return true
 }
@@ -121,11 +129,23 @@ func (s *SSE) write(p string) error {
 	return err
 }
 
-// Close stops the keepalive ticker; callers defer it (hazard 3: the keepalive
-// goroutine must not outlive the request).
+// Close ends the stream (idempotent) and terminates the keepalive
+// goroutine; callers defer it (hazard 3: the keepalive goroutine must
+// not outlive the request).
 func (s *SSE) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stopLocked()
+}
+
+// stopLocked ends the stream and wakes the keepalive goroutine via done
+// (sender-closes discipline: Stop alone never closes ka.C, so ranging
+// over it would leak — 13 channel rule).
+func (s *SSE) stopLocked() {
+	if !s.ended {
+		s.ended = true
+		close(s.done)
+	}
 	s.ka.Stop()
 }
 

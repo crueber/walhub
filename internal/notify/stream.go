@@ -9,6 +9,7 @@
 package notify
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"sync"
@@ -231,6 +232,8 @@ type sseWriter struct {
 	rc    *http.ResponseController
 	mu    sync.Mutex
 	ka    *time.Ticker
+	done  chan struct{} // closed by stopLocked; the keepalive goroutine's exit signal (sender owns)
+	ctx   context.Context
 	ended bool
 }
 
@@ -247,12 +250,23 @@ func newSSEWriter(w http.ResponseWriter, r *http.Request) (*sseWriter, bool) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, ": walgit\n\n")
 	fl.Flush()
-	s := &sseWriter{w: w, fl: fl, rc: http.NewResponseController(w)}
+	s := &sseWriter{w: w, fl: fl, rc: http.NewResponseController(w), done: make(chan struct{}), ctx: r.Context()}
 	s.ka = time.NewTicker(10 * time.Second)
+	// Keepalive goroutine (#13): exits via done (teardown) or the request
+	// context (client disconnect) — never by ranging over ka.C, whose
+	// channel Stop does not close (13 channel rule: sender owns and closes).
 	go func() {
-		for range s.ka.C {
-			if !s.comment(": keepalive") {
+		defer s.ka.Stop()
+		for {
+			select {
+			case <-s.done:
 				return
+			case <-s.ctx.Done():
+				return
+			case <-s.ka.C:
+				if !s.comment(": keepalive") {
+					return
+				}
 			}
 		}
 	}()
@@ -304,6 +318,7 @@ func (s *sseWriter) close() {
 func (s *sseWriter) stopLocked() {
 	if !s.ended {
 		s.ended = true
+		close(s.done)
 		s.ka.Stop()
 	}
 }
