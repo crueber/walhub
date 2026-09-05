@@ -641,9 +641,22 @@ func (s *Service) ReadDeliveries(ctx context.Context, owner, repo, id string) *D
 	return &d
 }
 
-// PingHook synthesizes a ping activity event (num 0) and runs one
-// delivery pass for that hook, so ping success proves URL + secret end
-// to end. Returns delivered=true when the ping event left the cursor.
+// PingHook synthesizes a ping activity event (num 0), appends it to the
+// activity log, and POSTs exactly that event through the normal delivery
+// path (postEvent: same wire shape, keeper headers, HMAC, client, and
+// deliveries ring), so ping success proves URL + secret end to end. The
+// backlog is deliberately NOT replayed here: deliverHook scans up to 256
+// events at 10 s per POST in the caller's goroutine (issue #155 — a deep
+// backlog held the admin's HTTP request for minutes and raced the
+// background delivery for the same hook). The background webhooks task
+// delivers the backlog on its own pass, including this ping event
+// (ping bypasses the events filter in deliverHook). Ping performs no
+// cursor CAS when a backlog is ahead of it, so it cannot skip or race
+// the loop; in the no-backlog case it advances the cursor past the ping
+// (monotonic, never beyond) so the loop does not redeliver it.
+// Returns delivered=true when the ping POST gets a 2xx; a failed POST
+// is (false, nil) with the detail on the deliveries ring (the API
+// contract: errors are for bad hook/config, not for sink failure).
 func (s *Service) PingHook(ctx context.Context, owner, repo, id, actor string) (bool, error) {
 	h := s.GetHook(ctx, owner, repo, id)
 	if h == nil {
@@ -667,6 +680,13 @@ func (s *Service) PingHook(ctx context.Context, owner, repo, id, actor string) (
 	if err := s.putCreate(ctx, ActivityKey(owner, repo, seq), raw); err != nil && !store.IsPreconditionFailed(err) {
 		return false, err
 	}
-	s.deliverHook(ctx, owner, repo, h)
-	return s.readCursor(ctx, owner, repo, id) >= seq, nil
+	status, derr := s.postEvent(ctx, h, &ev)
+	s.recordDelivery(ctx, owner, repo, h.ID, &ev, status, derr)
+	if derr != nil || status < 200 || status >= 300 {
+		return false, nil
+	}
+	if s.readCursor(ctx, owner, repo, id) == seq-1 {
+		s.advanceCursor(ctx, owner, repo, id, seq)
+	}
+	return true, nil
 }

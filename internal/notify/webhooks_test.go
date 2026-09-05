@@ -217,6 +217,161 @@ func TestPingBypassesEventFilter(t *testing.T) {
 	}
 }
 
+// TestPingBoundedWithDeepBacklog is the issue #155 regression: with a
+// backlog deeper than the delivery batch cap (256) and a slow sink, the
+// old ping replayed the backlog in the request goroutine (256 events ×
+// 10 s POST worst case, racing background delivery). The bounded ping
+// POSTs exactly the synthetic ping event and returns promptly,
+// leaving the backlog (and cursor) for the background loop.
+func TestPingBoundedWithDeepBacklog(t *testing.T) {
+	x := newHarness(t)
+	const backlog = 300 // beyond the deliverHook batch cap
+	const postDelay = 50 * time.Millisecond
+	var mu sync.Mutex
+	var posts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(postDelay) // slow sink: a full replay would take ~15 s
+		body, _ := io.ReadAll(r.Body)
+		var ev ActivityEvent
+		if err := json.Unmarshal(body, &ev); err != nil {
+			t.Errorf("bad body: %v", err)
+		}
+		mac := hmac.New(sha256.New, []byte("pw"))
+		mac.Write(body)
+		if got := r.Header.Get("X-Walgit-Signature"); got != "sha256="+hex.EncodeToString(mac.Sum(nil)) {
+			t.Errorf("HMAC mismatch: %q", got)
+		}
+		if r.Header.Get("X-Walgit-Event") != ev.Action || r.Header.Get("X-Walgit-Delivery") == "" {
+			t.Errorf("missing keeper headers")
+		}
+		mu.Lock()
+		posts = append(posts, ev.Action)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
+		URL: strPtr(srv.URL), Secret: strPtr("pw"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed the backlog directly (matching events the hook would deliver).
+	for i := 0; i < backlog; i++ {
+		seq, err := x.svc.reserveSeq(ctx(), "acme", "repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: x.now.Format(dateTimeFmt)}
+		if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), mustEncode(t, ev)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := time.Now()
+	delivered, err := x.svc.PingHook(ctx(), "acme", "repo", hk.ID, "amy@example.com")
+	elapsed := time.Since(start)
+	if err != nil || !delivered {
+		t.Fatalf("ping = %v, %v", delivered, err)
+	}
+	// Prompt: one POST (~50 ms), not a 256-deep replay (~13 s of sleeps).
+	if elapsed >= 10*time.Second {
+		t.Fatalf("ping took %v with %d-event backlog", elapsed, backlog)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(posts) != 1 || posts[0] != "ping" {
+		t.Fatalf("ping must POST exactly the ping event, got %v", posts)
+	}
+	// Backlog untouched: cursor unmoved, events still queued for the loop.
+	if cur := x.svc.readCursor(ctx(), "acme", "repo", hk.ID); cur != 0 {
+		t.Fatalf("ping moved the cursor to %d, want 0 (backlog stays for the loop)", cur)
+	}
+}
+
+// TestPingAdvancesCursorWithoutBacklog covers the no-backlog path: the
+// ping POST succeeds and the cursor moves past exactly the ping event,
+// so the next background pass does not redeliver it.
+func TestPingAdvancesCursorWithoutBacklog(t *testing.T) {
+	x := newHarness(t)
+	sink, srv := newSink(t, "pw")
+	defer srv.Close()
+	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
+		URL: strPtr(srv.URL), Secret: strPtr("pw"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := x.svc.PingHook(ctx(), "acme", "repo", hk.ID, "amy@example.com")
+	if err != nil || !delivered {
+		t.Fatalf("ping = %v, %v", delivered, err)
+	}
+	if cur := x.svc.readCursor(ctx(), "acme", "repo", hk.ID); cur != 1 {
+		t.Fatalf("cursor = %d, want 1 (past the ping)", cur)
+	}
+	x.svc.DeliverRepo(ctx(), "acme", "repo")
+	if got := sink.count(); got != 1 {
+		t.Fatalf("background pass redelivered the ping: %d posts", got)
+	}
+}
+
+// TestPingDeliveryFailure keeps the API contract: a sink failure is
+// (false, nil) — errors are for bad hook/config — with the detail on
+// the deliveries ring.
+func TestPingDeliveryFailure(t *testing.T) {
+	x := newHarness(t)
+	sink, srv := newSink(t, "")
+	defer srv.Close()
+	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
+		URL: strPtr(srv.URL),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.fail = true
+	delivered, err := x.svc.PingHook(ctx(), "acme", "repo", hk.ID, "amy@example.com")
+	if err != nil || delivered {
+		t.Fatalf("failing ping = %v, %v, want (false, nil)", delivered, err)
+	}
+	d := x.svc.ReadDeliveries(ctx(), "acme", "repo", hk.ID)
+	if len(d.Entries) != 1 || d.Entries[0].Status != 500 || d.Entries[0].Event != "ping" {
+		t.Fatalf("failure ring = %+v", d.Entries)
+	}
+	if cur := x.svc.readCursor(ctx(), "acme", "repo", hk.ID); cur != 0 {
+		t.Fatalf("failed ping moved the cursor to %d", cur)
+	}
+	// Transport failure (closed loopback port): same (false, nil) shape.
+	hk2, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
+		URL: strPtr("http://127.0.0.1:1/h"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err = x.svc.PingHook(ctx(), "acme", "repo", hk2.ID, "amy@example.com")
+	if err != nil || delivered {
+		t.Fatalf("refused ping = %v, %v, want (false, nil)", delivered, err)
+	}
+	d2 := x.svc.ReadDeliveries(ctx(), "acme", "repo", hk2.ID)
+	if len(d2.Entries) != 1 || d2.Entries[0].Event != "ping" || d2.Entries[0].Error == "" {
+		t.Fatalf("refused ring = %+v", d2.Entries)
+	}
+}
+
+// TestPingCorruptSeqState surfaces a seq-reservation failure instead of
+// pinging into a gap.
+func TestPingCorruptSeqState(t *testing.T) {
+	x := newHarness(t)
+	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
+		URL: strPtr("https://example.com/h"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRaw(t, x.svc.Store, CollabStateKey("acme", "repo"), []byte("{bad"))
+	if _, err := x.svc.PingHook(ctx(), "acme", "repo", hk.ID, "amy@example.com"); err == nil {
+		t.Fatal("ping with corrupt seq state must fail")
+	}
+}
+
 func TestHookValidation(t *testing.T) {
 	x := newHarness(t)
 	cases := []struct {
