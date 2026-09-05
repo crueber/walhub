@@ -289,7 +289,7 @@ subscribe the source author.
 
 ## 11. UI and SDK
 
-Pages (vanilla ESM SPA per `12_web_ui.md`; lazy `import()`, `mount/unmount` lifecycle, `useData`):
+Pages (SolidJS SPA per `12_web_ui.md`, D-WEB-6; router-lazy components, `useData`):
 
 | Route | Page | Live behavior |
 |---|---|---|
@@ -305,6 +305,8 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
 `mountStream` (`12_web_ui.md` §2.5) to follow `issue`/`issue_event` on the repo's existing SSE stream.
 
 ## Decisions
+
+- **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §11 page sketches read in the shipped idiom: router-lazy `.jsx` components, `useData` on Solid primitives, SSE refetch over the SDK readers. Routes, live behavior, and wire shapes are unchanged.
 
 - Issue nums are `<num:06x>` hex keys (decimal on the wire) — numeric order from byte-order LIST scans, same idiom as P3's `012x` seqs.
 - `issues/index.json` carries cards for BOTH kinds; issue endpoints filter `kind: "issue"` — one index for one numbering space (03 lists PRs from the same object).

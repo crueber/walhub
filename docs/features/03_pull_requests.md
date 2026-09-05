@@ -301,8 +301,8 @@ event; check results as 05's `check` event. Errors map per 07 §2 (unknown PR �
 
 ## 9. UI and SDK
 
-Pages (vanilla ESM SPA, `12_web_ui.md` patterns — `useData` two-step, SSE via the SDK readers, lazy
-`import()` routes; exact-shape coordination with 08):
+Pages (SolidJS SPA, `12_web_ui.md` patterns — `useData` two-step, SSE via the SDK readers, router-lazy
+routes; exact-shape coordination with 08):
 
 | Route | Page | Notes |
 |---|---|---|
@@ -317,6 +317,8 @@ SDK (`web/sdk/src/` submodule additions, esbuild-bundled into `repos.js` per 12 
 every call goes through the SDK).
 
 ## Decisions
+
+- **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §9 page sketches read in the shipped idiom: router-lazy `.jsx` components, `useData` two-step on Solid primitives, SSE via the SDK readers. Routes, notes, and wire shapes are unchanged.
 
 - PR threads reuse the issue thread pattern and numbering wholesale (P2/P3) — one conversation
   implementation, `kind` is the only difference.

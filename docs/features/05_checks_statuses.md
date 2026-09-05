@@ -233,7 +233,7 @@ interruption).
 
 ## 9. UI & SDK
 
-Pages (vanilla ESM SPA, `12_web_ui.md` §2 patterns; SSE via `lib/sse.js` `mountStream`, never
+Pages (SolidJS SPA, `12_web_ui.md` §2 patterns; SSE via `lib/sse.js` `mountStream`, never
 `EventSource`):
 
 | Surface | Behavior |
@@ -249,6 +249,8 @@ external CI with a `wct_` token), `tokens.{create, list, revoke}` (admin). Regis
 re-exports; envelope/SSE parsing reuses `sdk/src/sse.js` — one parser (12_web_ui.md §1.4).
 
 ## Decisions
+
+- **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §9 surface sketches read in the shipped idiom: Solid components, SSE via `lib/sse.js` `mountStream` (never `EventSource`). Surfaces, behavior, and wire shapes are unchanged.
 
 - **v1 is statuses-only; check runs/suites deferred** — the context model covers required-check gating; suites add grouping, not new gates; the key layout leaves room without a migration.
 - **One mutable record per `(sha, context)`, CAS overwrite** — matches the assignment's contention-free-by-construction model; history-of-attempts is deliberately not kept.
