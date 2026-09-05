@@ -320,3 +320,40 @@ func TestCreateOrgConcurrentRaceOneWinner(t *testing.T) {
 		t.Errorf("roster must hold exactly the winner as owner: %+v (winner %q)", m.Members, winners[0])
 	}
 }
+
+// TestCreateOrgRollbackSkipsDeleteUnderWinner: a members seed that fails
+// while a concurrent create already healed a roster under this reservation
+// must NOT roll the reservation back from under the winner. The caller
+// arbitrates read-only (409 for a non-owner) with org.json intact, and the
+// winner's subsequent re-create still succeeds.
+func TestCreateOrgRollbackSkipsDeleteUnderWinner(t *testing.T) {
+	inner := store.NewMemory()
+	ctx := context.Background()
+	now := testClock().Format("2006-01-02T15:04:05Z07:00")
+	foreign := &Members{Version: 1, Members: []Member{{Principal: "bob@example.com", Role: OrgOwner, JoinedAt: now}}, UpdatedAt: now}
+	if _, err := store.PutBytes(ctx, inner, MembersKey("acme"), encodeMembers(foreign),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(&membersFailOnce{ObjectStore: inner, key: MembersKey("acme"), err: errBoom}, config.Defaults())
+	s.Now = testClock
+
+	if _, err := s.CreateOrg(ctx, "acme", "Acme", "", "alice@example.com"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("non-owner must 409, got: %v", err)
+	}
+	if got, err := s.GetOrg(ctx, "acme"); err != nil || got == nil {
+		t.Fatalf("reservation must survive: GetOrg = %+v, %v", got, err)
+	}
+	m, err := s.GetMembers(ctx, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Members) != 1 || m.Members[0].Principal != "bob@example.com" {
+		t.Errorf("winner roster must be untouched: %+v", m.Members)
+	}
+
+	s.Store = inner
+	if _, err := s.CreateOrg(ctx, "acme", "Acme", "", "bob@example.com"); err != nil {
+		t.Fatalf("winner re-create must succeed, got: %v", err)
+	}
+}

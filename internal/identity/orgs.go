@@ -118,10 +118,19 @@ func (s *Service) CreateOrg(ctx context.Context, org, displayName, description, 
 		if store.IsPreconditionFailed(err) {
 			return s.confirmOrgOwner(ctx, org, o, creator)
 		}
-		// Roll back the reservation: version-guarded so a concurrently
-		// recreated org is never deleted. Best-effort — a failed rollback
-		// still leaves the resume path to heal the ownerless reservation,
-		// and the original error (never the rollback's) is returned.
+		// Roll back the reservation: version-guarded so an org recreated
+		// after a completed rollback is never deleted. Best-effort — a
+		// failed rollback still leaves the resume path to heal the
+		// ownerless reservation, and the original error (never the
+		// rollback's) is returned. A roster already exists only if a
+		// concurrent create healed under this reservation and won the
+		// namespace: never delete under the winner, arbitrate read-only
+		// instead. (A heal landing between this check and the delete can
+		// still orphan the winner's roster; that residue converges through
+		// resumeOrgCreate on retry — cross-object CAS does not exist.)
+		if m, _, merr := s.getMembers(ctx, org); merr == nil && m != nil {
+			return s.confirmOrgOwner(ctx, org, o, creator)
+		}
 		_ = s.Store.Delete(ctx, OrgKey(org), orgMeta.Version)
 		return nil, err
 	}
