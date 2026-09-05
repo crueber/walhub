@@ -572,7 +572,8 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   HEAD per distinct repo in the examined window. The sort is `sort.Slice` on (at desc, id).
   Trade-off, stated plainly: a first page served from a readable-but-short index skips the LIST
   merge, so a live-repo crash orphan (object Created but index CAS never landed) stays hidden
-  until its page is reached via overflow or retention converges it — the old code surfaced it
+  until its page is reached via overflow (paging past the window); retention reaps dead-repo
+  overflow but never reindexes live orphans — the old code surfaced it
   immediately at the price of a LIST per read. No new locks or goroutines (the memo is
   request-local). Regression: `tray_cost_test.go` counting-store tests pin the covered cost
   (1 GET + ≤ distinct-repo HEADs, 0 LISTs; verified LIST+80-HEADs pre-fix) and the overflow
