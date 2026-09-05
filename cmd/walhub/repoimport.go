@@ -74,9 +74,10 @@ func firstPositional(positional []string) string {
 }
 
 // runImportURL clones the source URL into owner/name through the same
-// Service (same publish/CAS path as the server — 14 §14.9): manifest
-// Create arbitrates, import.json records provenance, the operator is
-// recorded as admin. Exit codes per 11 §6.3 (0 ok, 1 error, 2 argv).
+// Service (same publish/CAS path as the server — 14 §14.9): the claim
+// arbitrates importers, manifest Create arbitrates, import.json records
+// provenance, the operator is recorded as admin. Exit codes per 11 §6.3
+// (0 ok, 1 error, 2 argv).
 func runImportURL(ctx context.Context, c *cli, a importURLArgs) int {
 	if a.url == "" || a.repo == "" {
 		fmt.Fprintln(os.Stderr, "usage: walhub import --url URL owner/name [--ref REF]… [--default-branch-only] [--include-pull-heads] [--include-notes] [--token-env VAR] [--format sha1|sha256] [--dangerous]")

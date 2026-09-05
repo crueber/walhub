@@ -108,19 +108,24 @@ func (f *errGetStore) Get(_ context.Context, _ string, _ store.GetOptions) (stor
 
 func TestWriteImportDocStoreFailures(t *testing.T) {
 	ctx := context.Background()
+	claim := &ImportDoc{Version: 1, SourceURL: "u"}
 	// Create failure (non-412) → 500.
-	if err := writeImportDoc(ctx, &errCreateStore{ObjectStore: store.NewMemory()}, "a", "b",
-		&ImportDoc{Version: 1}); statusCode(err) != 500 {
+	if _, _, _, err := claimImportDoc(ctx, &errCreateStore{ObjectStore: store.NewMemory()}, "a", "b", claim); statusCode(err) != 500 {
 		t.Fatalf("create failure = %v, want 500", err)
 	}
-	// 412 then readback failure → 500.
+	// 412 then readback failure → the read error (500 here).
 	mem := store.NewMemory()
-	if err := writeImportDoc(ctx, mem, "a", "b", &ImportDoc{Version: 1, SourceURL: "u"}); err != nil {
+	if _, _, _, err := claimImportDoc(ctx, mem, "a", "b", &ImportDoc{Version: 1, SourceURL: "u"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeImportDoc(ctx, &errGetStore{ObjectStore: mem}, "a", "b",
+	if _, _, _, err := claimImportDoc(ctx, &errGetStore{ObjectStore: mem}, "a", "b",
 		&ImportDoc{Version: 1, SourceURL: "u"}); statusCode(err) != 500 {
 		t.Fatalf("readback failure = %v, want 500", err)
+	}
+	// Completion against a failing store → 500.
+	if _, err := completeImportDoc(ctx, &errCreateStore{ObjectStore: store.NewMemory()}, "a", "b",
+		&ImportDoc{Version: 1, SourceURL: "u"}, "v1"); statusCode(err) != 500 {
+		t.Fatalf("complete failure = %v, want 500", err)
 	}
 	// Non-NotFound read error → 500.
 	if _, _, err := readImportDoc(ctx, &errGetStore{ObjectStore: mem}, "a", "b"); statusCode(err) != 500 {

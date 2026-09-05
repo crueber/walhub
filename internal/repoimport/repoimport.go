@@ -3,13 +3,19 @@
 //
 // A user posts a source URL + target owner/name (+ optional token for
 // private sources, ref filters, format pin); the package clones --mirror
-// into task scratch, enumerates + filters refs (the S4 refmap), ingests
-// through the existing publish path (source packs as tier-0, a full
-// bitmap'd repack as the tier-2 base — the classic runImport shape), and
-// commits with manifest.pb PutCreate (the CAS decides ownership). Then it
-// writes the importer-admin access.json via the identity service, and the
-// meta/import.json provenance (Create-once-then-CAS'd, the frozen
-// overwritable family — 14_extensibility.md §14.11 rule 2).
+// into task scratch, enumerates + filters refs (the S4 refmap),
+// PutCreates the in-progress import.json CLAIM (before the manifest, so
+// a manifest without a sidecar is unambiguously foreign), provisionally
+// commits with manifest.pb PutCreate (the CAS still arbitrates
+// ownership), converges idempotently through the existing publish path
+// (source packs as tier-0, a full bitmap'd repack as the tier-2 base —
+// the classic runImport shape), writes the importer-admin access.json
+// via the identity service, and CAS-completes the meta/import.json
+// provenance (Create-once-then-CAS'd, the frozen overwritable family —
+// 14_extensibility.md §14.11 rule 2). Any failure rolls back to a
+// resumable-or-clean state — a failed import never wedges its target
+// (fix #79: same-source retries always converge; 409 names only
+// genuinely foreign manifests).
 //
 // Seams (14_extensibility.md): Seam 1 via Handler (server.ExtraRoutes,
 // both lanes, top-level twins); Seam 5 via KindRepoImport run on the core

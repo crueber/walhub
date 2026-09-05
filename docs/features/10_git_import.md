@@ -49,7 +49,7 @@ drain-cancel is the v1 story).
 
 | Key | Kind | Content |
 |---|---|---|
-| `repos/<o>/<r>/meta/import.json` | Create-once-then-CAS'd provenance (same family as `fork.json`, 03 §7; joins the frozen overwritable list — 14 §14.11 rule 2, same change) | `{version: 1, source_url (canonical, token scrubbed), source_kind: "github"\|"generic"\|"file", requested_refs[], imported_at RFC3339, head_shas {ref: full sha}, importer, format}` |
+| `repos/<o>/<r>/meta/import.json` | Provenance + import CLAIM, Create-once-then-CAS'd (same family as `fork.json`, 03 §7; joins the frozen overwritable list — 14 §14.11 rule 2, same change) | `{version: 1, source_url (canonical, token scrubbed), source_kind: "github"\|"generic"\|"file", requested_refs[], imported_at RFC3339, head_shas {ref: full sha}, importer, format, complete: bool, claim_expires_at (RFC3339, claims only)}` — `complete:false` is the in-progress claim (PutCreated BEFORE the manifest; fix #79), `complete:true` the landed sidecar |
 
 Everything else reuses existing objects: `manifest.pb` (commit point),
 `checkpoint.pb ∥ refs.pb`, `wal/*` packs + side files, `access.json`
@@ -107,29 +107,48 @@ attempt, `defer RemoveAll`, never the serving copy):
    (`rev-parse --show-object-format`); `--format` pin mismatches → 422,
    never convert. Source HEAD read for the target symref (fallback
    `refs/heads/main` per 04 §1.2). LFS tracking → terminal `Notice` (S11).
-4. Commit point: `manifest.pb` **`PutCreate`** (`min_seq = seq+1`,
-   `first_state_at = as_of = now` per the `--direct` shape) — the CAS
-   decides ownership. `Create` conflict + matching `import.json` → benign
-   adopt (no-op outcome); anything else → 409, never silently adopt a
-   foreign manifest (B3 — covers PUT-created and auto-create-on-push
-   targets too).
-5. Packs: source packs as tier-0 (trailer checksum) + full bitmap'd
-   repack as tier-2 base — the classic `runImport` shape — each through
-   the idx discipline (§6.1): sibling `.idx` installed locally BEFORE
-   `AddPack` and uploaded to `wal/<checksum>.idx` after (create-if-absent,
-   412 = success).
-6. Refs: creates through `RepoHandle.Publish` (annotated tags carry
-   peel; HEAD follows the source); then importer-admin `access.json`
-   explicitly via the identity service (S7 — read-modify-write, bounded
-   CAS retries; non-email importers skip to the `BootstrapRepo`
-   backstop, narrated); absent `policy.json` left absent (= default).
-7. `meta/import.json` provenance `Create` (412 + matching source adopts;
-   else 409). Terminal `Notice` + result outcome.
+4. Claim point: `meta/import.json` **`PutCreate` with `complete:false`**
+   BEFORE the manifest CAS (fix #79). A lost CAS resolves to adopt
+   (complete + same source → no-op), resume (in-progress + same
+   source → converge below), takeover (in-progress + different
+   source + expired lease + no manifest → version-checked CAS to our
+   claim), or 409 — never a silent overwrite (B3).
+5. Provisional commit: `manifest.pb` **`PutCreate`** (`min_seq =
+   seq+1`, `first_state_at = as_of = now` per the `--direct` shape) —
+   the CAS still arbitrates name-ownership, but the repo persists only
+   when step 8 lands. A lost CAS with our claim live means a
+   push/fork/create won the name → 409 (the claim is left for the
+   retry; never deleted under a potential live winner).
+6. Converge (idempotent — the resume path): packs already durable in
+   the store are skipped (HEAD probe, never LIST) with their `.idx`
+   still ensured; refs are created only when absent (already-correct
+   tips skipped, a ref pointing elsewhere aborts loud 409 — never
+   overwrite); then the full bitmap'd repack as tier-2 base (each pack
+   through the idx discipline (§6.1): sibling `.idx` installed locally
+   BEFORE `AddPack` and uploaded to `wal/<checksum>.idx` after
+   (create-if-absent, 412 = success)).
+7. Refs + access as before (creates through `RepoHandle.Publish`;
+   annotated tags carry peel; HEAD follows the source; importer-admin
+   `access.json` explicitly via the identity service (S7 —
+   read-modify-write, bounded CAS retries; non-email importers skip
+   to the `BootstrapRepo` backstop, narrated); absent `policy.json`
+   left absent (= default)).
+8. `meta/import.json` completion: version-checked CAS (`PutUpdate`
+   on the claim version) flipping `complete:true` with the heads. A
+   lost CAS adopts a same-source completion (benign race → no-op),
+   else 409/500 loud. Terminal `Notice` + result outcome.
 
 Cancel-before-commit leaves task scratch + possibly orphan pack objects
-(harmless — the 14 §14.10.2 orphan philosophy). Safe re-POST: manifest
-lost the race → fresh attempt (unique scratch); won + `import.json`
-matches → no-op; won without → 409 delete-and-retry.
+(harmless — the 14 §14.10.2 orphan philosophy). Any post-claim failure
+rolls back to a resumable-or-clean state (fix #79): a manifest this run
+created is deleted (the repo never persists half-imported) and the
+owned claim follows iff the manifest delete landed; a surviving
+manifest keeps its claim so the retry resumes. Safe re-POST matrix:
+manifest lost the race → fresh attempt (unique scratch); won + complete
+`import.json` + same source → no-op; won + in-progress + same source →
+resume-to-complete (202 — never "delete and retry"); in-progress +
+different source → 409; manifest without any sidecar → 409 foreign
+(imports always claim first, so this is unambiguously not ours).
 
 ### Concurrency
 
@@ -138,7 +157,14 @@ handle to lock); two imports to one target interleave scratch/publish; a
 clone holds a pool slot indefinitely. Avoidance: service single-flight
 on `<target>` with the B2 params-aware join-or-409 decided in the
 handler BEFORE `TaskTable.Run` (-blind table joins never decide);
-manifest-`Create` arbitrates cross-instance races; scratch unique per
+exactly-one-winner is preserved at three CAS points (fix #79): the
+claim `PutCreate` serializes importers (lost CAS → adopt/resume/
+takeover/409, never overwrite), the manifest `PutCreate` still
+arbitrates name-ownership against pushes/forks/creates (unchanged —
+the literal "commit last" is impossible without core surgery since the
+publish path needs the handle `Create` returns, so the commit stays
+provisional instead), and the completion `PutUpdate` elects exactly one
+completer (lost CAS → adopt a same-source completion); scratch unique per
 attempt; clone concurrency gated by `import.max_concurrent` (default 2,
 bounded channel — saturation fails loudly, never queues silently);
 every git spawn in the bounded pool with ctx timeouts (`clone_timeout`
@@ -376,6 +402,31 @@ clean.
   stays internal — GET merges the ring mirror (fresh on every packet);
   pruned windows (past the 1 h retention) answer 404 per the §3 status
   table, and `import.json` stays the durable truth.
+- **Non-wedging imports (fix #79):** the manifest used to commit
+  BEFORE ingest/refs/admin/doc, so any later failure left a refless,
+  admin-less repo whose retry 409'd "delete and retry" to a caller
+  that may lack delete rights. The fix claims first
+  (`import.json` PutCreate with `complete:false` before the manifest
+  CAS), commits the manifest provisionally, converges idempotently
+  (presence-probed packs, create-only ref converge, CAS-completed
+  sidecar), and rolls every failure back to resumable-or-clean.
+  Same-source retries resume (202) instead of 409ing; "delete and
+  retry" 409s only for genuinely foreign manifests (no sidecar at
+  all), foreign completions, and live foreign claims. The literal
+  "commit the manifest last" from the issue is impossible without
+  core surgery (the publish path needs the handle `Create` returns;
+  `internal/wal` is untouchable per S12/law 8) — provisional-commit
+  + claim + resume + rollback is the equivalent guarantee, with the
+  manifest CAS arbitration unchanged. Claim lease =
+  `clone_timeout + git_timeout` (no new knob; expiry gates only
+  different-source takeover of a manifest-less target, never
+  same-source resume). Pre-fix sidecars (no `complete` flag) converge
+  once, then complete — never mistaken for a no-op. Residuals:
+  duplicate tier-0 log entries under racing same-source convergers
+  (content-addressed, benign); a foreign push winning the name race
+  in the claim→commit window leaves our claim + their manifest (the
+  retry converges and aborts loud on divergent refs — never silent,
+  never overwriting).
 
 ## Explicitly out of scope
 

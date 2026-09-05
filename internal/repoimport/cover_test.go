@@ -213,21 +213,46 @@ func TestIsPrivateIPShapes(t *testing.T) {
 func TestWriteImportDocRaces(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemory()
-	a := &ImportDoc{Version: 1, SourceURL: "file:///a.git", SourceKind: "file", RequestedRefs: []string{}, HeadSHAs: map[string]string{}, Importer: "x", Format: "sha1", ImportedAt: nowRFC3339()}
-	if err := writeImportDoc(ctx, st, "acme", "r", a); err != nil {
-		t.Fatalf("create: %v", err)
+	ttl := time.Hour
+	mkClaim := func(src string) *ImportDoc {
+		return &ImportDoc{Version: 1, SourceURL: src, SourceKind: "file", RequestedRefs: []string{}, HeadSHAs: map[string]string{}, Importer: "x", Format: "sha1", ImportedAt: nowRFC3339(), ClaimExpiresAt: time.Now().UTC().Add(ttl).Format(time.RFC3339)}
 	}
-	// Same source, different importer → benign adopt (nil).
-	b := &ImportDoc{Version: 1, SourceURL: "file:///a.git", SourceKind: "file", RequestedRefs: []string{}, HeadSHAs: map[string]string{}, Importer: "y", Format: "sha1", ImportedAt: nowRFC3339()}
-	if err := writeImportDoc(ctx, st, "acme", "r", b); err != nil {
-		t.Fatalf("adopt: %v", err)
+	// Fresh claim.
+	mode, _, ver, err := claimImportDoc(ctx, st, "acme", "r", mkClaim("file:///a.git"))
+	if err != nil || mode != claimFresh || ver == "" {
+		t.Fatalf("fresh = %v %q %v", mode, ver, err)
 	}
-	// Different source → 409, never adopt.
-	c := &ImportDoc{Version: 1, SourceURL: "file:///b.git", SourceKind: "file", RequestedRefs: []string{}, HeadSHAs: map[string]string{}, Importer: "y", Format: "sha1", ImportedAt: nowRFC3339()}
-	if err := writeImportDoc(ctx, st, "acme", "r", c); err == nil {
-		t.Fatalf("foreign source must 409")
-	} else if se, ok := err.(*StatusError); !ok || se.Status != 409 {
-		t.Fatalf("err = %v, want 409", err)
+	// Same source, in-progress → resume (different importer shares it).
+	mode, _, _, err = claimImportDoc(ctx, st, "acme", "r", mkClaim("file:///a.git"))
+	if err != nil || mode != claimResume {
+		t.Fatalf("same-source in-progress = %v %v, want resume", mode, err)
+	}
+	// Different source, live claim, no manifest → 409, never adopt.
+	if _, _, _, err := claimImportDoc(ctx, st, "acme", "r", mkClaim("file:///b.git")); statusCode(err) != 409 {
+		t.Fatalf("foreign in-progress = %v, want 409", err)
+	}
+	// Complete the claim, then same source with no manifest (deleted
+	// repo) → resume, not a success-over-absence adopt.
+	doc := mkClaim("file:///a.git")
+	doc.Complete = true
+	if _, err := completeImportDoc(ctx, st, "acme", "r", doc, ver); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	mode, _, _, err = claimImportDoc(ctx, st, "acme", "r", mkClaim("file:///a.git"))
+	if err != nil || mode != claimResume {
+		t.Fatalf("complete without manifest = %v %v, want resume", mode, err)
+	}
+	// With the manifest present → adopt.
+	if _, err := store.PutBytes(ctx, st, store.RepoPrefix("acme", "r")+store.Manifest, []byte("m"), store.PutOptions{Mode: store.PutCreate}); err != nil {
+		t.Fatal(err)
+	}
+	mode, landed, _, err := claimImportDoc(ctx, st, "acme", "r", mkClaim("file:///a.git"))
+	if err != nil || mode != claimAdopt || landed == nil || !landed.Complete {
+		t.Fatalf("adopt = %v %+v %v, want adopt+complete", mode, landed, err)
+	}
+	// Different source vs complete → 409, never adopt.
+	if _, _, _, err := claimImportDoc(ctx, st, "acme", "r", mkClaim("file:///b.git")); statusCode(err) != 409 {
+		t.Fatalf("foreign complete = %v, want 409", err)
 	}
 	// Corrupt existing → read error path.
 	if _, err := store.PutBytes(ctx, st, importKey("acme", "corrupt"), []byte("{nope"), store.PutOptions{Mode: store.PutCreate}); err != nil {
@@ -241,7 +266,7 @@ func TestWriteImportDocRaces(t *testing.T) {
 	if _, err := store.PutBytes(ctx, st, importKey("acme", "bare"), raw, store.PutOptions{Mode: store.PutCreate}); err != nil {
 		t.Fatal(err)
 	}
-	doc, _, err := readImportDoc(ctx, st, "acme", "bare")
+	doc, _, err = readImportDoc(ctx, st, "acme", "bare")
 	if err != nil || doc.RequestedRefs == nil || doc.HeadSHAs == nil {
 		t.Fatalf("read must non-nil maps: %+v %v", doc, err)
 	}

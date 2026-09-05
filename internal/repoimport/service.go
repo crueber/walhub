@@ -213,10 +213,16 @@ func (s *Service) Begin(ctx context.Context, p auth.Principal, params Params, to
 	if err != nil {
 		return nil, nil, err
 	}
-	if manifestPresent && doc != nil {
+	if manifestPresent && doc != nil && doc.Complete && doc.SourceURL == params.Source.URL {
 		return &BeginResult{NoOp: doc}, nil, nil
 	}
-	if manifestPresent {
+	if manifestPresent && doc != nil && !doc.Complete && doc.SourceURL == params.Source.URL {
+		// Same-source retry over an in-progress claim: resume to
+		// completion below (fix #79 — never "delete and retry" the
+		// caller may lack delete rights for).
+	} else if manifestPresent && doc != nil && !doc.Complete {
+		return nil, nil, &StatusError{Status: 409, Message: fmt.Sprintf("target %s has an import in progress from another source; wait for it, retry with the same source URL to resume it, or delete and retry", target)}
+	} else if manifestPresent {
 		return nil, nil, &StatusError{Status: 409, Message: fmt.Sprintf("target %s exists but was not created by import; delete and retry, or pick another name", target)}
 	}
 
