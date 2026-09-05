@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   validateSetup, normalizeSetup, isRestartLikely, parseDuration, parseSize, FIELDS,
   fmtSpecDuration, fmtSpecSize, tomlFragment, fieldAppliesToMode,
+  fieldAppliesToBackend, filterSetupToVisible, effectiveStoreBackend, STORE_BACKENDS,
 } from "../../src/lib/setup.js";
 const errs = (values) => validateSetup(values);
 const fatals = (values) => validateSetup(values).filter((e) => e.severity === "error");
@@ -244,7 +245,12 @@ test("every FIELDS entry carries a working example (setup page hints)", () => {
 
 test("every example value validates on its own (client mirror)", () => {
   for (const f of FIELDS) {
-    const errs = validateSetup({ [f.key]: f.ex }).filter((e) => e.key === f.key && e.severity === "error");
+    // backend-scoped examples validate under a backend where they are
+    // visible (hidden fields are skipped, so a bare probe would pass
+    // vacuously); unscoped examples validate under the default.
+    const probe = { [f.key]: f.ex };
+    if (f.backends) probe["store.backend"] = f.backends[0];
+    const errs = validateSetup(probe).filter((e) => e.key === f.key && e.severity === "error");
     assert.deepEqual(errs, [], `${f.key}: example ${JSON.stringify(f.ex)} must validate: ${errs.map((e) => e.message).join("; ")}`);
   }
 });
@@ -327,4 +333,69 @@ test("fieldAppliesToMode gates auth fields by server.auth.mode", () => {
   assert.deepEqual(byKey.get("server.auth.tokens").modes, ["token", "oidc"]);
   assert.deepEqual(byKey.get("server.auth.anonymous_read").modes, ["token", "oidc"]);
   assert.deepEqual(byKey.get("server.auth.trusted_forwarders").modes, ["token", "oidc"]);
+});
+
+// --- issue #164: per-backend store fields ----------------------------------------
+
+test("fieldAppliesToBackend shows only the selected backend's fields (+ shared)", () => {
+  const byKey = new Map(FIELDS.map((f) => [f.key, f]));
+  // selector + shared knobs are unconditional
+  for (const key of ["store.backend", "store.prefix", "store.max_retries", "store.multipart_threshold", "store.multipart_part_size"]) {
+    for (const b of STORE_BACKENDS) assert.equal(fieldAppliesToBackend(byKey.get(key), b), true, `${key} must show for ${b}`);
+  }
+  // backend-scoped fields
+  assert.deepEqual(byKey.get("store.root").backends, ["filesystem"]);
+  assert.deepEqual(byKey.get("store.bucket").backends, ["s3", "gcs"]);
+  for (const f of FIELDS.filter((f) => f.key.startsWith("store.s3."))) {
+    assert.deepEqual(f.backends, ["s3"], `${f.key} must be s3-only`);
+  }
+  for (const f of FIELDS.filter((f) => f.key.startsWith("store.gcs."))) {
+    assert.deepEqual(f.backends, ["gcs"], `${f.key} must be gcs-only`);
+  }
+  // spot matrix: exactly one backend's fields (+ shared) per selection
+  const visible = (backend) => FIELDS.filter((f) => f.key.startsWith("store.") && fieldAppliesToBackend(f, backend)).map((f) => f.key).sort();
+  assert.ok(visible("filesystem").includes("store.root") && !visible("filesystem").some((k) => k.startsWith("store.s3.") || k.startsWith("store.gcs.")));
+  assert.ok(!visible("filesystem").includes("store.bucket"));
+  assert.ok(visible("s3").includes("store.bucket") && visible("s3").some((k) => k.startsWith("store.s3.")) && !visible("s3").some((k) => k.startsWith("store.gcs.") || k === "store.root"));
+  assert.ok(visible("gcs").includes("store.bucket") && visible("gcs").some((k) => k.startsWith("store.gcs.")) && !visible("gcs").some((k) => k.startsWith("store.s3.") || k === "store.root"));
+  assert.ok(!visible("memory").includes("store.root") && !visible("memory").includes("store.bucket"));
+});
+
+test("effectiveStoreBackend defaults to filesystem when unset", () => {
+  assert.equal(effectiveStoreBackend({}), "filesystem");
+  assert.equal(effectiveStoreBackend({ "store.backend": "" }), "filesystem");
+  assert.equal(effectiveStoreBackend({ "store.backend": "s3" }), "s3");
+});
+
+test("switching backends preserves values: filter drops hidden keys without mutating", () => {
+  const values = {
+    "store.backend": "filesystem",
+    "store.root": "/var/lib/walhub/store",
+    "store.s3.endpoint": "http://rustfs:9000",
+    "store.gcs.endpoint": "http://localhost:4443",
+    "store.bucket": "walhub-test",
+  };
+  const filtered = filterSetupToVisible(values);
+  assert.equal(filtered["store.root"], "/var/lib/walhub/store");
+  assert.ok(!("store.s3.endpoint" in filtered) && !("store.gcs.endpoint" in filtered) && !("store.bucket" in filtered));
+  // the source object is untouched — revisits find their values
+  assert.equal(values["store.s3.endpoint"], "http://rustfs:9000");
+  const back = filterSetupToVisible({ ...values, "store.backend": "s3" });
+  assert.equal(back["store.s3.endpoint"], "http://rustfs:9000");
+  assert.equal(back["store.bucket"], "walhub-test");
+  assert.ok(!("store.root" in back) && !("store.gcs.endpoint" in back));
+});
+
+test("validation only requires the visible backend's fields", () => {
+  // garbage in a hidden backend is ignored …
+  assert.deepEqual(
+    fatals({ "store.backend": "filesystem", "store.s3.endpoint": "not-a-url", "store.gcs.bulk_clients": "many", "store.root": "/abs/root" }),
+    []);
+  // … but the same garbage fails when its backend is selected
+  assert.equal(messages({ "store.backend": "s3", "store.s3.endpoint": "not-a-url" }, "store.s3.endpoint").length, 1);
+  assert.equal(messages({ "store.backend": "gcs", "store.gcs.bulk_clients": "many" }, "store.gcs.bulk_clients").length, 1);
+  // relative store.root fails only for the filesystem backend
+  // (two errors: the field-level path check + the §5 rule-5 cross-check)
+  assert.ok(messages({ "store.backend": "filesystem", "store.root": "rel/root" }, "store.root").length >= 1);
+  assert.deepEqual(fatals({ "store.backend": "s3", "store.root": "rel/root" }), []);
 });

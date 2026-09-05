@@ -8,7 +8,7 @@
 
 import { createSignal, createMemo, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { reportError } from "../lib/data.js";
-import { validateSetup, normalizeSetup, isRestartLikely, FIELDS, fmtSpecDuration, fmtSpecSize, tomlFragment, fieldAppliesToMode } from "../lib/setup.js";
+import { validateSetup, normalizeSetup, isRestartLikely, FIELDS, fmtSpecDuration, fmtSpecSize, tomlFragment, fieldAppliesToMode, fieldAppliesToBackend, filterSetupToVisible, effectiveStoreBackend } from "../lib/setup.js";
 
 const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
 
@@ -146,7 +146,9 @@ export default function Setup() {
       return;
     }
     try {
-      const { status, body } = await postSetup("POST", normalizeSetup(getValues()), token);
+      // Only the visible backend's fields travel: hidden backends keep their
+      // form values for revisits but are not validated or saved.
+      const { status, body } = await postSetup("POST", normalizeSetup(filterSetupToVisible(getValues())), token);
       setResult({ kind: "test", status, body });
     } catch (e) { reportError(e, "setup/test"); }
   }
@@ -155,12 +157,13 @@ export default function Setup() {
     const errors = validateErrors();
     if (errors.length) { setResult({ kind: "save", status: "client", body: { errors } }); return; }
     try {
-      const test = await postSetup("POST", normalizeSetup(getValues()), token);
+      const payload = normalizeSetup(filterSetupToVisible(getValues()));
+      const test = await postSetup("POST", payload, token);
       if (test.status !== 200) { setResult({ kind: "save", status: test.status, body: test.body }); return; } // gate: validate, then write
-      const { status, body } = await postSetup("PUT", normalizeSetup(getValues()), token);
+      const { status, body } = await postSetup("PUT", payload, token);
       setResult({ kind: "save", status, body });
       if (status === 200) {
-        const changed = Object.keys(normalizeSetup(getValues()).overrides);
+        const changed = Object.keys(payload.overrides);
         const hints = (body.requires_restart ?? []).filter(isRestartLikely);
         setResult({ kind: "save", status, body, hint: hints.length
           ? `written to <data-dir>/walhub.toml — restart required for: ${changed.filter((k) => isRestartLikely(k)).join(", ")} (server list authoritative)`
@@ -200,6 +203,18 @@ export default function Setup() {
     const row = rowFor("server.auth.mode");
     const eff = row ? String(row.value ?? "").trim() : "";
     return eff || "none";
+  };
+  // The store card: effective backend from the FORM (falls back to the row
+  // value, then the first-run default "filesystem"). Only that backend's
+  // rows render — other backends' values stay in the form (toggles never
+  // wipe) but are hidden, unvalidated, and unsent until reselected. Hidden
+  // rows unmount via <Show>, so tab order and screen readers skip them.
+  const storeBackend = () => {
+    const v = getValues()["store.backend"];
+    if (v !== undefined && String(v).trim() !== "") return String(v).trim();
+    const row = rowFor("store.backend");
+    const eff = row ? String(row.value ?? "").trim() : "";
+    return eff || effectiveStoreBackend();
   };
   const redirectURI = () => {
     const pub = String(getValue("server.public_url") ?? "").trim().replace(/\/+$/, "");
@@ -339,7 +354,7 @@ export default function Setup() {
                       const inId = `setup-in-${k.key.replaceAll(".", "--")}`;
                       const lbId = `setup-lb-${k.key.replaceAll(".", "--")}`;
                       return (
-                        <Show when={fieldAppliesToMode(field, authMode())}>
+                        <Show when={fieldAppliesToMode(field, authMode()) && fieldAppliesToBackend(field, storeBackend())}>
                           <div class="setup-row" data-key={k.key}>
                             {/* left: the key, its provenance chip, and a working
                                 example that stays visible while typing */}

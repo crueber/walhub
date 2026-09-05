@@ -137,6 +137,38 @@ export function fieldAppliesToMode(field, mode) {
   return !field?.modes || field.modes.includes(mode);
 }
 
+/** Whether a store field row applies to the effective store.backend — FIELDS
+    entries without `backends` are shared across all backends (the selector
+    itself plus prefix/retries/multipart knobs). Backend-scoped entries name
+    their backends: store.root → filesystem, store.s3.* → s3, store.gcs.* →
+    gcs, store.bucket → s3+gcs (the bucket backends). Memory needs no extra
+    fields beyond the shared ones. */
+export const STORE_BACKENDS = ["s3", "gcs", "memory", "filesystem"];
+export function fieldAppliesToBackend(field, backend) {
+  return !field?.backends || field.backends.includes(backend);
+}
+
+/** Effective store backend for a flat {key: value} form state — the first-run
+    default (filesystem) when unset, mirroring the validator. */
+export function effectiveStoreBackend(values) {
+  const b = values?.["store.backend"];
+  return b === undefined || b === null || String(b).trim() === "" ? "filesystem" : String(b).trim();
+}
+
+/** Drop hidden backend-scoped store keys from a flat form state, keeping the
+    caller's object untouched. Values stay in the form (toggles never wipe);
+    they are just not validated or sent until their backend is selected. */
+export function filterSetupToVisible(values) {
+  const backend = effectiveStoreBackend(values);
+  const out = {};
+  for (const [key, v] of Object.entries(values ?? {})) {
+    const field = FIELD_BY_KEY.get(key);
+    if (field && !fieldAppliesToBackend(field, backend)) continue;
+    out[key] = v;
+  }
+  return out;
+}
+
 // --- field metadata: type + enum + example per 11_config_cli.md §2 ------------
 //
 // `ex` is a WORKING example value: it passes validateSetup on its own and is
@@ -186,21 +218,21 @@ export const FIELDS = [
   { key: "server.ssh.host_key_env", type: "string", ex: "WALHUB_SSH_HOST_KEY", note: "names the env var holding the key; overrides host_key" },
   // store
   { key: "store.backend", type: "enum", enum: ["s3", "gcs", "memory", "filesystem"], ex: "filesystem", note: "s3/gcs also need store.bucket and their subsection" },
-  { key: "store.bucket", type: "string", ex: "walhub-test" },
+  { key: "store.bucket", type: "string", ex: "walhub-test", backends: ["s3", "gcs"], note: "s3/gcs only" },
   { key: "store.prefix", type: "string", ex: "walhub/" },
-  { key: "store.root", type: "path", ex: "/var/lib/walhub/store", note: "filesystem backend only" },
+  { key: "store.root", type: "path", ex: "/var/lib/walhub/store", backends: ["filesystem"], note: "filesystem backend only" },
   { key: "store.max_retries", type: "int", min: 0, ex: "3" },
   { key: "store.multipart_threshold", type: "size", ex: "64MiB" },
   { key: "store.multipart_part_size", type: "size", ex: "16MiB", note: "must be ≤ multipart_threshold" },
-  { key: "store.s3.endpoint", type: "url", ex: "http://rustfs:9000", note: "rustfs/MinIO style; omit for AWS" },
-  { key: "store.s3.region", type: "string", ex: "us-east-1" },
-  { key: "store.s3.access_key_env", type: "string", ex: "AWS_ACCESS_KEY_ID", note: "names the env var holding the key" },
-  { key: "store.s3.secret_key_env", type: "string", ex: "AWS_SECRET_ACCESS_KEY" },
-  { key: "store.s3.force_path_style", type: "bool", ex: "true", note: "true for rustfs/MinIO; AWS uses virtual-host addressing" },
-  { key: "store.gcs.endpoint", type: "url", ex: "http://localhost:4443", note: "fake-gcs-server in dev; omit for real GCS" },
-  { key: "store.gcs.signing_service_account", type: "string", ex: "signer@project.iam.gserviceaccount.com" },
-  { key: "store.gcs.bulk_clients", type: "int", min: 1, ex: "4" },
-  { key: "store.gcs.bulk_concurrency", type: "int", min: 1, ex: "8" },
+  { key: "store.s3.endpoint", type: "url", ex: "http://rustfs:9000", backends: ["s3"], note: "rustfs/MinIO style; omit for AWS" },
+  { key: "store.s3.region", type: "string", ex: "us-east-1", backends: ["s3"] },
+  { key: "store.s3.access_key_env", type: "string", ex: "AWS_ACCESS_KEY_ID", backends: ["s3"], note: "names the env var holding the key" },
+  { key: "store.s3.secret_key_env", type: "string", ex: "AWS_SECRET_ACCESS_KEY", backends: ["s3"] },
+  { key: "store.s3.force_path_style", type: "bool", ex: "true", backends: ["s3"], note: "true for rustfs/MinIO; AWS uses virtual-host addressing" },
+  { key: "store.gcs.endpoint", type: "url", ex: "http://localhost:4443", backends: ["gcs"], note: "fake-gcs-server in dev; omit for real GCS" },
+  { key: "store.gcs.signing_service_account", type: "string", ex: "signer@project.iam.gserviceaccount.com", backends: ["gcs"] },
+  { key: "store.gcs.bulk_clients", type: "int", min: 1, ex: "4", backends: ["gcs"] },
+  { key: "store.gcs.bulk_concurrency", type: "int", min: 1, ex: "8", backends: ["gcs"] },
   // cache
   { key: "cache.dir", type: "path", ex: "/var/cache/walhub" },
   { key: "cache.mode", type: "enum", enum: ["budget", "disk", "auto"], ex: "budget" },
@@ -338,10 +370,10 @@ export function normalizeSetup(values) {
  */
 export function validateSetup(values) {
   const errors = [];
-  const effectiveBackend = (() => {
-    const b = values?.["store.backend"];
-    return b === undefined || b === null || b === "" ? "filesystem" : String(b).trim(); // first-run default
-  })();
+  // Single source of truth with effectiveStoreBackend (and the Setup.jsx
+  // row-fallback above it): unset/blank selects the filesystem first-run
+  // default. A local copy here once disagreed on whitespace-only input.
+  const effectiveBackend = effectiveStoreBackend(values);
   const fail = (key, message) => errors.push({ key, message, severity: "error" });
   const warn = (key, message) => errors.push({ key, message, severity: "warn" });
   const get = (key) => {
@@ -356,6 +388,11 @@ export function validateSetup(values) {
       errors.push({ key, message: `unknown key: ${key}`, severity: "error" }); // unknown keys are a validation error, not a silent drop
       continue;
     }
+    // Hidden backend-scoped fields are neither validated nor required: the
+    // operator edits them only when their backend is selected, and the setup
+    // page filters them out of the test/save payload (values are preserved
+    // in the form for revisits).
+    if (!fieldAppliesToBackend(field, effectiveBackend)) continue;
     const s = raw === undefined || raw === null ? "" : String(raw).trim();
     if (s === "") continue;
     const t = field.type;
