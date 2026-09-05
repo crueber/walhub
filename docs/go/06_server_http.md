@@ -453,7 +453,7 @@ Session cookie `walgit_session`: `HttpOnly`; `SameSite=None; Secure` when CORS o
 - `/_auth/check` (the edge's `auth_request`): on success 204 + `X-Walgit-Principal: <name>` + `X-Walgit-Write: 0|1` + `Cache-Control: private, max-age=300` (edges cache one verdict per credential ~5 min); 401/403/503 otherwise.
 - `POST /_auth/tokens`: session required, same-origin CSRF guard (`Sec-Fetch-Site` header must be `same-origin`), returns `{token, principal, write, expires_at}` (no-store); GET renders the mint page.
 
-**Identity forwarding (push broker):** `X-Walgit-Principal` is honored only when the authenticating caller (the hop) has write AND its principal name is in `server.auth.trusted_forwarders`; the forwarded name replaces the principal, keeps the caller's write flag, admin re-derived from policy.
+**Identity forwarding (push broker):** `X-Walgit-Principal` is honored only when the authenticating caller (the hop) has write AND its principal name is in `server.auth.trusted_forwarders`; the forwarded name replaces the principal, keeps the caller's write flag, admin re-derived from policy. The rule applies **uniformly on every authenticated surface** — core git/API lanes AND every Seam 1 feature surface (collab issues, pulls, review, checks, notify, releases, social, identity, repoimport): all resolve through the single entry point `AuthService.AuthenticateForwarded` (authenticate, then forward; authentication errors return before any forwarding is considered). A feature handler that re-authenticates via bare `Authenticate` drops the forwarded identity and misattributes brokered actions to the broker — that is an auth bug, not a fallback.
 
 **401/403/503 mapping:** Invalid/Unauthorized → 401 (+ `WWW-Authenticate: Bearer realm="walgit"`); Forbidden → 403; Unavailable → 503 (+ `Retry-After: 15`).
 
@@ -615,6 +615,7 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   keeps its 2-segment root and every deeper path. New nested repo pages (`/pulls/new`,
   `/pull/:num/commits`, `/pull/:num/files`, `/checks/:sha`) ride the existing `sub[0]` match —
   no router change for those.
+- **NEW (2026-09-05) — broker forwarding is uniform across core + collab surfaces** (Forgejo #71): the §8.6 rule resolves at the single entry point `AuthService.AuthenticateForwarded`, and every Seam 1 feature surface (all nine `chain*` closures in `cmd/walhub`) resolves through it — bare `Authenticate` in a feature chain is an auth bug (it attributes brokered actions to the broker). Rationale: one forwarding decision point keeps core git/API lanes and collab handlers identical by construction; fail-closed ordering (errors before forwarding) is inherited, not re-implemented per surface.
 
 **Divergence (2026-08-31):**
 

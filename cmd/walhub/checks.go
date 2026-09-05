@@ -46,7 +46,11 @@ func newChecksService(st store.ObjectStore, ident *identity.Service, pullsSvc *p
 // wct_ credentials resolve to the unprivileged ci:<id> principal at the
 // apiServe layer (so token/oidc modes don't 401 them before dispatch)
 // and again in the handler's Auth wrapper (so the handler sees the same
-// principal the git paths resolve). The secret itself is verified
+// principal the git paths resolve). Non-wct_ credentials fall through to
+// the forwarded server chain (AuthenticateForwarded, so the §8.6
+// broker-forwarding rule applies here exactly as on every other collab
+// surface; wct_ CI principals carry no write, so a forwarding header on a
+// CI credential is inert by construction). The secret itself is verified
 // handler-side per repo — the chain never sees it. Startup validates the
 // wct_ prefix overlaps no core prefix (wgt_); overlap panics.
 func chainChecks(srv *server.Server, h *checks.Handler) {
@@ -62,7 +66,7 @@ func chainChecks(srv *server.Server, h *checks.Handler) {
 		return auth.Principal{Name: checks.CIPrincipalName(id)}, nil, true
 	}
 	h.Auth = checks.WrapAuth(func(r *http.Request) (auth.Principal, *auth.AuthError) {
-		return srv.Auth().Authenticate(r, srv.Config())
+		return srv.Auth().AuthenticateForwarded(r, srv.Config())
 	})
 	srv.ChainExtra(h)
 }
