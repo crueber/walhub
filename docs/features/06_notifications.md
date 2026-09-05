@@ -476,6 +476,20 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   failure asserts no phantom + retry convergence; verified it fails on the old order). Rationale:
   the manifest CAS is the only commit point (law 4) — the list is the commit, the record is the
   cache.
+- **Unmarshalable `Emission.Detail` fails the emission, never the handler (issue #98, 2026-09-05):**
+  `Detail` is composition-supplied (`map[string]any`), so the old "shapes are fixed, marshal cannot
+  fail" claim did not hold — a chan/func value panicked the synchronous mutating handler inside
+  `encode`. `encode` now returns an error (CAS closures return it; emission paths log-drop it; a
+  `recover` converts even a panicking `MarshalJSON` into an error, so no panic path remains), and
+  `emit` screens `Detail` marshalability at entry, BEFORE the activity seq reservation, so a
+  poisoned emission leaves no seq gap and no partial tray. The screen lives at the `emit` entry —
+  NOT validated per composer in each feature package — because `Emission` is the boundary: notify
+  never imports the feature packages and they never import notify, so the untyped map is checked
+  where it crosses into the fan-out contract. Regression: `TestEmitPoisonDetailDropsLogged`
+  (chan/func/nested/panicking-marshaler Details → logged drop, zero store writes, handler intact;
+  valid Details unaffected) + `TestEncodeRejectsUnmarshalable` + `TestAppendActivityPoisonReturnsError`.
+  Rationale: fail the emission with a log (issue #92 convention), never the request; screening
+  before the reservation keeps the honest-gap log clean of self-inflicted gaps.
 
 ## Explicitly out of scope
 

@@ -40,8 +40,8 @@ func seedActivity(t *testing.T, st store.ObjectStore, at, owner, repo string, se
 	t.Helper()
 	ev := ActivityEvent{Seq: seq, Repo: owner + "/" + repo, Action: "commented",
 		Num: 7, Kind: "issue", Actor: "bob@example.com", Title: "T", At: at,
-		Payload: encode(activityPayload{Class: "subscribed", Recipients: recips, FanoutPending: pending})}
-	writeRaw(t, st, ActivityKey(owner, repo, seq), encode(ev))
+		Payload: mustEncode(t, activityPayload{Class: "subscribed", Recipients: recips, FanoutPending: pending})}
+	writeRaw(t, st, ActivityKey(owner, repo, seq), mustEncode(t, ev))
 }
 
 // TestSweepRedrainsUndrainedFanoutAfterRestart seeds the exact durable
@@ -61,14 +61,14 @@ func TestSweepRedrainsUndrainedFanoutAfterRestart(t *testing.T) {
 		return out
 	}
 	// Seq 1: overflow emission that never drained (2 recipients).
-	writeRaw(t, st, CollabStateKey("acme", "repo"), encode(CollabState{NextSeq: 3}))
+	writeRaw(t, st, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: 3}))
 	seedActivity(t, st, at, "acme", "repo", 1, true, recips("amy@example.com", "carol@example.com")...)
 	// Seq 2: sync-complete emission — already fanned out on the request
 	// path. Its notification exists; the sweep must not touch it (no
 	// completion record is ever written for non-pending seqs).
 	seedActivity(t, st, at, "acme", "repo", 2, false, recips("dave@example.com")...)
 	id2 := NotificationID("dave@example.com", "acme/repo", 7, ReasonSubscribed, 2)
-	writeRaw(t, st, NotifKey("dave@example.com", id2), encode(Notification{ID: id2, Repo: "acme/repo",
+	writeRaw(t, st, NotifKey("dave@example.com", id2), mustEncode(t, Notification{ID: id2, Repo: "acme/repo",
 		Num: 7, Kind: "issue", Reason: ReasonSubscribed, State: StateUnread, CreatedAt: at}))
 	// Seq 3: shortfall emission that never drained (1 recipient).
 	seedActivity(t, st, at, "acme", "repo", 3, true, recips("erin@example.com")...)
@@ -180,7 +180,7 @@ func TestSweepFanoutEdges(t *testing.T) {
 	x := newHarness(t)
 	// Corrupt allocator: skipped, nothing enqueued.
 	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 1),
-		encode(ActivityEvent{Seq: 1, Repo: "acme/repo", Action: "commented"}))
+		mustEncode(t, ActivityEvent{Seq: 1, Repo: "acme/repo", Action: "commented"}))
 	writeRaw(t, x.svc.Store, CollabStateKey("acme", "repo"), []byte("{corrupt"))
 	x.svc.sweepFanout(ctx())
 	x.svc.tasks.mu.Lock()
@@ -212,7 +212,7 @@ func TestSweepFanoutEdges(t *testing.T) {
 // passes — never O(head) GETs in one pass.
 func TestSweepFanoutProbeBound(t *testing.T) {
 	st := store.NewMemory()
-	writeRaw(t, st, CollabStateKey("acme", "repo"), encode(CollabState{NextSeq: 5000}))
+	writeRaw(t, st, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: 5000}))
 	c := &opCounts{}
 	svc := New(countingStore{ObjectStore: st, c: c}, nil)
 	before := c.snapshot()
@@ -253,7 +253,7 @@ func (f *flakeActivity) Get(ctx context.Context, key string, opts store.GetOptio
 func TestSweepFanoutTransientProbeRetries(t *testing.T) {
 	st := store.NewMemory()
 	at := "2026-09-04T12:00:00Z"
-	writeRaw(t, st, CollabStateKey("acme", "repo"), encode(CollabState{NextSeq: 1}))
+	writeRaw(t, st, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: 1}))
 	seedActivity(t, st, at, "acme", "repo", 1, true,
 		activityRecipient{Principal: "amy@example.com", Reason: ReasonSubscribed})
 	flake := &flakeActivity{ObjectStore: st, key: ActivityKey("acme", "repo", 1), n: 1}
@@ -301,11 +301,11 @@ func TestSweepFanoutTransientProbeRetries(t *testing.T) {
 func TestRetentionDeletesFanoutDoneMarkers(t *testing.T) {
 	x := newHarness(t)
 	oldAt := x.now.AddDate(0, 0, -30).Format(dateTimeFmt)
-	writeRaw(t, x.svc.Store, CollabStateKey("acme", "repo"), encode(CollabState{NextSeq: 2}))
+	writeRaw(t, x.svc.Store, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: 2}))
 	ev := ActivityEvent{Seq: 1, Repo: "acme/repo", Action: "commented", Kind: "issue", At: oldAt,
-		Payload: encode(activityPayload{Class: "subscribed", FanoutPending: true})}
-	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 1), encode(ev))
-	writeRaw(t, x.svc.Store, FanoutDoneKey("acme", "repo", 1), encode(FanoutDoneDoc{Seq: 1, At: oldAt}))
+		Payload: mustEncode(t, activityPayload{Class: "subscribed", FanoutPending: true})}
+	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 1), mustEncode(t, ev))
+	writeRaw(t, x.svc.Store, FanoutDoneKey("acme", "repo", 1), mustEncode(t, FanoutDoneDoc{Seq: 1, At: oldAt}))
 	x.svc.retainRepoEvents(ctx(), "acme", "repo", x.now)
 	if x.svc.readActivity(ctx(), "acme", "repo", 1) != nil {
 		t.Fatal("old event below the hookless floor must compact")

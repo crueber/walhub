@@ -146,6 +146,18 @@ func (x *harness) writeThread(t *testing.T, owner, repo string, num int, title, 
 
 func ctx() context.Context { return context.Background() }
 
+// mustEncode is the test-only encode for fixed shapes (production encode
+// returns an error since issue #98; fixtures fail fast instead of
+// threading errors through every seed site).
+func mustEncode(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := encode(v)
+	if err != nil {
+		t.Fatalf("mustEncode: %v", err)
+	}
+	return raw
+}
+
 // seedRepo marks owner/repo as existing: the manifest probe is the
 // repo-existence signal (watch/tray/retention paths gate on it), and the
 // body is never read.

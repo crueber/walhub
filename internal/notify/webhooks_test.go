@@ -332,7 +332,7 @@ func TestWebhookInsecureTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: x.now.Format(dateTimeFmt)}
-	if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), encode(ev)); err != nil {
+	if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), mustEncode(t, ev)); err != nil {
 		t.Fatal(err)
 	}
 	// Default (verify): self-signed fails, cursor stays at 0.
@@ -456,7 +456,7 @@ func TestWebhookDeliveryErrorScrubbed(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: x.now.Format(dateTimeFmt)}
-	if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), encode(ev)); err != nil {
+	if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), mustEncode(t, ev)); err != nil {
 		t.Fatal(err)
 	}
 	x.svc.DeliverRepo(ctx(), "acme", "repo")

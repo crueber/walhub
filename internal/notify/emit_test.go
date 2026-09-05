@@ -228,7 +228,7 @@ func TestEmitIdempotentRetry(t *testing.T) {
 	_ = json.Unmarshal(raw, &ix)
 	id := ix.Entries[0].ID
 	dup := Notification{ID: id, Repo: "acme/repo", Num: 7, Kind: "issue", Reason: ReasonSubscribed}
-	if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", id), encode(dup)); err == nil {
+	if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", id), mustEncode(t, dup)); err == nil {
 		t.Fatal("replay Create must 412")
 	} else if !isPrecondition(err) {
 		t.Fatalf("replay err = %v", err)

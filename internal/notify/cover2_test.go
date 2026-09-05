@@ -457,7 +457,7 @@ func TestHookURLHostAndIPShapes(t *testing.T) {
 func TestListHooksGetErrorSkips(t *testing.T) {
 	st := store.NewMemory()
 	writeRaw(t, st, HookKey("acme", "repo", strings.Repeat("k", 24)),
-		encode(&Hook{ID: strings.Repeat("k", 24), URL: "https://example.com/h"}))
+		mustEncode(t, &Hook{ID: strings.Repeat("k", 24), URL: "https://example.com/h"}))
 	svc := New(failGetStore{st}, nil)
 	hooks, err := svc.ListHooks(ctx(), "acme", "repo")
 	if err != nil || len(hooks) != 0 {
@@ -487,7 +487,7 @@ func TestPatchHookFull(t *testing.T) {
 
 func TestDeleteHookStoreError(t *testing.T) {
 	st := store.NewMemory()
-	writeRaw(t, st, HookKey("acme", "repo", "h"), encode(&Hook{ID: "h"}))
+	writeRaw(t, st, HookKey("acme", "repo", "h"), mustEncode(t, &Hook{ID: "h"}))
 	svc := New(failDeleteStore{st}, nil)
 	if err := svc.DeleteHook(ctx(), "acme", "repo", "h"); err == nil {
 		t.Fatal("delete error must surface")
@@ -525,7 +525,7 @@ func TestGapDeliveryWithLiveSink(t *testing.T) {
 	// Honest gap at seq 2: the loop counts it and continues from 3.
 	for _, seq := range []int{1, 3} {
 		ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: x.now.Format(dateTimeFmt)}
-		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), encode(ev))
+		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), mustEncode(t, ev))
 	}
 	x.svc.DeliverRepo(ctx(), "acme", "repo")
 	if got := sink.count(); got != 2 {
@@ -550,9 +550,9 @@ func TestPingStoreErrors(t *testing.T) {
 		t.Fatal("reserve error must surface")
 	}
 	st := store.NewMemory()
-	writeRaw(t, st, CollabStateKey("acme", "repo"), encode(CollabState{}))
+	writeRaw(t, st, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{}))
 	writeRaw(t, st, HookKey("acme", "repo", strings.Repeat("p", 24)),
-		encode(&Hook{ID: strings.Repeat("p", 24), URL: "http://127.0.0.1:9/h", Active: true}))
+		mustEncode(t, &Hook{ID: strings.Repeat("p", 24), URL: "http://127.0.0.1:9/h", Active: true}))
 	svc3 := New(failCreateStore{st}, nil)
 	if _, err := svc3.PingHook(ctx(), "acme", "repo", strings.Repeat("p", 24), "a"); err == nil {
 		t.Fatal("ping append error must surface")
@@ -644,7 +644,7 @@ func TestSocialTruncation(t *testing.T) {
 	for i := 0; i < MaxWatchers+1; i++ {
 		members = append(members, fmt.Sprintf("w%06d@example.com", i))
 	}
-	writeRaw(t, x.svc.Store, SocialKey("acme", "repo"), encode(SocialDoc{Watchers: MaxWatchers + 1, WatcherList: members}))
+	writeRaw(t, x.svc.Store, SocialKey("acme", "repo"), mustEncode(t, SocialDoc{Watchers: MaxWatchers + 1, WatcherList: members}))
 	st, err := x.svc.SetWatch(ctx(), "newuser@example.com", "acme", "repo", true)
 	if err != nil {
 		t.Fatal(err)
@@ -671,7 +671,7 @@ func TestSocialTruncation(t *testing.T) {
 func TestUnreadCountFloor(t *testing.T) {
 	x := newHarness(t)
 	// Count 0 with an unread entry + flip to read: delta floors at 0.
-	writeRaw(t, x.svc.Store, NotifIndexKey("amy@example.com"), encode(IndexDoc{
+	writeRaw(t, x.svc.Store, NotifIndexKey("amy@example.com"), mustEncode(t, IndexDoc{
 		Version: 1, UnreadCount: 0,
 		Entries: []IndexEntry{{ID: strings.Repeat("f", 32), State: StateUnread}},
 	}))
@@ -687,7 +687,7 @@ func TestRetainUserNothingToWrite(t *testing.T) {
 	x := newHarness(t)
 	// Stale sweep stamp, consistent count, nothing old: early return.
 	old := x.now.AddDate(0, 0, -2).Format(dateTimeFmt)
-	writeRaw(t, x.svc.Store, NotifIndexKey("amy@example.com"), encode(IndexDoc{
+	writeRaw(t, x.svc.Store, NotifIndexKey("amy@example.com"), mustEncode(t, IndexDoc{
 		Version: 1, UnreadCount: 1, SweptAt: old,
 		Entries: []IndexEntry{{ID: strings.Repeat("a", 32), State: StateUnread, At: x.now.Format(dateTimeFmt)}},
 	}))
@@ -717,10 +717,10 @@ func TestRetainRepoScanBranches(t *testing.T) {
 	newAt := x.now.Format(dateTimeFmt)
 	for seq, at := range map[int]string{1: oldAt, 2: newAt} {
 		ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", At: at}
-		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), encode(ev))
+		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), mustEncode(t, ev))
 	}
 	if _, err := x.svc.casUpdate(ctx(), CollabStateKey("acme", "repo"), 3, func(cur []byte, _ store.Version) ([]byte, bool, error) {
-		return encode(CollabState{NextSeq: 5}), true, nil
+		return mustEncode(t, CollabState{NextSeq: 5}), true, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -735,12 +735,12 @@ func TestRetainRepoScanBranches(t *testing.T) {
 	}
 	// Gap in the scan window: never delete what we cannot see.
 	if _, err := x.svc.casUpdate(ctx(), CollabStateKey("acme", "repo2"), 3, func(cur []byte, _ store.Version) ([]byte, bool, error) {
-		return encode(CollabState{NextSeq: 6}), true, nil
+		return mustEncode(t, CollabState{NextSeq: 6}), true, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	ev := ActivityEvent{Seq: 3, Repo: "acme/repo2", Action: "commented", At: oldAt}
-	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo2", 3), encode(ev))
+	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo2", 3), mustEncode(t, ev))
 	x.svc.retainRepoEvents(ctx(), "acme", "repo2", x.now)
 	if x.svc.readActivity(ctx(), "acme", "repo2", 3) != nil {
 		t.Fatal("lone old event below head must compact")
@@ -770,8 +770,8 @@ func TestRetainUserStoreError(t *testing.T) {
 func TestFanoutOneCanceled(t *testing.T) {
 	x := newHarness(t)
 	ev := ActivityEvent{Seq: 7, Repo: "acme/repo",
-		Payload: encode(activityPayload{Recipients: []activityRecipient{{Principal: "a@example.com", Reason: ReasonSubscribed}}})}
-	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 7), encode(ev))
+		Payload: mustEncode(t, activityPayload{Recipients: []activityRecipient{{Principal: "a@example.com", Reason: ReasonSubscribed}}})}
+	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 7), mustEncode(t, ev))
 	cctx, cancel := context.WithCancel(ctx())
 	cancel()
 	x.svc.fanoutOne(cctx, "acme", "repo", "acme/repo", 7) // precheck exits
