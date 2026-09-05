@@ -3,9 +3,24 @@
 //
 // The task table is the (repo, kind) single-flight (join semantics,
 // same shape as pulls' taskTable): a second start joins the running
-// task. The overflow task attaches activity seqs (the leader drains
-// exactly once). Composition starts Run (wake-ups + sweeps) like the
+// task. The overflow task attaches activity seqs; the leader drains
+// until quiescent and ends the task only when no seq arrived since the
+// last drain (drain-then-end under one discipline — issue #72).
+// Composition starts Run (wake-ups + sweeps) like the
 // events bridge: `go svc.Run(ctx)`.
+//
+// ### Concurrency
+//
+// Hazard: a fan-out seq attached between the leader's terminal drain
+// and the task end orphans on a detached entry while the joiner —
+// already returned — starts no worker (silent notification loss).
+// Avoidance: (a) the leader ends ONLY via endIfQuiescent, which
+// re-checks the attachment under the table lock nesting the entry
+// lock and refuses while seqs are pending; (b) a joiner re-checks
+// that its entry is still registered after attaching and re-enqueues
+// onto the current entry on a miss. Lock order is always
+// taskTable.mu → taskEntry.mu (endIfQuiescent is the ONLY place both
+// are held); no lock is held across any store or network call.
 package notify
 
 import (
@@ -85,6 +100,12 @@ func (t *taskTable) end(repo, kind, note string, now time.Time) {
 	if !ok {
 		return
 	}
+	t.finishLocked(key, e, note, now)
+}
+
+// finishLocked completes e: mark finished, unblock joiners, move the
+// record to the bounded recent cache. Caller holds t.mu.
+func (t *taskTable) finishLocked(key string, e *taskEntry, note string, now time.Time) {
 	e.rec.State = TaskFinished
 	e.rec.Finished = now.UTC().Format(dateTimeFmt)
 	e.rec.Note = note
@@ -99,6 +120,40 @@ func (t *taskTable) end(repo, kind, note string, now time.Time) {
 			delete(t.recent, oldest)
 		}
 	}
+}
+
+// endIfQuiescent completes a fanout task (leader only) IFF no seq was
+// attached since the leader's last drain: the table lock nests the
+// entry lock so the re-check and the removal are atomic against a
+// concurrent attach (issue #72). False means "seqs pending" — the
+// caller must drain again instead of ending. True with no running
+// entry is a no-op success (already ended).
+func (t *taskTable) endIfQuiescent(repo, kind, note string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	key := taskKey(repo, kind)
+	e, ok := t.running[key]
+	if !ok {
+		return true
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.seqs) > 0 {
+		return false
+	}
+	t.finishLocked(key, e, note, now)
+	return true
+}
+
+// current reports whether e is still the registered entry for
+// (repo, kind). A joiner that attached to a detached entry (the leader
+// ended between its begin and attach) must re-enqueue — see
+// enqueueFanout.
+func (t *taskTable) current(repo, kind string, e *taskEntry) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	cur, ok := t.running[taskKey(repo, kind)]
+	return ok && cur == e
 }
 
 // attach adds an activity seq to a running fanout task.
@@ -224,37 +279,51 @@ func (s *Service) StartWebhooks(ctx context.Context, repo string) *TaskRecord {
 
 // enqueueFanout attaches seq to the repo's fanout task, starting it when
 // idle. The task reloads each activity event and completes its recipient
-// set idempotently (deterministic ids + index dedup).
+// set idempotently (deterministic ids + index dedup). A joiner whose
+// entry was ended between its begin and attach re-enqueues onto the
+// current entry (the seq is re-attached there), so no interleaving
+// orphans a seq on a detached entry (issue #72).
 func (s *Service) enqueueFanout(repo string, seq int) {
-	e, joined := s.tasks.begin(repo, TaskKindFanout, s.nowUTC())
-	e.attach(seq)
-	if joined {
-		return
+	for {
+		e, joined := s.tasks.begin(repo, TaskKindFanout, s.nowUTC())
+		e.attach(seq)
+		if !joined {
+			go func() {
+				s.drainFanout(repo, e)
+			}()
+			return
+		}
+		if s.tasks.current(repo, TaskKindFanout, e) {
+			return
+		}
 	}
-	go func() {
-		s.drainFanout(repo, e)
-	}()
 }
 
-// drainFanout processes attached seqs until quiescent (re-checks the
-// attachment after each pass so late arrivals join the same task).
+// drainFanout processes attached seqs until quiescent: after each pass
+// the leader re-checks the attachment, and the task ends only via
+// endIfQuiescent — an empty drain followed by a late attach refuses
+// the end and drains again instead of dropping the seq (issue #72).
 func (s *Service) drainFanout(repo string, e *taskEntry) {
 	owner, name, ok := splitRepo(repo)
-	if !ok {
-		s.tasks.end(repo, TaskKindFanout, "bad repo", s.nowUTC())
-		return
-	}
 	note := "fanout drained"
+	if !ok {
+		note = "bad repo"
+	}
 	for {
 		seqs := e.drain()
-		if len(seqs) == 0 {
-			break
+		if ok {
+			for _, seq := range seqs {
+				s.fanoutOne(context.Background(), owner, name, repo, seq)
+			}
 		}
-		for _, seq := range seqs {
-			s.fanoutOne(context.Background(), owner, name, repo, seq)
+		// A malformed repo has nothing to fan out to: drained seqs
+		// are discarded, but the end stays quiescent so a concurrent
+		// joiner re-enqueues (and observes the finished record)
+		// instead of orphaning its seq.
+		if s.tasks.endIfQuiescent(repo, TaskKindFanout, note, s.nowUTC()) {
+			return
 		}
 	}
-	s.tasks.end(repo, TaskKindFanout, note, s.nowUTC())
 }
 
 // fanoutOne completes one activity event's recipient set: Create (412 =

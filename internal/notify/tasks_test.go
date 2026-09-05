@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -338,5 +339,126 @@ func TestRetainOverflowEdges(t *testing.T) {
 	}
 	if _, _, err := store.GetBytes(ctx(), x.svc.Store, NotifKey("amy@example.com", strings.Repeat("3", 32)), store.GetOptions{}); !store.IsNotFound(err) {
 		t.Fatalf("dead object must go: %v", err)
+	}
+}
+
+// TestFanoutTerminalDrainKeepsLateSeq reproduces issue #72's
+// late-attach-vs-terminal-drain interleaving at the entry discipline:
+//
+//  1. the leader's terminal drain observes an empty attachment;
+//  2. a concurrent enqueueFanout still sees the running entry, joins
+//     it, and attaches seq 7;
+//  3. the leader must NOT end the task with seq 7 pending.
+//
+// Pre-fix end() never re-checked e.seqs, so step 3 removed the task
+// while seq 7 orphaned on the detached entry — no worker ever drained
+// it again (silent notification loss). Drain-then-end via
+// endIfQuiescent refuses while seqs are pending; the leftover drains
+// first and only then may the task end.
+func TestFanoutTerminalDrainKeepsLateSeq(t *testing.T) {
+	x := newHarness(t)
+	const repo = "acme/repo"
+	e, joined := x.svc.tasks.begin(repo, TaskKindFanout, x.now)
+	if joined {
+		t.Fatal("first begin must lead")
+	}
+	// 1. terminal drain observes empty.
+	if seqs := e.drain(); len(seqs) != 0 {
+		t.Fatalf("fresh task drains %v", seqs)
+	}
+	// 2. late joiner attaches while the entry is still registered.
+	late, joined := x.svc.tasks.begin(repo, TaskKindFanout, x.now)
+	if !joined || late != e {
+		t.Fatal("late enqueue must join the still-running task")
+	}
+	late.attach(7)
+	if !x.svc.tasks.current(repo, TaskKindFanout, e) {
+		t.Fatal("joined entry must still be registered")
+	}
+	// 3. the end must refuse while seq 7 is pending.
+	if x.svc.tasks.endIfQuiescent(repo, TaskKindFanout, "fanout drained", x.now) {
+		t.Fatal("drain-then-end ended the task with seq 7 pending (issue #72)")
+	}
+	if rec := x.svc.TaskStatus(repo, TaskKindFanout); rec == nil || rec.State != TaskRunning {
+		t.Fatalf("refused end must leave the task running: %+v", rec)
+	}
+	// The leftover drains; only then may the task end.
+	if seqs := e.drain(); len(seqs) != 1 || seqs[0] != 7 {
+		t.Fatalf("leftover drain = %v", seqs)
+	}
+	if !x.svc.tasks.endIfQuiescent(repo, TaskKindFanout, "fanout drained", x.now) {
+		t.Fatal("quiescent task must end")
+	}
+	if rec := x.svc.TaskStatus(repo, TaskKindFanout); rec == nil || rec.State != TaskFinished {
+		t.Fatalf("task record = %+v", rec)
+	}
+	// Edges: ending an unknown key is a no-op success; a detached
+	// entry is no longer current.
+	if !x.svc.tasks.endIfQuiescent("acme/other", TaskKindFanout, "n", x.now) {
+		t.Fatal("unknown key must be a no-op success")
+	}
+	if x.svc.tasks.current(repo, TaskKindFanout, e) {
+		t.Fatal("ended entry must not be current")
+	}
+}
+
+// TestFanoutConcurrentEnqueueLosesNothing hammers the real
+// enqueueFanout/drainFanout paths: N seqs (one activity event + one
+// recipient each) each enqueued from R concurrent goroutines, so
+// attaches race terminal drains continuously. Every seq must still
+// produce its notification — pre-fix, an attach landing between the
+// terminal drain and end orphaned the seq (issue #72).
+func TestFanoutConcurrentEnqueueLosesNothing(t *testing.T) {
+	x := newHarness(t)
+	const repo = "acme/repo"
+	const n = 60
+	const per = 6
+	principals := make([]string, n)
+	for i := 0; i < n; i++ {
+		seq := i + 1
+		p := fmt.Sprintf("u%03d@example.com", i)
+		principals[i] = p
+		ev := ActivityEvent{Seq: seq, Repo: repo, Action: "commented", Num: seq, Kind: "issue",
+			Actor: "b", Title: "T", At: x.now.Format(dateTimeFmt),
+			Payload: encode(activityPayload{Class: "subscribed", Recipients: []activityRecipient{{Principal: p, Reason: ReasonSubscribed}}})}
+		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), encode(ev))
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		seq := i + 1
+		for j := 0; j < per; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				x.svc.enqueueFanout(repo, seq)
+			}()
+		}
+	}
+	wg.Wait()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		done := true
+		for _, p := range principals {
+			if countNotifs(t, x, p) != 1 {
+				done = false
+				break
+			}
+		}
+		if done {
+			if rec := x.svc.TaskStatus(repo, TaskKindFanout); rec != nil && rec.State == TaskFinished {
+				break
+			}
+			done = false
+		}
+		if time.Now().After(deadline) {
+			var missing []string
+			for _, p := range principals {
+				if countNotifs(t, x, p) != 1 {
+					missing = append(missing, p)
+				}
+			}
+			t.Fatalf("lost %d/%d fan-out seqs: %v", len(missing), n, missing)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
