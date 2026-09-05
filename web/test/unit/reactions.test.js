@@ -1,5 +1,6 @@
 // web/test/unit/reactions.test.js — issue #31: emoji mapping, %06x seq keys,
-// per-event summary entries, reaction_changed row text.
+// per-event summary entries, reaction_changed row text; issue #113:
+// the addable (not-on-the-comment) set.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -7,6 +8,7 @@ import {
   reactionEmoji,
   seqKey,
   summaryEntries,
+  addableReactions,
   reactionChangedText,
   adjustSummary,
 } from "../../src/lib/reactions.js";
@@ -40,6 +42,38 @@ test("summaryEntries misses nothing: unknown contents appended, missing seq empt
   assert.deepEqual(summaryEntries({}, 9), []);
   const summary = { "000000": { partyparrot: 2, heart: 1 } };
   assert.deepEqual(summaryEntries(summary, 0), [["heart", 1], ["partyparrot", 2]]);
+});
+
+test("addableReactions is the full set on an empty/missing summary", () => {
+  assert.deepEqual(addableReactions(undefined, 0), REACTIONS);
+  assert.deepEqual(addableReactions({}, 9), REACTIONS);
+});
+
+test("addableReactions excludes whatever the summary already shows (#113)", () => {
+  const summary = { "000003": { eyes: 1, "+1": 3, laugh: 0 } };
+  assert.deepEqual(addableReactions(summary, 3), ["-1", "laugh", "hooray", "confused", "heart", "rocket"]);
+  // Other seqs are unaffected.
+  assert.deepEqual(addableReactions(summary, 4), REACTIONS);
+});
+
+test("addableReactions ignores unknown contents and zero counts", () => {
+  const summary = { "000000": { partyparrot: 2, heart: 0 } };
+  assert.deepEqual(addableReactions(summary, 0), REACTIONS);
+});
+
+test("addableReactions drops a content once the optimistic add bumps it", () => {
+  const before = addableReactions(undefined, 3);
+  assert.ok(before.includes("+1"));
+  const after = addableReactions(adjustSummary(undefined, 3, "+1", +1), 3);
+  assert.ok(!after.includes("+1"));
+  assert.deepEqual(after, before.filter((r) => r !== "+1"));
+});
+
+test("addableReactions returns a content once its toggle-off removes it", () => {
+  const summary = { "000003": { "+1": 1, eyes: 2 } };
+  assert.ok(!addableReactions(summary, 3).includes("+1"));
+  const cleared = adjustSummary(summary, 3, "+1", -1);
+  assert.ok(addableReactions(cleared, 3).includes("+1"));
 });
 
 test("reactionChangedText keeps glyph and word form", () => {

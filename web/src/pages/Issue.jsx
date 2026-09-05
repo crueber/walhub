@@ -17,7 +17,8 @@ import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
-import { REACTIONS, reactionEmoji, summaryEntries, adjustSummary } from "../lib/reactions.js";
+import { reactionEmoji, summaryEntries, addableReactions, adjustSummary } from "../lib/reactions.js";
+import ReactionMenu from "../components/ReactionMenu.jsx";
 import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-events.js";
 
 // System-row text comes from the shared honest-event lib (null = comment
@@ -96,12 +97,12 @@ export default function Issue() {
     reload();
   };
 
-  // One in-flight reaction mutation per (seq, content): the picker and
-  // the chips share these keys, so a double-click (or Enter-repeat) can
-  // never double-fire — and the server dedups sequential duplicate adds
-  // per (actor, target, content) anyway (02 §8). Buttons disable while
-  // their key is busy; both are native <button>s (keyboard free) with a
-  // theme-agnostic disabled treatment.
+  // One in-flight reaction mutation per (seq, content): the plus-menu
+  // and the chips share these keys, so a double-click (or Enter-repeat)
+  // can never double-fire — and the server dedups sequential duplicate
+  // adds per (actor, target, content) anyway (02 §8). Buttons disable
+  // while their key is busy; both are native <button>s (keyboard free)
+  // with a theme-agnostic disabled treatment.
   const [getBusy, setBusy] = createSignal(new Set());
   const busyKey = (seq, content) => `${seq}:${content}`;
   const isBusy = (seq, content) => getBusy().has(busyKey(seq, content));
@@ -245,47 +246,41 @@ export default function Issue() {
                 events={events()}
                 textFor={eventText}
                 fmtDate={fmtDate}
-                actionsFor={(ev) => (
-                  <Show when={ev.type === "opened" || ev.type === "commented"}>
-                    <span class="ml-2 inline-flex gap-1" role="group" aria-label={`reactions for comment ${ev.seq}`}>
-                      <For each={REACTIONS}>
-                        {(r) => (
+                summaryFor={(ev) => {
+                  // The ONLY reaction surface (#113): one row per comment
+                  // in/near where its reactions appear — summary chips plus
+                  // a "+" menu offering exactly the addable set
+                  // (REACTIONS minus whatever the summary already shows;
+                  // adding bumps the count optimistically, which drops the
+                  // content from the menu). Chips toggle off (remove-404
+                  // falls back to add); there is no always-visible picker
+                  // row in the comment header anymore.
+                  if (ev.type !== "opened" && ev.type !== "commented") return null;
+                  const entries = summaryEntries(summary(), ev.seq);
+                  const addable = addableReactions(summary(), ev.seq);
+                  return (
+                    <div class="reaction-row mt-2 flex flex-wrap items-center gap-1" role="group" aria-label={`reactions on comment ${ev.seq}`}>
+                      <For each={entries}>
+                        {([content, count]) => (
                           <button
                             type="button"
-                            class="chip hover:border-zinc-400 disabled:cursor-wait disabled:opacity-50"
-                            aria-label={`react ${r}`}
-                            title={`react ${r}`}
-                            disabled={isBusy(ev.seq, r)}
-                            onClick={() => react(ev.seq, r)}
+                            class="chip disabled:cursor-wait disabled:opacity-50"
+                            aria-label={`toggle ${content} reaction, ${count} total`}
+                            title={`${content} · ${count}`}
+                            disabled={isBusy(ev.seq, content)}
+                            onClick={() => toggleReaction(ev.seq, content)}
                           >
-                            <span aria-hidden="true">{reactionEmoji(r)}</span>
+                            <span aria-hidden="true">{reactionEmoji(content)}</span> {count}
                           </button>
                         )}
                       </For>
-                    </span>
-                  </Show>
-                )}
-                summaryFor={(ev) => {
-                  const entries = () => summaryEntries(summary(), ev.seq);
-                  return (
-                    <Show when={(ev.type === "opened" || ev.type === "commented") && entries().length > 0}>
-                      <div class="reaction-summary mt-2 flex flex-wrap gap-1" role="group" aria-label={`reactions on comment ${ev.seq}`}>
-                        <For each={entries()}>
-                          {([content, count]) => (
-                            <button
-                              type="button"
-                              class="chip disabled:cursor-wait disabled:opacity-50"
-                              aria-label={`toggle ${content} reaction, ${count} total`}
-                              title={`${content} · ${count}`}
-                              disabled={isBusy(ev.seq, content)}
-                              onClick={() => toggleReaction(ev.seq, content)}
-                            >
-                              <span aria-hidden="true">{reactionEmoji(content)}</span> {count}
-                            </button>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
+                      <ReactionMenu
+                        seq={ev.seq}
+                        addable={addable}
+                        isBusy={(c) => isBusy(ev.seq, c)}
+                        onAdd={(c) => react(ev.seq, c)}
+                      />
+                    </div>
                   );
                 }}
               />

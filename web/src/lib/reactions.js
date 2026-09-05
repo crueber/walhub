@@ -48,6 +48,21 @@ export function summaryEntries(summary, seq) {
 }
 
 /**
+ * addableReactions(summary, seq) → [content, ...]: the REACTIONS contents
+ * with no live count on this event, in REACTIONS order (issue #113). The
+ * summary carries no per-user state, so "already on the comment" is the
+ * proxy for "already added": anything with a count is toggled off via its
+ * summary chip instead (remove-404 falls back to add, so a second viewer's
+ * add still flows through the chip). Adding a content optimistically bumps
+ * its count (adjustSummary), which drops it from this set — the add menu
+ * never offers what the chips already show.
+ */
+export function addableReactions(summary, seq) {
+  const per = (summary ?? {})[seqKey(seq)] ?? {};
+  return REACTIONS.filter((r) => (per[r] ?? 0) <= 0);
+}
+
+/**
  * Timeline row text for a reaction_changed event: the glyph up front for
  * scanners, the word form kept for clarity ("reacted 👀 eyes on #0").
  * (Kept for logs/diagnostics; the thread page folds these rows into the
