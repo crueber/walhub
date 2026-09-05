@@ -255,7 +255,8 @@ by vite — no code-splitting wired up.
   (`web/src/components/StarCount.jsx`) rendering `(3 ⭐)`-style beside the link via
   `GET …/api/social` under the shared `social:{o}/{r}` 30 s `useData` key (single-flighted,
   LRU-capped per §2.4) — the two pages share fetches, repeat visits within the TTL cost
-  zero GETs, and the link renders first with a muted `(…)` placeholder, so counts never
+  zero GETs while entries survive under the 400-entry LRU cap (a fully-maxed 500-row
+  cold load evicts the oldest entries, so the absolute worst case refetches some), and the link renders first with a muted `(…)` placeholder, so counts never
   block page render. Worst case stays bounded by the #117 caps (50 × 10 = 500 GETs cold,
   each independent). Formatting/TTL constants live in headless-testable `web/src/lib/stars.js`
   (`web/test/unit/stars.test.js`). Scope note: the org page has no repo listing, starred

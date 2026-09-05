@@ -4,9 +4,9 @@
 // Performance shape (documented, deliberate): one `GET …/api/social` per
 // rendered row, keyed `social:{o}/{r}` through the shared `useData`
 // promise-cache (single-flighted per key, `SOCIAL_TTL` 30 s, LRU-capped
-// per 12 §2.4) — the owners page, the `/:owner` page, and the repo chrome
-// all share fetches for the same repo, and repeat visits within the TTL
-// cost zero GETs. The link itself renders immediately; the count appears
+// per 12 §2.4) — the owners page and the `/:owner` page share fetches for
+// the same repo (the repo-chrome star toggle calls the same SDK method
+// directly, outside this cache), and repeat visits within the TTL cost
 // after load behind a muted `(…)` placeholder, so counts never block page
 // render. Worst case stays bounded by the #117 caps (50 owners × 10 repos
 // = 500 GETs on a cold cache, each independent so one slow repo never
