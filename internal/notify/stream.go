@@ -116,17 +116,48 @@ type RepoFrame struct {
 
 // repoBus multiplexes RepoFrames to per-repo subscribers with a bounded
 // recent ring (last RepoRing frames) for late attachers.
+//
+// Memory bound: at most RepoBusMaxRepos repo rings are retained, each at
+// most RepoRing frames. A repo's ring is dropped when its last subscriber
+// leaves (mirroring the subs cleanup in unsubscribe); repos that only ever
+// see publishes (no live subscribers) are capped by LRU eviction. Eviction
+// drops the replay ring only — live subscriber channels are never closed
+// by it, and the ring rebuilds on the next publish.
+//
+// Replay nuance: a subscriber attaching while (or before the idle evict of)
+// others are attached replays recent frames; one attaching after a fully
+// idle period — or to an LRU-evicted repo — starts from the live tail only.
+// Durable history is the feature timeline/API (08: frames invalidate
+// caches, the timeline is the backfill truth), never this ring.
+//
+// ### Concurrency
+// Hazard: publish/subscribe/unsubscribe racing on the ring maps, or an
+// eviction closing a live channel (send-on-closed panic). Avoidance: the
+// ring, recency, and subs maps are all guarded by the pre-existing b.mu
+// (no new lock); eviction deletes ring entries only, never subs entries or
+// channels; channel close stays solely in the unsubscribe path (the bus
+// owns the channels; receivers never close — 13 §5).
 type repoBus struct {
 	mu   sync.Mutex
 	subs map[string]map[chan RepoFrame]struct{}
 	ring map[string][]RepoFrame
+	last map[string]uint64 // LRU recency per retained repo (guarded by mu)
+	clk  uint64            // LRU clock (guarded by mu)
 }
 
 // RepoRing bounds the per-repo recent ring.
 const RepoRing = 64
 
+// RepoBusMaxRepos bounds how many repo rings are retained process-wide
+// (RepoBusMaxRepos * RepoRing frames worst case).
+const RepoBusMaxRepos = 256
+
 func newRepoBus() *repoBus {
-	return &repoBus{subs: map[string]map[chan RepoFrame]struct{}{}, ring: map[string][]RepoFrame{}}
+	return &repoBus{
+		subs: map[string]map[chan RepoFrame]struct{}{},
+		ring: map[string][]RepoFrame{},
+		last: map[string]uint64{},
+	}
 }
 
 // PublishStream publishes one repo frame (non-blocking, drop-oldest).
@@ -158,6 +189,14 @@ func (b *repoBus) publish(f RepoFrame) {
 		ring = ring[len(ring)-RepoRing:]
 	}
 	b.ring[f.Repo] = ring
+	b.clk++
+	b.last[f.Repo] = b.clk
+	// One publish adds at most one repo key, so a single eviction restores
+	// the bound; an `if` (not `for`) also guarantees no lock-held spin if
+	// the ring/last invariant ever diverged (evictLRULocked no-ops then).
+	if len(b.ring) > RepoBusMaxRepos {
+		b.evictLRULocked()
+	}
 	for ch := range b.subs[f.Repo] {
 		select {
 		case ch <- f:
@@ -185,6 +224,42 @@ func (s *Service) repoLiveCount(repo string) int {
 	return s.rbus.liveCount(repo)
 }
 
+// evictLRULocked drops the least-recently-published retained ring so the
+// bus stays within RepoBusMaxRepos repos. Repos with live subscribers are
+// evicted only when every retained repo has subscribers; subscriber
+// channels are never touched — the ring rebuilds on the next publish.
+// Caller holds b.mu.
+func (b *repoBus) evictLRULocked() {
+	victim, victimLast, found := "", uint64(0), false
+	for repo, last := range b.last {
+		if len(b.subs[repo]) > 0 {
+			continue // prefer evicting idle repos; live replay has an audience
+		}
+		if !found || last < victimLast {
+			victim, victimLast, found = repo, last, true
+		}
+	}
+	if !found {
+		for repo, last := range b.last {
+			if !found || last < victimLast {
+				victim, victimLast, found = repo, last, true
+			}
+		}
+	}
+	if !found {
+		return
+	}
+	delete(b.ring, victim)
+	delete(b.last, victim)
+}
+
+// ringCount reports retained repo rings (tests only).
+func (b *repoBus) ringCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.ring)
+}
+
 // liveCount reports current repo subscribers (tests only).
 func (b *repoBus) liveCount(repo string) int {
 	b.mu.Lock()
@@ -202,6 +277,10 @@ func (b *repoBus) subscribe(repo string) (<-chan RepoFrame, []RepoFrame, func())
 	}
 	set[ch] = struct{}{}
 	recent := append([]RepoFrame(nil), b.ring[repo]...)
+	if _, ok := b.ring[repo]; ok {
+		b.clk++
+		b.last[repo] = b.clk
+	}
 	b.mu.Unlock()
 	var once sync.Once
 	return ch, recent, func() {
@@ -211,6 +290,10 @@ func (b *repoBus) subscribe(repo string) (<-chan RepoFrame, []RepoFrame, func())
 				delete(set, ch)
 				if len(set) == 0 {
 					delete(b.subs, repo)
+					// Last subscriber out: drop the replay ring too, or the
+					// map grows one entry per repo ever published.
+					delete(b.ring, repo)
+					delete(b.last, repo)
 				}
 			}
 			b.mu.Unlock()

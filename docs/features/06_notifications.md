@@ -452,6 +452,18 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   Rationale: a reason-keyed reservation object would need read-path and retention lifecycle to honor
   "a read does not block a new one"; the index row IS the live set, so arbitrating there adds no new
   object family and no new lifecycle.
+- **Bounded repoBus ring (issue #93, 2026-09-05):** `repoBus.ring` grew one entry per repo ever
+  published and was never deleted (subscriber cleanup existed; ring cleanup did not). The fix pairs
+  evict-on-last-subscriber (unsubscribe drops the repo's ring alongside its subs entry — the same
+  discipline the subs map already had) with an LRU cap of `RepoBusMaxRepos` (256) retained repos for
+  the publish-with-no-subscribers path, which publish-then-subscribe replay (kept: existing tests
+  assert it) would otherwise leave unbounded. Eviction prefers idle repos, drops replay rings only
+  (live channels are never closed by it; the ring rebuilds on the next publish), and all recency
+  state rides the pre-existing bus mutex — no new locks, no timers, no goroutines. Behavior nuance:
+  a subscriber attaching after a fully idle period, or to an LRU-evicted repo, replays nothing and
+  starts from the live tail; durable history is the feature timeline/API (08: frames invalidate
+  caches, the timeline is the backfill truth), never this ring. Worst case is now 256 repos × 64
+  frames.
 
 ## Explicitly out of scope
 
