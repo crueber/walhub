@@ -468,6 +468,19 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   Removal needs no new affordance: the sidebar `+` dropdown's "No
   milestone" row PATCHes the explicit null above (verified end to end in
   the browser drive for this change).
+- **Sidebar mutations are pinned to their issue** (issue #143, 2026-09-05).
+  The thread route reuses one component instance across issue numbers, so
+  the label toggle and milestone select capture `num()`/`key()` before
+  the PATCH: the optimistic paint, the PATCH, and the reconcile all name
+  the clicked issue even when the view navigates mid-flight (the old tail
+  would `reload()` the NEW issue's key and strand the mutated issue on
+  its optimistic guess until an SSE frame arrived). The per-issue busy
+  guards reset on navigation for the same reason — an in-flight mutation
+  on the previous issue must never silently swallow a click on the new
+  one (the busy early-return fires no PATCH and posts no tray entry, so
+  the menu just closes). No-op selects still skip the round trip
+  silently by design (`milestonePatch` returns null); every real click
+  either PATCHes or reports.
 - **Default close-reason + `*none`/`none` filter spellings** (`assignee=*none`,
   `milestone=none`) are implemented exactly as §7 rows state.
 - **Event windows return arrays newest-first** (most recent event at index
