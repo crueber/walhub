@@ -1,8 +1,8 @@
 // web/src/pages/Issues.jsx — route "/:owner/:name/issues" (02 §11): the
 // issue list with a filter bar (state/labels/assignee/milestone/since),
-// paged cards from the index (index-first, LIST fallback server-side),
-// ALWAYS rendered newest-first by number descending (#48).
-// new-issue + labels/milestones links. Cards upsert in place on `issue`
+// paged divider-separated rows from the index (index-first, LIST fallback
+// server-side), ALWAYS rendered newest-first by number descending (#48).
+// new-issue + labels/milestones links. Rows upsert in place on `issue`
 // SSE frames (the repo stream is shared; this page refetches its window).
 
 import { createSignal, For, Show } from "solid-js";
@@ -43,7 +43,7 @@ export default function Issues() {
 
   const reload = () => invalidate(key());
 
-  // Label colors for the card chips (#45): the index cards carry names
+  // Label colors for the row chips (#45): the index rows carry names
   // only (02 §2 projection), so colors resolve through the cached
   // `labels:{o}/{r}` set (30 s TTL, one shared entry with the thread
   // page picker). Unknown names render as bare chips (02 §3.1).
@@ -131,22 +131,28 @@ export default function Issues() {
                 />
               }
             >
-              <ul class="grid gap-2">
+              <ul>
                 <For each={sortByNumDesc(page().issues)}>
                 {(issue) => (
-                  <li class="card flex flex-wrap items-baseline gap-2 p-3">
-                    {statePill(issue.state)}
-                    <A
-                      class="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
-                      href={`/${ctx.full}/issues/${issue.num}`}
-                    >
-                      #{issue.num} {issue.title}
-                    </A>
-                    <span class="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
-                      {issue.comment_count} comments · <DateTime value={issue.updated_at} />
-                    </span>
+                  // Divider-separated rows, never boxed (#135, echoing the
+                  // ThreadTimeline comment-entry dividers from #109). Title
+                  // first, state pill after it — pill-before-title offset
+                  // the baseline weirdly.
+                  <li class="border-t border-zinc-200 py-3 first:border-t-0 first:pt-0 dark:border-zinc-800">
+                    <div class="flex flex-wrap items-baseline gap-2">
+                      <A
+                        class="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+                        href={`/${ctx.full}/issues/${issue.num}`}
+                      >
+                        #{issue.num} {issue.title}
+                      </A>
+                      {statePill(issue.state)}
+                      <span class="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
+                        {issue.comment_count} comments · <DateTime value={issue.updated_at} />
+                      </span>
+                    </div>
                     <Show when={(issue.labels ?? []).length > 0}>
-                      <span class="flex w-full flex-wrap gap-1">
+                      <span class="mt-1 flex flex-wrap gap-1">
                         <For each={issue.labels}>
                           {(l) => <LabelChip name={l} map={colorMap()} />}
                         </For>
