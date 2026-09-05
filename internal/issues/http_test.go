@@ -318,6 +318,20 @@ func TestPatchIssueMilestoneHTTP(t *testing.T) {
 	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"milestone":"`+m.ID+`"}`); w.Code != http.StatusOK {
 		t.Fatalf("set = %d: %s", w.Code, w.Body.String())
 	}
+	// Absent key is a no-op (must not clear the milestone just set).
+	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"title":"t2"}`); w.Code != http.StatusOK {
+		t.Fatalf("absent-key = %d: %s", w.Code, w.Body.String())
+	} else {
+		var res struct {
+			Thread *Thread `json:"thread"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if res.Thread.Milestone == nil || *res.Thread.Milestone != m.ID {
+			t.Fatalf("absent-key milestone = %v, want %q", res.Thread.Milestone, m.ID)
+		}
+	}
 	// Explicit null clears (absent key would be a no-op — the wire
 	// distinguishes them; issue #119).
 	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"milestone":null}`); w.Code != http.StatusOK {
