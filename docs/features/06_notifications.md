@@ -357,7 +357,15 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   entry on a miss (the seq is re-attached there, so the orphaned copy on the detached entry is never
   drained twice — and any double drain is idempotent anyway via deterministic ids + Create-412).
   Rationale: neither half alone closes it (a re-checking end still loses an attach landing between the
-  check and the removal; a re-verifying joiner still loses to a bare end that never re-checks).
+   check and the removal; a re-verifying joiner still loses to a bare end that never re-checks).
+- **SSE keepalive goroutine lifecycle (issue #73, 2026-09-05):** the per-user stream's keepalive
+  goroutine ranged over `ka.C`, and `close()` only called `Ticker.Stop()` — which never closes the
+  channel — so every disconnected stream leaked one goroutine. The writer now carries a sender-owned
+  `done` channel (closed exactly once under the `ended` guard) plus the request context, and the
+  goroutine selects on both instead of ranging the ticker (13 channel rule: sender owns and closes;
+  every goroutine exits via context). Same latent shape fixed in the sibling `internal/api` SSE
+  envelope (`Close()` now ends the stream, not just the ticker); the 10 s keepalive wire contract is
+  unchanged. Rationale: Stop-without-close cannot terminate a range; teardown must signal the waiter.
 
 ## Explicitly out of scope
 
