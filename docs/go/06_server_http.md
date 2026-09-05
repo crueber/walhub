@@ -169,7 +169,7 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/setup` | setup UI shell (SolidJS SPA route, D-WEB-6); assets at `/setup/assets/*` |
+| GET | `/setup` | setup UI shell (SolidJS SPA route, D-WEB-6); assets at `/_ui/assets/*` |
 | GET | `/api/v1/setup` | full config schema + effective values + file state + validation errors |
 | POST | `/api/v1/setup/test` | validate a proposed config without saving |
 | PUT | `/api/v1/setup` | validate + atomically write `<data-dir>/walhub.toml` |
@@ -230,7 +230,7 @@ locate data dir (--data-dir flag > WALHUB_DATA_DIR env; default ~/.local/share/w
 ├─ no <data-dir>/walhub.toml → boot with the first-run defaults (below) + a LOUD setup banner in the logs on every start
 ├─ config file present, parses + validates → normal boot (§10.4)
 └─ config file present but INVALID (parse or validation errors) → SETUP-ONLY MODE:
-     only /setup, /setup/assets/*, /api/v1/setup, /api/v1/setup/test, PUT /api/v1/setup,
+     only /setup, /_ui/*, /api/v1/setup, /api/v1/setup/test, PUT /api/v1/setup,
      /healthz, /readyz, and /services/public/* answer; everything else → 503 plain text
      with a pointer to /setup. The UI shows the exact errors; a saved fix takes effect
      after a restart (the process stays in setup-only mode until restarted).
@@ -248,7 +248,7 @@ locate data dir (--data-dir flag > WALHUB_DATA_DIR env; default ~/.local/share/w
 
 **Data-dir layout:** `<data-dir>/store/` (object store), `<data-dir>/cache/` (prewarm, LFS spool, TLS), `<data-dir>/walhub.toml` (saved by setup Save; the only config file the server reads).
 
-**Setup UI:** `GET /setup` serves the page; `GET /setup/assets/*` serves its ESM/CSS (embedded `fs.FS`, precompressed, like `/_ui`). The page groups ALL config keys by section with current effective values (merging defaults ← file ← env), validates client-side, and Saves via the API.
+**Setup UI:** `GET /setup` serves the SPA shell; its JS/CSS come from `/_ui/assets/*` (the vite bundle, immutable). The page groups ALL config keys by section with current effective values (merging defaults ← file ← env), validates client-side, and Saves via the API.
 
 **Setup API:**
 

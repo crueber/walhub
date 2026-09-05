@@ -34,8 +34,8 @@ dark as the shipped default). The SDK is the only way the SPA talks to the serve
 <div id="root"></div>
 ```
 
-Routing is `@solidjs/router` (`web/src/index.jsx`): the route inventory and lazy loading behavior are
-UNCHANGED from §2.3; pages are lazy route components resolved on first navigation and cached by the router.
+Routing is `@solidjs/router` (`web/src/index.jsx`): the route inventory is
+UNCHANGED from §2.3; pages are static route components (top-level `import`s, one vite bundle — no `lazy()` code-splitting wired up).
 
 ## 1. Artifact A — the SDK (`web/sdk/`)
 
@@ -67,7 +67,7 @@ Build (SDK leg of `make web`; the SPA leg is `vite build` — devDependencies ar
 and the SDK itself stays dependency-free):
 
 ```sh
-cd web && pnpm install --frozen-lockfile     # devDependencies only: esbuild
+cd web && pnpm install --frozen-lockfile     # devDependencies: vite + esbuild
 pnpm run build:sdk                            # esbuild sdk/src/index.js --bundle --format=esm \
                                               #   --target=es2022 --minify --outfile=dist/repos.js
 ```
@@ -180,14 +180,14 @@ import { createStore } from "solid-js/store";
 
 **Reactivity contract:**
 
-- Signals are synchronous pull/push: `set` notifies subscribers synchronously; effects run in registration order after a microtask-free synchronous flush (batching is NOT required; each `set` triggers dependent effects immediately — the app is small enough that consistency beats batching).
+- Signals update through the reactive graph: `set` marks dependents dirty and Solid flushes effects in topological order afterward — synchronous `set`s batch, so an effect reading two signals set together runs once, not twice.
 - Dependencies are tracked at read time: any signal read while an effect/memo is running becomes a dependency. No explicit dependency lists.
 - `onCleanup` inside a component registers teardown on unmount; long-lived non-component scopes use `createRoot` with explicit `dispose()` — the lifecycle rule of §2.5.
-- Memos are lazy-ish: recomputed on first read after invalidation, not eagerly.
+- Memos are cached derivations: recomputed when a dependency changes, read cheaply otherwise.
 - UI updates are Solid components + JSX: effects write to DOM nodes (`el.textContent = …`, `el.classList.toggle(…)`) or re-render a list; no VDOM diffing beyond Solid's fine-grained updates.
 
-**Components:** pages are Solid components (`web/src/pages/*.jsx`) mounted by the router; shared UI lives in
-`web/src/components/*.jsx`. Data fetching composes over the §2.4 cache via Solid primitives.
+**Components:** pages are Solid components (`web/src/pages/*.jsx`) mounted by the router; shared UI is the
+router root (`web/src/App.jsx`: header, nav, theme toggle). Data fetching composes over the §2.4 cache via Solid primitives.
 
 ### 2.2 npm dependency budget (DECIDED — `solid-js` + `@solidjs/router` runtime, D-WEB-6)
 
@@ -208,7 +208,7 @@ bundle). Everything previous packages provided that is NOT back in the budget st
 | Route | Page |
 |---|---|
 | `/` | owners (list of owners; each → their repos) |
-| `/api` | API docs page (lazy `import()`) |
+| `/api` | API docs page |
 | `/:owner` | repos of an owner |
 | `/:owner/:repo` | repo shell — tabs Code, Commits, WAL, Settings + tasks overlay |
 | `/:owner/:repo/tree/*` | tree at ref/path |
@@ -219,9 +219,9 @@ bundle). Everything previous packages provided that is NOT back in the budget st
 | `/:owner/:repo/settings` | settings (3 sub-tabs) |
 | `/setup` | Setup UI (§2.10) |
 
-All deep-linkable; every UI route returns the SPA `index.html` from the server. Pages are router-lazy
-components (`lazy(() => import("./pages/Commit.jsx"))`), resolved on first navigation and cached by the
-router — code-split by vite, nothing else to wire up.
+All deep-linkable; every UI route returns the SPA `index.html` from the server. Pages are static route
+components (`component={Commit}` with a top-level `import` in `web/src/index.jsx`), bundled into the app
+by vite — no code-splitting wired up.
 
 ### 2.4 Data layer (hand-rolled)
 
@@ -307,8 +307,8 @@ var web embed.FS            // dist/index.html, dist/assets/*, dist/repos.js —
 
 | Path | Cache behavior |
 |---|---|
-| `/assets/*` (content-hashed vite output, immutable) | `Cache-Control: public, max-age=31536000, immutable` |
-| `index.html` (all UI routes) | `Cache-Control: no-cache` + ETag |
+| `/_ui/assets/*` (content-hashed vite output, immutable) | `Cache-Control: public, max-age=31536000, immutable` |
+| `/_ui/index.html` and every UI route (the SPA shell) | `Cache-Control: no-cache` + ETag |
 | `/repos.js` | `Cache-Control: no-cache` + ETag |
 
 Compression: `gzip` via server middleware for text assets (`text/*`, `application/javascript`, `application/json`, `text/css`) when `Accept-Encoding` contains `gzip` and the body is ≥ 1 KiB — on-the-fly `gzip.Writer` with level 6, `Vary: Accept-Encoding` set, no brotli, no precompressed sibling files. Serving details, route registration under `internal/server`, and the `X-Walgit-Capabilities` edge contract are specified in `06_server_http.md`; the API endpoints themselves in `07_api.md`.
@@ -322,8 +322,8 @@ web/
 ├── sdk/src/            ← artifact A source, SUBMODULES (§1.0): index/core/errors/sse/auth/repo/admin/types
 ├── dist/               ← build output, gitignored: index.html, assets/* (hashed), repos.js
 ├── package.json        ← runtime: solid-js, @solidjs/router; dev: vite, vite-plugin-solid, @tailwindcss/vite, tailwindcss, esbuild. scripts: build:ui, build:sdk, build
-├── src/                ← artifact B: index.jsx router, pages/*.jsx, components/*.jsx, lib/*.js, ui.css (Tailwind entry)
-└── test/               ← node --test suites (§5): unit/*.test.js, smoke/*.test.js, helpers/server.js
+├── src/                ← artifact B: index.jsx router, pages/*.jsx, lib/*.js, ui.css (Tailwind entry)
+└── test/               ← node --test suites (§5): unit/*.test.js (incl. smoke), helpers/fetch.js
 ```
 
 The SPA is vite-built from `web/src/**` into `web/dist/`; the SDK is esbuild-bundled from
@@ -332,10 +332,10 @@ The SPA is vite-built from `web/src/**` into `web/dist/`; the SDK is esbuild-bun
 
 ## 5. Testing the JS (`node --test`, zero npm test deps)
 
-Runner: Node's built-in test runner — `node --test web/test/unit/*.test.js`. No jest, no vitest, no test-framework dependencies. Logic and DOM are **separated by rule**: every module in `web/src/lib/` except `data.js`'s DOM-adjacent bits must be importable in Node with no `document`/`window` access; DOM wiring lives in `web/src/pages/` and `main.js`.
+Runner: Node's built-in test runner — `node --test web/test/unit/*.test.js`. No jest, no vitest, no test-framework dependencies. Logic and DOM are **separated by rule**: every module in `web/src/lib/` except `data.js`'s DOM-adjacent bits must be importable in Node with no `document`/`window` access; DOM wiring lives in `web/src/pages/` and `index.jsx`.
 
 **Pure (headless-testable) modules:** `sdk/src/*.js` (api client groups, injectable `fetch` + stream shim, envelope parser), `lib/sse.js` (frame parser, one parser shared with `sdk/src/sse.js`), `lib/diff.js`, `lib/markdown.js`, `lib/sanitize.js`, `lib/setup.js` (setup form validation rules, mirroring the server), `lib/highlight.js`.
-**DOM-wiring modules (not unit-tested):** `pages/*.js`, `main.js`, the router glue, anything touching `document`/`template`/`location` — exercised by smoke tests instead.
+**DOM-wiring modules (not unit-tested):** `pages/*.jsx`, `index.jsx`, the router glue, anything touching `document`/`location` — exercised by smoke tests instead.
 
 ```js
 // web/test/unit/sdk-envelope.test.js (skeleton)
@@ -353,13 +353,14 @@ test("SSE envelope → result payload", async () => {
 ```
 
 ```js
-// web/test/smoke/server.test.js (skeleton) — real server binary, real fetch
+// web/test/unit/smoke.test.js (skeleton) — real server binary, real fetch.
+// CI serves a build for this file (WALHUB_TEST_WEB_BASE_URL); locally the file
+// skips when no server is up, so `make test` stays green on a cold machine.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startServer } from "./helpers/server.js";   // spawns ./walhub serve on a temp data-dir, waits for /healthz
+const base = process.env.WALHUB_TEST_WEB_BASE_URL ?? "http://127.0.0.1:8080";
 
 test("pages and SDK serve", async () => {
-  const base = await startServer();
   const ui = await fetch(`${base}/`);
   assert.equal(ui.status, 200);
   assert.match(await ui.text(), /id="root"/);
@@ -370,7 +371,7 @@ test("pages and SDK serve", async () => {
 });
 ```
 
-`web/test/smoke/setup-api.test.js` (same shape): on a fresh data-dir (D5 defaults boot), `GET /api/v1/setup` → `{access: "open"}`, `POST /api/v1/setup/test` with `{server: {listen: "0.0.0.0:9999"}}` → 200, `PUT /api/v1/setup` → 200 with `restart_required` containing `"server.listen"`. Also required: `web/test/unit/setup.test.js` — table-driven cases for the `lib/setup.js` validators mirroring the server (valid values pass; range/enum/format/cross-field violations fail with the server's message).
+Required alongside it: `web/test/unit/setup-api.test.js` (same shape): on a fresh data-dir (D5 defaults boot), `GET /api/v1/setup` → `{access: "open"}`, `POST /api/v1/setup/test` with `{server: {listen: "0.0.0.0:9999"}}` → 200, `PUT /api/v1/setup` → 200 with `restart_required` containing `"server.listen"`. Also required: `web/test/unit/setup-form.test.js` — table-driven cases for the `lib/setup.js` validators mirroring the server (valid values pass; range/enum/format/cross-field violations fail with the server's message).
 
 Make wiring (D3 — all dev/CI targets are Make targets): `test-web:` runs `node --test web/test/unit/*.test.js`.
 

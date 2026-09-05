@@ -30,7 +30,7 @@ An operator MUST be able to build, containerize, deploy (one box or a fleet), an
   var Files embed.FS
   ```
 - `internal/server` serves `web.Files` through `http.FileServerFS`; the browser loads the **vite-built SolidJS bundle** (`web/dist/index.html` + content-hashed `assets/*`, 2026-09-02 user decision, DEVIATIONS.md D-WEB-6 — Tailwind v4 CSS-first, dark mode by default, no CDN). The SDK is **authored as submodules** (`web/sdk/src/*.js`, 12_web_ui.md §1.0) and bundled by esbuild into `web/dist/repos.js`, served at its contract path (see 06_server_http.md / 07_api.md) — the `repos.mjs` twin is gone (D2); `make build` depends on `make web`.
-- The SPA is vite-built (`pnpm run build:ui` → `web/dist/`); the SDK bundle is esbuild-bundled (`pnpm run build:sdk` → `web/dist/repos.js`) — `pnpm run build` runs both. `node --test web/test/` runs the headless JS tests (§7.2/§8) but never feeds the build. The binary embeds ONLY the built `web/dist/` (`//go:embed all:dist` in `web/embed.go`), so sources (`web/src/`, `web/sdk/src/`, `web/test/`) and dotfiles stay out of the binary while remaining on disk for dev/tests.
+- The SPA is vite-built (`pnpm run build:ui` → `web/dist/`); the SDK bundle is esbuild-bundled (`pnpm run build:sdk` → `web/dist/repos.js`) — `pnpm run build` runs both. `node --test web/test/unit/*.test.js` runs the headless JS tests (§7.2/§8) but never feeds the build. The binary embeds ONLY the built `web/dist/` (`//go:embed all:dist` in `web/embed.go`), so sources (`web/src/`, `web/sdk/src/`, `web/test/`) and dotfiles stay out of the binary while remaining on disk for dev/tests.
 
 ### 1.3 Version identity
 
@@ -369,7 +369,7 @@ test:                           ## fast tier; -race needs cgo, so CGO stays on h
 race: test                      ## alias, named for the flag
 
 js-test:                        ## headless JS logic tests — Node's own runner, zero npm deps
-	node --test web/test/
+	node --test web/test/unit/*.test.js
 
 e2e:                            ## smart-HTTP end-to-end against the real git binary
 	CGO_ENABLED=1 go test -race -tags e2e ./internal/server/... -run TestE2E
@@ -420,7 +420,7 @@ when: { event: [push, pull_request] }
 steps:
   vet:   { image: golang:1.25, commands: [make vet]  }
   test:  { image: golang:1.25, commands: [make test] }   # golang image ships git + gcc (-race)
-  js-test: { image: node:22-alpine, commands: [node --test web/test/] }
+  js-test: { image: node:22-alpine, commands: [node --test web/test/unit/*.test.js] }
   cover: { image: golang:1.25, commands: [make cover], depends_on: [test] }
   e2e:   { image: golang:1.25, commands: [make e2e],   depends_on: [test] }
   contract: { image: golang:1.25, commands: [make contract], depends_on: [test] }
