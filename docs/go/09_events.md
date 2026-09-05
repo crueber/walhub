@@ -337,7 +337,8 @@ fails N times exercises at-least-once replay.
   client followed up to 10 cross-scheme redirects and Go forwards custom headers cross-host, so a
   validated URL could 302 the HMAC secret + body onto `http://169.254.169.254/` or any private IP.
   The fix refuses ALL redirects (a 3xx is a delivery failure, cursor untouched) and pins a
-  resolve-screen-dial in the transport (`internal/events/ssrf.go`, stdlib `netip` only). Refuse-all
+  resolve-screen-dial in the transport (`internal/egress`, stdlib `netip` only, with
+  `internal/events/ssrf.go` keeping its names as thin wrappers). Refuse-all
   rather than same-host-only because same-host still permits an https→http plaintext downgrade.
   Screening runs at every delivery (DNS can change between config and POST), not just at config
   time; the range table extends the repoimport `isPrivateIP` logic with 198.18/15 + TEST-NETs +

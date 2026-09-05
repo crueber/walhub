@@ -24,7 +24,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -37,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/egress"
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
@@ -294,22 +294,35 @@ func (s *Service) DeleteHook(ctx context.Context, owner, repo, id string) error 
 
 // --- delivery loop ----------------------------------------------------------------------
 
-// hookClient is the dedicated delivery client (bulk bytes never share a
+// hookClient is the dedicated delivery lane (bulk bytes never share a
 // client with control-plane traffic — here webhooks get their own lane).
-var hookClient = &http.Client{Timeout: WebhookTimeout}
+// Redirects are refused outright and every dial is screened against the
+// non-public ranges with the check and the connect pinned to one
+// resolution (internal/egress, shared with the events bridge so the two
+// sinks cannot drift apart); either layer failing fails the delivery
+// with the cursor untouched.
+//
+// Refuse-all (not same-host-only): a same-host https→http downgrade
+// would still leak the secret and body in plaintext, and "same host" is
+// DNS-defined anyway. Trade-off, stated plainly: benign redirects fail
+// too — a trailing-slash normalization hop or an http→https upgrade is a
+// delivery error, not a silent follow. Hook URLs must be configured in
+// canonical (final, https) form; the failure lands on the deliveries
+// ring and retries next pass.
+var hookClient = &http.Client{
+	Timeout:       WebhookTimeout,
+	CheckRedirect: egress.RefuseRedirect,
+	Transport:     egress.Transport(false),
+}
 
-// hookClientInsecure is the same lane with TLS verification disabled,
-// selected per hook by insecure_tls (§1.4, default false). Cloned from the
-// default transport so proxy/env behavior is preserved; stdlib only.
-var hookClientInsecure = &http.Client{Timeout: WebhookTimeout, Transport: insecureTransport()}
-
-func insecureTransport() http.RoundTripper {
-	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
-		clone := tr.Clone()
-		clone.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		return clone
-	}
-	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+// hookClientInsecure is the same hardened lane with TLS verification
+// disabled, selected per hook by insecure_tls (§1.4, default false).
+// Insecure never means unpinned: redirects are still refused and the
+// dial screen still applies; only the cert check is skipped.
+var hookClientInsecure = &http.Client{
+	Timeout:       WebhookTimeout,
+	CheckRedirect: egress.RefuseRedirect,
+	Transport:     egress.Transport(true),
 }
 
 // hookClientFor selects the delivery client for h (insecure only when the
@@ -405,7 +418,9 @@ func (s *Service) probeAhead(ctx context.Context, owner, repo string, seq int) i
 }
 
 // postEvent POSTs one activity event; returns the status (0 + err on
-// transport failure). The secret never leaves the HMAC + TLS.
+// transport failure). The secret never leaves the HMAC + TLS: any 3xx
+// fails (no redirect is followed, so no signature/body crosses hosts)
+// and any non-public dial target fails closed before any SYN.
 func (s *Service) postEvent(ctx context.Context, h *Hook, ev *ActivityEvent) (int, error) {
 	body := encode(ev)
 	req, err := http.NewRequestWithContext(ctx, "POST", h.URL, bytes.NewReader(body))
