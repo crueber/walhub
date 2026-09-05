@@ -18,33 +18,12 @@ import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { REACTIONS, reactionEmoji, summaryEntries, adjustSummary } from "../lib/reactions.js";
+import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-events.js";
 
+// System-row text comes from the shared honest-event lib (null = comment
+// body). Never asserts a close reason the event does not carry.
 function eventText(ev) {
-  switch (ev.type) {
-    case "opened":
-    case "commented":
-      return null; // rendered as markdown body
-    case "title_changed":
-      return `retitled “${ev.from}” → “${ev.to}”`;
-    case "labels_changed":
-      return `labels ${(ev.added ?? []).map((l) => `+${l}`).join(" ")} ${(ev.removed ?? []).map((l) => `-${l}`).join(" ")}`.trim() || "labels changed";
-    case "assignees_changed":
-      return `assignees ${(ev.added ?? []).map((a) => `+${a}`).join(" ")} ${(ev.removed ?? []).map((a) => `-${a}`).join(" ")}`.trim() || "assignees changed";
-    case "state_changed":
-      return ev.to === "closed" ? `closed as ${ev.reason ?? "completed"}` : "reopened";
-    case "milestone_changed":
-      return `milestone ${ev.from ?? "none"} → ${ev.to ?? "none"}`;
-    case "referenced":
-      return `referenced by #${ev.source?.num ?? "?"}`;
-    case "cross_referenced":
-      return `referenced from ${ev.source?.repo ?? "?"}#${ev.source?.num ?? "?"}`;
-    // No reaction_changed case: those events fold into the per-comment
-    // summary chips below (#42b) and never reach the timeline.
-    case "closed_by_pr":
-      return `closed by #${ev.pr_num} (${ev.keyword})`;
-    default:
-      return ev.type;
-  }
+  return issueEventText(ev);
 }
 
 export default function Issue() {
@@ -94,16 +73,26 @@ export default function Issue() {
     reload();
   };
 
-  const commentAndClose = async (body) => {
+  const commentAndClose = async (body, reason) => {
     // No atomic comment+close endpoint (PATCH takes state only): post the
     // body first when non-empty (GitHub semantics — empty body just
-    // closes), then close. Either step throwing keeps the composer text
-    // (CommentComposer clears only on success); after a comment-posted /
-    // close-failed split the plain Close button finishes the job.
+    // closes), then close with the EXPLICIT reason chosen in the composer
+    // menu — the API defaults an omitted reason to completed, so the UI
+    // always sends one (closePatch throws on anything else). Either step
+    // throwing keeps the composer text (CommentComposer clears only on
+    // success); after a comment-posted / close-failed split the plain
+    // Close menu finishes the job.
     if (String(body ?? "").trim()) {
       await ctx.repoClient.issues.comment(num(), body);
     }
-    await ctx.repoClient.issues.patch(num(), { state: "closed" });
+    await ctx.repoClient.issues.patch(num(), closePatch(reason));
+    reload();
+  };
+
+  // Explicit-reason close (#109): the composer chooser supplies
+  // completed|not_planned; closePatch refuses to build a body without one.
+  const close = async (reason) => {
+    await ctx.repoClient.issues.patch(num(), closePatch(reason));
     reload();
   };
 
@@ -245,7 +234,7 @@ export default function Issue() {
             <>
               <h2 class="mb-1 text-lg font-semibold">
                 <span class={t().state === "open" ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-500"}>
-                  #{t().num} {t().state === "open" ? "Open" : "Closed"}
+                  #{t().num} {t().state === "open" ? "Open" : closedStateLabel(t().state_reason)}
                 </span>{" "}
                 {t().title}
               </h2>
@@ -311,7 +300,8 @@ export default function Issue() {
                   onCommentAndClose={t().state === "open" ? commentAndClose : undefined}
                   commentAndCloseLabel="Comment and Close"
                   closeLabel={t().state === "open" ? "Close" : "Reopen"}
-                  onClose={() => patch({ state: t().state === "open" ? "closed" : "open" })}
+                  closeChooser={t().state === "open"}
+                  onClose={(reason) => (t().state === "open" ? close(reason) : patch({ state: "open" }))}
                   errorKey="issue-comment"
                   mentionId="mention-issue-comment"
                   mentionNames={thread()?.participants}

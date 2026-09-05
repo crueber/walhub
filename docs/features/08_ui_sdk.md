@@ -56,8 +56,8 @@ the repo header (07, optimistic update + rollback), "New issue"/"New pull reques
 
 | Component | Purpose | Contract |
 |---|---|---|
-| `ThreadTimeline` | Renders a P3 event log (issue thread, PR conversation, review thread). One row per event kind: opened, commented, labeled, unlabeled, state-changed, assigned, referenced, review-posted, check-reported, merged, closed, reopened | Input: header + seq window of events (`{after_seq, n}`); compensating events render as normal rows (never rewrite history); comment bodies via markdown-lite + sanitizer; `aria-live="polite"` region so SSE-appended rows announce; dedup key `(num, event_seq)` |
-| `CommentComposer` | New-comment editor | markdown-lite preview (`lib/markdown.js` + `lib/sanitize.js`); **mentions autocomplete**: `@` opens a popup fed by `useData("assignables:{o}/{r}")` (repo collaborators ∪ org members, endpoint per 01); submits via the feature's comment endpoint → `{event_seq}`; optional close controls (`closeLabel`+`onClose`, `onCommentAndClose`+`commentAndCloseLabel`) share one right-aligned action row — the issue thread uses them for Close/Reopen + Comment-and-Close, the PR page omits them |
+| `ThreadTimeline` | Renders a P3 event log (issue thread, PR conversation, review thread). Comment kinds (opened/commented, i.e. `textFor` → null) render as divider-separated entries — author/date header, markdown body, reaction rows — with NO per-comment boxes; every other kind renders as a single-line centered muted system row ("{actor} {text}") | Input: header + seq window of events (`{after_seq, n}`); compensating events render as normal rows (never rewrite history); comment bodies via markdown-lite + sanitizer; `aria-live="polite"` region so SSE-appended rows announce; dedup key `(num, event_seq)`; rows carry `event-{seq}` DOM ids |
+| `CommentComposer` | New-comment editor | markdown-lite preview (`lib/markdown.js` + `lib/sanitize.js`); **mentions autocomplete**: `@` opens a popup fed by `useData("assignables:{o}/{r}")` (repo collaborators ∪ org members, endpoint per 01); submits via the feature's comment endpoint → `{event_seq}`; optional close controls (`closeLabel`+`onClose`, `onCommentAndClose`+`commentAndCloseLabel`) share one right-aligned action row — the issue thread uses them for Close/Reopen + Comment-and-Close, the PR page omits them. On an open issue the close controls are reason choosers (`closeChooser`): "Close as completed" / "Close as not planned" menus whose choice is passed as `onClose(reason)` / `onCommentAndClose(body, reason)`; reopen stays a plain button |
 | `LabelPicker` | Apply/remove labels on an issue/PR | Source: `labels:{o}/{r}` cache; each toggle = one PATCH (one event per 02); triage+ only |
 | `AssigneePicker` | Same, for assignees | Source: `assignables:{o}/{r}`; triage+ only |
 | `DiffPage` | Renders a PR/commit diff | Feeds `parsePatchFiles` (12 §2.8 grammar) the `text/plain` unified patch; per-file unified/split toggle, file anchors by `stats[].path`; **line-thread anchoring**: anchor key `(path, side: old\|new, line)`; per-line comment forms create threads via `reviews.threadCreate`; threads whose anchor no longer exists on the current head's diff render collapsed with an "outdated" flag |
@@ -359,6 +359,15 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   is two sequential calls (comment POST when the body is non-empty, then state PATCH) — there is no
   atomic comment+close endpoint, so a comment-posted/close-failed split keeps the text and the plain
   Close button finishes the job.
+- **Honest close + system-row timeline (2026-09-05, issue #109).** Comments render as divider-separated
+  entries (no per-comment boxes; the composer stays a distinct card); every non-comment event kind
+  renders as one centered muted system line ("{actor} {fragment}", fragment from `lib/issue-events.js`,
+  unit-tested in `web/test/unit/issue-events.test.js`). The API defaults an omitted `state_reason` to
+  `completed`, so the UI never sends one: on an open issue both close controls are chooser menus
+  ("Close as completed" / "Close as not planned", same for Comment-and-Close; `closePatch` throws
+  instead of building a reason-less body), and the closed header reads "Closed as …" from the recorded
+  `state_reason` ("Closed" alone when none is recorded). Applies to the shared ThreadTimeline, so PR
+  conversations get the same treatment.
 - **English-only v1, no i18n scaffolding** — additive later, zero cost now.
 - **Releases/stars SDK per 07's submodule plan** (`releases.js`, `social.js`) — absorbed verbatim to avoid conflicting paths.
 - **Settings Danger Zone with typed-confirm (2026-09-04, issue #39).** `DangerConfirm` is the single confirm pattern for all future entries; Delete Repository reuses the existing `repo.delete()` (`DELETE …/api` → 204) and navigates to `/` on success because the repo page is gone. No new endpoint, no new SDK method, no new deps.
