@@ -329,9 +329,15 @@ func (s *Service) drainFanout(repo string, e *taskEntry) {
 		if ok {
 			bctx := context.Background()
 			for _, seq := range seqs {
-				if s.fanoutOne(bctx, owner, name, repo, seq) {
-					s.markFanoutDone(bctx, owner, name, seq)
+				existed, complete := s.fanoutOne(bctx, owner, name, repo, seq)
+				if !existed {
+					continue // gap — honest-gap semantics, no marker
 				}
+				if !complete {
+					continue // incomplete — no marker; the redrain
+					// re-drives the seq idempotently (issue #152)
+				}
+				s.markFanoutDone(bctx, owner, name, seq)
 			}
 		}
 		// A malformed repo has nothing to fan out to: drained seqs
@@ -347,40 +353,62 @@ func (s *Service) drainFanout(repo string, e *taskEntry) {
 // fanoutOne completes one activity event's recipient set: Create (412 =
 // done) + index CAS + SSE frame per recipient. Best-effort per
 // recipient; the activity event stays the backfill truth. It reports
-// whether the event existed — a gap writes no completion record (the gap
-// will never fill, so a marker would be a lie the sweep must re-probe;
-// absence simply never enqueues).
-func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq int) bool {
+// (existed, complete): a gap reports existed=false and writes no
+// completion record (the gap will never fill, so a marker would be a lie
+// the sweep must re-probe; absence simply never enqueues). An incomplete
+// drain — budget-stranded or failed recipients — reports complete=false
+// and logs the shortfall; the caller must skip the done marker so the
+// redrain sweep retries the seq (re-drain is idempotent: deterministic
+// ids + Create-412 + index dedup — issue #152). Dedup-skips are complete,
+// not failures: the live entry already covers them.
+func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq int) (existed, complete bool) {
 	fctx, cancel := context.WithTimeout(ctx, FanoutBudget)
 	defer cancel()
 	ev := s.readActivity(fctx, owner, name, seq)
 	if ev == nil {
-		return false
+		return false, false
 	}
 	var payload activityPayload
 	_ = json.Unmarshal(ev.Payload, &payload)
 	sem := make(chan struct{}, FanoutParallel)
 	var wg sync.WaitGroup
+	// failed counts stranded/failed recipients. mu guards the counter
+	// only and is never held across a store call (13 §2 rule 4).
+	var mu sync.Mutex
+	failed := 0
+	fail := func() {
+		mu.Lock()
+		failed++
+		mu.Unlock()
+	}
 	for _, r := range payload.Recipients {
 		r := r
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if fctx.Err() != nil {
+				fail() // budget expired before this recipient started
 				return
 			}
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-fctx.Done():
+				fail() // budget expired waiting for a slot
 				return
 			}
 			// Same entry-level discipline as the sync path (issue #91):
 			// createOne arbitrates the unread dedup inside the index CAS
 			// (the pre-check alone races here exactly as on the sync path)
 			// and deletes its own orphan object on a lost race.
+			// createSkipped is complete (the live entry covers it); only
+			// createFailed strands this recipient for the redrain.
 			n, status := s.createOne(fctx, Emission{Repo: repo, Num: ev.Num, Kind: ev.Kind},
 				ev.Title, ev.Actor, ev.At, seq, target{principal: r.Principal, reason: r.Reason})
+			if status == createFailed {
+				fail()
+				return
+			}
 			if status != createCreated {
 				return
 			}
@@ -388,7 +416,12 @@ func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq i
 		}()
 	}
 	wg.Wait()
-	return true
+	if failed > 0 {
+		s.log().WarnContext(ctx, "notify: fanout incomplete (done marker skipped; redrain retries)",
+			"repo", repo, "seq", seq, "recipients", len(payload.Recipients), "failed", failed)
+		return true, false
+	}
+	return true, true
 }
 
 // --- fanout redrain (issue #77) --------------------------------------------------

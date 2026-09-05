@@ -490,6 +490,22 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   valid Details unaffected) + `TestEncodeRejectsUnmarshalable` + `TestAppendActivityPoisonReturnsError`.
   Rationale: fail the emission with a log (issue #92 convention), never the request; screening
   before the reservation keeps the honest-gap log clean of self-inflicted gaps.
+- **Overflow-drain completion is honest (issue #152, 2026-09-05):** `fanoutOne` returned "event
+  existed", not "recipients done" — the 5 s budget stranded recipients at the precheck/slot
+  select and `createFailed` was swallowed, yet the drain still wrote the per-seq completion
+  marker, so the #77 redrain sweep skipped the seq forever (silent notification loss).
+  `fanoutOne` now reports `(existed, complete)`: budget-stranded and `createFailed` recipients
+  count as incomplete (dedup-skips stay complete — the live entry covers them), the shortfall is
+  logged (`notify: fanout incomplete …` with repo/seq/recipients/failed), and the drain skips
+  the marker on incomplete so the sweep re-drives the seq — re-drain is idempotent
+  (deterministic ids + Create-412 + index dedup), so the retry converges without duplicates.
+  No new locks (one counter mutex held only around the increment, never across a store call, 13
+  §2); no signature change beyond the second return (existing callers ignore it as a statement).
+  Regression: `TestFanoutDrainSkipsDoneMarkerOnIncomplete` (fault-injected recipient failure →
+  no marker; healed sweep converges exactly-once; verified FAILING pre-fix) +
+  `TestFanoutOneExpiredBudgetIsIncomplete` (canceled budget → `(true, false)`; live redrain
+  converges + marks). Rationale: the marker is a completion claim — writing it on a partial
+  drain is the lie that orphans the remainder.
 
 ## Explicitly out of scope
 
