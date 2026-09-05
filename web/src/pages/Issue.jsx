@@ -12,7 +12,9 @@ import { useRepo, fmtDate } from "./Repo.jsx";
 import { useData, invalidate, patchCached, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { toggleLabel, labelColorMap } from "../lib/labels.js";
+import { milestoneTitle, milestonePatch } from "../lib/milestones.js";
 import LabelPicker, { LabelChip } from "../components/LabelPicker.jsx";
+import MilestonePicker from "../components/MilestonePicker.jsx";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
@@ -42,6 +44,11 @@ export default function Issue() {
   const [getLabelSet] = useData(() => `labels:${ctx.full}`, () => ctx.repoClient.labels.list(), TTL.labels);
   const allLabels = () => getLabelSet()?.labels ?? [];
   const colorMap = () => labelColorMap(allLabels());
+  // Repo milestone set for the sidebar picker + title display (02 §3.2
+  // `milestones:{o}/{r}`, 30 s TTL; the page owns the cache per the
+  // MilestonePicker contract — the component only renders props).
+  const [getMilestoneSet] = useData(() => `milestones:${ctx.full}`, () => ctx.repoClient.milestones.list(), TTL.milestones);
+  const allMilestones = () => getMilestoneSet()?.milestones ?? [];
   const [getOlder, setOlder] = createSignal(false);
   // Older event windows accumulate here (the view holds the newest page;
   // both are newest-first, so concatenation stays ordered).
@@ -206,6 +213,29 @@ export default function Issue() {
     });
   };
 
+  // Sidebar milestone select (#119): one PATCH per select (one event
+  // per 02 §7), optimistic patchCached paint + guarded invalidate
+  // reconcile — the same bump pattern as the label toggle above. One
+  // in-flight mutation at a time (the picker disables while busy), and
+  // no-op selects skip the round trip entirely (milestonePatch returns
+  // null). Clearing sends an explicit null — absent would mean "no
+  // change" server-side.
+  const [getMilestoneBusy, setMilestoneBusy] = createSignal(false);
+  const selectMilestone = async (id) => {
+    if (getMilestoneBusy()) return;
+    const fields = milestonePatch(thread()?.milestone ?? null, id);
+    if (!fields) return;
+    setMilestoneBusy(true);
+    patchCached(key(), (view) => ({ ...view, thread: { ...view.thread, milestone: fields.milestone } }));
+    try {
+      await ctx.repoClient.issues.patch(num(), fields);
+    } catch (err) {
+      reportError(err, "issue-milestone");
+    }
+    reload();
+    setMilestoneBusy(false);
+  };
+
   const loadOlder = async () => {
     const all = events();
     if (!all.length || getOlder()) return;
@@ -347,10 +377,15 @@ export default function Issue() {
                 </div>
               </div>
               <div class="grid gap-1 p-3">
-                <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Milestone</span>
+                <div class="mb-1 flex items-center justify-between gap-2">
+                  <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Milestone</span>
+                  <Show when={canTriage()}>
+                    <MilestonePicker milestones={allMilestones()} current={t().milestone ?? null} busy={getMilestoneBusy()} onSelect={selectMilestone} />
+                  </Show>
+                </div>
                 <div class="flex flex-wrap gap-1">
                   <Show when={t().milestone} fallback={<span class="muted text-xs">none</span>}>
-                    {(m) => <span>{m()}</span>}
+                    {(m) => <span>{milestoneTitle(allMilestones(), m())}</span>}
                   </Show>
                 </div>
               </div>

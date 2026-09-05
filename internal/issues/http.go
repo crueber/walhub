@@ -471,21 +471,40 @@ func (h *Handler) patchIssue(w http.ResponseWriter, r *http.Request, owner, repo
 		return
 	}
 	var body struct {
-		Title       *string   `json:"title"`
-		State       *string   `json:"state"`
-		StateReason *string   `json:"state_reason"`
-		Labels      *[]string `json:"labels"`
-		Assignees   *[]string `json:"assignees"`
-		Milestone   **string  `json:"milestone"`
+		Title       *string         `json:"title"`
+		State       *string         `json:"state"`
+		StateReason *string         `json:"state_reason"`
+		Labels      *[]string       `json:"labels"`
+		Assignees   *[]string       `json:"assignees"`
+		Milestone   json.RawMessage `json:"milestone"`
 	}
 	if !decodeStrict(w, r, 1<<20,
 		map[string]bool{"title": true, "state": true, "state_reason": true, "labels": true, "assignees": true, "milestone": true},
 		&body) {
 		return
 	}
+	// Milestone rides as a value json.RawMessage (not **string):
+	// encoding/json maps an explicit null onto a nil **string, which is
+	// indistinguishable from an absent key — and absent must mean "no
+	// change" while null means "clear" (02 §7, issue #119). A value
+	// RawMessage stays nil when absent and holds "null" when clearing;
+	// anything but null or a string is 400.
+	var milestone **string
+	if raw := body.Milestone; raw != nil {
+		var want *string
+		if string(raw) != "null" {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				writePlain(w, http.StatusBadRequest, "invalid milestone: must be an id string or null")
+				return
+			}
+			want = &s
+		}
+		milestone = &want
+	}
 	th, err := h.Svc.PatchIssue(r.Context(), owner, repo, num, p, IssuePatch{
 		Title: body.Title, State: body.State, StateReason: body.StateReason,
-		Labels: body.Labels, Assignees: body.Assignees, Milestone: body.Milestone,
+		Labels: body.Labels, Assignees: body.Assignees, Milestone: milestone,
 	})
 	if err != nil {
 		writeErr(w, err)
