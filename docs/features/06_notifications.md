@@ -413,7 +413,8 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **Issues `NotifyEvent` gains additive `Action`** (opened|commented|closed|reopened; "" = commented) so the activity log records the true action behind the coarse `subscribed` class; pulls/review/checks classes were already precise. `mentioned`-emission added to pulls (opened body, PR comments) and review (submitted reviews, thread comments) via the shared `identity.ParseMentions` §3 parser (email principals + `@org/team`, code-span stripping, 50-token cap); issues additionally passes team spellings through (`/` cannot appear in a principal, so the spelling is self-describing). Rationale: §3 mandates parsing on EVERY comment/review/body event, and the parser belongs to 01 (the principal authority) so all emitters share one grammar.
 - **PR #17 review fixes (2026-09-04):** `insecure_tls` is honored per hook (dedicated insecure lane cloned from the default transport — the field was stored but never selected); the retention activity sweep is read-bounded (600 seqs/pass, converging across daily passes — the loop was O(minCursor) reads); the §6 watch rows now spell the key `watchers` (matching 07 §5 and the implementation); E7's replay row now reports the measured (3+n) GETs (writes were and are flat at 2 PUTs). Rationale: a stored-but-dead TLS flag fails closed against the wrong party (self-signed dev hooks never deliver); maintainer passes must stay bounded; wire tables must match the owned shape.
 - **Repo-delete userspace hygiene (issue #63, 2026-09-04):** the tray skips entries naming a deleted
-  repo (one manifest HEAD per merged entry; probe errors and malformed repos keep the entry) while
+  repo (lazy liveness probe, memoized to one manifest HEAD per distinct repo in the examined window
+  since #157; probe errors and malformed repos keep the entry) while
   `unread_count` stays O(1) off the index — the retention pass (§9) drops the dead rows and reconciles
   the count, so badge and tray reconverge daily. Watch writes fail closed on ghosts (`PUT` → 404;
   `DELETE` still removes the record but skips the counter CAS so no `social.json` is resurrected);
@@ -559,8 +560,24 @@ a read notification while its tray page is open is harmless (404 → UI drops th
    `StartWebhooks` keeps its signature (caller ctx ignored, documented). Regression:
    `TestDrainInterruptsWedgedWebhooks` + `TestDrainInterruptsWedgedFanout` (wedged store +
    drain → prompt end; verified HANGING pre-fix with the task stuck `running`) +
-   `TestDrainRefusesNewTasks`. Rationale: every goroutine exits via context (13 §8) — a
-   task immune to drain is a shutdown hang.
+    `TestDrainRefusesNewTasks`. Rationale: every goroutine exits via context (13 §8) — a
+    task immune to drain is a shutdown hang.
+- **Index-first tray reads (issue #157, 2026-09-05):** `Tray` LISTed the user prefix and GET every
+  overflow object (up to 1000) on EVERY read even when the index window covered the page, probed
+  one manifest HEAD per merged entry (up to ~1050), and sorted with an O(n²) insertion sort.
+  The read is now index-first: a page covered by the hot window is served from the single index
+  GET with no LIST; the LIST+GET overflow merge runs only for pages reaching past the window
+  (overflow cursor, or a page the live index rows cannot fill). Liveness stays lazy — collection
+  stops at n+1 live rows — and memoized per repo for the request, so the hot path probes one
+  HEAD per distinct repo in the examined window. The sort is `sort.Slice` on (at desc, id).
+  Trade-off, stated plainly: a first page served from a readable-but-short index skips the LIST
+  merge, so a live-repo crash orphan (object Created but index CAS never landed) stays hidden
+  until its page is reached via overflow or retention converges it — the old code surfaced it
+  immediately at the price of a LIST per read. No new locks or goroutines (the memo is
+  request-local). Regression: `tray_cost_test.go` counting-store tests pin the covered cost
+  (1 GET + ≤ distinct-repo HEADs, 0 LISTs; verified LIST+80-HEADs pre-fix) and the overflow
+  contract (exactly 1 LIST). Rationale: law 4 (no LIST on hot paths, P5) and law 6 (round
+  trips are the cost model) — the tray is the highest-frequency user-private read.
 
 ## Explicitly out of scope
 
