@@ -496,13 +496,16 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   buttons, so double-clicks never double-fire.
 - **Reactions add through a "+" menu, never an always-visible picker**
   (issue #113): each commented/opened event shows one reaction row where
-  its chips appear — summary chips plus a tiny "+" trigger opening a
+  its chips appear — summary chips plus a plain "+" trigger (issue #134:
+  NOT a chip — no chip background or border, a larger glyph, vertically
+  centered on the row exactly like the chips) opening a
   dropdown with exactly the addable set (`addableReactions`: REACTIONS
   minus whatever the summary already shows for that seq, in wire order;
   the optimistic add bump drops the content from the menu). Contents
   already on the comment toggle off via their chips only. The menu is a
   native-button `menu` sibling of the LabelPicker "+" idiom (Esc/outside
-  click close, ArrowUp/Down/Home/End move, dark+light via the shared
+  click close, ArrowUp/Down/Home/End move, global :focus-visible ring,
+  dark+light zinc trigger tones with the menu rows on the shared
   chip/card classes); the thread timeline keeps its generic `actionsFor`
   slot for other surfaces.
 

@@ -11,11 +11,15 @@
 //
 // The trigger sits INSIDE the summary row (not in the comment header),
 // so a comment with no reactions shows a lone "+" where its chips will
-// appear. Keyboard: the trigger and every row are native <button>s
-// (Tab/Enter/Space free); ArrowDown on the trigger opens the menu into
-// the first row; ArrowUp/Down/Home/End move between rows; Esc closes and
-// restores focus to the trigger; a pointer click outside closes it.
-// Colors work in dark + light via the shared chip/card classes.
+// appear. The trigger is a PLAIN affordance, not a chip (issue #134): no
+// chip background or border, a larger "+" glyph, vertically centered on
+// the row exactly like the chips. Keyboard: the trigger and every row
+// are native <button>s (Tab/Enter/Space free); ArrowDown on the trigger
+// opens the menu into the first row; ArrowUp/Down/Home/End move between
+// rows; Esc closes and restores focus to the trigger; a pointer click
+// outside closes it. Focus stays visible via the global :focus-visible
+// ring (ui.css); colors work in dark + light via zinc text/hover tones
+// (the menu rows and dropdown keep the shared chip/card classes).
 //
 // ### Concurrency
 // Hazard: double-clicking a row fires two POSTs; the second add is a
@@ -85,11 +89,11 @@ export default function ReactionMenu(props) {
 
   const empty = () => !(props.addable?.length > 0);
   return (
-    <div class="reaction-menu relative inline-block" ref={root}>
+    <div class="reaction-menu relative inline-flex items-center self-center" ref={root}>
       <button
         type="button"
         ref={trigger}
-        class="chip hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-50"
+        class="inline-flex items-center justify-center self-center rounded px-1.5 py-px text-base font-semibold leading-none text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
         aria-haspopup="menu"
         aria-expanded={getOpen() ? "true" : "false"}
         aria-label={
