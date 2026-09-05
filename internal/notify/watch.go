@@ -58,7 +58,11 @@ func (s *Service) SetWatch(ctx context.Context, principal, owner, repo string, o
 			return WatchState{}, fmt.Errorf("%w: repo %s/%s not found", ErrNotFound, owner, repo)
 		}
 		rec := WatchRecord{Repo: owner + "/" + repo, WatchedAt: s.nowUTC().Format(dateTimeFmt)}
-		if err := s.putCreate(ctx, key, encode(rec)); err != nil {
+		raw, err := encode(rec)
+		if err != nil {
+			return WatchState{}, err
+		}
+		if err := s.putCreate(ctx, key, raw); err != nil {
 			if !store.IsPreconditionFailed(err) {
 				return WatchState{}, err
 			}
@@ -109,7 +113,11 @@ func (s *Service) socialWatch(ctx context.Context, owner, repo, principal string
 			if soc.Watchers != want {
 				soc.Watchers = want
 				soc.UpdatedAt = s.nowUTC().Format(dateTimeFmt)
-				return encode(soc), true, nil
+				raw, err := encode(soc)
+				if err != nil {
+					return nil, false, err
+				}
+				return raw, true, nil
 			}
 			return nil, false, nil
 		}
@@ -134,7 +142,11 @@ func (s *Service) socialWatch(ctx context.Context, owner, repo, principal string
 		}
 		soc.Watchers = len(soc.WatcherList)
 		soc.UpdatedAt = s.nowUTC().Format(dateTimeFmt)
-		return encode(soc), true, nil
+		raw, err := encode(soc)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 	return err
 }

@@ -52,7 +52,11 @@ func (s *Service) reserveSeq(ctx context.Context, owner, repo string) (int, erro
 			seq = 1
 		}
 		st.NextSeq = seq
-		return encode(st), true, nil
+		raw, err := encode(st)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 	if err != nil {
 		return 0, err
@@ -73,9 +77,21 @@ func (s *Service) appendActivity(ctx context.Context, owner, repo string, seq in
 	ev := ActivityEvent{
 		Seq: seq, Repo: e.Repo, Action: action, Num: e.Num, Kind: e.Kind,
 		Actor: actor, Title: title, At: at,
-		Payload: encode(activityPayload{Class: e.Class, Recipients: recips, FanoutPending: pending, Detail: e.Detail}),
 	}
-	if err := s.putCreate(ctx, ActivityKey(owner, repo, seq), encode(ev)); err != nil {
+	// Detail rides inside the payload (composition-supplied, issue #98):
+	// an unmarshalable value fails this emission with an error — never a
+	// panic. emit screens Detail at entry, so this fires only for direct
+	// appendActivity callers (the fanout backfill replays stored events
+	// via createOne and never re-encodes Detail).
+	var err error
+	if ev.Payload, err = encode(activityPayload{Class: e.Class, Recipients: recips, FanoutPending: pending, Detail: e.Detail}); err != nil {
+		return fmt.Errorf("notify: activity payload: %w", err)
+	}
+	raw, err := encode(ev)
+	if err != nil {
+		return fmt.Errorf("notify: activity event: %w", err)
+	}
+	if err := s.putCreate(ctx, ActivityKey(owner, repo, seq), raw); err != nil {
 		if store.IsPreconditionFailed(err) {
 			return nil
 		}
@@ -130,8 +146,11 @@ func FanoutDoneKey(owner, repo string, seq int) string {
 // success). Best-effort: a lost write re-drains idempotently on the next
 // sweep (deterministic ids + Create-412), never skipping.
 func (s *Service) markFanoutDone(ctx context.Context, owner, repo string, seq int) {
-	_ = s.putCreate(ctx, FanoutDoneKey(owner, repo, seq),
-		encode(FanoutDoneDoc{Seq: seq, At: s.nowUTC().Format(dateTimeFmt)}))
+	raw, err := encode(FanoutDoneDoc{Seq: seq, At: s.nowUTC().Format(dateTimeFmt)})
+	if err != nil {
+		return // fixed shape; and a lost write re-drains idempotently anyway
+	}
+	_ = s.putCreate(ctx, FanoutDoneKey(owner, repo, seq), raw)
 }
 
 // fanoutDone reports whether seq already drained (absent/unreadable →

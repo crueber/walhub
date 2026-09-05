@@ -450,18 +450,18 @@ func TestNotifyGhostRepoTable(t *testing.T) {
 	writeRaw(t, x.svc.Store, WatchingKey("amy@example.com", "acme", "gone"),
 		[]byte(`{"repo":"acme/gone","watched_at":"2026-09-04T12:00:00Z"}`))
 	at := x.now.Format(dateTimeFmt)
-	writeRaw(t, x.svc.Store, NotifIndexKey("amy@example.com"), encode(IndexDoc{
+	writeRaw(t, x.svc.Store, NotifIndexKey("amy@example.com"), mustEncode(t, IndexDoc{
 		Version: 1, UnreadCount: 2,
 		Entries: []IndexEntry{
 			{ID: strings.Repeat("a", 32), Repo: "acme/gone", Num: 1, Kind: "issue", Reason: ReasonSubscribed, Title: "G", State: StateUnread, At: at},
 			{ID: strings.Repeat("b", 32), Repo: "acme/live", Num: 2, Kind: "issue", Reason: ReasonSubscribed, Title: "L", State: StateUnread, At: at},
 		},
 	}))
-	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", strings.Repeat("a", 32)), encode(Notification{
+	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", strings.Repeat("a", 32)), mustEncode(t, Notification{
 		ID: strings.Repeat("a", 32), Repo: "acme/gone", Num: 1, Kind: "issue",
 		Reason: ReasonSubscribed, Title: "G", State: StateUnread, CreatedAt: at,
 	}))
-	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", strings.Repeat("c", 32)), encode(Notification{
+	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", strings.Repeat("c", 32)), mustEncode(t, Notification{
 		ID: strings.Repeat("c", 32), Repo: "acme/gone", Num: 3, Kind: "issue",
 		Reason: ReasonMentioned, Title: "O", State: StateUnread, CreatedAt: at,
 	}))

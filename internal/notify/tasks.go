@@ -628,7 +628,11 @@ func (s *Service) retainUser(ctx context.Context, principal string, now time.Tim
 			curIx.CompactedThrough = compacted
 		}
 		curIx.SweptAt = now.Format(dateTimeFmt)
-		return encode(curIx), true, nil
+		raw, err := encode(curIx)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 }
 

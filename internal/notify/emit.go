@@ -7,9 +7,12 @@
 // shape onto Emission and calls the matching Emit method. notify then
 // performs, in order:
 //
-//  0. resolve: validate mentions (profile probe), expand teams, union
-//     watchers for subscribed-mapped classes, add the thread author —
-//     minus the actor, deduped.
+//  0. screen + resolve: first verify the composition-supplied Detail
+//     survives json.Marshal (issue #98) — an unmarshalable value drops
+//     THIS emission with a log (no seq reserved, no tray written, never
+//     a panic); then validate mentions (profile probe), expand teams,
+//     union watchers for subscribed-mapped classes, add the thread
+//     author — minus the actor, deduped.
 //  1. reserve the activity seq (collab_state CAS). The id embeds this
 //     seq, so the reservation precedes the Creates; a crash between the
 //     reservation and the activity Create leaves a gap, which is allowed
@@ -168,6 +171,20 @@ func threadKey(owner, repo string, num int) string {
 
 // emit performs the §4 sequence for one emission.
 func (s *Service) emit(ctx context.Context, e Emission) {
+	if !marshalable(e.Detail) {
+		// Issue #98: Detail is composition-supplied (map[string]any) and
+		// may hold chan/func values, which used to panic the mutating
+		// handler inside encode. Fail THIS emission with a log instead —
+		// the handler (and its committed CAS) survives. Screened before
+		// the seq reservation so the drop leaves no gap and no partial
+		// tray; the thread timeline stays the backfill truth (P8). The
+		// screen lives here — not in each feature package — because
+		// Emission is the boundary: notify never imports the feature
+		// packages and they never import notify.
+		s.log().WarnContext(ctx, "notify: emission dropped: unmarshalable detail",
+			"repo", e.Repo, "num", e.Num, "class", e.Class, "actor", normPrincipal(e.Actor))
+		return
+	}
 	owner, name, ok := splitRepo(e.Repo)
 	if !ok {
 		return // malformed repo — nothing to fan out to (P8: data already committed)
@@ -518,7 +535,11 @@ func (s *Service) createOne(ctx context.Context, e Emission, title, actor, at st
 		State: StateUnread, CreatedAt: at,
 	}
 	fresh := true
-	if err := s.putCreate(ctx, NotifKey(t.principal, id), encode(n)); err != nil {
+	raw, err := encode(n)
+	if err != nil {
+		return Notification{}, createFailed
+	}
+	if err := s.putCreate(ctx, NotifKey(t.principal, id), raw); err != nil {
 		if !store.IsPreconditionFailed(err) {
 			return Notification{}, createFailed
 		}
@@ -639,7 +660,11 @@ func (s *Service) indexUpsert(ctx context.Context, principal string, en IndexEnt
 		if !changed {
 			return nil, false, nil
 		}
-		return encode(ix), true, nil
+		raw, err := encode(ix)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 	if errors.Is(err, errDedupLive) {
 		return false, nil

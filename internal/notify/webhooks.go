@@ -176,12 +176,20 @@ func (s *Service) CreateHook(ctx context.Context, owner, repo string, actor stri
 	if spec.Secret != nil {
 		h.Secret = *spec.Secret
 	}
-	if err := s.putCreate(ctx, HookKey(owner, repo, h.ID), encode(h)); err != nil {
+	raw, err := encode(h)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.putCreate(ctx, HookKey(owner, repo, h.ID), raw); err != nil {
 		if store.IsPreconditionFailed(err) {
 			// ULID collision is randomness failure, not a conflict —
 			// retry once with fresh entropy.
 			h.ID = newHookID(s.nowUTC(), rand.Reader)
-			if err := s.putCreate(ctx, HookKey(owner, repo, h.ID), encode(h)); err != nil {
+			raw, err := encode(h)
+			if err != nil {
+				return nil, err
+			}
+			if err := s.putCreate(ctx, HookKey(owner, repo, h.ID), raw); err != nil {
 				return nil, err
 			}
 			return h, nil
@@ -272,7 +280,11 @@ func (s *Service) PatchHook(ctx context.Context, owner, repo, id string, spec Ho
 		h.UpdatedAt = s.nowUTC().Format(dateTimeFmt)
 		h.Version++
 		result = &h
-		return encode(h), true, nil
+		raw, err := encode(h)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 	if err != nil {
 		return nil, err
@@ -423,7 +435,10 @@ func (s *Service) probeAhead(ctx context.Context, owner, repo string, seq int) i
 // fails (no redirect is followed, so no signature/body crosses hosts)
 // and any non-public dial target fails closed before any SYN.
 func (s *Service) postEvent(ctx context.Context, h *Hook, ev *ActivityEvent) (int, error) {
-	body := encode(ev)
+	body, err := encode(ev)
+	if err != nil {
+		return 0, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", h.URL, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
@@ -473,7 +488,11 @@ func (s *Service) advanceCursor(ctx context.Context, owner, repo, id string, seq
 		}
 		c.PublishedSeq = seq
 		c.UpdatedAt = s.nowUTC().Format(dateTimeFmt)
-		return encode(c), true, nil
+		raw, err := encode(c)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 }
 
@@ -593,7 +612,11 @@ func (s *Service) recordDelivery(ctx context.Context, owner, repo, id string, ev
 			d.Entries = d.Entries[len(d.Entries)-MaxDeliveries:]
 		}
 		d.UpdatedAt = entry.At
-		return encode(d), true, nil
+		raw, err := encode(d)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 }
 
@@ -632,7 +655,11 @@ func (s *Service) PingHook(ctx context.Context, owner, repo, id, actor string) (
 		Seq: seq, Repo: owner + "/" + repo, Action: ActionPing,
 		Kind: "repo", Actor: normPrincipal(actor), At: s.nowUTC().Format(dateTimeFmt),
 	}
-	if err := s.putCreate(ctx, ActivityKey(owner, repo, seq), encode(ev)); err != nil && !store.IsPreconditionFailed(err) {
+	raw, err := encode(ev)
+	if err != nil {
+		return false, err
+	}
+	if err := s.putCreate(ctx, ActivityKey(owner, repo, seq), raw); err != nil && !store.IsPreconditionFailed(err) {
 		return false, err
 	}
 	s.deliverHook(ctx, owner, repo, h)

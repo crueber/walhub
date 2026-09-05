@@ -177,7 +177,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, who string) {
 			if !ok {
 				return
 			}
-			if !s.event("notification", string(encode(n))) {
+			raw, err := encode(n)
+			if err != nil {
+				continue // fixed shape; never kill a live stream on it
+			}
+			if !s.event("notification", string(raw)) {
 				return
 			}
 		}
@@ -462,7 +466,11 @@ func (s *Service) SetState(ctx context.Context, who, id string, read bool) (*Not
 		}
 		n.State = want
 		result = &n
-		return encode(n), true, nil
+		raw, err := encode(n)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 	if err != nil {
 		return nil, err
@@ -506,7 +514,11 @@ func (s *Service) indexFlip(ctx context.Context, who, id, want string) error {
 		if ix.UnreadCount < 0 {
 			ix.UnreadCount = 0
 		}
-		return encode(ix), true, nil
+		raw, err := encode(ix)
+		if err != nil {
+			return nil, false, err
+		}
+		return raw, true, nil
 	})
 	return err
 }

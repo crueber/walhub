@@ -160,7 +160,7 @@ func TestEvidenceDeliveryLoop(t *testing.T) {
 			t.Fatal(err)
 		}
 		ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", At: svc.nowUTC().Format(dateTimeFmt)}
-		if err := svc.putCreate(context.Background(), ActivityKey("acme", "repo", seq), encode(ev)); err != nil {
+		if err := svc.putCreate(context.Background(), ActivityKey("acme", "repo", seq), mustEncode(t, ev)); err != nil {
 			t.Fatal(err)
 		}
 	}

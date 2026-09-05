@@ -74,7 +74,7 @@ func TestRetentionCompactsReads(t *testing.T) {
 	// Seed: one old read, one recent read, one unread.
 	seed := func(id, state, at string) {
 		n := Notification{ID: id, Repo: "acme/repo", Num: 7, Kind: "issue", Reason: ReasonSubscribed, State: state, CreatedAt: at}
-		if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", id), encode(n)); err != nil {
+		if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", id), mustEncode(t, n)); err != nil {
 			t.Fatal(err)
 		}
 		if err := x.svc.indexAdd(ctx(), "amy@example.com", IndexEntry{ID: id, Repo: "acme/repo", Num: 7, Kind: "issue", Reason: ReasonSubscribed, State: state, At: at}); err != nil {
@@ -121,12 +121,12 @@ func TestRetentionCompactsActivityFloor(t *testing.T) {
 	oldAt := x.now.AddDate(0, 0, -30).Format(dateTimeFmt)
 	for seq := 1; seq <= 3; seq++ {
 		if _, err := x.svc.casUpdate(ctx(), CollabStateKey("acme", "repo"), 3, func(cur []byte, _ store.Version) ([]byte, bool, error) {
-			return encode(CollabState{NextSeq: seq}), true, nil
+			return mustEncode(t, CollabState{NextSeq: seq}), true, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
 		ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: oldAt}
-		if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), encode(ev)); err != nil {
+		if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), mustEncode(t, ev)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -142,7 +142,7 @@ func TestRetentionCompactsActivityFloor(t *testing.T) {
 	// With a hook whose cursor guards seq 2, only seq 1 compacts.
 	for seq := 1; seq <= 3; seq++ {
 		ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: oldAt}
-		_ = x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), encode(ev))
+		_ = x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), mustEncode(t, ev))
 	}
 	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{URL: strPtr("https://example.com/h")})
 	if err != nil {
@@ -267,7 +267,7 @@ func TestRetentionDropsDeadRepos(t *testing.T) {
 	recent := x.now.Format(dateTimeFmt)
 	seed := func(who, id, repo, state string) {
 		n := Notification{ID: id, Repo: repo, Num: 7, Kind: "issue", Reason: ReasonSubscribed, State: state, CreatedAt: recent}
-		if err := x.svc.putCreate(ctx(), NotifKey(who, id), encode(n)); err != nil {
+		if err := x.svc.putCreate(ctx(), NotifKey(who, id), mustEncode(t, n)); err != nil {
 			t.Fatal(err)
 		}
 		if err := x.svc.indexAdd(ctx(), who, IndexEntry{ID: id, Repo: repo, Num: 7, Kind: "issue", Reason: ReasonSubscribed, State: state, At: recent}); err != nil {
@@ -281,7 +281,7 @@ func TestRetentionDropsDeadRepos(t *testing.T) {
 	// Overflow: a dead-repo object with no index row (trim the window by
 	// hand — indexAdd caps at TrayPageSize, so evict via direct write).
 	overflow := Notification{ID: strings.Repeat("0", 32), Repo: "acme/gone", Num: 9, Kind: "issue", Reason: ReasonMentioned, State: StateUnread, CreatedAt: recent}
-	if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", strings.Repeat("0", 32)), encode(overflow)); err != nil {
+	if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", strings.Repeat("0", 32)), mustEncode(t, overflow)); err != nil {
 		t.Fatal(err)
 	}
 	x.svc.RunRetention(ctx())
@@ -312,7 +312,7 @@ func TestRetainOverflowEdges(t *testing.T) {
 		t.Helper()
 		if body == nil {
 			n := Notification{ID: id, Repo: repo, Num: 1, Kind: "issue", Reason: ReasonSubscribed, State: StateUnread, CreatedAt: at}
-			body = encode(n)
+			body = mustEncode(t, n)
 		}
 		if err := x.svc.putCreate(ctx(), NotifKey("amy@example.com", id), body); err != nil {
 			t.Fatal(err)
@@ -420,8 +420,8 @@ func TestFanoutConcurrentEnqueueLosesNothing(t *testing.T) {
 		principals[i] = p
 		ev := ActivityEvent{Seq: seq, Repo: repo, Action: "commented", Num: seq, Kind: "issue",
 			Actor: "b", Title: "T", At: x.now.Format(dateTimeFmt),
-			Payload: encode(activityPayload{Class: "subscribed", Recipients: []activityRecipient{{Principal: p, Reason: ReasonSubscribed}}})}
-		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), encode(ev))
+			Payload: mustEncode(t, activityPayload{Class: "subscribed", Recipients: []activityRecipient{{Principal: p, Reason: ReasonSubscribed}}})}
+		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), mustEncode(t, ev))
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {

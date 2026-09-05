@@ -294,14 +294,14 @@ func TestReserveSeqEdges(t *testing.T) {
 	st2 := store.NewMemory()
 	x2 := newHarness(t)
 	x2.svc.Store = st2
-	writeRaw(t, st2, CollabStateKey("acme", "repo"), encode(CollabState{NextSeq: -5}))
+	writeRaw(t, st2, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: -5}))
 	seq, err := x2.svc.reserveSeq(ctx(), "acme", "repo")
 	if err != nil || seq != 1 {
 		t.Fatalf("clamp = %d, %v", seq, err)
 	}
 	// Permanent CAS contention exhausts the loop.
 	st3 := store.NewMemory()
-	writeRaw(t, st3, CollabStateKey("acme", "repo"), encode(CollabState{}))
+	writeRaw(t, st3, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{}))
 	svc3 := New(always412Store{st3}, nil)
 	if _, err := svc3.reserveSeq(ctx(), "acme", "repo"); err == nil {
 		t.Fatal("CAS exhaustion must fail")
@@ -393,7 +393,7 @@ func TestCreateAllCanceled(t *testing.T) {
 
 func TestCreateOneStoreError(t *testing.T) {
 	st := store.NewMemory()
-	writeRaw(t, st, CollabStateKey("acme", "repo"), encode(CollabState{NextSeq: 1}))
+	writeRaw(t, st, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: 1}))
 	svc := New(failCreateStore{st}, nil)
 	svc.Now = time.Now
 	svc.EmitIssue(ctx(), "acme/repo", 0, "subscribed", "bob@example.com", "", "commented", []string{"amy@example.com"})
@@ -749,7 +749,7 @@ func TestSetStateEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Index without the entry: no-op.
-	writeRaw(t, x.svc.Store, NotifIndexKey("zed@example.com"), encode(IndexDoc{Version: 1}))
+	writeRaw(t, x.svc.Store, NotifIndexKey("zed@example.com"), mustEncode(t, IndexDoc{Version: 1}))
 	if err := x.svc.indexFlip(ctx(), "zed@example.com", strings.Repeat("2", 32), StateRead); err != nil {
 		t.Fatal(err)
 	}
@@ -805,7 +805,7 @@ func TestSetWatchEdges(t *testing.T) {
 		t.Fatal("corrupt social must fail")
 	}
 	// Count-drift repair on unwatch of a non-member.
-	writeRaw(t, x.svc.Store, SocialKey("acme", "repo3"), encode(SocialDoc{Watchers: 5}))
+	writeRaw(t, x.svc.Store, SocialKey("acme", "repo3"), mustEncode(t, SocialDoc{Watchers: 5}))
 	st, err = x.svc.SetWatch(ctx(), "amy@example.com", "acme", "repo3", false)
 	if err != nil || st.Watchers != 0 {
 		t.Fatalf("drift repair = %+v, %v", st, err)
@@ -899,10 +899,10 @@ func TestDeliverHookGapAndBadURL(t *testing.T) {
 	// Gap: seqs 1 and 3 exist, 2 is an honest gap. Cursor must pass the
 	// gap (counted) and deliver both sides.
 	writeRaw(t, x.svc.Store, HookKey("acme", "repo", strings.Repeat("h", 24)),
-		encode(&Hook{ID: strings.Repeat("h", 24), URL: "http://127.0.0.1:9/hook", Active: true, Version: 1}))
+		mustEncode(t, &Hook{ID: strings.Repeat("h", 24), URL: "http://127.0.0.1:9/hook", Active: true, Version: 1}))
 	for _, seq := range []int{1, 3} {
 		ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: x.now.Format(dateTimeFmt)}
-		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), encode(ev))
+		writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", seq), mustEncode(t, ev))
 	}
 	h := x.svc.GetHook(ctx(), "acme", "repo", strings.Repeat("h", 24))
 	x.svc.deliverHook(ctx(), "acme", "repo", h)
@@ -915,7 +915,7 @@ func TestDeliverHookGapAndBadURL(t *testing.T) {
 	}
 	// Bad-URL hook: postEvent NewRequest fails fast, no crash.
 	writeRaw(t, x.svc.Store, HookKey("acme", "repo", strings.Repeat("i", 24)),
-		encode(&Hook{ID: strings.Repeat("i", 24), URL: "http://127.0.0.1:9/\x7f", Active: true, Version: 1}))
+		mustEncode(t, &Hook{ID: strings.Repeat("i", 24), URL: "http://127.0.0.1:9/\x7f", Active: true, Version: 1}))
 	hi := x.svc.GetHook(ctx(), "acme", "repo", strings.Repeat("i", 24))
 	if status, err := x.svc.postEvent(ctx(), hi, &ActivityEvent{Seq: 1}); err == nil || status != 0 {
 		t.Fatalf("bad url = %d, %v", status, err)
@@ -928,7 +928,7 @@ func TestCursorAndDeliveriesEdges(t *testing.T) {
 	if got := x.svc.readCursor(ctx(), "acme", "repo", "h"); got != 0 {
 		t.Fatalf("corrupt cursor = %d", got)
 	}
-	writeRaw(t, x.svc.Store, CursorKey("acme", "repo", "n"), encode(CursorDoc{PublishedSeq: -3}))
+	writeRaw(t, x.svc.Store, CursorKey("acme", "repo", "n"), mustEncode(t, CursorDoc{PublishedSeq: -3}))
 	if got := x.svc.readCursor(ctx(), "acme", "repo", "n"); got != 0 {
 		t.Fatalf("negative cursor = %d", got)
 	}
@@ -1010,10 +1010,10 @@ func TestFanoutOneEdges(t *testing.T) {
 	x.addProfile("amy@example.com")
 	ev := ActivityEvent{Seq: 7, Repo: "acme/repo", Action: "commented", Num: 1, Kind: "issue",
 		Actor: "b", Title: "T", At: x.now.Format(dateTimeFmt),
-		Payload: encode(activityPayload{Class: "subscribed", Recipients: []activityRecipient{{Principal: "amy@example.com", Reason: ReasonSubscribed}}})}
-	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 7), encode(ev))
+		Payload: mustEncode(t, activityPayload{Class: "subscribed", Recipients: []activityRecipient{{Principal: "amy@example.com", Reason: ReasonSubscribed}}})}
+	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 7), mustEncode(t, ev))
 	id := NotificationID("amy@example.com", "acme/repo", 1, ReasonSubscribed, 7)
-	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", id), encode(Notification{ID: id}))
+	writeRaw(t, x.svc.Store, NotifKey("amy@example.com", id), mustEncode(t, Notification{ID: id}))
 	if err := x.svc.indexAdd(ctx(), "amy@example.com", IndexEntry{ID: id, Repo: "acme/repo", Num: 1, Kind: "issue", Reason: ReasonSubscribed, State: StateUnread, At: x.now.Format(dateTimeFmt)}); err != nil {
 		t.Fatal(err)
 	}
@@ -1023,8 +1023,8 @@ func TestFanoutOneEdges(t *testing.T) {
 	}
 	// Create error path (failCreateStore): loads, then fails the write.
 	st2 := store.NewMemory()
-	writeRaw(t, st2, ActivityKey("acme", "repo", 8), encode(ActivityEvent{Seq: 8, Repo: "acme/repo",
-		Payload: encode(activityPayload{Recipients: []activityRecipient{{Principal: "z@example.com", Reason: ReasonSubscribed}}})}))
+	writeRaw(t, st2, ActivityKey("acme", "repo", 8), mustEncode(t, ActivityEvent{Seq: 8, Repo: "acme/repo",
+		Payload: mustEncode(t, activityPayload{Recipients: []activityRecipient{{Principal: "z@example.com", Reason: ReasonSubscribed}}})}))
 	svc2 := New(failCreateStore{st2}, nil)
 	svc2.fanoutOne(ctx(), "acme", "repo", "acme/repo", 8)
 }
@@ -1033,7 +1033,7 @@ func TestSweepAndRun(t *testing.T) {
 	x := newHarness(t)
 	// Seed a hookless repo with activity + a hooked repo.
 	writeRaw(t, x.svc.Store, ActivityKey("acme", "repo", 1),
-		encode(ActivityEvent{Seq: 1, Repo: "acme/repo", Action: "commented"}))
+		mustEncode(t, ActivityEvent{Seq: 1, Repo: "acme/repo", Action: "commented"}))
 	if _, err := x.svc.CreateHook(ctx(), "acme", "repo2", "a", HookSpec{URL: strPtr("http://127.0.0.1:9/h")}); err != nil {
 		t.Fatal(err)
 	}
@@ -1054,7 +1054,7 @@ func TestRetentionCorruptUserIndex(t *testing.T) {
 
 func TestRetainRepoListError(t *testing.T) {
 	st := store.NewMemory()
-	writeRaw(t, st, CursorKey("acme", "repo", "h"), encode(CursorDoc{PublishedSeq: 4}))
+	writeRaw(t, st, CursorKey("acme", "repo", "h"), mustEncode(t, CursorDoc{PublishedSeq: 4}))
 	svc := New(failListStore{st}, nil)
 	svc.retainRepoEvents(ctx(), "acme", "repo", time.Now()) // ListHooks fails → return
 	svc.RunRetention(ctx())                                 // enumerations fail → no-op

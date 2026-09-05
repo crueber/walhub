@@ -638,12 +638,34 @@ func sortStrings(s []string) {
 	}
 }
 
-// encode marshals v (wire/persisted JSON); errors are internal (shapes
-// are fixed, so marshal cannot fail — panic would hide nothing).
-func encode(v any) []byte {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		panic("notify: encode: " + err.Error())
-	}
-	return raw
+// encode marshals v (wire/persisted JSON). Most callers pass fixed
+// shapes, which marshal infallibly in practice — but Emission.Detail is
+// composition-supplied (map[string]any, issue #98), so marshal CAN fail.
+// Callers propagate the error (CAS closures return it; emission paths
+// log-drop it); nothing on the request path panics. The recover closes
+// the last panic path absolutely: a value inside the untyped map may
+// carry a panicking MarshalJSON, which encoding/json would propagate —
+// here it becomes an error instead.
+func encode(v any) (raw []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			raw, err = nil, fmt.Errorf("notify: encode: %v", r)
+		}
+	}()
+	return json.Marshal(v)
+}
+
+// marshalable reports whether v survives json.Marshal (issue #98: the
+// cheap screen at the emit entry — Detail is composition-supplied and
+// may hold chan/func values). encoding/json itself only errors on such
+// values; the recover guards pathological MarshalJSON implementations
+// supplied inside the untyped map.
+func marshalable(v any) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	_, err := json.Marshal(v)
+	return err == nil
 }
