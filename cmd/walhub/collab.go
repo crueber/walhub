@@ -147,17 +147,21 @@ func chainCollab(srv *server.Server, c *collabWiring) {
 	}
 	if c.identHandler != nil {
 		// Chain the identity surface in front of the core api mux (Seam 1);
-		// authentication resolves through the server chain (Seam 2).
+		// authentication resolves through the server chain (Seam 2),
+		// including the §8.6 broker-forwarding rule — the forwarded
+		// principal replaces the broker's, never the broker itself.
 		c.identHandler.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
-			return srv.Auth().Authenticate(r, srv.Config())
+			return srv.Auth().AuthenticateForwarded(r, srv.Config())
 		}
 		srv.ChainExtra(c.identHandler)
 	}
 	if c.issuesHandler != nil {
 		// Chain the issues surface in front of the core api mux (Seam 1);
-		// authentication resolves through the server chain (Seam 2).
+		// authentication resolves through the server chain (Seam 2),
+		// including the §8.6 broker-forwarding rule — the forwarded
+		// principal replaces the broker's, never the broker itself.
 		c.issuesHandler.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
-			return srv.Auth().Authenticate(r, srv.Config())
+			return srv.Auth().AuthenticateForwarded(r, srv.Config())
 		}
 		srv.ChainExtra(c.issuesHandler)
 	}

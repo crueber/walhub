@@ -40,10 +40,12 @@ func newImportService(st store.ObjectStore, ident *identity.Service, reg *wal.Re
 }
 
 // chainImport fronts the core mux with the import surface (Seam 1);
-// authentication resolves through the server chain (Seam 2).
+// authentication resolves through the server chain (Seam 2), including the
+// §8.6 broker-forwarding rule — the forwarded principal replaces the
+// broker's, never the broker itself.
 func chainImport(srv *server.Server, h *repoimport.Handler) {
 	h.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
-		return srv.Auth().Authenticate(r, srv.Config())
+		return srv.Auth().AuthenticateForwarded(r, srv.Config())
 	}
 	srv.ChainExtra(h)
 }

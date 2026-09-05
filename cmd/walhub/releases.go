@@ -39,10 +39,12 @@ func newReleasesService(st store.ObjectStore, ident *identity.Service, reg *wal.
 // chainReleases fronts the core mux with the releases lane surface (Seam 1)
 // and registers the byte route on the repo-subpath chain (the static
 // uncompressed group per the 14.3 routing note); authentication resolves
-// through the server chain (Seam 2).
+// through the server chain (Seam 2), including the §8.6 broker-forwarding
+// rule — the forwarded principal replaces the broker's, never the broker
+// itself.
 func chainReleases(srv *server.Server, h *releases.Handler) {
 	h.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
-		return srv.Auth().Authenticate(r, srv.Config())
+		return srv.Auth().AuthenticateForwarded(r, srv.Config())
 	}
 	srv.ChainExtra(h)
 	srv.ChainRepo(h)

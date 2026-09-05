@@ -130,6 +130,24 @@ func (s *AuthService) Authenticate(r *http.Request, c *config.Config) (auth.Prin
 	return auth.Anonymous(), nil
 }
 
+// AuthenticateForwarded resolves the request's principal per Authenticate
+// (§8.3) and then applies the §8.6 broker-forwarding rule (identityForward):
+// a trusted forwarding broker's X-Walgit-Principal replaces the principal
+// name. This is the ONE entry point feature (Seam 1) surfaces must resolve
+// through — calling Authenticate directly drops the forwarded identity and
+// misattributes brokered actions to the broker (fail-closed: an
+// authentication error returns before any forwarding is considered, and
+// forwarding never upgrades a denied or anonymous caller). Pure function of
+// the request headers and the resolved static config; no locks, no I/O, so
+// concurrent handler goroutines share it freely.
+func (s *AuthService) AuthenticateForwarded(r *http.Request, c *config.Config) (auth.Principal, *auth.AuthError) {
+	p, aerr := s.Authenticate(r, c)
+	if aerr != nil {
+		return p, aerr
+	}
+	return s.identityForward(r, p), nil
+}
+
 // authToken is the §8.3 `token` tree.
 func (s *AuthService) authToken(r *http.Request) (auth.Principal, *auth.AuthError) {
 	cred, _ := resolveCredential(r)

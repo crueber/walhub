@@ -38,10 +38,12 @@ func newNotifyService(st store.ObjectStore, ident *identity.Service) (*notify.Se
 }
 
 // chainNotify fronts the core mux with the notify surface (Seam 1);
-// authentication resolves through the server chain (Seam 2).
+// authentication resolves through the server chain (Seam 2), including the
+// §8.6 broker-forwarding rule — the forwarded principal replaces the
+// broker's, never the broker itself.
 func chainNotify(srv *server.Server, h *notify.Handler) {
 	h.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) {
-		return srv.Auth().Authenticate(r, srv.Config())
+		return srv.Auth().AuthenticateForwarded(r, srv.Config())
 	}
 	srv.ChainExtra(h)
 }
