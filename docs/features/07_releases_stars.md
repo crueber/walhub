@@ -179,10 +179,13 @@ ONLY the caller's field, `PutUpdate(version)`, retry on 412; monotonicity is not
 both exist), but every mutation path uses the same loop, so interleavings converge. Contention is
 negligible (human-rate events; documented per P2 reasoning). Cross-process arbitration is the CAS
 alone (no singleflight, no cross-feature locks — the header rule stands); same-process `Star` calls
-additionally serialize on a leaf per-Service gate (#69: the star decision spans two keys — record +
-counter — so two CAS loops cannot make check-and-bump atomic). The gate is `Star`-only (never nested,
-`defer`-released; `Unstar` keeps its version-conditional Delete token, reads stay lock-free), and the
-resync decision is evaluated inside the counter CAS loop so retries re-check the latest state.
+additionally serialize on a sharded per-Service gate (#69, tightened by #97: 64 fixed stripes keyed by
+(repo, principal) — the star decision spans two keys — record + counter — so two CAS loops cannot make
+check-and-bump atomic, but serialization is needed only where the keys coincide). The gate is `Star`-only
+(never nested, `defer`-released; `Unstar` keeps its version-conditional Delete token, reads stay lock-free),
+a shard is held across at most one record GET + one record PUT + one ≤8-attempt counter CAS loop (small
+control-plane JSON only — no bulk, no git, no LIST), so a slow store call stalls at most its ~1/64 shard,
+and the resync decision is evaluated inside the counter CAS loop so retries re-check the latest state.
 `updated_at` is set by whichever write wins last.
 
 #### 4.1 Deleted repos — miss-tolerant reads, guarded writes, resync on recreate (issue #63)
@@ -357,6 +360,19 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
   (record-first, miss-tolerant reads) — and cross-process same-instant races keep the #63
   unstar/restar convergence. Regression: `TestStarConcurrentConverge` stress
   (`-race -count=20`) plus the deterministic `TestStarConcurrentResyncConverges` (absent/zeroed table).
+- **Sharded star gate (issue #97, 2026-09-05):** route (b) — the #69 leaf gate was process-global and held
+  across store calls, serializing every `Star` on the instance behind one slow call (a new lock outside the
+  13 §2 closed list). Pure CAS (route a) was rejected, not disproven-lightly: the create-path bump must stay
+  unconditional (conditioning it on absent/zero undercounts every already-starred repo —
+  `TestStarUnstarIdempotent` pins second-principal → 2), while a late observer cannot distinguish a
+  just-created record (bump in flight) from a stale one (repair due), so no per-call CAS condition separates
+  them. The gate stays but is sharded: 64 fixed stripes (FNV-1a, stdlib only, no per-key map) keyed by
+  (repo, principal) — the exact pair whose record Create and counter bump must be atomic with each other.
+  Different principals converge via CAS alone (unconditional bump vs conditional resync); different repos
+  share nothing. Hold bound is documented at the `lockStar` site (≤ 1 GET + 1 PUT + one ≤8-attempt CAS loop,
+  control-plane JSON only, `Star`-only, never nested). Regression:
+  `TestStarSlowStoreDoesNotStallUnrelatedRepo` (wedged store op on one repo while another repo's `Star`
+  completes) plus the #69 stress tests green `-race -count=20`; coverage stays ≥95%.
 - **Repo-delete userspace hygiene (issue #63, 2026-09-04):** miss-tolerant reads + guarded writes +
   recreate resync per §4.1 — no reverse index (enumerating people stays a non-feature), no tombstones
   (per-repo state must die with the prefix), no repair-on-recreate scan. Rationale: readers can probe
