@@ -732,7 +732,7 @@ function WebhooksTab(props) {
                           <For each={getDeliveries()[h.id] ?? []} fallback={<span class="muted text-xs">no deliveries yet</span>}>
                             {(d) => (
                               <div class="font-mono text-xs text-zinc-600 dark:text-zinc-300">
-                                #{d.seq} {d.event} → {d.status}{d.error ? ` (${d.error})` : ""} · {d.at}
+                                #{d.seq} {d.event} → {d.status}{d.error ? ` (${d.error})` : ""} · <DateTime value={d.at} />
                               </div>
                             )}
                           </For>

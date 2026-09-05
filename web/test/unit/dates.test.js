@@ -4,7 +4,7 @@
 // local wall-time shape + zone suffix, invalid passthrough.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fmtDate, fmtDateTitle, ordinal } from "../../src/lib/format.js";
+import { dateTimeAttr, fmtDate, fmtDateTitle, ordinal } from "../../src/lib/format.js";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -120,4 +120,12 @@ test("title is the local wall time plus a real zone name", () => {
   assert.match(got, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+$/);
   assert.ok(got.startsWith(want), `title ${got} should start with local wall time ${want}`);
   assert.ok(!got.endsWith("Z"), "title must be local, never UTC-suffixed");
+});
+
+test("dateTimeAttr normalizes to UTC ISO, never throws", () => {
+  assert.equal(dateTimeAttr("2025-03-04T08:23:00.000Z"), "2025-03-04T08:23:00.000Z");
+  assert.equal(dateTimeAttr("2025-03-04T10:23:00+02:00"), "2025-03-04T08:23:00.000Z");
+  assert.equal(dateTimeAttr(new Date("2025-03-04T08:23:00.000Z")), "2025-03-04T08:23:00.000Z");
+  assert.equal(dateTimeAttr(Date.parse("2025-03-04T08:23:00.000Z")), "2025-03-04T08:23:00.000Z");
+  assert.equal(dateTimeAttr("not-a-date"), "not-a-date");
 });

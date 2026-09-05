@@ -168,3 +168,19 @@ export function fmtDateTitle(iso) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
     `${pad2(d.getHours())}:${pad2(d.getMinutes())} ${zoneName(d)}`;
 }
+
+/**
+ * dateTimeAttr(value) → machine-readable `<time dateTime>`: valid inputs
+ * normalize to UTC ISO ("2025-03-04T08:23:00.000Z") so Date objects and epoch
+ * numbers are as correct as ISO strings; unparseable input falls back to
+ * String(value) (never throws — `new Date(bad).toISOString()` would).
+ */
+export function dateTimeAttr(value) {
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  } catch {
+    // fall through to the String fallback below
+  }
+  return String(value);
+}

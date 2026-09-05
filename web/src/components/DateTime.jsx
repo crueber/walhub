@@ -7,12 +7,12 @@
 // props: { value, fallback? }
 
 import { Show } from "solid-js";
-import { fmtDate, fmtDateTitle } from "../lib/format.js";
+import { dateTimeAttr, fmtDate, fmtDateTitle } from "../lib/format.js";
 
 export default function DateTime(props) {
   return (
     <Show when={props.value} fallback={props.fallback ?? ""}>
-      {(v) => <time dateTime={String(v())} title={fmtDateTitle(v())}>{fmtDate(v())}</time>}
+      {(v) => <time dateTime={dateTimeAttr(v())} title={fmtDateTitle(v())}>{fmtDate(v())}</time>}
     </Show>
   );
 }
