@@ -295,7 +295,7 @@ Pages (SolidJS SPA per `12_web_ui.md`, D-WEB-6; `.jsx` route components, `useDat
 |---|---|---|
 | `/:o/:r/issues` | list: filter bar (state/labels/assignee/milestone/since), paged cards from the index | SSE `issue` upserts/patches cards in place |
 | `/:o/:r/issues/new` | create form (title, markdown-lite body, preview toggle) | — |
-| `/:o/:r/issues/:num` | thread: header, timeline (seq-window, older on demand), comment composer, sidebar (labels/assignees/milestone/state for ≥ triage) | `issue_event` appends timeline frames; `issue` updates the header |
+| `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone in divided sections) | `issue_event` appends timeline frames; `issue` updates the header |
 | `/:o/:r/labels` | label CRUD (triage-gated UI) | on save, refetch |
 | `/:o/:r/milestones` | milestone CRUD + progress bars | on save, refetch |
 
@@ -317,6 +317,13 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
 - `participants[]` lives in the header, maintained by the same CAS as the event seq — one owner (06 depends on this).
 - Milestone progress is denormalized counters, derived-for-display, never authoritative.
 - Auth gates per P6: label/milestone CRUD and moderation at triage; issue create/comment at read.
+- **Unified issue sidebar + labels dropdown (issue #107).** The thread page
+  sidebar is ONE metadata card (labels / assignees / milestone in divided
+  sections, each value directly under its header); the old state card is
+  gone — the header `#N Open/Closed` badge is the single source of state.
+  Labels keep their applied chips plus a triage-gated `+` button opening a
+  dropdown with ALL repo label options (menuitemcheckbox rows, one PATCH
+  per toggle; Esc/outside-click close, focus returns to the trigger).
 - Compaction task kind `issue-index-compact`, trigger sampled — no timer goroutine invented.
 - **List render is number-descending (issue #48, 2026-09-04):** every list
   read (`GET …/api/issues` under any state filter) renders newest-first by
