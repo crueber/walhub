@@ -2,6 +2,8 @@ package social
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,8 +102,8 @@ func TestStarConcurrentResyncConverges(t *testing.T) {
 }
 
 // TestStarZeroServiceGateSkips pins the degraded path: a Service built
-// without New has no star gate, so Star must still work (CAS alone) rather
-// than deadlock on a nil channel.
+// without New has no star shards, so Star must still work (CAS alone) rather
+// than deadlock on a nil gate.
 func TestStarZeroServiceGateSkips(t *testing.T) {
 	st := store.NewMemory()
 	s := &Service{Store: st, Roles: newFakeRoles()}
@@ -140,6 +142,98 @@ func TestStarConcurrentConverge(t *testing.T) {
 	d, err := x.svc.Counts(ctx(), jane(), "o", "r")
 	if err != nil || d.Stars != 2 {
 		t.Fatalf("converge: %+v %v", d, err)
+	}
+}
+
+// stallStore wedges every op touching one repo inside the call until
+// release is closed. It proves the shard gate (issue #97): a wedged store
+// call stalls at most same-shard Stars, never an unrelated repo.
+type stallStore struct {
+	store.ObjectStore
+	substr  string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *stallStore) stall(key string) {
+	if !strings.Contains(key, s.substr) {
+		return
+	}
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+}
+
+func (s *stallStore) Get(ctx context.Context, key string, opts store.GetOptions) (store.GetResult, error) {
+	s.stall(key)
+	return s.ObjectStore.Get(ctx, key, opts)
+}
+
+func (s *stallStore) Put(ctx context.Context, key string, body store.PutBody, opts store.PutOptions) (store.ObjectMeta, error) {
+	s.stall(key)
+	return s.ObjectStore.Put(ctx, key, body, opts)
+}
+
+func (s *stallStore) Delete(ctx context.Context, key string, ver store.Version) error {
+	s.stall(key)
+	return s.ObjectStore.Delete(ctx, key, ver)
+}
+
+// TestStarSlowStoreDoesNotStallUnrelatedRepo pins issue #97: with the old
+// process-global gate a wedged store call inside one Star serialized every
+// Star on the instance. Same principal, two repos on different shards: the
+// quick Star must complete while the slow one is still wedged inside its
+// store call, and both counters must converge to 1 afterwards.
+func TestStarSlowStoreDoesNotStallUnrelatedRepo(t *testing.T) {
+	x := newHarness(t)
+	seedRepo(t, x, "o", "slow")
+	// Pick a repo name on a different shard — otherwise the test would pin
+	// a hash collision instead of isolation.
+	quick := ""
+	for i := 0; ; i++ {
+		cand := fmt.Sprintf("quick%d", i)
+		if starShard(starGateKey("o", "slow", "jane")) != starShard(starGateKey("o", cand, "jane")) {
+			quick = cand
+			break
+		}
+	}
+	seedRepo(t, x, "o", quick)
+	st := &stallStore{ObjectStore: x.svc.Store, substr: "o/slow", entered: make(chan struct{}), release: make(chan struct{})}
+	x.svc.Store = st
+	slowDone := make(chan error, 1)
+	go func() {
+		_, err := x.svc.Star(ctx(), jane(), "o", "slow")
+		slowDone <- err
+	}()
+	<-st.entered // the slow Star is wedged inside a store call holding its shard
+	quickDone := make(chan error, 1)
+	go func() {
+		_, err := x.svc.Star(ctx(), jane(), "o", quick)
+		quickDone <- err
+	}()
+	select {
+	case err := <-quickDone:
+		if err != nil {
+			t.Fatalf("quick star: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("unrelated Star stalled behind a wedged store call")
+	}
+	close(st.release)
+	select {
+	case err := <-slowDone:
+		if err != nil {
+			t.Fatalf("slow star: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("slow star never finished after release")
+	}
+	for _, tc := range []struct{ repo string }{{"o/slow"}, {"o/" + quick}} {
+		o, r, _ := splitStarRepo(tc.repo)
+		d, err := x.svc.Counts(ctx(), jane(), o, r)
+		if err != nil || d.Stars != 1 {
+			t.Fatalf("%s converged to %+v %v, want stars 1", tc.repo, d, err)
+		}
 	}
 }
 

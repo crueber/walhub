@@ -24,13 +24,18 @@ import (
 // userspace record the prefix sweep can never clean.
 //
 // Concurrency (issue #69): the mutation (record check/Create, counter
-// bump-or-resync) runs under the Service star gate, so same-process Stars
-// are sequential and each observes the previous call's committed counter.
-// The gate plus the conditional resync CAS in reconcileStar keep the
-// counter exact: the record Create 412 still arbitrates first-star races
-// (the loser recounts without repairing), and a late observer of an
-// in-flight record sees the winner's committed bump instead of firing a
-// second one.
+// bump-or-resync) runs under the Service star shard for (repo, principal),
+// so same-process same-starrer Stars are sequential and each observes the
+// previous call's committed counter. The shard plus the conditional resync
+// CAS in reconcileStar keep the counter exact: the record Create 412 still
+// arbitrates first-star races (the loser recounts without repairing), and a
+// late observer of an in-flight record sees the winner's committed bump
+// instead of firing a second one. Pure CAS alone cannot close this hole
+// (issue #97): the create-path bump must stay unconditional — conditioning
+// it on absent/zero would undercount every already-starred repo
+// (TestStarUnstarIdempotent pins bob → 2) — while a late observer cannot
+// tell a just-created record (bump in flight) from a stale one (repair
+// due), so the shard stays.
 func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string) (int, error) {
 	if err := requireAuthenticated(p); err != nil {
 		return 0, err
@@ -41,9 +46,9 @@ func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string
 	if !s.repoAlive(ctx, owner, repo) {
 		return 0, fmt.Errorf("%w: repo %s not found", ErrNotFound, repoName(owner, repo))
 	}
-	release := s.lockStar()
-	defer release()
 	who := normPrincipal(p.Name)
+	release := s.lockStar(starGateKey(owner, repo, who))
+	defer release()
 	key := StarKey(who, owner, repo)
 	if raw, _, err := s.getJSON(ctx, key); err != nil {
 		return 0, err

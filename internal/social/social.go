@@ -34,15 +34,17 @@
 // The star resync decision (absent/zero counter + live record ⇒ one +1) is
 // evaluated INSIDE the counter CAS loop, never from a pre-read (issue #69).
 // Handlers hold no repo locks across store calls (13 §2 rule 4) — the one
-// stated exception is the Star leaf gate below, which serializes only
-// same-process Star calls (human-rate, bounded hold, never nested).
+// stated exception is the Star shard gate below, which serializes only
+// same-shard Star calls (human-rate, bounded hold, never nested, issue #97).
 package social
 
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/identity"
@@ -125,35 +127,62 @@ type Service struct {
 	Store store.ObjectStore
 	Roles RoleService
 	Now   func() time.Time
-	// starGate serializes Star's check-then-act within this process: the
+	// starShards serializes Star's check-then-act within this process: the
 	// star decision spans two keys (the per-principal record and the
 	// shared counter), so the counter CAS alone cannot arbitrate a
 	// same-principal race in the post-recreate zero window (issue #69).
-	// Capacity-1 channel used as a mutex — no new imports, safe to copy:
-	// acquire by receiving, release by sending back. Initialized by New;
-	// a zero Service (nil gate) skips mutual exclusion and relies on CAS
-	// alone (degraded but safe — service_test pins the path).
-	starGate chan struct{}
+	// Sharded by (repo, principal) (issue #97): a slow store call stalls
+	// at most same-shard Stars, never the whole instance. A zero Service
+	// (nil shards) skips mutual exclusion and relies on CAS alone
+	// (degraded but safe — service_test pins the path).
+	starShards *[starShardCount]sync.Mutex
+}
+
+// starShardCount is the stripe count for the Star gate (issue #97): fixed
+// and small (no per-key map to grow or GC), so worst-case unrelated
+// sharing is 1/64 of Star traffic — Star-only, human-rate — while the
+// correctness set (same repo + same principal, whose record and counter
+// keys coincide) always lands on one shard.
+const starShardCount = 64
+
+// starShard maps a gate key onto its stripe (FNV-1a, stdlib only).
+func starShard(key string) uint {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return uint(h.Sum32() % starShardCount)
+}
+
+// starGateKey is the sharding key: the exact (repo, principal) pair whose
+// record Create and counter bump must be atomic with each other. Different
+// principals on one repo share the counter but not the record, and their
+// CAS loops already converge (unconditional bump vs conditional resync,
+// arbitrated by the store); different repos share nothing.
+func starGateKey(owner, repo, principal string) string {
+	return owner + "/" + repo + "\x00" + principal
 }
 
 // New builds a Service over st.
 func New(st store.ObjectStore, roles RoleService) *Service {
-	gate := make(chan struct{}, 1)
-	gate <- struct{}{}
-	return &Service{Store: st, Roles: roles, Now: time.Now, starGate: gate}
+	return &Service{Store: st, Roles: roles, Now: time.Now, starShards: &[starShardCount]sync.Mutex{}}
 }
 
-// lockStar acquires the Star serialization gate and returns the release
-// function for defer. Only Star takes this gate (never nested, single
-// lock so no ordering hazard); Unstar keeps its version-conditional
-// Delete token and all reads stay lock-free.
-func (s *Service) lockStar() func() {
-	g := s.starGate
-	if g == nil {
+// lockStar acquires the Star serialization shard for key and returns the
+// release function for defer. Only Star takes this gate (never nested, so
+// no ordering hazard); Unstar keeps its version-conditional Delete token
+// and all reads stay lock-free.
+//
+// Hold bound (issue #97): one record GET + one record PUT + one counter
+// CAS loop of at most 8 attempts × (GET + PUT), all small control-plane
+// JSON on the control-plane transport — no bulk bytes, no git subprocess,
+// no LIST. The gate is Star-only at human rate, so even a wedged store
+// call stalls only the ~1/64 shard it hashes to.
+func (s *Service) lockStar(key string) func() {
+	if s.starShards == nil {
 		return func() {}
 	}
-	<-g
-	return func() { g <- struct{}{} }
+	shard := &s.starShards[starShard(key)]
+	shard.Lock()
+	return shard.Unlock
 }
 
 // nowUTC is the clock, UTC (RFC 3339 wire timestamps).
