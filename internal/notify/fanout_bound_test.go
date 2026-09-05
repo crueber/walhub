@@ -269,6 +269,9 @@ func TestFanoutDeliverRepoBounded(t *testing.T) {
 	defer srv.Close()
 
 	const nhooks = 64
+	// Above the per-repo cap on purpose (this test measures delivery
+	// goroutine bounding, not the cap): raise it for this service.
+	x.svc.MaxHooks = nhooks + 1
 	x.addProfile("amy@example.com", "bob@example.com")
 	for range nhooks {
 		if _, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{

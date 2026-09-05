@@ -77,6 +77,13 @@ toggle belongs to 07/08; this doc only consumes it.
 | `insecure_tls` | bool | default `false` |
 | `created_by`, `created_at`, `updated_at` | | RFC 3339 |
 
+Cap: at most `DefaultMaxHooksPerRepo` (20) hook configs per repo (service override
+`MaxHooks`, zero/negative selects the default; no config key in v1). Creates beyond
+the cap are refused with `409` plain-text. The cap is also the per-repo sweep bound:
+one repo's minute pass never scans more than the cap's worth of hooks (issue #156).
+Repos that already hold more hooks than the cap (created before it) are grandfathered:
+delivery still scans all their hooks and only new creates are refused.
+
 Delivery records: `repos/<o>/<r>/webhooks/<id>/deliveries/recent.json` — one CAS'd last-25 ring
 `{updated_at, entries:[{seq, event, status, at, error?, duration_ms}]}` (debugging surface only, not
 a durability mechanism).
@@ -203,6 +210,13 @@ stays git-only (P1 law); the events-bridge loop is frozen and gains no collabora
 - **Delivery loop:** new maintain task kind `webhooks` (Seam 5, `internal/notifications` package),
   single-flight `(repo, "webhooks")` per §6.8. One loop pass per repo: for each active hook, scan
   `collab-events/` from the hook's cursor, POST each matching event, CAS-advance the cursor.
+  The minute sweep that schedules these passes is incremental (issue #156): a repo costs one
+  `collab_state` GET per pass unless its allocator advanced since the last scheduled pass or
+  its last pass left cursors behind the head (POST failure or a 256-event backlog — the
+  at-least-once retry contract is unchanged, only lagging repos re-pass). Repos without an
+  activity log never reach the hook LIST; wake-ups after each fanned-out event stay the fast
+  path and the sweep is the backstop. A new or newly-activated hook arms its repo explicitly,
+  so a hook created onto a quiet repo's backlog does not wait for the next emission.
 - **Per-hook cursor:** `repos/<o>/<r>/webhooks/cursors/<hook-id>.json`,
   `{"published_seq": N, "updated_at": RFC3339}` — CAS'd, a direct analog of the per-sink
   `events/cursors/<sink>.json` family (14 §14.6); proposed for the frozen overwritable list (the D-EXT-2
@@ -252,7 +266,7 @@ RouteProvider (Seam 1).
 | `DELETE /{o}/{r}/api/watch` | read (self only) | → `{watching: false, watchers}` | |
 | `GET /{o}/{r}/api/watch` | authenticated (self only) | → `{watching: bool}` | no-store |
 | `GET /{o}/{r}/api/webhooks` | admin | → `{webhooks: [Hook (no secret)]}` | |
-| `POST /{o}/{r}/api/webhooks` | admin | `{url, events[], secret?, insecure_tls?}` → `Hook` | 400 on bad URL/events |
+| `POST /{o}/{r}/api/webhooks` | admin | `{url, events[], secret?, insecure_tls?}` → `Hook` | 400 on bad URL/events; 409 plain-text past the per-repo cap (§1.4) |
 | `GET /{o}/{r}/api/webhooks/{id}` | admin | → `Hook` (`secret_set`, never `secret`) | |
 | `PATCH /{o}/{r}/api/webhooks/{id}` | admin | partial → `Hook` | CAS'd |
 | `DELETE /{o}/{r}/api/webhooks/{id}` | admin | → 204 | also deletes cursor + deliveries |
@@ -360,6 +374,13 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **Email is out; the activity log is the named seam** — a future email sink needs no schema change here.
 - **`X-Walgit-*` header keepers on collaboration webhooks** — wire identifiers are contracts, not branding (D-NAME-1).
 - **User notification SSE stream is a new top-level route**, not a repo-stream extension: notifications are user-scoped and must not require per-repo subscriptions.
+- **Hooks are capped per repo (20, issue #156) and the minute sweep is incremental** — the
+  pre-fix sweep LISTed + GET every hook of every repo every minute (O(total hooks) forever,
+  uncapped). The cap bounds one repo's pass; the sweep gate (one `collab_state` GET, pass
+  only on allocator advance or a lagging cursor, armed explicitly by create/activate) bounds
+  the quiet steady state independent of hook count. Failed deliveries still retry on the
+  next pass (pending mark, not a full rescan of every repo). No config key in v1 (service
+  field override, same convention as the retention window).
 - **Bounded ping (issue #155):** `PingHook` no longer runs `deliverHook` (up to 256 events ×
   10 s POST in the admin's request goroutine, racing background delivery for the same hook).
   It appends the synthetic `ping` event and POSTs exactly that event via the same `postEvent`
