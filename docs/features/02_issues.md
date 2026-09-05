@@ -228,7 +228,7 @@ RFC 3339, cache class per route. `num` matches `[1-9][0-9]{0,8}` (decimal on the
 | `POST …/api/issues` | read (authenticated) | `{title, body?}` → `201 {thread, events:[opened]}`; allocates num via P2 |
 | `GET …/api/issues/{num}` | read | → `{thread, events:[last 50], events_more:bool}`; `?after_seq=&n=` windows the log; `ETag: "v<version>"`, 304 on If-None-Match |
 | `GET …/api/issues/{num}/events?after_seq=&n=` | read | → `{events:[], more:bool}`; seq-window pagination, newest-last |
-| `PATCH …/api/issues/{num}` | title/state: author or triage; labels/assignees/milestone keys: triage | `{title?, state?, state_reason?, labels?, assignees?, milestone?}` → `{thread}`; unknown keys 400; no-op fields omitted |
+| `PATCH …/api/issues/{num}` | title/state: author or triage; labels/assignees/milestone keys: triage | `{title?, state?, state_reason?, labels?, assignees?, milestone?}` → `{thread}`; unknown keys 400; no-op fields omitted; `milestone: null` clears (absent key = no change) |
 | `POST …/api/issues/{num}/comments` | read (authenticated) | `{body}` → `201 {event}` |
 | `POST …/api/issues/{num}/reactions` | read (authenticated) | `{target_event_seq, content}` → `{event}` |
 | `DELETE …/api/issues/{num}/reactions/{target_event_seq}/{content}` | own reaction only | → `204` |
@@ -295,9 +295,9 @@ Pages (SolidJS SPA per `12_web_ui.md`, D-WEB-6; `.jsx` route components, `useDat
 |---|---|---|
 | `/:o/:r/issues` | list: filter bar (state/labels/assignee/milestone/since), paged cards from the index | SSE `issue` upserts/patches cards in place |
 | `/:o/:r/issues/new` | create form (title, markdown-lite body, preview toggle) | — |
-| `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone in divided sections) | `issue_event` appends timeline frames; `issue` updates the header |
+| `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone + `+` dropdown with a "No milestone" clear row in divided sections) | `issue_event` appends timeline frames; `issue` updates the header |
 | `/:o/:r/labels` | label CRUD (triage-gated UI) | on save, refetch |
-| `/:o/:r/milestones` | milestone CRUD + progress bars | on save, refetch |
+| `/:o/:r/milestones` | milestone CRUD + progress bars + per-milestone linked issues (each milestone lists/links its issues via the server-side `milestone=` list filter; the title links to the filtered issue list) | on save, refetch |
 
 SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WEB-2; full shapes in 08):
 `repo.issues.{list,get,create,patch,comment,events,reactions.add,reactions.remove}`, `repo.labels.{list,create,update,delete}`,
@@ -382,6 +382,11 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
   event); milestone `due_on: ""` clears.
 - **Milestone ids ride the wire as stored** (`<id:06x>` hex) — no decimal
   twin, unlike issue nums.
+- **PATCH `milestone: null` clears; an absent `milestone` key is a
+  no-op** (issue #119). The HTTP layer decodes the key as a value
+  `json.RawMessage` because encoding/json maps an explicit null onto a
+  nil `**string`, indistinguishable from absent — null must reach the
+  service's clear path, absent must not.
 - **Default close-reason + `*none`/`none` filter spellings** (`assignee=*none`,
   `milestone=none`) are implemented exactly as §7 rows state.
 - **Event windows return arrays newest-first** (most recent event at index

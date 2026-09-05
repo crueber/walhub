@@ -304,6 +304,59 @@ func TestPatchIssueHTTP(t *testing.T) {
 	}
 }
 
+func TestPatchIssueMilestoneHTTP(t *testing.T) {
+	roles := newFakeRoles()
+	grantTriage(roles, "acme", "repo")
+	s := testService(roles)
+	m, err := s.CreateMilestone(reqCtx(), "acme", "repo", aliceP, "v1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCreate(t, s, "acme", "repo", janeP, "t", "")
+	ha := testHandler(s, aliceP)
+	// Set by id string.
+	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"milestone":"`+m.ID+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("set = %d: %s", w.Code, w.Body.String())
+	}
+	// Absent key is a no-op (must not clear the milestone just set).
+	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"title":"t2"}`); w.Code != http.StatusOK {
+		t.Fatalf("absent-key = %d: %s", w.Code, w.Body.String())
+	} else {
+		var res struct {
+			Thread *Thread `json:"thread"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if res.Thread.Milestone == nil || *res.Thread.Milestone != m.ID {
+			t.Fatalf("absent-key milestone = %v, want %q", res.Thread.Milestone, m.ID)
+		}
+	}
+	// Explicit null clears (absent key would be a no-op — the wire
+	// distinguishes them; issue #119).
+	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"milestone":null}`); w.Code != http.StatusOK {
+		t.Fatalf("clear = %d: %s", w.Code, w.Body.String())
+	} else {
+		var res struct {
+			Thread *Thread `json:"thread"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if res.Thread.Milestone != nil {
+			t.Fatalf("cleared milestone = %q, want nil", *res.Thread.Milestone)
+		}
+	}
+	// Non-string, non-null → 400 (fail closed).
+	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"milestone":5}`); w.Code != http.StatusBadRequest {
+		t.Errorf("number = %d, want 400", w.Code)
+	}
+	// Unknown id → 400.
+	if w := doReq(ha, "PATCH", "/acme/repo/api/issues/1", `{"milestone":"0000ff"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("unknown id = %d, want 400", w.Code)
+	}
+}
+
 func TestCommentsHTTP(t *testing.T) {
 	roles := newFakeRoles()
 	s := testService(roles)
