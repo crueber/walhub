@@ -62,10 +62,16 @@ repo owner name). Org objects:
 Write discipline:
 
 - **Create** (immutable `PutMode::Create`) applies only to the *namespace*: creating an org is
-  `Create` of `org.json` (a lost race loses the org name — 409 "org already exists"); creating a team
-  is `Create` of its `teams/<slug>.json`. Everything else — profile edits, roster changes, membership —
-  is a **CAS'd update** (`Update(version)`, retry-on-412 re-read; the canonical CAS loop, 13_concurrency
-  §3). CAS is the lock; there is no separate lock object anywhere in this feature.
+  `Create` of `org.json` followed by `Create` of `members.json` binding the creator as owner.
+  Creation is atomic-or-recoverable (#75): a failed members seed rolls the `org.json` reservation
+  back (version-guarded, best-effort), and a retry on an ownerless reservation (members missing or
+  ownerless — the crash-between-writes residue) completes the owner binding via CAS instead of
+  409ing; a re-create by the already-bound owner is idempotent success. A lost race against a
+  genuinely owned org still loses the org name — 409 "org already exists" — and the loser writes
+  nothing. Creating a team is `Create` of its `teams/<slug>.json`. Everything else — profile edits,
+  roster changes, membership — is a **CAS'd update** (`Update(version)`, retry-on-412 re-read; the
+  canonical CAS loop, 13_concurrency §3). CAS is the lock; there is no separate lock object anywhere
+  in this feature.
 - **members.json is one object, human-rate.** Rosters are small (dozens), writes are rare (someone
   joins/leaves a team), so whole-roster CAS beats per-member objects: one GET answers the hot P6
   question ("is this principal an owner of `<org>`?") with no LIST. Contention is a non-issue at
@@ -350,6 +356,13 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   is the same truth source accept already uses — no sweeper, no users LIST, no tombstone, and no
   prune path that could orphan a pending row. P6/auth is untouched: the gates still decide visibility,
   existence only decides whether a row renders.
+- **Org creation is atomic-or-recoverable (issue #75, 2026-09-05)** — a failed `members.json`
+  seed rolls the `org.json` reservation back (version-guarded, best-effort, original error surfaces),
+  and a retry on an ownerless reservation completes the owner binding via CAS (same path heals the
+  crash-between-writes residue); re-create by the bound owner is idempotent. Rationale: the old
+  reserve-then-seed left an ownerless namespace on any non-412 seed failure with retries 409ing
+  forever. Arbitration is unchanged for genuine races: exactly one winner, losers 409 and write
+  nothing, because only an ownerless roster is ever rewritten.
 
 ## Explicitly out of scope
 
