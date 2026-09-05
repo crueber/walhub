@@ -120,10 +120,22 @@ Ordering guarantee: by seq within a repo; **nothing across repos**.
 
 ### 4.2 Go client
 
-`net/http` with one client reused per process (default transport is fine; the batch is small). The
+`net/http` with one client reused per process (the batch is small). The
 entire POST — connect through body read — runs under `context.WithTimeout(ctx, 10*time.Second)`.
 `http.Client.Timeout` is NOT set (it would also cap the connection reuse); the timeout lives on the
-request context.
+request context. Egress hardening (no new dependencies, stdlib only):
+
+- **No redirects.** `CheckRedirect` refuses every redirect (refuse-all, not same-host-only — a
+  same-host https→http downgrade would still leak the HMAC secret and body in plaintext, and
+  "same host" is DNS-defined anyway). Any 3xx fails the delivery: cursor untouched, replay on the
+  next wake-up. The signature and body therefore never leave the validated host.
+- **Delivery-time IP screening with pinned dialing.** The transport's `DialContext` resolves the
+  URL host, drops every non-public address (RFC1918, link-local incl. 169.254.169.254, CGNAT
+  100.64/10, benchmark 198.18/15, TEST-NETs, ULA, multicast, unspecified, reserved — see
+  `webhookBlockedNets`), and dials only the survivors. Check and connect see the same resolution,
+  so there is no resolve-vs-connect gap; literal private IPs fail before any SYN. Unresolvable
+  hosts fail closed. **Loopback stays allowed**: the URL is operator config (not tenant input),
+  dev/CI webhooks target localhost, and the contract tests deliver to loopback servers.
 
 ### 4.3 Sink abstraction
 
@@ -321,6 +333,19 @@ fails N times exercises at-least-once replay.
   (folded entries are unreadable) and made explicit here so no implementation reads below `min_seq`.
 - **`http.Client.Timeout` unset in favor of per-request context timeouts**: pure Go mechanics;
   behaviorally identical to the Rust 10 s delivery timeout.
+- **Webhook egress hardening — no redirects, delivery-time IP screen (Fix #78):** the default
+  client followed up to 10 cross-scheme redirects and Go forwards custom headers cross-host, so a
+  validated URL could 302 the HMAC secret + body onto `http://169.254.169.254/` or any private IP.
+  The fix refuses ALL redirects (a 3xx is a delivery failure, cursor untouched) and pins a
+  resolve-screen-dial in the transport (`internal/egress`, stdlib `netip` only, with
+  `internal/events/ssrf.go` keeping its names as thin wrappers). Refuse-all
+  rather than same-host-only because same-host still permits an https→http plaintext downgrade.
+  Screening runs at every delivery (DNS can change between config and POST), not just at config
+  time; the range table extends the repoimport `isPrivateIP` logic with 198.18/15 + TEST-NETs +
+  reserved/multicast/unspecified. Loopback stays allowed (operator-configured URL, dev/CI targets
+  localhost, contract tests deliver to httptest servers) — an operator pointing at their own host
+  is their choice; a redirect escaping it is refused. No new goroutines or locks, so no new
+  concurrency hazard (13 §2: the shared transport is goroutine-safe, dials are sequential).
 - Everything else — event JSON shape (incl. `_walgit.seq` as string), zero-OID rule, sha1 delivery
   id / sha256 HMAC signature headers, dedup key, cursor key/JSON, CAS semantics, notify body
   parsers, sweep defaults, and metric names — is carried over verbatim for bucket- and wire-format

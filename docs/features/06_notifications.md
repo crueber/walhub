@@ -409,6 +409,26 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   idempotent Creates (at-least-once, the webhooks cursor discipline). Rationale: the durable queue
   was write-only without a reader — the sweep is that reader, scoped to recent activity so a restart
   never scans the bucket.
+- **Tenant webhook egress hardening — no redirects, delivery-time IP screen (issue #78, 2026-09-05):**
+  `validateHookURL` (https-only except loopback-http) was bypassable: both delivery clients followed
+  up to 10 redirects across schemes/hosts, and Go forwards custom headers cross-host (only
+  Authorization/Cookie are stripped), so a validated `https://…` hook could 302/307/308 the
+  `X-Walgit-Signature` + body onto `http://169.254.169.254/` or any private IP. The fix hardens BOTH
+  lanes (`hookClient` and `hookClientInsecure`): `CheckRedirect` refuses ALL redirects (a 3xx is a
+  delivery failure, cursor untouched, replay next pass) and every dial resolves, screens, and dials
+  only public survivors with check and connect pinned to one resolution (no TOCTOU; literal private
+  IPs fail pre-SYN; unresolvable fails closed). Refuse-all rather than same-host-only because
+  same-host still permits an https→http plaintext downgrade of secret+body, and "same host" is
+  DNS-defined anyway. Trade-off, stated plainly: benign redirects fail too — a trailing-slash
+  normalization hop or an http→https upgrade is a delivery error, not a silent follow, so hook URLs
+  must be configured in canonical (final, https) form. The screen lives in the shared stdlib-only
+  `internal/egress` package (one range table — RFC1918, link-local incl. 169.254.169.254, CGNAT,
+  benchmark 198.18/15, TEST-NETs, ULA, multicast, unspecified, reserved, incl. mapped-v6 — reused
+  verbatim by the events bridge, which keeps its existing names as thin wrappers), so the two sinks
+  cannot drift apart. Loopback stays allowed on both validation and dial (tenant dev hooks target
+  localhost; contract tests deliver to httptest servers). Screening runs at every delivery (DNS can
+  change between config and POST), not just at config time. No new goroutines or locks, so no new
+  concurrency hazard (the shared transports are goroutine-safe, dials are sequential).
 
 ## Explicitly out of scope
 

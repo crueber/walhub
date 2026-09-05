@@ -31,8 +31,14 @@ type Sink interface {
 // would also cap connection reuse).
 const deliverTimeout = 10 * time.Second
 
-// webhookClient is the one client per process; the default transport is fine.
-var webhookClient = &http.Client{} //nolint:exhaustruct // http.Client.Timeout deliberately unset (09 §4.2)
+// webhookClient is the one client per process. Redirects are refused
+// outright (signature + body must never leave the validated host) and the
+// transport screens every dial against the non-public ranges (ssrf.go);
+// either layer failing fails the delivery with the cursor untouched.
+var webhookClient = &http.Client{ //nolint:exhaustruct // http.Client.Timeout deliberately unset (09 §4.2)
+	CheckRedirect: webhookRefuseRedirect,
+	Transport:     webhookTransport(),
+}
 
 // WebhookSink POSTs the batch as one JSON array to events.webhook_url.
 type WebhookSink struct {
