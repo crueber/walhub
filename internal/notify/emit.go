@@ -199,8 +199,9 @@ func (s *Service) emit(ctx context.Context, e Emission) {
 	if len(targets) > MaxSyncRecipients {
 		// Overflow: the activity event (with the full recipient set
 		// in its payload) is the durable queue; notify-fanout drains
-		// it. The request never extends past this point (§4).
-		_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets)
+		// it. The request never extends past this point (§4). The
+		// pending flag arms the restart redrain sweep (issue #77).
+		_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, true)
 		s.enqueueFanout(e.Repo, seq)
 		s.wakeRepo(e.Repo)
 		return
@@ -215,8 +216,9 @@ func (s *Service) emit(ctx context.Context, e Emission) {
 		// remainder idempotently. Dedup-skips are NOT failures — the
 		// live entry already covers them, so they never arm the task
 		// (a task racing a later read-flip could otherwise mint a
-		// duplicate live entry for the same thread+reason).
-		_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets)
+		// duplicate live entry for the same thread+reason). The pending
+		// flag arms the restart redrain sweep (issue #77).
+		_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, true)
 		s.enqueueFanout(e.Repo, seq)
 		s.wakeRepo(e.Repo)
 		// Publish what did complete — a partial tray beats silence.
@@ -225,7 +227,7 @@ func (s *Service) emit(ctx context.Context, e Emission) {
 		}
 		return
 	}
-	_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets)
+	_ = s.appendActivity(ctx, owner, name, seq, e, action, title, actor, at, targets, false)
 	for _, d := range done {
 		s.ubus.publish(d.principal, d.notif)
 	}

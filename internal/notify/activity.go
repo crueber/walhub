@@ -26,7 +26,12 @@ type activityRecipient struct {
 type activityPayload struct {
 	Class      string              `json:"class"`
 	Recipients []activityRecipient `json:"recipients"`
-	Detail     map[string]any      `json:"detail,omitempty"`
+	// FanoutPending marks overflow/shortfall emissions whose recipient
+	// set still needs the notify-fanout task (issue #77): the sweep
+	// re-drains exactly these events after a restart. Sync-complete
+	// emissions omit it (omitempty keeps their bytes unchanged).
+	FanoutPending bool           `json:"fanout_pending,omitempty"`
+	Detail        map[string]any `json:"detail,omitempty"`
 }
 
 // reserveSeq CAS-allocates the next activity seq (P3 two-step, step 1:
@@ -57,8 +62,10 @@ func (s *Service) reserveSeq(ctx context.Context, owner, repo string) (int, erro
 
 // appendActivity Creates the immutable activity event for seq (P3
 // two-step, step 2). A 412 means the seq was already appended (retried
-// overflow path) — success either way.
-func (s *Service) appendActivity(ctx context.Context, owner, repo string, seq int, e Emission, action, title, actor, at string, targets []target) error {
+// overflow path) — success either way. pending marks overflow/shortfall
+// emissions for the restart redrain sweep (issue #77); sync-complete
+// emissions pass false.
+func (s *Service) appendActivity(ctx context.Context, owner, repo string, seq int, e Emission, action, title, actor, at string, targets []target, pending bool) error {
 	recips := make([]activityRecipient, 0, len(targets))
 	for _, t := range targets {
 		recips = append(recips, activityRecipient{Principal: t.principal, Reason: t.reason})
@@ -66,7 +73,7 @@ func (s *Service) appendActivity(ctx context.Context, owner, repo string, seq in
 	ev := ActivityEvent{
 		Seq: seq, Repo: e.Repo, Action: action, Num: e.Num, Kind: e.Kind,
 		Actor: actor, Title: title, At: at,
-		Payload: encode(activityPayload{Class: e.Class, Recipients: recips, Detail: e.Detail}),
+		Payload: encode(activityPayload{Class: e.Class, Recipients: recips, FanoutPending: pending, Detail: e.Detail}),
 	}
 	if err := s.putCreate(ctx, ActivityKey(owner, repo, seq), encode(ev)); err != nil {
 		if store.IsPreconditionFailed(err) {
@@ -88,4 +95,34 @@ func (s *Service) readActivity(ctx context.Context, owner, repo string, seq int)
 		return nil
 	}
 	return &ev
+}
+
+// FanoutDoneDoc is one repos/<o>/<r>/collab-fanout/<seq:012x>.json: the
+// per-seq completion record of the notify-fanout task (issue #77). The
+// drain writes it after fanoutOne completes a seq; the restart redrain
+// sweep skips seqs that carry it. Create-only and tiny; retention deletes
+// it alongside its activity event (§9).
+type FanoutDoneDoc struct {
+	Seq int    `json:"seq"`
+	At  string `json:"at"`
+}
+
+// FanoutDoneKey returns repos/<o>/<r>/collab-fanout/<seq:012x>.json.
+func FanoutDoneKey(owner, repo string, seq int) string {
+	return fmt.Sprintf("repos/%s/%s/collab-fanout/%012x.json", owner, repo, seq)
+}
+
+// markFanoutDone records a completed drain (412 = already drained —
+// success). Best-effort: a lost write re-drains idempotently on the next
+// sweep (deterministic ids + Create-412), never skipping.
+func (s *Service) markFanoutDone(ctx context.Context, owner, repo string, seq int) {
+	_ = s.putCreate(ctx, FanoutDoneKey(owner, repo, seq),
+		encode(FanoutDoneDoc{Seq: seq, At: s.nowUTC().Format(dateTimeFmt)}))
+}
+
+// fanoutDone reports whether seq already drained (absent/unreadable →
+// false — the sweep re-enqueues and the drain proves idempotent).
+func (s *Service) fanoutDone(ctx context.Context, owner, repo string, seq int) bool {
+	raw, _, err := s.getJSON(ctx, FanoutDoneKey(owner, repo, seq))
+	return err == nil && raw != nil
 }

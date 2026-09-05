@@ -311,15 +311,15 @@ func TestReserveSeqEdges(t *testing.T) {
 func TestAppendActivityEdges(t *testing.T) {
 	x := newHarness(t)
 	e := Emission{Repo: "acme/repo", Kind: "issue", Class: "subscribed"}
-	if err := x.svc.appendActivity(ctx(), "acme", "repo", 1, e, "commented", "T", "a", x.now.Format(dateTimeFmt), nil); err != nil {
+	if err := x.svc.appendActivity(ctx(), "acme", "repo", 1, e, "commented", "T", "a", x.now.Format(dateTimeFmt), nil, false); err != nil {
 		t.Fatal(err)
 	}
 	// Same seq twice → 412-tolerant success.
-	if err := x.svc.appendActivity(ctx(), "acme", "repo", 1, e, "commented", "T", "a", x.now.Format(dateTimeFmt), nil); err != nil {
+	if err := x.svc.appendActivity(ctx(), "acme", "repo", 1, e, "commented", "T", "a", x.now.Format(dateTimeFmt), nil, false); err != nil {
 		t.Fatalf("replay append = %v", err)
 	}
 	svc2 := New(errStore{store.NewMemory(), errors.New("store down")}, nil)
-	if err := svc2.appendActivity(ctx(), "acme", "repo", 1, e, "commented", "T", "a", "", nil); err == nil {
+	if err := svc2.appendActivity(ctx(), "acme", "repo", 1, e, "commented", "T", "a", "", nil, false); err == nil {
 		t.Fatal("store error must surface")
 	}
 	// Corrupt activity reads as absent.
