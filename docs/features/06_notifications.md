@@ -212,8 +212,14 @@ stays git-only (P1 law); the events-bridge loop is frozen and gains no collabora
   `X-Walgit-Signature: sha256=<hex HMAC-SHA256(body, secret)>` (omitted if no secret),
   `X-Walgit-Event: <action>`. 10 s timeout; 2xx = delivered; anything else = not advanced (at-least-once;
   consumers dedup on `X-Walgit-Delivery`).
-- **Ping:** `POST …/webhooks/{id}/ping` synthesizes activity event `action: "ping"` (num 0) — delivered
-  through the same loop, so ping success proves the URL + secret end to end.
+- **Ping:** `POST …/webhooks/{id}/ping` synthesizes activity event `action: "ping"` (num 0),
+  appends it to the activity log, and POSTs exactly that event through the same `postEvent`
+  path (wire shape, keeper headers, HMAC, client, deliveries ring), so ping success proves
+  the URL + secret end to end. The backlog is NOT replayed on the ping request (issue #155):
+  a deep backlog is delivered by the background `webhooks` task on its own pass (the ping
+  event bypasses the events filter there); the ping request performs exactly one bounded
+  POST and returns promptly regardless of backlog depth. With no backlog the ping advances
+  the hook cursor past the ping event so the loop does not redeliver it.
 
 ### Concurrency
 
@@ -354,6 +360,12 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **Email is out; the activity log is the named seam** — a future email sink needs no schema change here.
 - **`X-Walgit-*` header keepers on collaboration webhooks** — wire identifiers are contracts, not branding (D-NAME-1).
 - **User notification SSE stream is a new top-level route**, not a repo-stream extension: notifications are user-scoped and must not require per-repo subscriptions.
+- **Bounded ping (issue #155):** `PingHook` no longer runs `deliverHook` (up to 256 events ×
+  10 s POST in the admin's request goroutine, racing background delivery for the same hook).
+  It appends the synthetic `ping` event and POSTs exactly that event via the same `postEvent`
+  path, leaving backlog and cursor to the background `webhooks` task (no-backlog case still
+  advances the cursor past the ping). One bounded POST per ping request; the URL + secret
+  proof is unchanged.
 - **Fan-out slots are acquired before spawning (issue #153)** — `resolve`, `createAll`, `fanoutOne`,
   and `DeliverRepo` take the cap-8 semaphore in the parent loop before `go`, so in-flight fan-out
   goroutines are bounded by construction no matter how large the recipient/hook set is. Budget
