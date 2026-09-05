@@ -382,6 +382,11 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   `newestFirst` JSDoc in `web/src/lib/owners.js`). Pure cap/order helpers live in
   `web/src/lib/owners.js` with headless cover in `web/test/unit/owners.test.js` (logic/DOM
   separation per 12 §5); the page contract itself lives in 12 §2.3.1.
+- **Calm owners page + star counts (2026-09-05, issue #137).** Owner sections flatten to a
+  `divide-y` divider stack (intro card kept; caps, overflow links, newest-first order from #117
+  unchanged) and every repo row on `/` and `/:owner` shows `(N ⭐)` via `<StarCount>` on the
+  shared `social:{o}/{r}` 30 s §6 key — single-flighted, non-blocking (muted `(…)` placeholder),
+  worst case bounded by the #117 caps. No new endpoint, no new SDK method, no new deps.
 
 ## Explicitly out of scope
 

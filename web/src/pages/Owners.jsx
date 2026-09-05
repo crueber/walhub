@@ -2,12 +2,15 @@
 // Owner/repo names come from the store-backed core listing endpoints
 // (GET /api/v1/owners, GET /api/v1/owners/{owner}/repos — 07 §8); the page
 // adds newest-first ordering, per-section caps (lib/owners.js), and the
-// intro card. No new endpoint, no new SDK method (issue #117).
+// intro card. Star counts ride the shared `social:{o}/{r}` cache entries
+// (<StarCount>, lib/stars.js). No new endpoint, no new SDK method
+// (issues #117, #137).
 
 import repos from "../../sdk/src/index.js";
 import { For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useData } from "../lib/data.js";
+import StarCount from "../components/StarCount.jsx";
 import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
@@ -19,11 +22,18 @@ import {
 function OwnerSection(props) {
   const [getRepos] = useData(`repos:${props.owner}`, () => repos.owners.repos(props.owner));
   return (
-    <section class="card p-4">
-      <h3 class="mb-2 text-base font-semibold">
+    <section class="py-3">
+      <h3 class="text-sm font-semibold">
         <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}`}>
           {props.owner}
         </A>
+        <Show when={getRepos()}>
+          {(names) => (
+            <span class="muted ml-2 text-xs font-normal">
+              {names().length} repositor{names().length === 1 ? "y" : "ies"}
+            </span>
+          )}
+        </Show>
       </h3>
       <Show when={getRepos()} fallback={<p class="muted text-sm">loading…</p>}>
         {(names) => {
@@ -31,20 +41,18 @@ function OwnerSection(props) {
           const { shown, extra } = pageSlice(ordered, MAX_REPOS_PER_OWNER);
           return (
             <>
-              <p class="muted mb-2 text-xs">
-                {names().length} repositor{names().length === 1 ? "y" : "ies"}
-              </p>
-              <Show when={shown.length > 0} fallback={<p class="muted text-sm">nothing under {props.owner} yet</p>}>
-                <ul class="space-y-1">
+              <Show when={shown.length > 0} fallback={<p class="muted mt-1 text-sm">nothing under {props.owner} yet</p>}>
+                <ul class="mt-1 space-y-1">
                   <For each={shown}>
                     {(n) => (
-                      <li>
+                      <li class="flex flex-wrap items-baseline gap-x-1.5">
                         <A
                           class="text-sm text-emerald-700 hover:underline dark:text-emerald-400"
                           href={`/${props.owner}/${n}`}
                         >
                           {props.owner}/{n}
                         </A>
+                        <StarCount full={`${props.owner}/${n}`} />
                       </li>
                     )}
                   </For>
@@ -92,7 +100,7 @@ export default function Owners() {
               when={shown.length > 0}
               fallback={<p class="muted">no repositories yet — push one, or use the API to create it</p>}
             >
-              <div class="space-y-3">
+              <div class="divide-y divide-zinc-200 dark:divide-zinc-800">
                 <For each={shown}>{(o) => <OwnerSection owner={o} />}</For>
               </div>
               <Show when={extra > 0}>
