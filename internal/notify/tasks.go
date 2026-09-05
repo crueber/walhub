@@ -375,24 +375,13 @@ func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq i
 			case <-fctx.Done():
 				return
 			}
-			id := NotificationID(r.Principal, repo, ev.Num, r.Reason, seq)
-			if s.hasUnread(fctx, r.Principal, repo, ev.Num, r.Reason) {
-				return
-			}
-			n := Notification{
-				ID: id, Repo: repo, Num: ev.Num, Kind: ev.Kind,
-				Reason: r.Reason, Title: ev.Title, Actor: ev.Actor,
-				State: StateUnread, CreatedAt: ev.At,
-			}
-			if err := s.putCreate(fctx, NotifKey(r.Principal, id), encode(n)); err != nil {
-				if !store.IsPreconditionFailed(err) {
-					return
-				}
-			}
-			if err := s.indexAdd(fctx, r.Principal, IndexEntry{
-				ID: id, Repo: repo, Num: ev.Num, Kind: ev.Kind,
-				Reason: r.Reason, Title: ev.Title, State: StateUnread, At: ev.At,
-			}); err != nil {
+			// Same entry-level discipline as the sync path (issue #91):
+			// createOne arbitrates the unread dedup inside the index CAS
+			// (the pre-check alone races here exactly as on the sync path)
+			// and deletes its own orphan object on a lost race.
+			n, status := s.createOne(fctx, Emission{Repo: repo, Num: ev.Num, Kind: ev.Kind},
+				ev.Title, ev.Actor, ev.At, seq, target{principal: r.Principal, reason: r.Reason})
+			if status != createCreated {
 				return
 			}
 			s.ubus.publish(r.Principal, n)
