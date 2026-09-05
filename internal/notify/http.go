@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -328,10 +329,43 @@ func stripSecret(h *Hook) map[string]any {
 // --- service reads/writes used by handlers ------------------------------------------
 
 // Tray returns the newest-first page (state-filtered, after-cursor) plus
-// whether older entries exist. Index-first (P4); LIST overflow sorted by
-// (at desc, id) — the deterministic id is content-hash, NOT time-ordered
-// (see Decisions: the 06 §1.1 sort sentence is corrected there).
+// whether older entries exist. Index-first (P4): the hot window answers a
+// covered page with one index GET and no LIST; the LIST overflow (P5) runs
+// only for pages reaching past the window. Liveness against deleted repos
+// (#63) is lazy and memoized per repo for the request, so the hot path
+// probes one HEAD per distinct repo in the examined window instead of one
+// per entry. Sorted by (at desc, id) — the deterministic id is
+// content-hash, NOT time-ordered (see Decisions: the 06 §1.1 sort sentence
+// is corrected there). No new locks or goroutines: the memo is
+// request-local, so there is no new concurrency hazard.
 func (s *Service) Tray(ctx context.Context, who, state, after string, n int) ([]Notification, bool) {
+	alive := map[string]bool{}
+	var indexed []Notification
+	indexFull := false
+	haveIndex := false
+	if raw, _, err := s.getJSON(ctx, NotifIndexKey(who)); err == nil && raw != nil {
+		var ix IndexDoc
+		if err := json.Unmarshal(raw, &ix); err == nil {
+			for _, en := range ix.Entries {
+				indexed = append(indexed, Notification{
+					ID: en.ID, Repo: en.Repo, Num: en.Num, Kind: en.Kind,
+					Reason: en.Reason, Title: en.Title, State: en.State, CreatedAt: en.At,
+				})
+			}
+			indexFull = len(ix.Entries) >= TrayPageSize
+			haveIndex = true
+		}
+	}
+	sortNotifications(indexed)
+	// A missing or corrupt index says nothing about overflow — only a
+	// readable index can cover a page without the LIST merge below.
+	if haveIndex {
+		if page, more, ok := s.trayPage(ctx, alive, indexed, indexFull, state, after, n); ok {
+			return page, more
+		}
+	}
+	// Overflow page: merge the LIST window over the index rows (P5:
+	// paginated collaboration read; cap 1000 objects).
 	byID := map[string]Notification{}
 	order := []string{}
 	remember := func(n Notification) {
@@ -340,18 +374,9 @@ func (s *Service) Tray(ctx context.Context, who, state, after string, n int) ([]
 		}
 		byID[n.ID] = n
 	}
-	if raw, _, err := s.getJSON(ctx, NotifIndexKey(who)); err == nil && raw != nil {
-		var ix IndexDoc
-		if err := json.Unmarshal(raw, &ix); err == nil {
-			for _, en := range ix.Entries {
-				remember(Notification{
-					ID: en.ID, Repo: en.Repo, Num: en.Num, Kind: en.Kind,
-					Reason: en.Reason, Title: en.Title, State: en.State, CreatedAt: en.At,
-				})
-			}
-		}
+	for _, nt := range indexed {
+		remember(nt)
 	}
-	// LIST overflow (P5: paginated collaboration read; cap 1000 objects).
 	count := 0
 	_ = s.Store.List(ctx, NotifPrefix(who), "", func(m store.ObjectMeta) error {
 		if strings.HasSuffix(m.Key, "/index.json") || count >= 1000 {
@@ -373,62 +398,84 @@ func (s *Service) Tray(ctx context.Context, who, state, after string, n int) ([]
 	for _, id := range order {
 		all = append(all, byID[id])
 	}
-	// Miss-tolerance (#63): notifications naming a deleted repo are
-	// skipped — the prefix sweep cannot enumerate userspace, so the tray
-	// probes the manifest per merged entry (one HEAD each; a probe error
-	// or malformed repo keeps the entry). UnreadCount stays O(1) off the
-	// index; the retention pass drops the dead rows and reconciles it.
-	live := all[:0]
-	for _, notif := range all {
-		if o, r, ok := repoOf(notif.Repo); ok {
-			if !s.repoAlive(ctx, o, r) {
-				continue
-			}
-		}
-		live = append(live, notif)
-	}
-	all = live
 	sortNotifications(all)
-	filtered := all[:0]
-	seenAfter := after == ""
-	for _, notif := range all {
-		if !seenAfter {
-			if notif.ID == after {
-				seenAfter = true
+	if page, more, ok := s.trayPage(ctx, alive, all, false, state, after, n); ok {
+		return page, more
+	}
+	// Unknown cursor on the exhaustive merged read restarts at the first
+	// page (state-filtered).
+	page, more, _ := s.trayPage(ctx, alive, all, false, state, "", n)
+	return page, more
+}
+
+// trayPage slices the state-filtered, after-cursor window out of sorted
+// (newest-first) rows, skipping dead-repo rows through the memoized lazy
+// probe. It reports ok=false when rows cannot cover the window: an after
+// cursor outside rows (the caller falls through to LIST; the merged LIST
+// read instead restarts at the first page), or fewer live rows than the
+// page while older overflow may exist (indexFull). Collection stops at
+// n+1 live rows, so a covered read costs O(page) store calls. On the
+// merged LIST read (indexFull=false) the rows are exhaustive, so only a
+// cursor miss reports !ok and every other window is covered.
+func (s *Service) trayPage(ctx context.Context, alive map[string]bool, rows []Notification, indexFull bool, state, after string, n int) ([]Notification, bool, bool) {
+	start := 0
+	if after != "" {
+		found := -1
+		for i, nt := range rows {
+			if nt.ID == after {
+				found = i
+				break
 			}
+		}
+		if found < 0 {
+			return nil, false, false
+		}
+		start = found + 1
+	}
+	live := make([]Notification, 0, n+1)
+	for _, nt := range rows[start:] {
+		if state != "" && nt.State != state {
 			continue
 		}
-		if state != "" && notif.State != state {
+		if !s.trayAlive(ctx, alive, nt) {
 			continue
 		}
-		filtered = append(filtered, notif)
-	}
-	if !seenAfter && after != "" {
-		filtered = all[:0] // unknown cursor → first page, state-filtered
-		for _, notif := range all {
-			if state != "" && notif.State != state {
-				continue
-			}
-			filtered = append(filtered, notif)
+		live = append(live, nt)
+		if len(live) > n {
+			return live[:n], true, true
 		}
 	}
-	if len(filtered) <= n {
-		return filtered, false
+	if indexFull {
+		return nil, false, false
 	}
-	return filtered[:n], true
+	return live, false, true
+}
+
+// trayAlive reports whether nt's repo is live, memoized per repo for the
+// request: at most one HEAD per distinct repo in the examined window.
+// Malformed repos and probe errors keep the entry (fail open toward
+// serving; the retention pass reconciles the count and drops dead rows).
+func (s *Service) trayAlive(ctx context.Context, alive map[string]bool, nt Notification) bool {
+	o, r, ok := repoOf(nt.Repo)
+	if !ok {
+		return true
+	}
+	if live, hit := alive[nt.Repo]; hit {
+		return live
+	}
+	live := s.repoAlive(ctx, o, r)
+	alive[nt.Repo] = live
+	return live
 }
 
 // sortNotifications orders newest-first by (CreatedAt desc, ID asc).
 func sortNotifications(all []Notification) {
-	for i := 1; i < len(all); i++ {
-		for j := i; j > 0; j-- {
-			a, b := all[j-1], all[j]
-			if a.CreatedAt > b.CreatedAt || (a.CreatedAt == b.CreatedAt && a.ID < b.ID) {
-				break
-			}
-			all[j-1], all[j] = all[j], all[j-1]
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].CreatedAt != all[j].CreatedAt {
+			return all[i].CreatedAt > all[j].CreatedAt
 		}
-	}
+		return all[i].ID < all[j].ID
+	})
 }
 
 // UnreadCount reads the O(1) index count (0 when absent).
