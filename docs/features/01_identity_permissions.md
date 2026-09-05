@@ -303,7 +303,9 @@ owner, never 404) are **core** endpoints (specified in `docs/go/07_api.md` §8,
 registered by the core mux, not by this package's RouteProvider). They are the
 read surface the owners (`/`) page renders per-owner repo sections from
 (issue #117): `owners.list()` then one `owners.repos(owner)` per shown owner.
-No pagination, no creation timestamps — the bucket stores neither, so caps and
+No pagination, no creation timestamps on the listing path — the endpoints return
+sorted plain name lists (per-repo `first_state_at`/first-entry `created_at` proxies exist
+deeper in the bucket but cost a manifest/log GET per repo), so caps and
 newest-first ordering live client-side (`web/src/lib/owners.js`: `MAX_OWNERS`
 50, `MAX_REPOS_PER_OWNER` 10, reverse of server order as the newest-first
 proxy; 08 §6 owns the cache keys, 12 §2.3.1 the page contract).
@@ -380,9 +382,9 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
 - **Owners page reuses the core listing endpoints; no endpoint added (issue #117, 2026-09-05)** —
   `GET /api/v1/owners` + `GET /api/v1/owners/{owner}/repos` already list everything the `/` page
   needs, so this change adds no wire surface (§8.1 pins the reuse). Caps and newest-first ordering
-  stay client-side on purpose: the bucket stores no creation timestamps and the registry returns
-  sorted names, so a server-side "newest" sort or paginated shape would invent metadata the store
-  does not have. Rationale: read-only reuse keeps the round-trip budget (1 + shown-owners GETs,
+  stay client-side on purpose: the listing path exposes no creation timestamps and the registry returns
+  sorted names, so a server-side "newest" sort or paginated shape   would need per-repo manifest/log reads (or a new endpoint carrying creation times) rather than
+  inventing metadata the listing does not have. Rationale: read-only reuse keeps the round-trip budget (1 + shown-owners GETs,
   SWR-cached) and the CAS surface untouched.
 
 ## Explicitly out of scope

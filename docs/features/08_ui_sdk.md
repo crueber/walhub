@@ -378,7 +378,7 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   (newest-first, capped at `MAX_REPOS_PER_OWNER` 10, "+N more →" folding to `/:owner`). Data comes
   from the existing core listing endpoints via the existing SDK (`owners.list()`, `owners.repos(o)`)
   under the `owners` / `repos:{owner}` §6 keys — no new endpoint, no new SDK method, no new deps.
-  Ordering key is the reverse of server order (the bucket stores no creation timestamps; see the
+  Ordering key is the reverse of server order (the listing path exposes no creation timestamps; see the
   `newestFirst` JSDoc in `web/src/lib/owners.js`). Pure cap/order helpers live in
   `web/src/lib/owners.js` with headless cover in `web/test/unit/owners.test.js` (logic/DOM
   separation per 12 §5); the page contract itself lives in 12 §2.3.1.

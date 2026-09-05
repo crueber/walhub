@@ -16,11 +16,15 @@ export const MAX_REPOS_PER_OWNER = 10;
 /**
  * newestFirst(names) → a reversed copy: owners (and their repos) newest-first.
  *
- * Ordering key, documented honestly: the bucket stores NO creation timestamp
- * for owners or repos, and `GET /api/v1/owners` (+ `/{owner}/repos`) return
- * store-sorted (ascending) name lists — so the page reverses the server
- * order. Reverse-lexicographic is the closest deterministic newest-first
- * proxy available; if the backend ever carries creation times, this is the
+ * Ordering key, documented honestly: the listing path exposes NO creation
+ * timestamp — `GET /api/v1/owners` (+ `/{owner}/repos`) return store-sorted
+ * (ascending) name lists of plain strings, and `ObjectMeta` carries no
+ * timestamps. (Per-repo creation proxies DO exist deeper in the bucket —
+ * `CheckpointRef.first_state_at`, else the first log entry's `created_at` —
+ * but reading them costs one manifest/log GET per repo, so true
+ * reverse-chronological order wants a server-side shape, not client logic.)
+ * Reverse-lexicographic is the closest deterministic newest-first proxy
+ * available; if the backend ever carries creation times, this is the
  * single function to replace (callers pass server order straight through).
  */
 export function newestFirst(names) {
