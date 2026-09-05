@@ -258,6 +258,12 @@ type Releases struct {
 	MaxAssetBytes ByteSize `toml:"max_asset_bytes"`
 }
 
+// Attachments caps pasted/dropped issue images (docs/features/02 §12:
+// attachments.max_image_bytes, default 8 MiB → 413 over cap).
+type Attachments struct {
+	MaxImageBytes ByteSize `toml:"max_image_bytes"`
+}
+
 // Import bounds the repository-import surface (docs/features/10 §6:
 // additive [import] section, 14_extensibility.md §14.12 — existing keys
 // never change meaning). All timeouts are per-spawn ctx timeouts; sizes
@@ -290,6 +296,7 @@ type Config struct {
 	Events      Events      `toml:"events"`
 	Releases    Releases    `toml:"releases"`
 	Import      Import      `toml:"import"`
+	Attachments Attachments `toml:"attachments"`
 
 	// DataDir is the zero-config root (divergence D5): --data-dir / WALHUB_DATA_DIR,
 	// default ~/.local/share/walhub. Holds store/, cache/, and the saved walhub.toml.
@@ -419,6 +426,9 @@ func Defaults() *Config {
 			MaxBytes:      64 << 30,
 			MaxRefs:       100000,
 			MaxConcurrent: 2,
+		},
+		Attachments: Attachments{
+			MaxImageBytes: 8 << 20,
 		},
 	}
 }

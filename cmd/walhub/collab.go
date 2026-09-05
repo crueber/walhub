@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 
 	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/checks"
@@ -75,6 +76,13 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// nil until wireNotifyFanout binds the real emitter below
 	// (best-effort synchronous fan-out contract, P8).
 	c.issuesSvc = issues.New(st, c.ident)
+	c.issuesSvc.MaxImageBytes = int64(cfg.Attachments.MaxImageBytes)
+	if c.issuesSvc.MaxImageBytes <= 0 {
+		c.issuesSvc.MaxImageBytes = issues.DefaultMaxImageBytes
+	}
+	if cfg.Cache.Dir != "" {
+		c.issuesSvc.SpoolDir = filepath.Join(cfg.Cache.Dir, "attachments-spool")
+	}
 	c.issuesHandler = &issues.Handler{Svc: c.issuesSvc}
 	// Wave C1 pulls (docs/features/03): PR threads over the shared
 	// numbering/thread/index family, pr.json sidecars, the stamped
@@ -164,6 +172,10 @@ func chainCollab(srv *server.Server, c *collabWiring) {
 			return srv.Auth().AuthenticateForwarded(r, srv.Config())
 		}
 		srv.ChainExtra(c.issuesHandler)
+		// The §12 byte route lives outside the api lanes (repo_extra.go
+		// seam, same as release asset bytes); authentication resolves
+		// in-handler from the same chain.
+		srv.ChainRepo(c.issuesHandler)
 	}
 	if c.pullsHandler != nil {
 		chainPulls(srv, c.pullsHandler)

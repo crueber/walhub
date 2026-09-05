@@ -22,6 +22,13 @@ var (
 	// ErrCorrupt maps to 503: a stored object fails to parse (the repair
 	// path, not the client, owns the fix).
 	ErrCorrupt = errors.New("store unavailable")
+	// ErrTooLarge maps to 413: an attachment upload over
+	// attachments.max_image_bytes (§12).
+	ErrTooLarge = errors.New("attachment too large")
+	// ErrUnsupportedMedia maps to 415: an attachment upload whose
+	// magic bytes are not in the PNG/JPEG/GIF/WebP allowlist (§12;
+	// SVG is rejected, never sanitized).
+	ErrUnsupportedMedia = errors.New("unsupported image type")
 )
 
 // statusFor maps a sentinel to its HTTP status.
@@ -37,6 +44,10 @@ func statusFor(err error) int {
 		return http.StatusUnauthorized
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict
+	case errors.Is(err, ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
+	case errors.Is(err, ErrUnsupportedMedia):
+		return http.StatusUnsupportedMediaType
 	}
 	return http.StatusServiceUnavailable
 }

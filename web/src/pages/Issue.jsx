@@ -341,6 +341,7 @@ export default function Issue() {
                   errorKey="issue-comment"
                   mentionId="mention-issue-comment"
                   mentionNames={thread()?.participants}
+                  uploader={ctx.repoClient.attachments}
                 />
               </Show>
             </>

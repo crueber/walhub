@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -320,5 +322,33 @@ func TestValidateImport(t *testing.T) {
 	c.Import.URLAllowlist = []string{"github.com", "git.example.com"}
 	if _, errs := Validate(c); len(errs) != 0 {
 		t.Fatalf("plain-host allowlist must pass: %v", errs)
+	}
+}
+
+func TestAttachmentsDefaultsAndValidation(t *testing.T) {
+	c := Defaults()
+	if c.Attachments.MaxImageBytes != ByteSize(8<<20) {
+		t.Fatalf("attachments.max_image_bytes = %v, want 8MiB", c.Attachments.MaxImageBytes)
+	}
+	if _, errs := Validate(c); len(errs) != 0 {
+		t.Fatalf("defaults do not validate: %v", errs)
+	}
+	bad := Defaults()
+	bad.Attachments.MaxImageBytes = -1
+	if _, errs := Validate(bad); len(errs) == 0 {
+		t.Fatal("negative attachments.max_image_bytes accepted")
+	}
+	// TOML spelling round-trips through the file loader.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "walhub.toml")
+	if err := os.WriteFile(path, []byte("[attachments]\nmax_image_bytes = \"1MiB\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := LoadExplicit(path, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Attachments.MaxImageBytes != ByteSize(1<<20) {
+		t.Fatalf("loaded max_image_bytes = %v", loaded.Attachments.MaxImageBytes)
 	}
 }

@@ -136,6 +136,13 @@ type Service struct {
 	Roles RoleService
 	Now   func() time.Time
 
+	// MaxImageBytes caps one attachment upload (0 = DefaultMaxImageBytes).
+	// Composition sets it from attachments.max_image_bytes (§12).
+	MaxImageBytes int64
+	// SpoolDir stages verified-then-written attachment bytes (LFS §6.2
+	// pattern: never buffer the upload in memory). Empty = os.TempDir.
+	SpoolDir string
+
 	// Notify receives §10 fan-out synchronously after each committed
 	// mutation (nil = no-op until internal/notify lands).
 	Notify Emitter

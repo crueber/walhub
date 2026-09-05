@@ -616,6 +616,7 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   `/pull/:num/commits`, `/pull/:num/files`, `/checks/:sha`) ride the existing `sub[0]` match —
   no router change for those.
 - **NEW (2026-09-05) — broker forwarding is uniform across core + collab surfaces** (Forgejo #71): the §8.6 rule resolves at the single entry point `AuthService.AuthenticateForwarded`, and every Seam 1 feature surface (all nine `chain*` closures in `cmd/walhub`) resolves through it — bare `Authenticate` in a feature chain is an auth bug (it attributes brokered actions to the broker). Rationale: one forwarding decision point keeps core git/API lanes and collab handlers identical by construction; fail-closed ordering (errors before forwarding) is inherited, not re-implemented per surface.
+- **NEW (2026-09-05) — issue attachment bytes use `private` cache class** (Forgejo #120, docs/features/02 §12): `GET|HEAD /{o}/{r}/attachments/<sha>/<name>` follows the §5 static contract reimplemented in `internal/issues` (ETag/304/206/416/HEAD/nosniff) with one deliberate token deviation — `Cache-Control: private, max-age=31536000, immutable` instead of `public`. Immutable bytes, but authenticated reads must not sit in shared caches.
 
 **Divergence (2026-08-31):**
 

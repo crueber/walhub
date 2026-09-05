@@ -242,6 +242,13 @@ RFC 3339, cache class per route. `num` matches `[1-9][0-9]{0,8}` (decimal on the
 | `PATCH …/api/milestones/{id}` | triage | `{title?, description?, due_on?, state?}` → `{milestone}` |
 | `DELETE …/api/milestones/{id}` | triage | → `204`; 409 while issues reference it |
 
+Attachments (§12) ride the same lanes with two extra rows:
+
+| METHOD + path | Auth (P6) | Request → Response |
+|---|---|---|
+| `POST …/api/attachments?name=` | read (authenticated) | raw image bytes + optional `X-Walgit-Attachment-Sha256` → `201 {name, size, sha256, content_type, url}`; over `attachments.max_image_bytes` → `413`; non-image/SVG magic → `415`; no-store |
+| `GET\|HEAD /{o}/{r}/attachments/{sha}/{name}` | read | raw bytes under the in-package static contract: `ETag`/`If-None-Match` → `304`, `Range`/`If-Range` → `206`/`416`, sniffed `Content-Type`, `Cache-Control: private, max-age=31536000, immutable`, `nosniff` |
+
 Auth per P6: `read` = role ≥ read (or `anonymous_read`); `authenticated` = any principal; `triage` = role ≥ triage. Errors are
 plain text (`404` "unknown issue", `409` "milestone has open issues"); every LIST-backed route states its page size (P5).
 
@@ -303,8 +310,72 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
 `repo.issues.{list,get,create,patch,comment,events,reactions.add,reactions.remove}`, `repo.labels.{list,create,update,delete}`,
 `repo.milestones.{list,get,create,update,delete}` — thin fetch wrappers over §7 with the SDK's lane/401 rules; thread pages use
 `mountStream` (`12_web_ui.md` §2.5) to follow `issue`/`issue_event` on the repo's existing SSE stream.
+`repo.attachments.upload(file|Blob|Uint8Array, {name?, sha256?, contentType?})` (§12) posts raw bytes with an optional
+`X-Walgit-Attachment-Sha256` (computed via `crypto.subtle.digest` when available, omitted on non-secure origins where
+`crypto.subtle` is undefined — the server verifies the header only when present) and resolves the 201 record.
+
+## 12. Attachments (paste/drop images, issue #120)
+
+Bodies stay raw text ≤ 64 KiB (§1.2) — images are stored objects referenced by `![name](url)` markdown links, never inline
+`data:` URIs (the sanitizer drops `data:` URLs, so inline paste could never render).
+
+New bucket family (content-addressed, `Create`-only immutable — no frozen-overwritable-list entry, which covers overwritable
+keys only):
+
+| Key | Kind of object | Write mode |
+|---|---|---|
+| `repos/<o>/<r>/attachments/<sha256hex>/<name>` | raw image bytes | `Create` only |
+
+`<name>` is the sanitized original filename (single segment, 1–200 bytes, no `/`, no leading `.`) for readable alt text;
+the sha segment makes collisions harmless. Upload and comment-submit are decoupled (the upload references no issue number,
+so the new-issue form and thread comments share the path).
+
+Upload flow (single-step — images are ≤ 8 MiB, bounded, human-rate; not the release two-step):
+`io.LimitReader(max+1)` bound → `413` over `attachments.max_image_bytes` (default 8 MiB; no `Content-Length` requirement, so
+chunked clients work) → spool to `<cache.dir>/attachments-spool` hashing sha256 in the copy loop (never buffered) → the
+optional client sha is verified only when sent → magic-byte sniff (PNG/JPEG/GIF/WebP allowlist; **SVG → 415 rejected**, never
+sanitized — same-origin SVG is script execution and the dependency budget forbids an XML sanitizer; extension and client
+`Content-Type` are ignored for the verdict) → `Create` with the sniffed type (a 412 under the same key is same-bytes by
+construction → idempotent `201`, no re-read) → `201 {name, size, sha256, content_type, url}` (`no-store`; plain-text errors).
+
+Byte reads gate at read level (private-repo screenshots must not leak via URL guessing) and otherwise follow the static
+contract reimplemented in-package (`internal/issues` cannot import `server` — upward import, law 8): strong `ETag` from the
+store version, `304`/`206`/`416`/`HEAD`, `Accept-Ranges`, sniffed `Content-Type` re-sniffed from the stored prefix (the store
+contract exposes no content type on read; the bytes are immutable so the sniff is deterministic), `nosniff`, with one
+deliberate token deviation from 06 §5: `Cache-Control: private, max-age=31536000, immutable` (authenticated reads must not
+sit in shared caches). Warm GET/HEAD costs 1 store Get; a satisfiable byte range costs one follow-up ranged Get.
+
+Frontend: `web/sdk/src/attachments.js` (`uploadAttachment` precedent shape) + shared `web/src/lib/attachUpload.js` (alt
+escaping per S1, cursor splice, placeholder → `![name](url)` replace, 64 KiB pre-check before each upload so an over-cap
+body fails client-side instead of orphaning bytes; headless-tested via `node --test`) + thin `onPaste`/`onDrop` glue in
+`IssueNew.jsx` and the thread comment composer (`CommentComposer` gains an optional `uploader` prop, wired by `Issue.jsx`
+only). Sequential uploads, one request each; failures swap a failure line and `reportError` verbatim. `.markdown-body img`
+is `max-w-full h-auto`. PR-body adoption is out of scope and NOT free: it additionally requires switching `Pull.jsx`
+rendering to `renderMarkdown`+`sanitize` (it renders plain text today).
+
+### Concurrency
+
+Hazard: concurrent identical uploads racing on one content-addressed key. Avoidance: the store's create-if-absent
+arbitrates; losers take the 412 as idempotent 201 (same key ⇒ same bytes). No locks, no single-flight, no task kinds; the
+handler holds no repo locks across store calls (13 §2 rule 4).
 
 ## Decisions
+
+- **Attachments for pasted/dropped issue images (issue #120, 2026-09-05).** New `repos/<o>/<r>/attachments/<sha>/<name>`
+  family (§12), `POST …/api/attachments` (authenticated + read, 8 MiB cap → 413, magic allowlist PNG/JPEG/GIF/WebP,
+  SVG → 415, client sha optional-when-present) + `GET|HEAD /{o}/{r}/attachments/<sha>/<name>` (read-gated, in-package
+  static contract with `private, immutable`). Package home is `internal/issues` (auth-gate affinity, one coverage gate).
+  Config `[attachments] max_image_bytes` (default `8MiB`) is struct + default + validation + docs in this change and is
+  recorded as setup-schema-pending (no `internal/setup` in code yet). Repo-scoped ExtraRoutes features are EXEMPT from
+  the 14 §14.12 discovery sentence (existing issue routes are already absent from `endpoints[]`; the SDK builds
+  repo-scoped paths statically) — no discovery-seam amendment. The byte route rides `ChainRepo`/`HandleRepo`
+  (`internal/server/repo_extra.go`, same as release asset bytes), NOT the `Handle` ExtraRoutes chain: the core router
+  only sends lane paths to the api seam, so a non-lane `Handle` branch would be dead code (verified against the live
+  server during implementation). Orphans are kept in v1 (Upload and comment-submit are
+  decoupled); ceiling: even 100 abandoned uploads/day ≤ 800 MiB/day worst case, human-rate reality orders of magnitude
+  less — a future `attachment-sweep` maintainer kind may reconcile bodies against attachments when the family grows.
+  Dedup oracle accepted: keys are repo-scoped, so probing reveals existence-only to already-authorized readers. An
+  EVIDENCE entry is not needed (collaboration surface, human-rate, sim budgets untouched).
 
 - **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §11 page sketches read in the shipped idiom: `.jsx` route components, `useData` on Solid primitives, SSE refetch over the SDK readers. Routes, live behavior, and wire shapes are unchanged.
 
@@ -432,3 +503,4 @@ SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WE
 - Cross-repo closing keywords (`fixes owner/repo#N`) — the parser records them as `cross_referenced` only.
 - Full-text issue search (P9: index-format decision deferred); label rename propagation beyond the index hot window.
 - Editing/deleting comments after write (corrections are compensating events, P3); reactions on labels/milestones.
+- Editing/deleting attachments after upload, thumbnailing, EXIF stripping, per-repo quotas beyond the per-file cap (§12).
