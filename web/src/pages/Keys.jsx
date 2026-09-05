@@ -6,6 +6,7 @@
 
 import { createSignal, onCleanup, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
+import DateTime from "../components/DateTime.jsx";
 
 export default function Keys() {
   const [getKeys, setKeys] = createSignal(null);
@@ -185,7 +186,7 @@ export default function Keys() {
                           <code class="font-mono text-xs">{shortKey(k.key)}</code>
                         </td>
                         <td class="tabular muted text-xs">
-                          {k.created_at ? new Date(k.created_at).toLocaleString() : ""}
+                          {k.created_at ? <DateTime value={k.created_at} /> : ""}
                         </td>
                         <td>
                           <button

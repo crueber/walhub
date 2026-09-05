@@ -7,7 +7,8 @@
 
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
-import { useRepo, fmtDate } from "./Repo.jsx";
+import { useRepo } from "./Repo.jsx";
+import DateTime from "../components/DateTime.jsx";
 import { useData, invalidate } from "../lib/data.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
@@ -73,7 +74,7 @@ export function ContextRows(props) {
                 </a>
               </Show>
               <span class="muted ml-auto text-xs">
-                {st.creator} · {fmtDate(st.updated_at)}
+                {st.creator} · <DateTime value={st.updated_at} />
               </span>
             </li>
           )}
@@ -103,7 +104,7 @@ function ShaRow(props) {
           </A>
           <span class="text-xs text-zinc-500 dark:text-zinc-400">{stateLabel(state())}</span>
           <span class="muted text-xs">
-            {(contexts().length ? `${contexts().length} contexts` : "no contexts")} · {fmtDate(row().updated_at)}
+            {(contexts().length ? `${contexts().length} contexts` : "no contexts")} · <DateTime value={row().updated_at} />
           </span>
           <button type="button" class="link ml-auto text-xs" onClick={() => setOpen(!getOpen())}>
             {getOpen() ? "collapse" : "expand"}

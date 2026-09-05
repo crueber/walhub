@@ -9,11 +9,12 @@
 
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
-import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
+import { useRepo, fmtBytes } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { keyAssets, LATEST_ASSET_LIMIT } from "../lib/releases.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
+import DateTime from "../components/DateTime.jsx";
 
 export function ReleaseBadges(props) {
   return (
@@ -98,7 +99,7 @@ export default function Releases() {
                 </div>
                 <div class="card-meta">
                   <span>{rel.name}</span>
-                  <span>{fmtDate(rel.published_at ?? rel.created_at)}</span>
+                  <span><DateTime value={rel.published_at ?? rel.created_at} /></span>
                   <span>{(rel.assets ?? []).length} assets</span>
                 </div>
               </li>
@@ -160,7 +161,7 @@ export default function Releases() {
                   </Show>
                   <Show when={date()}>
                     <p class="muted mt-0.5 text-xs">
-                      Published <time dateTime={date()}>{fmtDate(date())}</time>
+                      Published <DateTime value={date()} />
                     </p>
                   </Show>
                   <div class="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800/60">

@@ -21,13 +21,14 @@
 
 import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
 import { A, useNavigate, useSearchParams } from "@solidjs/router";
-import { useRepo, fmtDate } from "./Repo.jsx";
+import { useRepo } from "./Repo.jsx";
 import { reportError } from "../lib/data.js";
 import { mountStream } from "../lib/sse.js";
 import { roleAtLeast } from "../components/perms.jsx";
 import { useRole } from "../components/perms.jsx";
 import { shortSha } from "../lib/sha.jsx";
 import { PREVIEW_WINDOW, compareHistories, tipSubject, fmtBounded, toShortRef } from "../lib/compare.js";
+import DateTime from "../components/DateTime.jsx";
 
 function RefSelect(props) {
   const [getQuery, setQuery] = createSignal("");
@@ -161,7 +162,7 @@ function ComparePreview(props) {
                     {tipSubject(c) || "(no message)"}
                   </span>
                   <span class="muted ml-auto shrink-0 text-xs">
-                    {c.author ? `${c.author} · ` : ""}{c.author_date ? fmtDate(c.author_date) : ""}
+                    {c.author ? `${c.author} · ` : ""}{c.author_date ? <DateTime value={c.author_date} /> : ""}
                   </span>
                 </li>
               )}

@@ -6,11 +6,12 @@
 
 import { createSignal, For, Show } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
-import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
+import { useRepo, fmtBytes } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
 import { ReleaseBadges } from "./Releases.jsx";
+import DateTime from "../components/DateTime.jsx";
 
 export default function Release() {
   const ctx = useRepo();
@@ -106,7 +107,7 @@ export default function Release() {
               <div class="mb-2 flex flex-wrap items-center gap-2">
                 <h1 class="card-title font-mono text-xl">{rel().tag}</h1>
                 <ReleaseBadges release={rel()} />
-                <span class="card-meta ml-auto">{fmtDate(rel().published_at ?? rel().created_at)}</span>
+                <span class="card-meta ml-auto"><DateTime value={rel().published_at ?? rel().created_at} /></span>
               </div>
               <h2 class="mb-2 text-lg font-semibold">{rel().name}</h2>
               <div class="markdown-body" innerHTML={sanitize(renderMarkdown(rel().body ?? ""))} />

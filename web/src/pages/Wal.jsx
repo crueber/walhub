@@ -7,7 +7,8 @@
 import { For, Show, createSignal, onCleanup } from "solid-js";
 import { useDataRefetchable, DEFAULT_TTL, invalidate, reportError } from "../lib/data.js";
 import { mountStream } from "../lib/sse.js";
-import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
+import { useRepo, fmtBytes } from "./Repo.jsx";
+import DateTime from "../components/DateTime.jsx";
 
 // --- status chips -------------------------------------------------------------
 
@@ -219,7 +220,7 @@ function OpsBox(props) {
                       <For each={recent()}>
                         {(t) => (
                           <li>
-                            {t.kind ?? t.op} — {t.summary ?? t.state ?? ""} · {fmtDate(t.finished ?? t.at)}
+                            {t.kind ?? t.op} — {t.summary ?? t.state ?? ""} · <DateTime value={t.finished ?? t.at} />
                           </li>
                         )}
                       </For>
@@ -365,7 +366,7 @@ export default function Wal() {
                         ["tail entries", String(manifest().tail_entries ?? "—")],
                         ["checkpoint", manifest().checkpoint ? `@${manifest().checkpoint.seq ?? manifest().checkpoint}` : "—"],
                         ["packset", String(manifest().packset?.count ?? manifest().packset?.packs?.length ?? "—")],
-                        ["last push", fmtDate(manifest().last_push) || "—"],
+                        ["last push", manifest().last_push ? <DateTime value={manifest().last_push} /> : "—"],
                       ]}
                     />
                   }
@@ -448,7 +449,7 @@ export default function Wal() {
                           {(c) => (
                             <tr>
                               <td>{String(c.at_seq ?? "")}</td>
-                              <td>{fmtDate(c.at)}</td>
+                              <td><DateTime value={c.at} /></td>
                               <td>{String(c.tier ?? "")}</td>
                               <td>{String(c.packs ?? c.pack_count ?? "")}</td>
                             </tr>

@@ -3,10 +3,11 @@
 
 import { For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
-import { useRepo, fmtDate } from "./Repo.jsx";
+import { useRepo } from "./Repo.jsx";
 import { useData } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { useCollabStream } from "../components/collab.jsx";
+import DateTime from "../components/DateTime.jsx";
 
 export default function PullCommits() {
   const ctx = useRepo();
@@ -36,7 +37,7 @@ export default function PullCommits() {
                 </A>
                 <p class="text-sm">{c.subject ?? c.message}</p>
                 <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                  {c.author} · {fmtDate(c.author_date ?? c.date)}
+                  {c.author} · <DateTime value={c.author_date ?? c.date} />
                 </p>
               </li>
             )}

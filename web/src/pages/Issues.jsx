@@ -7,12 +7,13 @@
 
 import { createSignal, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
-import { useRepo, fmtDate } from "./Repo.jsx";
+import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { sortByNumDesc } from "../lib/sort.js";
 import { TTL } from "../lib/collab.js";
 import { labelColorMap } from "../lib/labels.js";
 import { LabelChip } from "../components/LabelPicker.jsx";
+import DateTime from "../components/DateTime.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 
@@ -142,7 +143,7 @@ export default function Issues() {
                       #{issue.num} {issue.title}
                     </A>
                     <span class="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
-                      {issue.comment_count} comments · {fmtDate(issue.updated_at)}
+                      {issue.comment_count} comments · <DateTime value={issue.updated_at} />
                     </span>
                     <Show when={(issue.labels ?? []).length > 0}>
                       <span class="flex w-full flex-wrap gap-1">

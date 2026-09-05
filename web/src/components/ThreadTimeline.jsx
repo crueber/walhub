@@ -15,12 +15,13 @@
 // props: { events, textFor(ev) → string|null (null = comment body),
 //   actionsFor?(ev) → JSX (per-comment extras, e.g. reaction buttons),
 //   summaryFor?(ev) → JSX|null (per-comment summary row under the body,
-//     e.g. the reaction emoji+count chips; null = no row),
-//   fmtDate }.
+//     e.g. the reaction emoji+count chips; null = no row) }.
+// Dates render via the shared <DateTime> (issue #133).
 
 import { For, Show } from "solid-js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
+import DateTime from "./DateTime.jsx";
 
 export default function ThreadTimeline(props) {
   const textFor = (ev) => props.textFor(ev);
@@ -41,7 +42,7 @@ export default function ThreadTimeline(props) {
                 >
                   <p class="text-center text-xs text-zinc-500 dark:text-zinc-400">
                     <span class="font-medium text-zinc-700 dark:text-zinc-200">{ev.actor}</span> {text}{" · "}
-                    {props.fmtDate(ev.at)}
+                    <DateTime value={ev.at} />
                   </p>
                 </li>
               }
@@ -55,7 +56,7 @@ export default function ThreadTimeline(props) {
                   <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
                     <span class="font-medium text-zinc-700 dark:text-zinc-200">{ev.actor}</span>
                     {" · "}
-                    {props.fmtDate(ev.at)}
+                    <DateTime value={ev.at} />
                     <Show when={props.actionsFor}>{props.actionsFor(ev)}</Show>
                   </p>
                   <div class="prose-sm" innerHTML={sanitize(renderMarkdown(ev.body ?? ""))} />
