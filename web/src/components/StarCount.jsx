@@ -10,13 +10,17 @@
 // after load behind a muted `(…)` placeholder, so counts never block page
 // render. Worst case stays bounded by the #117 caps (50 owners × 10 repos
 // = 500 GETs on a cold cache, each independent so one slow repo never
-// blocks the rest); failures follow the data-layer contract (tray, not
-// the page). No new endpoint, no new SDK method (`repo.social.get()`,
+// blocks the rest). Failures follow the data-layer contract (tray, not the
+// page) — EXCEPT 404, which is an expected listing state, not an error
+// (deleted/private, or a fork-provisioned prefix whose child manifest does
+// not exist yet — issue #150): the fetch resolves to null via
+// `tolerateMissing` and the row hides the count silently, never traying.
+// No new endpoint, no new SDK method (`repo.social.get()`,
 // 07 §§4–7).
 
 import repos from "../../sdk/src/index.js";
 import { Show } from "solid-js";
-import { useData } from "../lib/data.js";
+import { useData, tolerateMissing } from "../lib/data.js";
 import { SOCIAL_TTL, fmtStars } from "../lib/stars.js";
 
 /** <StarCount full="owner/name" /> — quiet muted count beside a repo link. */
@@ -24,15 +28,18 @@ export default function StarCount(props) {
   const full = () => props.full;
   const [getSocial] = useData(
     () => `social:${full()}`,
-    () => repos.repo(full()).social.get(),
+    () => tolerateMissing(repos.repo(full()).social.get(), null),
     SOCIAL_TTL,
   );
+  // undefined = still loading → placeholder; null = missing (#150) → hidden.
   return (
-    <Show when={getSocial()} fallback={<span class="muted text-xs" aria-hidden="true">(…)</span>}>
-      {(s) => {
-        const t = fmtStars(s().stars);
-        return t ? <span class="muted text-xs">{t}</span> : null;
-      }}
+    <Show when={getSocial() !== undefined} fallback={<span class="muted text-xs" aria-hidden="true">(…)</span>}>
+      <Show when={getSocial()}>
+        {(s) => {
+          const t = fmtStars(s().stars);
+          return t ? <span class="muted text-xs">{t}</span> : null;
+        }}
+      </Show>
     </Show>
   );
 }
