@@ -28,7 +28,6 @@ This file consolidates, deduplicated, every decision recorded in the `## Decisio
   Sources: 01, 12, 15, 16, README L1, AGENTS L1. Status: in force (supersedes SolidJS set).
 - **D-DEP-3 — Hand-rolled inventory (no library where a crate was used).** S3 SigV4 (~150 lines, validated against AWS test vectors); GCS JSON-API HTTPS client; protobuf wire codec; JWKS/JWT verification (`crypto/rsa`/`crypto/ecdsa`); Prometheus text exposition; weighted LRU caches; `singleflight.Group`; CORS and all other middleware (chi core only); `weighted semaphore` + errgroup in `internal/store` (ruling C-1: hand-rolled, no x/sync); cron parser (08); hand-rolled h2c only via `x/net`.
   Rationale: budget is law — hand-roll instead; each hand-rolled piece is behavior-identical to the Rust original. (The `crypto/x509`+`crypto/ecdsa` self-signed TLS piece was REMOVED 2026-09-05 by Forgejo #165 — no in-process TLS at all; the proxy terminates it.)
-  Rationale: budget is law — hand-roll instead; each hand-rolled piece is behavior-identical to the Rust original.
   Sources: 01, 02, 03, 06, 07, 08, 12, 13, README L1, AGENTS L1. Status: in force.
 
 ## 3. Web stack
