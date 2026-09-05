@@ -191,7 +191,10 @@ func (b *repoBus) publish(f RepoFrame) {
 	b.ring[f.Repo] = ring
 	b.clk++
 	b.last[f.Repo] = b.clk
-	for len(b.ring) > RepoBusMaxRepos {
+	// One publish adds at most one repo key, so a single eviction restores
+	// the bound; an `if` (not `for`) also guarantees no lock-held spin if
+	// the ring/last invariant ever diverged (evictLRULocked no-ops then).
+	if len(b.ring) > RepoBusMaxRepos {
 		b.evictLRULocked()
 	}
 	for ch := range b.subs[f.Repo] {
