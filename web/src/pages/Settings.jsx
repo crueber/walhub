@@ -17,7 +17,8 @@ import {
   resolveSettingsTab,
   settingsTabIdFromHash,
 } from "../lib/settingsNav.js";
-import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
+import { useRepo, fmtBytes } from "./Repo.jsx";
+import DateTime from "../components/DateTime.jsx";
 import AccessTab from "./Access.jsx";
 import Wal from "./Wal.jsx";
 
@@ -84,7 +85,7 @@ function ScheduledTab(props) {
                       <td>{s.kind ?? ""}</td>
                       <td>{s.base ?? "—"}</td>
                       <td>{`${s.schedule ?? ""}${s.schedule_human ? ` (${s.schedule_human})` : ""}`}</td>
-                      <td>{fmtDate(s.next)}</td>
+                      <td><DateTime value={s.next} /></td>
                       <td>{String(s.keep ?? "—")}</td>
                       <td>{s.filter ?? "—"}</td>
                       <td>{asList(s.refs).join(", ") || "—"}</td>
@@ -117,7 +118,7 @@ function ScheduledTab(props) {
                 ? <span class="chip">{`following every ${d().upstream.follow_interval_secs ?? "?"}s`}</span>
                 : <span class="chip !bg-amber-100 !text-amber-800 dark:!bg-amber-900/60 dark:!text-amber-300">not following</span>}
               <Show when={d().upstream?.last_round}>
-                <span class="muted">{` · last round ${fmtDate(d().upstream.last_round)}`}</span>
+                <span class="muted">{" · last round "}<DateTime value={d().upstream.last_round} /></span>
               </Show>
             </p>
           </section>
@@ -356,7 +357,7 @@ function ConfigTab(props) {
                 <div class="rev-row border-b border-zinc-100 pb-2 dark:border-zinc-800/60">
                   <div class="flex flex-wrap items-center gap-2">
                     <strong>{`#${e.revision ?? e.seq}`}</strong>
-                    <span class="muted text-sm">{` ${e.author ?? ""} · ${fmtDate(e.at)} · ${e.message ?? ""} `}</span>
+                    <span class="muted text-sm">{` ${e.author ?? ""} · `}<DateTime value={e.at} />{` · ${e.message ?? ""} `}</span>
                     <button class="pill cursor-pointer select-none" type="button" onClick={() => revert(e)}>Revert to this</button>
                     <button class="pill cursor-pointer select-none" type="button" onClick={() => showDiff(e)}>line diff</button>
                   </div>
@@ -478,8 +479,8 @@ function CITokensTab(props) {
                     <td>{t.name}</td>
                     <td class="text-xs">{(t.scopes ?? []).join(", ")}</td>
                     <td class="text-xs">{t.created_by}</td>
-                    <td class="text-xs">{fmtDate(t.created_at)}</td>
-                    <td class="text-xs">{t.revoked_at ? `revoked ${fmtDate(t.revoked_at)}` : "active"}</td>
+                    <td class="text-xs"><DateTime value={t.created_at} /></td>
+                    <td class="text-xs">{t.revoked_at ? <>revoked <DateTime value={t.revoked_at} /></> : "active"}</td>
                     <td>
                       <Show when={!t.revoked_at}>
                         <button type="button" class="link text-xs" onClick={() => revoke(t.id)}>

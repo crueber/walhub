@@ -8,7 +8,8 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { useData, useResolved, SHA_TTL } from "../lib/data.js";
 import { CopySha, shortSha } from "../lib/sha.jsx";
-import { fmtDate, shortRef, useRepo } from "./Repo.jsx";
+import { shortRef, useRepo } from "./Repo.jsx";
+import DateTime from "../components/DateTime.jsx";
 import { CheckPill } from "./Checks.jsx";
 
 function ParentLinks(props) {
@@ -55,7 +56,7 @@ function CommitRow(props) {
           <Show when={c().author_email}>
             <span>{` <${c().author_email}>`}</span>
           </Show>
-          <span>{` · ${fmtDate(c().author_date)}`}</span>
+          <span>{" · "}<DateTime value={c().author_date} /></span>
           <Show when={(c().trailers?.length ?? 0) > 0}>
             <span class="pill ml-1">{c().trailers.length} trailers</span>
           </Show>

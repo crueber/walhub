@@ -20,12 +20,6 @@ export function useRepo() {
   return useContext(RepoCtx);
 }
 
-export function fmtDate(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? String(iso) : d.toISOString().replace("T", " ").slice(0, 16) + "Z";
-}
-
 export function fmtBytes(n) {
   if (n === undefined || n === null || n < 0) return "—";
   if (n < 1024) return `${n} B`;

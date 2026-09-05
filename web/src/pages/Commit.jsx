@@ -7,7 +7,8 @@ import { A } from "@solidjs/router";
 import { useData, SHA_TTL } from "../lib/data.js";
 import { parsePatchFiles, splitRows, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
 import { CopySha, shortSha } from "../lib/sha.jsx";
-import { fmtDate, useRepo } from "./Repo.jsx";
+import { useRepo } from "./Repo.jsx";
+import DateTime from "../components/DateTime.jsx";
 import { CheckPill, ContextRows } from "./Checks.jsx";
 
 const fileAnchor = (path) => `f-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -239,7 +240,7 @@ function CommitDetail(props) {
                     <span>{` <${c().author_email}>`}</span>
                   </Show>
                   <span>
-                    {` · authored ${fmtDate(c().author_date)} · committed ${fmtDate(c().committer_date ?? c().commit_date)}`}
+                    {" · authored "}<DateTime value={c().author_date} />{" · committed "}<DateTime value={c().committer_date ?? c().commit_date} />
                   </span>
                 </p>
                 <Show when={parents().length > 0}>

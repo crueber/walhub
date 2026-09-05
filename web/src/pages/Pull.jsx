@@ -10,11 +10,12 @@
 
 import { createSignal, For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
-import { useRepo, fmtDate } from "./Repo.jsx";
+import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { CheckPill, ContextRows } from "./Checks.jsx";
 import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
+import DateTime from "../components/DateTime.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import MergeBox from "../components/MergeBox.jsx";
 import { useCollabStream } from "../components/collab.jsx";
@@ -121,7 +122,7 @@ function ReviewsList(props) {
               <div class="card-meta">
                 <span>{rv.by}</span>
                 <span class={decisionBadge(rv.state ?? rv.kind)}>{rv.kind === "review_dismissed" ? `dismissed #${rv.dismisses}` : rv.state}</span>
-                <span>{fmtDate(rv.at)}</span>
+                <span><DateTime value={rv.at} /></span>
               </div>
               <Show when={rv.kind === "review_dismissed"}>
                 <p class="text-sm italic">dismissed review #{rv.dismisses}: {rv.reason}</p>
@@ -460,7 +461,7 @@ function ThreadComments(props) {
       <For each={getView()?.comments ?? []} fallback={<li class="text-xs text-zinc-500 dark:text-zinc-400">loading…</li>}>
         {(c) => (
           <li class="text-xs">
-            <span class="font-semibold">{c.by}</span> <span class="text-zinc-500 dark:text-zinc-400">{fmtDate(c.at)}</span>
+            <span class="font-semibold">{c.by}</span> <span class="text-zinc-500 dark:text-zinc-400"><DateTime value={c.at} /></span>
             <p class="whitespace-pre-wrap text-sm">{c.body}</p>
           </li>
         )}
@@ -636,12 +637,12 @@ export default function Pull() {
           #{num()} {thread()?.title}
         </h1>
         <p class="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          {thread()?.state} · {thread()?.author} · {fmtDate(thread()?.updated_at)}
+          {thread()?.state} · {thread()?.author} · <DateTime value={thread()?.updated_at} />
         </p>
         <div class="mb-4">
           <ReviewSummaryBar summary={summary()} head={head()} />
         </div>
-        <ThreadTimeline events={getView()?.events ?? []} textFor={eventText} fmtDate={fmtDate} />
+        <ThreadTimeline events={getView()?.events ?? []} textFor={eventText} />
         <Show when={canComment()}>
           <CommentComposer
             onSubmit={comment}

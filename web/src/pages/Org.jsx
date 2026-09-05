@@ -6,15 +6,10 @@ import { createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import DateTime from "../components/DateTime.jsx";
 
 const ORG_ROLES = ["owner", "member"];
 const TABS = ["Profile", "Members", "Teams", "Invitations"];
-
-function fmtDate(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? String(iso) : d.toISOString().replace("T", " ").slice(0, 16) + "Z";
-}
 
 function ProfileTab(props) {
   const org = props.org;
@@ -66,7 +61,7 @@ function ProfileTab(props) {
                 <button type="button" class="btn px-3 py-1" onClick={save}>save profile</button>
               </div>
               <Show when={getNote()}><p class="text-sm text-amber-700 dark:text-amber-300">{getNote()}</p></Show>
-              <p class="muted text-xs">created {fmtDate(o().created_at)} · updated {fmtDate(o().updated_at)}</p>
+              <p class="muted text-xs">created <DateTime value={o().created_at} /> · updated <DateTime value={o().updated_at} /></p>
             </div>
           </section>
         </>

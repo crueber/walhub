@@ -8,7 +8,7 @@
 
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
-import { useRepo, fmtDate } from "./Repo.jsx";
+import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, patchCached, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { toggleLabel, labelColorMap } from "../lib/labels.js";
@@ -16,6 +16,7 @@ import { milestoneTitle, milestonePatch } from "../lib/milestones.js";
 import LabelPicker, { LabelChip } from "../components/LabelPicker.jsx";
 import MilestonePicker from "../components/MilestonePicker.jsx";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
+import DateTime from "../components/DateTime.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
@@ -283,13 +284,12 @@ export default function Issue() {
                   </span>
                 </div>
                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                  {t().author} opened {fmtDate(t().created_at)} · {t().comment_count} comments
+                  {t().author} opened <DateTime value={t().created_at} /> · {t().comment_count} comments
                 </p>
               </header>
               <ThreadTimeline
                 events={events()}
                 textFor={(ev) => eventText(ev, allMilestones())}
-                fmtDate={fmtDate}
                 summaryFor={(ev) => {
                   // The ONLY reaction surface (#113): one row per comment
                   // in/near where its reactions appear — summary chips plus
