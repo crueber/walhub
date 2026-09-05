@@ -1,18 +1,25 @@
-// web/src/pages/Settings.jsx — repo settings, five sub-tabs (§2.9 + 05 §9):
-// 1. Scheduled tasks — strategy table + placement/host facts + upstream follow status.
-// 2. Push policy — textarea editor, 400 ms debounced validate, dry-run vs last N
-//    pushes, save/discard/copy.
-// 3. Effective config & history — TOML editor with debounced validate, publish with
-//    a message, clear, per-revision history with "Revert to this" + line diff.
-// 4. Access — visibility + role bindings (Access.jsx).
-// 5. CI tokens — wct_ token mint/list/revoke (05 §3, admin-only).
+// web/src/pages/Settings.jsx — repo settings, left-sidebar layout (issue #123,
+// §2.9 + 05 §9): the sidebar holds the standard listing (scheduled tasks,
+// push policy, effective config & history, access, CI tokens, webhooks, WAL)
+// plus the Danger Zone in its own danger-styled section. WAL moved here from
+// the main repo tab bar and renders inline; the /wal route is kept for old
+// links. Narrow content column: every tab's form is grid/flex-wrap based and
+// every data table scrolls horizontally — nothing assumes full-page width.
 
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { useData, reportError, asList } from "../lib/data.js";
 import { dangerMatches } from "../lib/danger.js";
+import {
+  SETTINGS_GROUP,
+  DANGER_GROUP,
+  DEFAULT_SETTINGS_TAB,
+  resolveSettingsTab,
+  settingsTabIdFromHash,
+} from "../lib/settingsNav.js";
 import { useRepo, fmtDate, fmtBytes } from "./Repo.jsx";
 import AccessTab from "./Access.jsx";
+import Wal from "./Wal.jsx";
 
 // --- tiny line diff (LCS) for the per-revision "line diff" ----------------------
 
@@ -46,7 +53,8 @@ function debounce(fn, ms) {
   return d;
 }
 
-const TABS = ["Scheduled tasks", "Push policy", "Effective config & history", "Access", "CI tokens", "Webhooks"];
+// Tab ids live in lib/settingsNav.js (SETTINGS_GROUP + DANGER_GROUP) — the
+// single source the sidebar and the content switch below both read.
 
 // --- tab 1: scheduled tasks ------------------------------------------------------
 
@@ -120,7 +128,7 @@ function ScheduledTab(props) {
                 <For each={d().fields ?? []}>
                   {(f) => (
                     <tr>
-                      <th class="w-64 align-top font-mono text-xs">{f.key}</th>
+                      <th class="w-40 align-top break-words font-mono text-xs sm:w-64">{f.key}</th>
                       <td>
                         {String(f.value ?? "")}{" "}
                         {f.source === "setting"
@@ -201,15 +209,18 @@ function PolicyTab(props) {
           <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={save}>Save</button>
           <button class="pill cursor-pointer select-none" type="button" onClick={reload}>Discard</button>
           <button class="pill cursor-pointer select-none" type="button" onClick={copy}>Copy</button>
-          <input
-            class="input w-20 tabular"
-            type="number"
-            min="1"
-            max="100"
-            value={getDryN()}
-            onInput={(e) => setDryN(e.currentTarget.value)}
-          />
-          <button class="pill cursor-pointer select-none" type="button" onClick={dryRun}>Dry-run last N pushes</button>
+          <span class="flex items-center gap-2">
+            <input
+              class="input w-20 tabular"
+              type="number"
+              min="1"
+              max="100"
+              value={getDryN()}
+              onInput={(e) => setDryN(e.currentTarget.value)}
+              aria-label="Dry-run against the last N pushes"
+            />
+            <button class="pill cursor-pointer select-none" type="button" onClick={dryRun}>Dry-run last N pushes</button>
+          </span>
         </div>
         <div class="mt-2 space-y-1 text-sm">
           <p class="muted">{getNote()}</p>
@@ -229,6 +240,7 @@ function PolicyTab(props) {
         {(d) => (
           <section class="card mt-4 p-4">
             <h3 class="mb-2 font-semibold">{`Dry run: ${d().allowed ?? 0} allowed / ${d().denied ?? 0} denied of ${d().pushes?.length ?? 0}`}</h3>
+            <div class="overflow-x-auto">
             <table class="data-table">
               <thead>
                 <tr><th>seq</th><th>principal</th><th>atomic</th><th>refs</th></tr>
@@ -246,6 +258,7 @@ function PolicyTab(props) {
                 </For>
               </tbody>
             </table>
+            </div>
           </section>
         )}
       </Show>
@@ -319,11 +332,12 @@ function ConfigTab(props) {
           <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={publish}>Publish</button>
           <button class="pill cursor-pointer select-none" type="button" onClick={clearAll}>Clear</button>
           <input
-            class="input w-72"
+            class="input min-w-0 flex-1 basis-48"
             type="text"
             placeholder="publish message (author = $USER)"
             value={getMessage()}
             onInput={(e) => setMessage(e.currentTarget.value)}
+            aria-label="Publish message"
           />
         </div>
         <Show when={getNote()}>
@@ -423,7 +437,7 @@ function CITokensTab(props) {
         </p>
         <form class="flex flex-wrap items-center gap-2" onSubmit={create}>
           <input
-            class="input w-64"
+            class="input min-w-0 flex-1 basis-48 sm:max-w-xs"
             placeholder="token name (e.g. woodpecker)"
             value={getName()}
             onInput={(e) => setName(e.target.value)}
@@ -451,6 +465,7 @@ function CITokensTab(props) {
       <section class="card mt-4 p-4">
         <h3 class="mb-2 font-semibold">Tokens</h3>
         <Show when={getTokens()} fallback={<p class="muted">loading…</p>}>
+          <div class="overflow-x-auto">
           <table class="data-table">
             <thead>
               <tr><th>id</th><th>name</th><th>scopes</th><th>created by</th><th>created</th><th>status</th><th></th></tr>
@@ -477,6 +492,7 @@ function CITokensTab(props) {
               </For>
             </tbody>
           </table>
+          </div>
         </Show>
       </section>
     </>
@@ -518,7 +534,7 @@ export function DangerConfirm(props) {
       </p>
       <div class="flex flex-wrap items-center gap-2">
         <input
-          class="input w-72 border-red-300 font-mono text-xs dark:border-red-800"
+          class="input w-72 max-w-full border-red-300 font-mono text-xs dark:border-red-800"
           type="text"
           placeholder={props.expected}
           value={getTyped()}
@@ -542,8 +558,8 @@ export function DangerConfirm(props) {
   );
 }
 
-// DangerZone renders at the bottom of the settings page shell (below the
-// tab content, visible on every tab). First entry: Delete Repository —
+// DangerZone renders as the sidebar's Danger Zone section content (issue
+// #123 — no longer pinned below every tab). First entry: Delete Repository —
 // admin-only on the server (`DELETE …/api` → 204, 403 otherwise and the
 // 403 text lands in the entry's error line); success navigates to the
 // owners list because the repo page no longer exists.
@@ -559,7 +575,7 @@ function DangerZone(props) {
   }
 
   return (
-    <section class="card mt-4 border-red-500/60 p-4" aria-label="Danger Zone">
+    <section class="card border-red-500/60 p-4" aria-label="Danger Zone">
       <h3 class="mb-1 font-semibold text-red-700 dark:text-red-400">Danger Zone</h3>
       <p class="muted mb-3 text-sm">Irreversible actions. Each requires typing the repository name.</p>
       <div class="rounded border border-red-500/40 p-3">
@@ -650,33 +666,35 @@ function WebhooksTab(props) {
           <code class="font-mono">X-Walgit-Event</code> headers. HTTPS only (HTTP on loopback for dev).
           Empty events = all; <code class="font-mono">*</code> matches everything.
         </p>
-        <form class="flex flex-wrap items-center gap-2" onSubmit={create}>
+        <form class="grid grid-cols-1 gap-2" onSubmit={create}>
           <input
-            class="input w-72"
+            class="input"
             placeholder="https://example.com/hook"
             value={getUrl()}
             onInput={(e) => setUrl(e.target.value)}
             aria-label="Webhook URL"
           />
-          <input
-            class="input w-48"
-            placeholder="events, comma-list (empty = all)"
-            value={getEvents()}
-            onInput={(e) => setEvents(e.target.value)}
-            aria-label="Events filter"
-          />
-          <input
-            class="input w-48"
-            type="password"
-            placeholder="secret (optional, write-only)"
-            value={getSecret()}
-            onInput={(e) => setSecret(e.target.value)}
-            aria-label="Webhook secret"
-            autocomplete="new-password"
-          />
-          <button type="submit" class="btn btn-primary px-3 py-1">
-            add webhook
-          </button>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
+            <input
+              class="input"
+              placeholder="events, comma-list (empty = all)"
+              value={getEvents()}
+              onInput={(e) => setEvents(e.target.value)}
+              aria-label="Events filter"
+            />
+            <input
+              class="input"
+              type="password"
+              placeholder="secret (optional, write-only)"
+              value={getSecret()}
+              onInput={(e) => setSecret(e.target.value)}
+              aria-label="Webhook secret"
+              autocomplete="new-password"
+            />
+            <button type="submit" class="btn btn-primary justify-self-start px-3 py-1 sm:justify-self-auto">
+              add webhook
+            </button>
+          </div>
         </form>
         <Show when={getNote()}>
           <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{getNote()}</p>
@@ -685,6 +703,7 @@ function WebhooksTab(props) {
       <section class="card mt-4 p-4">
         <h3 class="mb-2 font-semibold">Configured hooks</h3>
         <Show when={getHooks()} fallback={<p class="muted">loading…</p>}>
+          <div class="overflow-x-auto">
           <table class="data-table">
             <thead>
               <tr><th>url</th><th>events</th><th>active</th><th>secret</th><th></th></tr>
@@ -724,45 +743,110 @@ function WebhooksTab(props) {
               </For>
             </tbody>
           </table>
+          </div>
         </Show>
       </section>
     </>
   );
 }
 
+// --- shell: left sidebar + content column ----------------------------------------
+
+// One sidebar entry: a native button (keyboard reachable, focus ring from
+// the global :focus-visible rule) with aria-current="page" on the active
+// entry. Danger entries carry the danger tone via the `danger` flag.
+function SideItem(props) {
+  return (
+    <li>
+      <button
+        type="button"
+        class={props.danger ? "side-nav-item side-nav-item-danger" : "side-nav-item"}
+        aria-current={props.active ? "page" : undefined}
+        onClick={props.onSelect}
+      >
+        {props.label}
+      </button>
+    </li>
+  );
+}
+
 export default function Settings() {
   const ctx = useRepo();
   const repo = ctx.repoClient;
-  const [getTab, setTab] = createSignal("Scheduled tasks");
+  // Deep-linkable tabs: a bare /settings visit opens the default; #wal,
+  // #danger, … select their entry. Stale hashes fall back, never blank.
+  const initialTab = () =>
+    typeof window === "undefined"
+      ? DEFAULT_SETTINGS_TAB
+      : (resolveSettingsTab(settingsTabIdFromHash(window.location.hash)) ?? DEFAULT_SETTINGS_TAB);
+  const [getTab, setTab] = createSignal(initialTab());
+
+  const select = (id) => {
+    setTab(id);
+    try {
+      // replaceState: no scroll jump, no hashchange loop, back button intact.
+      window.history.replaceState(null, "", `#${id}`);
+    } catch { /* non-browser or denied — the tab still switched */ }
+  };
+
+  // Back/forward across #hashes follows the sidebar instead of stranding it.
+  if (typeof window !== "undefined") {
+    const onHash = () => {
+      const t = settingsTabIdFromHash(window.location.hash);
+      if (t) setTab(t);
+    };
+    window.addEventListener("hashchange", onHash);
+    onCleanup(() => window.removeEventListener("hashchange", onHash));
+  }
 
   return (
     <div class="settings-page">
       <h2 class="mb-3 text-lg font-semibold">Settings</h2>
-      <nav class="subtabs mb-4 flex flex-wrap gap-1.5" aria-label="settings sections">
-        <For each={TABS}>
-          {(t) => (
-            <button
-              type="button"
-              class="pill cursor-pointer select-none"
-              classList={{
-                "!border-emerald-500 !font-medium !text-emerald-700 dark:!text-emerald-300": getTab() === t,
-              }}
-              onClick={() => setTab(t)}
-            >
-              {t}
-            </button>
-          )}
-        </For>
-      </nav>
-      <div>
-        <Show when={getTab() === "Scheduled tasks"}><ScheduledTab ctx={ctx} repo={repo} /></Show>
-        <Show when={getTab() === "Push policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
-        <Show when={getTab() === "Effective config & history"}><ConfigTab ctx={ctx} repo={repo} /></Show>
-        <Show when={getTab() === "Access"}><AccessTab ctx={ctx} repo={repo} /></Show>
-        <Show when={getTab() === "CI tokens"}><CITokensTab ctx={ctx} repo={repo} /></Show>
-        <Show when={getTab() === "Webhooks"}><WebhooksTab ctx={ctx} repo={repo} /></Show>
+      <div class="flex flex-col gap-4 lg:flex-row lg:gap-6">
+        <nav class="shrink-0 lg:w-56" aria-label="Settings sections">
+          <div class="flex gap-4 lg:sticky lg:top-4 lg:block lg:space-y-4">
+            <section aria-labelledby="settings-nav-standard" class="min-w-0 flex-1 lg:flex-none">
+              <h3 id="settings-nav-standard" class="side-nav-heading">Settings</h3>
+              <ul class="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
+                <For each={SETTINGS_GROUP}>
+                  {(t) => (
+                    <SideItem
+                      label={t.label}
+                      active={getTab() === t.id}
+                      onSelect={() => select(t.id)}
+                    />
+                  )}
+                </For>
+              </ul>
+            </section>
+            <section aria-labelledby="settings-nav-danger" class="flex-none lg:flex-none">
+              <h3 id="settings-nav-danger" class="side-nav-heading side-nav-heading-danger">Danger Zone</h3>
+              <ul class="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
+                <For each={DANGER_GROUP}>
+                  {(t) => (
+                    <SideItem
+                      label={t.label}
+                      danger
+                      active={getTab() === t.id}
+                      onSelect={() => select(t.id)}
+                    />
+                  )}
+                </For>
+              </ul>
+            </section>
+          </div>
+        </nav>
+        <div class="min-w-0 flex-1">
+          <Show when={getTab() === "scheduled"}><ScheduledTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "config"}><ConfigTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "access"}><AccessTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "tokens"}><CITokensTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "webhooks"}><WebhooksTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "wal"}><Wal /></Show>
+          <Show when={getTab() === "danger"}><DangerZone ctx={ctx} repo={repo} /></Show>
+        </div>
       </div>
-      <DangerZone ctx={ctx} repo={repo} />
     </div>
   );
 }

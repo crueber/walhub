@@ -44,7 +44,9 @@ const SECTIONS = [
   ["/o/r/pulls", "pulls"],
   ["/o/r/pull/7", "pulls"],
   ["/o/r/pull/7/files", "pulls"],
-  ["/o/r/wal", "wal"],
+  // WAL moved into the settings sidebar (issue #123): the kept /wal route
+  // highlights Settings instead of a tab that no longer exists.
+  ["/o/r/wal", "settings"],
   ["/o/r/settings", "settings"],
   ["/o/r/settings/policy", "settings"],
   ["/o/r/checks", "checks"],

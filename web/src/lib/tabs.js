@@ -29,8 +29,10 @@ const SECTION_TABS = {
   check: "checks",
   releases: "releases",
   release: "releases",
-  // WAL / settings.
-  wal: "wal",
+  // WAL / settings. WAL has no tab of its own since issue #123 (it is a
+  // settings sidebar section now), so the kept /wal route highlights
+  // Settings; a highlight-nothing id would leave the tab bar blank.
+  wal: "settings",
   settings: "settings",
 };
 
