@@ -7,7 +7,7 @@
 // (coalesced), they never carry full state.
 
 import { createEffect, createSignal, For, Show } from "solid-js";
-import { useParams } from "@solidjs/router";
+import { A, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, patchCached, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
@@ -444,12 +444,40 @@ export default function Issue() {
                 <div class="mb-1 flex items-center justify-between gap-2">
                   <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Milestone</span>
                   <Show when={canTriage()}>
-                    <MilestonePicker milestones={allMilestones()} current={t().milestone ?? null} busy={getMilestoneBusy()} onSelect={selectMilestone} />
+                    {/* Set state (#148): the + dropdown hides, a − button
+                        clears directly via the same selectMilestone path
+                        (explicit null, pinned key, busy guard). Unset
+                        state keeps the + dropdown unchanged. */}
+                    <Show
+                      when={t().milestone}
+                      fallback={
+                        <MilestonePicker milestones={allMilestones()} current={null} busy={getMilestoneBusy()} onSelect={selectMilestone} />
+                      }
+                    >
+                      <button
+                        type="button"
+                        class="btn px-1.5 py-0 text-xs leading-5 disabled:cursor-wait disabled:opacity-50"
+                        aria-label="Remove milestone"
+                        title="Remove from milestone"
+                        disabled={getMilestoneBusy()}
+                        onClick={() => selectMilestone(null)}
+                      >
+                        <span aria-hidden="true">−</span>
+                      </button>
+                    </Show>
                   </Show>
                 </div>
                 <div class="flex flex-wrap gap-1">
                   <Show when={t().milestone} fallback={<span class="muted text-xs">none</span>}>
-                    {(m) => <span>{milestoneTitle(allMilestones(), m())}</span>}
+                    {(m) => (
+                      <A
+                        class="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+                        href={`/${ctx.full}/issues?milestone=${encodeURIComponent(m())}`}
+                        title={`issues on milestone ${milestoneTitle(allMilestones(), m())}`}
+                      >
+                        {milestoneTitle(allMilestones(), m())}
+                      </A>
+                    )}
                   </Show>
                 </div>
               </div>

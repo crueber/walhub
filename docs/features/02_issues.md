@@ -302,7 +302,7 @@ Pages (SolidJS SPA per `12_web_ui.md`, D-WEB-6; `.jsx` route components, `useDat
 |---|---|---|
 | `/:o/:r/issues` | list: filter bar (state/labels/assignee/milestone/since), paged cards from the index | SSE `issue` upserts/patches cards in place |
 | `/:o/:r/issues/new` | create form (title, markdown-lite body, preview toggle) | — |
-| `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone + `+` dropdown with a "No milestone" clear row in divided sections) | `issue_event` appends timeline frames; `issue` updates the header |
+| `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone with a linked title to the filtered issue list; triage sees the `+` dropdown when unset and a direct `−` clear button when set — issue #148) | `issue_event` appends timeline frames; `issue` updates the header |
 | `/:o/:r/labels` | label CRUD (triage-gated UI) | on save, refetch |
 | `/:o/:r/milestones` | milestone CRUD + progress bars + per-milestone linked issues (each milestone lists/links its issues via the server-side `milestone=` list filter; the title links to the filtered issue list) | on save, refetch |
 
@@ -378,6 +378,7 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   EVIDENCE entry is not needed (collaboration surface, human-rate, sim budgets untouched).
 
 - **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §11 page sketches read in the shipped idiom: `.jsx` route components, `useData` on Solid primitives, SSE refetch over the SDK readers. Routes, live behavior, and wire shapes are unchanged.
+- **Milestone sidebar minus-button + linked title (issue #148, 2026-09-05).** Set state hides the `+` dropdown and shows a triage-gated `−` button that clears via the existing `selectMilestone(null)` path (explicit-null PATCH, pinned key, busy guard — #143/#145 discipline unchanged); unset state keeps the `+` dropdown with its "No milestone" clear row. The milestone title links to the canonical per-milestone view (`/{o}/{r}/issues?milestone=<id>`, same href as the milestones-page title links from #119).
 
 - Issue nums are `<num:06x>` hex keys (decimal on the wire) — numeric order from byte-order LIST scans, same idiom as P3's `012x` seqs.
 - `issues/index.json` carries cards for BOTH kinds; issue endpoints filter `kind: "issue"` — one index for one numbering space (03 lists PRs from the same object).
