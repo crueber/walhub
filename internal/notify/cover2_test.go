@@ -289,6 +289,121 @@ drained:
 	unsub3()
 }
 
+func TestRepoRingEvictedOnLastUnsubscribe(t *testing.T) {
+	x := newHarness(t)
+	const repos = 10
+	unsubs := make([]func(), 0, repos)
+	for i := 0; i < repos; i++ {
+		repo := fmt.Sprintf("acme/evict%d", i)
+		x.svc.PublishStream("issue", repo, "", "", "", i)
+		_, _, unsub := x.svc.SubscribeRepo(repo)
+		unsubs = append(unsubs, unsub)
+	}
+	if got := x.svc.rbus.ringCount(); got != repos {
+		t.Fatalf("ringCount = %d, want %d", got, repos)
+	}
+	for _, unsub := range unsubs {
+		unsub()
+	}
+	if got := x.svc.rbus.ringCount(); got != 0 {
+		t.Fatalf("ringCount after last unsubscribe = %d, want 0", got)
+	}
+	// Late subscriber after a fully idle period starts from the live tail.
+	_, recent, unsub := x.svc.SubscribeRepo("acme/evict0")
+	defer unsub()
+	if len(recent) != 0 {
+		t.Fatalf("replay after eviction = %d frames, want 0", len(recent))
+	}
+}
+
+func TestRepoRingLRUCap(t *testing.T) {
+	x := newHarness(t)
+	total := RepoBusMaxRepos + 5
+	for i := 0; i < total; i++ {
+		x.svc.PublishStream("issue", fmt.Sprintf("acme/cap%d", i), "", "", "", i)
+	}
+	if got := x.svc.rbus.ringCount(); got != RepoBusMaxRepos {
+		t.Fatalf("ringCount = %d, want %d", got, RepoBusMaxRepos)
+	}
+	// Oldest idle repos are evicted first: no replay.
+	_, recent, unsub := x.svc.SubscribeRepo("acme/cap0")
+	defer unsub()
+	if len(recent) != 0 {
+		t.Fatalf("evicted replay = %d frames, want 0", len(recent))
+	}
+	// Newest repos are retained with their frames.
+	last := fmt.Sprintf("acme/cap%d", total-1)
+	_, recent, unsub2 := x.svc.SubscribeRepo(last)
+	defer unsub2()
+	if len(recent) != 1 || recent[0].Num != total-1 {
+		t.Fatalf("retained replay = %+v, want one frame num %d", recent, total-1)
+	}
+}
+
+func TestRepoRingEvictPrefersIdle(t *testing.T) {
+	x := newHarness(t)
+	_, _, unsub := x.svc.SubscribeRepo("acme/old")
+	defer unsub()
+	x.svc.PublishStream("issue", "acme/old", "", "", "", 1)
+	for i := 0; i < RepoBusMaxRepos; i++ {
+		x.svc.PublishStream("issue", fmt.Sprintf("acme/busy%d", i), "", "", "", i)
+	}
+	if got := x.svc.rbus.ringCount(); got != RepoBusMaxRepos {
+		t.Fatalf("ringCount = %d, want %d", got, RepoBusMaxRepos)
+	}
+	// The subscribed repo keeps its ring while idle ones are evicted.
+	_, recent, unsub2 := x.svc.SubscribeRepo("acme/old")
+	defer unsub2()
+	if len(recent) != 1 || recent[0].Num != 1 {
+		t.Fatalf("subscribed replay = %+v, want one frame", recent)
+	}
+	_, recent, unsub3 := x.svc.SubscribeRepo("acme/busy0")
+	defer unsub3()
+	if len(recent) != 0 {
+		t.Fatalf("oldest idle replay = %d frames, want 0", len(recent))
+	}
+}
+
+func TestRepoRingEvictAllSubscribedKeepsLive(t *testing.T) {
+	x := newHarness(t)
+	unsubs := make([]func(), 0, RepoBusMaxRepos+1)
+	for i := 0; i < RepoBusMaxRepos+1; i++ {
+		repo := fmt.Sprintf("acme/live%d", i)
+		_, _, unsub := x.svc.SubscribeRepo(repo)
+		unsubs = append(unsubs, unsub)
+		x.svc.PublishStream("issue", repo, "", "", "", i)
+	}
+	defer func() {
+		for _, unsub := range unsubs {
+			unsub()
+		}
+	}()
+	if got := x.svc.rbus.ringCount(); got != RepoBusMaxRepos {
+		t.Fatalf("ringCount = %d, want %d", got, RepoBusMaxRepos)
+	}
+	// Eviction drops only the replay ring: the LRU repo's channel stays open.
+	if got := x.svc.repoLiveCount("acme/live0"); got != 1 {
+		t.Fatalf("live0 subscribers = %d, want 1", got)
+	}
+	_, recent, unsub := x.svc.SubscribeRepo("acme/live0")
+	defer unsub()
+	if len(recent) != 0 {
+		t.Fatalf("evicted replay = %d frames, want 0", len(recent))
+	}
+	// Live delivery on the evicted repo still works; same-goroutine publish
+	// lands in the buffer before PublishFrame returns (deterministic).
+	ch, _, _ := x.svc.SubscribeRepo("acme/live1")
+	x.svc.PublishStream("issue", "acme/live1", "", "", "", 99)
+	select {
+	case f := <-ch:
+		if f.Num != 99 {
+			t.Fatalf("live frame num = %d, want 99", f.Num)
+		}
+	default:
+		t.Fatal("live subscriber must receive despite ring eviction")
+	}
+}
+
 func TestUserBusMultiSub(t *testing.T) {
 	x := newHarness(t)
 	_, unsub1 := x.svc.ubus.subscribe("amy@example.com")
