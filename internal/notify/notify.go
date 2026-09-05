@@ -83,6 +83,8 @@ const (
 	// FanoutBudget bounds the synchronous fan-out of one emission.
 	FanoutBudget = 5 * time.Second
 	// FanoutParallel caps concurrent store writes inside one fan-out.
+	// Slots are acquired BEFORE spawning (issue #153), so in-flight
+	// fan-out goroutines are bounded by construction on every path.
 	FanoutParallel = 8
 	// WebhookTimeout bounds one webhook POST (§5.3).
 	WebhookTimeout = 10 * time.Second

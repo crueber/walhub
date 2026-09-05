@@ -348,8 +348,11 @@ func hookClientFor(h *Hook) *http.Client {
 }
 
 // DeliverRepo runs one webhooks pass for repo: every active hook,
-// sequentially per hook, parallel across hooks (cap 8). Best-effort per
-// hook; a failed hook holds back only its own cursor.
+// sequentially per hook, parallel across hooks (cap 8). The slot is
+// acquired BEFORE spawning (issue #153), so at most FanoutParallel
+// delivery goroutines exist at any instant no matter how many hooks are
+// configured. Best-effort per hook; a failed hook holds back only its
+// own cursor.
 func (s *Service) DeliverRepo(ctx context.Context, owner, repo string) {
 	hooks, err := s.ListHooks(ctx, owner, repo)
 	if err != nil {
@@ -362,15 +365,15 @@ func (s *Service) DeliverRepo(ctx context.Context, owner, repo string) {
 			continue
 		}
 		h := h
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
-			}
+			defer func() { <-sem }()
 			s.deliverHook(ctx, owner, repo, h)
 		}()
 	}

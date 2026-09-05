@@ -310,7 +310,10 @@ func (s *Service) resolve(ctx context.Context, owner, repo string, e Emission, a
 		seen[k] = true
 		out = append(out, target{principal: p, reason: r})
 	}
-	// Primary recipients, bounded parallel probes (cap 8).
+	// Primary recipients, bounded parallel probes (cap 8). The slot is
+	// acquired BEFORE spawning, so at most FanoutParallel probe
+	// goroutines exist at any instant no matter how large the recipient
+	// set is (issue #153: spawn-then-acquire is unbounded by construction).
 	sem := make(chan struct{}, FanoutParallel)
 	var wg sync.WaitGroup
 	for _, r := range e.Recipients {
@@ -319,10 +322,14 @@ func (s *Service) resolve(ctx context.Context, owner, repo string, e Emission, a
 			addTeam(s, ctx, owner, repo, r, e.Class, actor, author, add, &mu)
 			continue
 		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			continue // request gone; remaining recipients dropped
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
 			defer func() { <-sem }()
 			p := normPrincipal(r)
 			if p == "" || p == actor {
@@ -455,6 +462,10 @@ type completed struct {
 // under the fan-out budget, returning the created deliveries and whether
 // any target FAILED (dedup-skips are complete, not failures).
 func (s *Service) createAll(ctx context.Context, owner, repo string, e Emission, title, actor, at string, seq int, targets []target) ([]completed, bool) {
+	// The slot is acquired BEFORE spawning (issue #153): at most
+	// FanoutParallel workers exist at any instant. Budget accounting is
+	// unchanged — a recipient never launched before expiry counts failed,
+	// exactly as a worker stranded on the semaphore did before.
 	sem := make(chan struct{}, FanoutParallel)
 	var mu sync.Mutex
 	done := []completed{}
@@ -462,19 +473,19 @@ func (s *Service) createAll(ctx context.Context, owner, repo string, e Emission,
 	var wg sync.WaitGroup
 	for _, t := range targets {
 		t := t
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			mu.Lock()
+			failed = true
+			mu.Unlock()
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() { <-sem }()
 			if ctx.Err() != nil {
-				mu.Lock()
-				failed = true
-				mu.Unlock()
-				return
-			}
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
 				mu.Lock()
 				failed = true
 				mu.Unlock()
