@@ -354,6 +354,11 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 - **Email is out; the activity log is the named seam** — a future email sink needs no schema change here.
 - **`X-Walgit-*` header keepers on collaboration webhooks** — wire identifiers are contracts, not branding (D-NAME-1).
 - **User notification SSE stream is a new top-level route**, not a repo-stream extension: notifications are user-scoped and must not require per-repo subscriptions.
+- **Fan-out slots are acquired before spawning (issue #153)** — `resolve`, `createAll`, `fanoutOne`,
+  and `DeliverRepo` take the cap-8 semaphore in the parent loop before `go`, so in-flight fan-out
+  goroutines are bounded by construction no matter how large the recipient/hook set is. Budget
+  accounting is unchanged (a recipient never launched before expiry counts failed, as a
+  semaphore-stranded worker did before); the §4 `errgroup.SetLimit(8)` bound now holds literally.
 - **Emission failures are logged and never arm phantom fan-out (issue #92)** — every `emit` drop path
   (`reserveSeq` failure, overflow/shortfall/sync `appendActivity` failure) logs a `notify: emission …`
   Warn with repo/num/class/actor (+seq once reserved — the reserve path has none yet) and cause (Service.Logger, nil → discard, the events-bridge

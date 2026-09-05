@@ -383,18 +383,22 @@ func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq i
 	}
 	for _, r := range payload.Recipients {
 		r := r
+		// Acquire BEFORE spawning (issue #153): at most FanoutParallel
+		// workers exist at any instant. Budget accounting is unchanged —
+		// a recipient never launched before expiry counts failed,
+		// exactly as a worker stranded on the semaphore did before.
+		select {
+		case sem <- struct{}{}:
+		case <-fctx.Done():
+			fail() // budget expired waiting for a slot
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() { <-sem }()
 			if fctx.Err() != nil {
 				fail() // budget expired before this recipient started
-				return
-			}
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-fctx.Done():
-				fail() // budget expired waiting for a slot
 				return
 			}
 			// Same entry-level discipline as the sync path (issue #91):
