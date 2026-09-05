@@ -475,7 +475,15 @@ func (s *Service) sweepFanoutRepo(ctx context.Context, owner, repo, key string) 
 		end = seen + maxFanoutRedrainSeqs
 	}
 	for seq := seen + 1; seq <= end; seq++ {
-		ev := s.readActivity(ctx, owner, repo, seq)
+		ev, err := s.readActivityErr(ctx, owner, repo, seq)
+		if err != nil {
+			// Transient store failure: stop the window here so the
+			// high-water does not advance past an unprobed seq (the
+			// next pass retries it — a failed probe must never look
+			// like a drained one).
+			end = seq - 1
+			break
+		}
 		if ev == nil {
 			continue // gap — honest-gap semantics, never enqueued
 		}

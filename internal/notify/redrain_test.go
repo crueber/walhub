@@ -9,7 +9,9 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -224,6 +226,71 @@ func TestSweepFanoutProbeBound(t *testing.T) {
 	svc.tasks.mu.Unlock()
 	if running {
 		t.Fatal("pure gaps must enqueue nothing")
+	}
+}
+
+// flakeActivity fails GETs of one key n times, then delegates (a transient
+// store failure the next pass must recover from).
+type flakeActivity struct {
+	store.ObjectStore
+	key string
+	n   int
+}
+
+func (f *flakeActivity) Get(ctx context.Context, key string, opts store.GetOptions) (store.GetResult, error) {
+	if key == f.key && f.n > 0 {
+		f.n--
+		return nil, errors.New("flake")
+	}
+	return f.ObjectStore.Get(ctx, key, opts)
+}
+
+// TestSweepFanoutTransientProbeRetries pins the redrain failure direction:
+// a transient store error on an activity probe must stop the window WITHOUT
+// advancing the high-water past the unprobed seq — the healed next pass
+// redrains it. (Before the fix, readActivity conflated errors with gaps and
+// the high-water advanced past the pending seq, orphaning it forever.)
+func TestSweepFanoutTransientProbeRetries(t *testing.T) {
+	st := store.NewMemory()
+	at := "2026-09-04T12:00:00Z"
+	writeRaw(t, st, CollabStateKey("acme", "repo"), encode(CollabState{NextSeq: 1}))
+	seedActivity(t, st, at, "acme", "repo", 1, true,
+		activityRecipient{Principal: "amy@example.com", Reason: ReasonSubscribed})
+	flake := &flakeActivity{ObjectStore: st, key: ActivityKey("acme", "repo", 1), n: 1}
+	svc := New(flake, nil)
+
+	svc.sweepFanout(ctx())
+	svc.tasks.mu.Lock()
+	_, running := svc.tasks.running[taskKey("acme/repo", TaskKindFanout)]
+	svc.tasks.mu.Unlock()
+	if running {
+		t.Fatal("failed probe must enqueue nothing")
+	}
+	if svc.fanoutDone(ctx(), "acme", "repo", 1) {
+		t.Fatal("failed probe must write no completion record")
+	}
+	svc.fanoutMu.Lock()
+	seen := svc.fanoutSeen["acme/repo"]
+	svc.fanoutMu.Unlock()
+	if seen != 0 {
+		t.Fatalf("high-water = %d after a failed probe, want 0 (window must stop, not skip)", seen)
+	}
+
+	// Healed store: the next pass probes seq 1 again and drains it.
+	svc.sweepFanout(ctx())
+	waitFanoutQuiescent(t, svc, "acme/repo")
+	if !svc.fanoutDone(ctx(), "acme", "repo", 1) {
+		t.Fatal("healed pass must drain the retried seq")
+	}
+	n := 0
+	_ = st.List(ctx(), NotifPrefix("amy@example.com"), "", func(m store.ObjectMeta) error {
+		if len(m.Key) > len("/index.json") && m.Key[len(m.Key)-len("/index.json"):] != "/index.json" {
+			n++
+		}
+		return nil
+	})
+	if n != 1 {
+		t.Fatalf("retried seq must deliver exactly once, got %d", n)
 	}
 }
 
