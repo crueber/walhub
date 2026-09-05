@@ -1242,3 +1242,64 @@ func mustMarshalStale(t *testing.T, doc *ImportDoc) []byte {
 	}
 	return raw
 }
+
+// drainOnClaimRead drains the service right after the first import.json
+// GET lands. A resume run resolves its claim via a read (no PutCreate),
+// which happens after the pre-claim drain guard already passed — the
+// pre-commit re-guard must then refuse WITHOUT deleting the shared
+// claim it converged off.
+type drainOnClaimRead struct {
+	store.ObjectStore
+	mu   sync.Mutex
+	svc  *Service
+	done bool
+}
+
+func (f *drainOnClaimRead) Get(ctx context.Context, key string, opts store.GetOptions) (store.GetResult, error) {
+	res, err := f.ObjectStore.Get(ctx, key, opts)
+	f.mu.Lock()
+	drain := !f.done && strings.HasSuffix(key, ImportKey) && err == nil
+	if drain {
+		f.done = true
+	}
+	svc := f.svc
+	f.mu.Unlock()
+	if drain && svc != nil {
+		svc.Drain()
+	}
+	return res, err
+}
+
+// TestIssue79DrainRefusalKeepsResumeClaim: a drain landing between the
+// claim-resume and the manifest commit must refuse WITHOUT deleting the
+// shared in-progress claim — with a surviving manifest, deleting it
+// would wedge the retry on a foreign-manifest 409 (the #79 shape).
+func TestIssue79DrainRefusalKeepsResumeClaim(t *testing.T) {
+	cfg := testConfig(t)
+	mem := store.NewMemory()
+	gate := &drainOnClaimRead{ObjectStore: mem}
+	svc, _ := testServiceOnStore(t, cfg, &FakeRoles{}, gate)
+	gate.svc = svc
+	ctx := context.Background()
+	remote := t.TempDir() + "/src"
+	srcURL := fixtureRepo(t, remote, 1, 0, 0)
+	// Wedged state: prior attempt's manifest + its in-progress claim.
+	if _, err := svc.reg.Create(ctx, "acme/drnk", 0); err != nil {
+		t.Fatal(err)
+	}
+	claim := &ImportDoc{Version: 1, SourceURL: srcURL, SourceKind: "file", RequestedRefs: []string{}, HeadSHAs: map[string]string{}, Importer: "x", Format: "sha1", ImportedAt: nowRFC3339(), ClaimExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}
+	if _, _, _, err := claimImportDoc(ctx, svc.store, "acme", "drnk", claim); err != nil {
+		t.Fatal(err)
+	}
+	in := &importNarr{print: &Printer{Context: ctx}}
+	if err := svc.runImport(ctx, in, "i-drnk", headlessParams(srcURL, "acme", "drnk"), ""); statusCode(err) != 503 {
+		t.Fatalf("drained resume = %v, want 503", err)
+	}
+	// Both commit points must survive so the retry resumes.
+	if v := manifestVersion(t, mem, "acme", "drnk"); v == "" {
+		t.Fatalf("manifest deleted under drain refusal")
+	}
+	if doc, _, err := readImportDoc(ctx, mem, "acme", "drnk"); err != nil || doc == nil || doc.Complete || doc.SourceURL != srcURL {
+		t.Fatalf("shared claim deleted under drain refusal: %+v %v", doc, err)
+	}
+}

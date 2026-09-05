@@ -165,13 +165,16 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 	// only persists when the terminal import.json CAS lands: any later
 	// failure rolls back to a resumable-or-clean state below. Re-check
 	// drain here (a claim-to-manifest race with phase 1 must refuse,
-	// never land a post-drain manifest).
+	// never land a post-drain manifest). Only a fresh/taken-over claim
+	// is owned (mode == claimFresh): a resume run must never delete the
+	// shared claim it converged off — with a surviving manifest that
+	// would wedge the retry on a foreign-manifest 409.
 	if s.Draining() {
-		s.rollbackImport(ctx, target, params.Owner, params.Name, false, true, claimVer)
+		s.rollbackImport(ctx, target, params.Owner, params.Name, false, mode == claimFresh, claimVer)
 		return interruptedErr()
 	}
 	if err := ctx.Err(); err != nil {
-		s.rollbackImport(ctx, target, params.Owner, params.Name, false, true, claimVer)
+		s.rollbackImport(ctx, target, params.Owner, params.Name, false, mode == claimFresh, claimVer)
 		return &StatusError{Status: 503, Message: "import interrupted; safe to retry"}
 	}
 	var h *wal.RepoHandle

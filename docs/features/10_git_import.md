@@ -421,12 +421,17 @@ clean.
   `clone_timeout + git_timeout` (no new knob; expiry gates only
   different-source takeover of a manifest-less target, never
   same-source resume). Pre-fix sidecars (no `complete` flag) converge
-  once, then complete — never mistaken for a no-op. Residuals:
-  duplicate tier-0 log entries under racing same-source convergers
-  (content-addressed, benign); a foreign push winning the name race
-  in the claim→commit window leaves our claim + their manifest (the
-  retry converges and aborts loud on divergent refs — never silent,
-  never overwriting).
+   once, then complete — never mistaken for a no-op. A pre-fix
+   failure that landed between the manifest commit and the sidecar
+   write left a manifest with NO sidecar: post-fix that state is
+   indistinguishable from a foreign manifest, so it stays 409-foreign
+   by design (delete-and-retry). Residuals:
+   duplicate pack log entries — racing same-source convergers, or a
+   resumed run's re-repack adding a superseded tier-2 base
+   (content-addressed, benign); a foreign push winning the name race
+   in the claim→commit window leaves our claim + their manifest (the
+   retry converges and aborts loud on divergent refs — never silent,
+   never overwriting).
 
 ## Explicitly out of scope
 
