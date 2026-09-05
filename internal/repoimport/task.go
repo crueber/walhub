@@ -1,17 +1,25 @@
 // task.go — the import body (shared by the HTTP task and the CLI
 // headless runner): scratch `git clone --mirror` → for-each-ref enumerate
-// + S4 refmap → ingest via the existing publish path (source packs as
-// tier-0, full bitmap'd repack as the tier-2 base — the classic runImport
-// shape) → manifest PutCreate commit point → importer-admin via the
-// identity service → import.json provenance Create.
+// + S4 refmap → in-progress import.json CLAIM (PutCreate, before the
+// manifest) → provisional manifest PutCreate (the CAS arbitrates
+// ownership) → idempotent converge (presence-probed packs, ref creates
+// for absent refs only, repack base, importer-admin) → version-checked
+// import.json completion CAS → rollback to resumable-or-clean on any
+// failure (fix #79: a failed import never wedges the target).
 //
 // ### Concurrency
 // Hazard: the target may not exist yet, so the body holds NO repo locks
 // (13 §2 rule 4 — there is no handle to lock); duplicate POSTs are
 // deduped by the service single-flight, cross-instance races by the
-// manifest Create CAS. Avoidance: unique scratch per attempt (defer
-// RemoveAll), clone-concurrency semaphore (import.max_concurrent, S9),
-// every git spawn in Pool.Run with ctx timeouts, bulk pack uploads through
+// store CAS operations. Exactly-one-winner is preserved at three
+// points: the claim PutCreate serializes importers (a lost CAS resolves
+// to adopt/resume/takeover/409 — never a silent overwrite); the
+// manifest PutCreate still arbitrates name-ownership against pushes,
+// forks, and creates (unchanged); the completion PutUpdate elects
+// exactly one completer (a lost CAS adopts a same-source completion).
+// Avoidance: unique scratch per attempt (defer RemoveAll),
+// clone-concurrency semaphore (import.max_concurrent, S9), every git
+// spawn in Pool.Run with ctx timeouts, bulk pack uploads through
 // AddPack (the bulk path, never request goroutines), no lock held across
 // any store/network call, sender-owns-close channels (the stream ring),
 // every goroutine exits via context (clone drain, heartbeat ticker).
@@ -26,6 +34,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/identity"
@@ -108,37 +117,136 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 	}
 	s.lfsNotice(ctx, n, scratch)
 
-	// Commit point: manifest.pb PutCreate (the CAS decides ownership —
-	// same arbitration as create, 13 §3, and forks, 03 §7). A commit
-	// attempted after drain begins must fail, never land: the service
-	// flag covers Drain (checked first — it is set even if the table
-	// drain races behind), and the body ctx covers every other cancel
-	// (table Drain at phase 1, CLI SIGINT). Both refuse with a
-	// retryable 503 (law 7), before the CAS, so no post-drain manifest
-	// can exist.
+	// Claim point (fix #79): PutCreate the in-progress import.json
+	// BEFORE the manifest CAS, so a manifest without a sidecar is
+	// unambiguously foreign (B3 409 stands) while a same-source retry
+	// over our claim resumes instead of wedging. A claim attempted
+	// after drain begins must fail, never land: the service flag covers
+	// Drain (checked first — it is set even if the table drain races
+	// behind), and the body ctx covers every other cancel (table Drain
+	// at phase 1, CLI SIGINT). Both refuse with a retryable 503 (law
+	// 7), before any bucket write, so no post-drain claim can exist.
 	if s.Draining() {
 		return interruptedErr()
 	}
 	if err := ctx.Err(); err != nil {
 		return &StatusError{Status: 503, Message: "import interrupted; safe to retry"}
 	}
-	h, err := s.reg.Create(ctx, target, format)
-	if err != nil {
-		var we *wal.WalError
-		if errors.As(err, &we) && we.Kind == wal.WalErrAlreadyExists {
-			// Lost the Create race: adopt iff the winner recorded the
-			// same source (B3 benign race → no-op outcome), else 409.
-			if doc, _, rerr := readImportDoc(ctx, s.store, params.Owner, params.Name); rerr == nil && doc != nil && doc.SourceURL == params.Source.URL {
-				n.Notice(fmt.Sprintf("target %s already imported from this source; adopting", target))
-				n.setResult(&Outcome{Repo: target, SourceURL: doc.SourceURL, HeadSHAs: doc.HeadSHAs, Format: doc.Format, ImportedAt: doc.ImportedAt})
-				return nil
+	claim := &ImportDoc{
+		Version:        1,
+		SourceURL:      params.Source.URL,
+		SourceKind:     string(params.Source.Kind),
+		RequestedRefs:  append([]string{}, params.Refs...),
+		ImportedAt:     nowRFC3339(),
+		HeadSHAs:       map[string]string{},
+		Importer:       paramsImporter(params),
+		Format:         formatName,
+		ClaimExpiresAt: time.Now().UTC().Add(claimTTL(s.cfg)).Format(time.RFC3339),
+	}
+	mode, landed, claimVer, cerr := claimImportDoc(ctx, s.store, params.Owner, params.Name, claim)
+	if cerr != nil {
+		return cerr
+	}
+	if mode == claimAdopt {
+		// The winner recorded the same source (B3 benign race → no-op
+		// outcome, zero pack traffic — heads are NOT re-fetched).
+		n.Notice(fmt.Sprintf("target %s already imported from this source; adopting", target))
+		n.setResult(&Outcome{Repo: target, SourceURL: landed.SourceURL, HeadSHAs: landed.HeadSHAs, Format: landed.Format, ImportedAt: landed.ImportedAt})
+		return nil
+	}
+	resume := mode == claimResume
+	if resume {
+		n.Notice(fmt.Sprintf("resuming import of %s from this source", target))
+	}
+
+	// Provisional commit: manifest.pb PutCreate still arbitrates
+	// name-ownership (the CAS elects exactly one winner — same
+	// arbitration as create, 13 §3, and forks, 03 §7), but the repo
+	// only persists when the terminal import.json CAS lands: any later
+	// failure rolls back to a resumable-or-clean state below. Re-check
+	// drain here (a claim-to-manifest race with phase 1 must refuse,
+	// never land a post-drain manifest). Only a fresh/taken-over claim
+	// is owned (mode == claimFresh): a resume run must never delete the
+	// shared claim it converged off — with a surviving manifest that
+	// would wedge the retry on a foreign-manifest 409.
+	if s.Draining() {
+		s.rollbackImport(ctx, target, params.Owner, params.Name, false, mode == claimFresh, claimVer)
+		return interruptedErr()
+	}
+	if err := ctx.Err(); err != nil {
+		s.rollbackImport(ctx, target, params.Owner, params.Name, false, mode == claimFresh, claimVer)
+		return &StatusError{Status: 503, Message: "import interrupted; safe to retry"}
+	}
+	var h *wal.RepoHandle
+	ownedManifest := false
+	if resume {
+		// Resume opens the wedged (or crashed-pre-commit) target; a
+		// missing manifest means the first attempt died before its
+		// commit — Create it now (owned, rolled back on failure).
+		var oerr error
+		h, oerr = s.reg.Open(ctx, target)
+		if oerr != nil {
+			if !isNotFound(oerr) {
+				s.rollbackImport(ctx, target, params.Owner, params.Name, false, false, claimVer)
+				return &StatusError{Status: 500, Message: fmt.Sprintf("open %s: %v (safe to retry)", target, scrubError(oerr.Error()))}
 			}
-			return &StatusError{Status: 409, Message: fmt.Sprintf("target %s taken by another import or push; delete and retry, or pick another name", target)}
+			h, oerr = s.reg.Create(ctx, target, format)
+			if oerr != nil {
+				var we *wal.WalError
+				if errors.As(oerr, &we) && we.Kind == wal.WalErrAlreadyExists {
+					h, oerr = s.reg.Open(ctx, target)
+				}
+			} else {
+				ownedManifest = true
+			}
+			if oerr != nil {
+				s.rollbackImport(ctx, target, params.Owner, params.Name, ownedManifest, false, claimVer)
+				return &StatusError{Status: 500, Message: fmt.Sprintf("create %s: %v (safe to retry)", target, scrubError(oerr.Error()))}
+			}
 		}
-		return &StatusError{Status: 500, Message: fmt.Sprintf("create %s: %v", target, scrubError(err.Error()))}
+	} else {
+		var herr error
+		h, herr = s.reg.Create(ctx, target, format)
+		if herr != nil {
+			var we *wal.WalError
+			if errors.As(herr, &we) && we.Kind == wal.WalErrAlreadyExists {
+				// Our claim won but the name is taken: a push, fork,
+				// or plain create landed first (a concurrent import
+				// would have held the claim instead). The claim is
+				// left in place deliberately: it may be shared with
+				// a live winner (takeover race), and deleting under
+				// them would flip their completion into a 409. The
+				// retry resumes off it and converges (a divergent
+				// foreign ref aborts loud in completeBody) — never
+				// a silent wedge.
+				return &StatusError{Status: 409, Message: fmt.Sprintf("target %s taken by another import or push; delete and retry, or pick another name", target)}
+			}
+			// The claim survives a 500 here (no manifest exists):
+			// the retry resumes off it — never a wedge.
+			return &StatusError{Status: 500, Message: fmt.Sprintf("create %s: %v (safe to retry)", target, scrubError(herr.Error()))}
+		}
+		ownedManifest = true
 	}
 	n.Notice(fmt.Sprintf("created %s (%s)", target, formatName))
 
+	if err := s.completeBody(ctx, n, h, params, scratch, refs, headTarget, formatName, format, claimVer); err != nil {
+		s.rollbackImport(ctx, target, params.Owner, params.Name, ownedManifest, mode == claimFresh, claimVer)
+		return err
+	}
+	return nil
+}
+
+// completeBody converges the provisional repo to the imported state and
+// CAS-completes the claim (fix #79): packs (skipping checksums already
+// durable — the resume path), refs (converged against the serving
+// copy — creates only for absent refs, never overwrites), the tier-2
+// repack base, importer-admin, and the terminal import.json CAS. Every
+// step is idempotent, so a retry over an in-progress claim always
+// converges instead of wedging. Any error triggers rollbackImport at
+// the caller (never inline — the ownership flags live in runImport).
+func (s *Service) completeBody(ctx context.Context, n *importNarr, h *wal.RepoHandle, params Params, scratch string, refs []Ref, headTarget, formatName string, format git.ObjectFormat, claimVer store.Version) error {
+	maxBytes := int64(s.cfg.Import.MaxBytes)
+	target := params.target()
 	importer := paramsImporter(params)
 	meta := map[string]string{"agent": KindRepoImport, "principal": importer, "imported_from": params.Source.URL}
 
@@ -146,6 +254,10 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 	// checksum), then a full bitmap'd repack as the tier-2 base — the
 	// classic runImport shape (§2 step 3a). Each pack goes through
 	// publishPack (idx install + durable upload around AddPack).
+	// Checksums already durable in the store are skipped (the resume
+	// path — re-AddPacking would duplicate log entries); their .idx
+	// is still ensured (a crash between AddPack and the idx upload
+	// leaves a pack without one).
 	packs, _ := filepath.Glob(filepath.Join(scratch, "objects", "pack", "*.pack"))
 	sort.Strings(packs)
 	imported := map[string]bool{}
@@ -160,6 +272,18 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 		if imported[checksum] {
 			continue
 		}
+		present, perr := s.packPresent(ctx, params, checksum)
+		if perr != nil {
+			return perr
+		}
+		if present {
+			n.Progress("ingest", uint64(len(imported)+1), uint64(len(packs)), "packs")
+			if err := s.ensureIdxUploaded(ctx, h, params, pack, checksum); err != nil {
+				return err
+			}
+			imported[checksum] = true
+			continue
+		}
 		n.Progress("ingest", uint64(len(imported)+1), uint64(len(packs)), "packs")
 		if err := s.publishPack(ctx, n, h, params, pack, checksum, 0, meta); err != nil {
 			return err
@@ -168,13 +292,27 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 	}
 	n.Notice(fmt.Sprintf("ingested %d packs", len(imported)))
 
-	// Refs: creates through the WAL publish path (never hand-rolled
+	// Refs: converge through the WAL publish path (never hand-rolled
 	// object writes); annotated tags carry peel; HEAD follows the source
-	// (refs/heads/main fallback per 04 §1.2).
+	// (refs/heads/main fallback per 04 §1.2). Absent refs are created,
+	// tips already at the wanted oid are skipped, and a ref pointing
+	// anywhere else aborts loud (a foreign writer — never overwrite).
+	curTips, curPeeled, curHead, rerr := s.currentRefs(ctx, h)
+	if rerr != nil {
+		return rerr
+	}
 	kept := map[string]bool{}
 	txn := &proto.RefTransaction{}
+	converged := 0
 	for _, r := range refs {
 		kept[r.Name] = true
+		if cur, ok := curTips[r.Name]; ok {
+			if cur == r.Oid && curPeeled[r.Name] == r.Peeled {
+				converged++
+				continue
+			}
+			return &StatusError{Status: 409, Message: fmt.Sprintf("target %s changed during import (ref %s points elsewhere); delete and retry, or pick another name", target, scrubError(r.Name))}
+		}
 		u := &proto.RefUpdate{Name: r.Name, OldOid: format.ZeroHex(), NewOid: r.Oid}
 		if r.Peeled != "" {
 			u.NewPeeled = r.Peeled
@@ -187,13 +325,15 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 	} else if kept["refs/heads/main"] {
 		head = "refs/heads/main"
 	}
-	if head != "" {
+	if head != "" && head != curHead {
 		txn.Updates = append(txn.Updates, &proto.RefUpdate{Name: "HEAD", NewSymbolicTarget: head})
 	}
-	if _, err := h.Publish(ctx, wal.PublishRequest{Txn: txn, Meta: meta}); err != nil {
-		return &StatusError{Status: 500, Message: fmt.Sprintf("publish refs: %v (safe to retry after delete)", scrubError(err.Error()))}
+	if len(txn.Updates) > 0 {
+		if _, err := h.Publish(ctx, wal.PublishRequest{Txn: txn, Meta: meta}); err != nil {
+			return &StatusError{Status: 500, Message: fmt.Sprintf("publish refs: %v (safe to retry)", scrubError(err.Error()))}
+		}
 	}
-	n.Notice(fmt.Sprintf("published %d refs", len(refs)))
+	n.Notice(fmt.Sprintf("published %d refs (%d already converged)", len(refs), converged))
 
 	// Tier-2 base: full bitmap'd repack over the ingested objects. The
 	// repack writes its own idx in the serving copy; publishPack uploads
@@ -240,13 +380,108 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 		HeadSHAs:      headSHAs,
 		Importer:      importer,
 		Format:        formatName,
+		Complete:      true,
 	}
-	if err := writeImportDoc(ctx, s.store, params.Owner, params.Name, doc); err != nil {
-		return err
+	landed, cerr := completeImportDoc(ctx, s.store, params.Owner, params.Name, doc, claimVer)
+	if cerr != nil {
+		return cerr
 	}
 	n.Notice(fmt.Sprintf("imported %s: %d refs, %d packs", target, len(refs), len(imported)))
-	n.setResult(&Outcome{Repo: target, SourceURL: doc.SourceURL, HeadSHAs: headSHAs, Format: formatName, ImportedAt: doc.ImportedAt})
+	n.setResult(&Outcome{Repo: target, SourceURL: landed.SourceURL, HeadSHAs: landed.HeadSHAs, Format: landed.Format, ImportedAt: landed.ImportedAt})
 	return nil
+}
+
+// rollbackImport restores a resumable-or-clean state after a body
+// failure (fix #79): a manifest this run created is deleted (the repo
+// never persists half-imported); the owned claim follows iff the
+// manifest delete landed. A surviving manifest keeps its claim, so the
+// retry resumes; a surviving claim with no manifest resumes from
+// Create. Resume runs never delete (they own neither), and foreign
+// manifests are never touched (only self-created ones delete).
+func (s *Service) rollbackImport(ctx context.Context, target, owner, repo string, ownedManifest, ownedClaim bool, claimVer store.Version) {
+	if ownedManifest && s.reg != nil {
+		if _, derr := s.reg.Delete(ctx, target); derr != nil {
+			return
+		}
+	}
+	if ownedClaim && s.store != nil {
+		_ = deleteImportDoc(ctx, s.store, owner, repo, claimVer)
+	}
+}
+
+// isNotFound reports store-not-found and wal-not-found alike.
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if store.IsNotFound(err) {
+		return true
+	}
+	var we *wal.WalError
+	return errors.As(err, &we) && we.Kind == wal.WalErrNotFound
+}
+
+// packPresent probes wal/<checksum>.pack (probe, don't list — law 4;
+// the resume path skips already-durable packs instead of re-AddPacking
+// them, which would duplicate log entries).
+func (s *Service) packPresent(ctx context.Context, params Params, checksum string) (bool, error) {
+	meta, err := s.store.Head(ctx, store.RepoPrefix(params.Owner, params.Name)+store.PackKey(checksum))
+	if err != nil {
+		if store.IsNotFound(err) {
+			return false, nil
+		}
+		return false, &StatusError{Status: 500, Message: fmt.Sprintf("probe pack %s: %v (safe to retry)", checksum, scrubError(err.Error()))}
+	}
+	return meta != nil, nil
+}
+
+// idxPresent probes wal/<checksum>.idx (same probe discipline).
+func (s *Service) idxPresent(ctx context.Context, params Params, checksum string) (bool, error) {
+	meta, err := s.store.Head(ctx, store.RepoPrefix(params.Owner, params.Name)+store.IdxKey(checksum))
+	if err != nil {
+		if store.IsNotFound(err) {
+			return false, nil
+		}
+		return false, &StatusError{Status: 500, Message: fmt.Sprintf("probe idx %s: %v (safe to retry)", checksum, scrubError(err.Error()))}
+	}
+	return meta != nil, nil
+}
+
+// currentRefs reads the serving copy's ref tips (+ annotated-tag peel
+// and HEAD symref) for the converge: the handle's catchUp at Open has
+// already replayed the manifest's refs phase, so for-each-ref sees the
+// durable state including any prior attempt's publishes.
+func (s *Service) currentRefs(ctx context.Context, h *wal.RepoHandle) (tips, peeled map[string]string, head string, err error) {
+	tips = map[string]string{}
+	peeled = map[string]string{}
+	all, ferr := s.git.ForEachRef(ctx, h.Dir())
+	if ferr != nil {
+		return nil, nil, "", &StatusError{Status: 500, Message: fmt.Sprintf("read refs: %v (safe to retry)", scrubError(ferr.Error()))}
+	}
+	for _, r := range all {
+		tips[r.Name] = r.Oid
+		if r.Peeled != "" {
+			peeled[r.Name] = r.Peeled
+		}
+	}
+	return tips, peeled, HeadTarget(h.Dir()), nil
+}
+
+// ensureIdxUploaded installs the pack's .idx into the serving copy and
+// uploads it iff absent (the resume path for packs whose AddPack landed
+// but whose idx upload never did — the §6.1 gap).
+func (s *Service) ensureIdxUploaded(ctx context.Context, h *wal.RepoHandle, params Params, packPath, checksum string) error {
+	present, err := s.idxPresent(ctx, params, checksum)
+	if err != nil {
+		return err
+	}
+	if present {
+		return nil
+	}
+	if _, err := s.installIdx(ctx, h, packPath, checksum); err != nil {
+		return err
+	}
+	return s.uploadIdx(ctx, params, h, checksum)
 }
 
 // publishPack publishes one pack through AddPack plus the idx discipline
@@ -256,23 +491,42 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 // materializes from the store alone — "warmth", law 4). The .idx upload
 // is create-if-absent; a 412 loser is success (uploadPack's rule).
 func (s *Service) publishPack(ctx context.Context, n *importNarr, h *wal.RepoHandle, params Params, packPath, checksum string, tier uint32, meta map[string]string) error {
+	if _, err := s.installIdx(ctx, h, packPath, checksum); err != nil {
+		return err
+	}
+	if _, err := h.AddPack(ctx, packPath, checksum, tier, meta); err != nil {
+		return &StatusError{Status: 500, Message: fmt.Sprintf("publish pack %s: %v (safe to retry; orphan packs are inert)", checksum, scrubError(err.Error()))}
+	}
+	return s.uploadIdx(ctx, params, h, checksum)
+}
+
+// installIdx installs the pack's .idx sibling into the serving copy
+// (regenerating via git index-pack when the source lacks one) and
+// returns the serving-copy path. Load-bearing twice: LevelServe Sync
+// needs it locally, and a fresh instance materializes from the store
+// alone ("warmth", law 4).
+func (s *Service) installIdx(ctx context.Context, h *wal.RepoHandle, packPath, checksum string) (string, error) {
 	idxSrc, err := s.git.EnsurePackIdx(ctx, packPath)
 	if err != nil {
-		return &StatusError{Status: 502, Message: fmt.Sprintf("pack %s: %v", filepath.Base(packPath), scrubError(err.Error()))}
+		return "", &StatusError{Status: 502, Message: fmt.Sprintf("pack %s: %v", filepath.Base(packPath), scrubError(err.Error()))}
 	}
 	servingIdx := filepath.Join(h.Repo().PackDir(), "pack-"+checksum+".idx")
 	if idxSrc != servingIdx {
 		raw, rerr := os.ReadFile(idxSrc)
 		if rerr != nil {
-			return &StatusError{Status: 500, Message: fmt.Sprintf("read idx: %v", scrubError(rerr.Error()))}
+			return "", &StatusError{Status: 500, Message: fmt.Sprintf("read idx: %v", scrubError(rerr.Error()))}
 		}
 		if werr := os.WriteFile(servingIdx, raw, 0o644); werr != nil {
-			return &StatusError{Status: 500, Message: fmt.Sprintf("install idx: %v", scrubError(werr.Error()))}
+			return "", &StatusError{Status: 500, Message: fmt.Sprintf("install idx: %v", scrubError(werr.Error()))}
 		}
 	}
-	if _, err := h.AddPack(ctx, packPath, checksum, tier, meta); err != nil {
-		return &StatusError{Status: 500, Message: fmt.Sprintf("publish pack %s: %v (safe to retry after delete; orphan packs are inert)", checksum, scrubError(err.Error()))}
-	}
+	return servingIdx, nil
+}
+
+// uploadIdx uploads the serving-copy .idx create-if-absent (a 412 loser
+// is success — uploadPack's rule: the bytes are content-addressed).
+func (s *Service) uploadIdx(ctx context.Context, params Params, h *wal.RepoHandle, checksum string) error {
+	servingIdx := filepath.Join(h.Repo().PackDir(), "pack-"+checksum+".idx")
 	idxBytes, rerr := os.ReadFile(servingIdx)
 	if rerr != nil {
 		return &StatusError{Status: 500, Message: fmt.Sprintf("read idx: %v", scrubError(rerr.Error()))}
