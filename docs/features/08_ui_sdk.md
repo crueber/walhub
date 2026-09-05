@@ -6,14 +6,15 @@
 > component inventory, and the wire-facing SDK surface. Where a feature doc and this doc disagree on an
 > endpoint path, the feature doc owns the wire and this table is corrected in the same change.
 
-Everything reuses the frozen patterns of `docs/go/12_web_ui.md` — reactive core (§2.1), `useData` TTL cache
-(§2.4), `mountStream` SSE helper (§2.5), unified-diff parser (§2.8), hand-rolled router (§2.3) — and the wire
+Everything reuses the frozen patterns of `docs/go/12_web_ui.md` — Solid signals (§2.1), `useData` TTL cache
+(§2.4), `mountStream` SSE helper (§2.5), unified-diff parser (§2.8), `@solidjs/router` (§2.3) — and the wire
 conventions of `docs/go/07_api.md` §2: plain-text errors shown verbatim, arrays `[]` never null, RFC 3339,
-SSE envelope (§6), SWR/ETag vs no-store cache classes (§4). No new npm dependencies (law 1: zero runtime,
-esbuild dev-only). No TypeScript, no framework.
+SSE envelope (§6), SWR/ETag vs no-store cache classes (§4). No new npm dependencies beyond the D-WEB-6
+budget (runtime `solid-js` + `@solidjs/router`; SDK dependency-free). No TypeScript.
 
-> **Adaptation (2026-09-04, D-WEB-6 — see Decisions):** the paragraph above describes the vanilla-ESM
-> SPA. The repo ships the SolidJS SPA (`solid-js` + `@solidjs/router` runtime; `vite` +
+> **Adaptation (2026-09-04, D-WEB-6 — see Decisions; wording fixed for issue #76):** an earlier revision
+> of the paragraph above described the vanilla-ESM SPA (hand-rolled reactive core, hand-rolled router,
+> "no build"). The repo ships the SolidJS SPA (`solid-js` + `@solidjs/router` runtime; `vite` +
 > `vite-plugin-solid` + `@tailwindcss/vite` dev-only; SDK still dependency-free, still no TypeScript).
 > "Reactive core" = Solid signals, "router" = `@solidjs/router`, "no build" = vite build into
 > `web/dist/`; the contract below (routes, components, cache keys, SDK surface, SSE wiring) is
@@ -366,7 +367,7 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
 
 - Code search UI, Discussions, Projects/boards, Actions/CI running (P9) — no pages, no routes, no SDK groups.
 - i18n, themes beyond the existing CSS, dark-mode variants.
-- Mobile/responsive redesign beyond the existing CSS baseline; no CSS framework.
+- Mobile/responsive redesign beyond the existing Tailwind baseline; no additional CSS framework.
 - Real-time collaborative editing (presence, live cursors) — SSE carries state changes, not keystrokes.
 - Offline mode / service workers; the SPA requires a live server for every data layer key.
 - Push notification channels (web push, email digests) — 06's per-user stream and webhooks are the only fan-out surfaces in v1.

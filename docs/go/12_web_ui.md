@@ -1,4 +1,4 @@
-# 12 — Web UI and the `repos.js` SDK (vanilla ES modules)
+# 12 — Web UI and the `repos.js` SDK (SolidJS SPA)
 
 > Source: MASTER_RUST_SPEC.md §10 (web UI + SDK), §8.8/§8.9 (auth flows and setup recipes consumed by the UI), §9 (wire contract) · Status: normative for the walhub Go implementation.
 
@@ -12,32 +12,40 @@
 > §5 testing tier for them), the SSE ownership/cancellation rules (§2.5), and the `/repos.js` SDK
 > contract (§1.1). The old vanilla sources were deleted in the same change (pre-1.0 rule).
 
-The UI is two artifacts in `web/`, served directly by the same Go binary — **standard ECMAScript, no TypeScript, no framework, zero runtime npm dependencies**. One dev-time exception: the SDK is bundled from submodules by esbuild (§1.0) — the SPA itself has no build step:
+The UI is two artifacts in `web/`, served by the same Go binary from the **vite-built `web/dist/`**
+— a **SolidJS SPA** (plain JSX, no TypeScript; runtime npm dependencies exactly `solid-js` +
+`@solidjs/router`; state via Solid signals/stores + context; Tailwind CSS v4 CSS-first, dark mode by
+default, no CDN) plus the dependency-free SDK bundle. Build tooling is dev-time only: `vite` +
+`vite-plugin-solid` + `@tailwindcss/vite` build the SPA; `esbuild` bundles the SDK from submodules (§1.0):
 
 | Artifact | Path | Language | Dependencies |
 |---|---|---|---|
 | SDK | source `web/sdk/src/*.js` → bundle `web/dist/repos.js` | plain ES modules, dependency-free | dev: esbuild only |
-| SPA | `web/src/**`, `web/index.html` | standard ECMAScript (ES modules) | none |
+| SPA | `web/src/**` (`.jsx`), `web/index.html` → `web/dist/` | SolidJS JSX, plain JS (no TypeScript) | runtime: `solid-js`, `@solidjs/router`; dev: `vite`, `vite-plugin-solid`, `@tailwindcss/vite`, `tailwindcss` |
 
-Files are modules: the browser loads them as-is via native `<script type="module">` and an **import map** in `index.html`. Everything — reactive helpers, SSE envelope parsing, diff parsing, markdown-lite, highlighting, progress bar, error tray, ref picker, router — is hand-rolled per the dependency budget (`01_overview.md`, law 1). The SDK is the only way the SPA talks to the server (dogfood rule, §10.2).
+The SPA entry is `web/src/index.jsx` (SolidJS router, `<div id="root">` in `web/index.html`); styling is
+a single CSS-first Tailwind entry (`web/src/ui.css`: `@import "tailwindcss"`, class-based dark variant,
+dark as the shipped default). The SDK is the only way the SPA talks to the server (dogfood rule, §10.2).
 
 ```html
-<!-- web/index.html (excerpt): import map + entry. -->
-<script type="importmap">{"imports":{"repos":"/_ui/sdk/src/index.js","ui/":"/_ui/src/","lib/":"/_ui/src/lib/"}}</script>
-<script type="module" src="/_ui/src/main.js"></script>
+<!-- web/index.html (excerpt): vite entry + dark-by-default shell. -->
+<html lang="en" class="dark">
+<script type="module" src="/src/index.jsx"></script>
+<div id="root"></div>
 ```
 
-Routing is hand-rolled (~60 lines): a `route(pattern)` matcher against `location.pathname` plus a `navigate(path)` that calls `history.pushState` and re-runs the active page's `mount`/`unmount`. Route inventory and lazy loading behavior are UNCHANGED from §2.3; "lazy-loaded" pages are dynamic `import()` of the page module (native, no bundler needed).
+Routing is `@solidjs/router` (`web/src/index.jsx`): the route inventory is
+UNCHANGED from §2.3; pages are static route components (top-level `import`s, one vite bundle — no `lazy()` code-splitting wired up).
 
 ## 1. Artifact A — the SDK (`web/sdk/`)
 
-The SDK is a **wire client**, not an app: plain ES modules, zero runtime imports, no framework, no router.
+The SDK is a **wire client**, not an app: plain ES modules with zero runtime imports (framework-free,
+router-free, no state library).
 It is **authored as submodules** under `web/sdk/src/` (user decision — never one huge file) and a dev-time
 esbuild step bundles the entry module into the single distribution artifact `web/dist/repos.js`, served at
-`/repos.js` (one stable URL, one request for external consumers). The SPA does NOT import the bundle: the
-import map maps `"repos"` to the SOURCE entry (`/_ui/sdk/src/index.js`), so the app and the bundle share
-one source of truth and dev edits need no rebuild. No IIFE/global build and no `.mjs` twin — pre-1.0,
-no-compat: ES modules are the only distribution.
+`/repos.js` (one stable URL, one request for external consumers). The SPA imports the same SDK source
+modules (bundled into the app by vite); app and bundle share one source of truth. No IIFE/global build
+and no `.mjs` twin — pre-1.0, no-compat: ES modules are the only distribution.
 
 ### 1.0 Source layout and the build (normative)
 
@@ -54,19 +62,22 @@ web/sdk/src/
 └── types.js      JSDoc @typedef blocks (§1.1) — editor IntelliSense only, no runtime
 ```
 
-Build (the ONE dev-time tool step; `esbuild` is the single devDependency — runtime budget stays zero):
+Build (SDK leg of `make web`; the SPA leg is `vite build` — devDependencies are `esbuild`, `vite`,
+`vite-plugin-solid`, `@tailwindcss/vite`, `tailwindcss`; runtime budget is `solid-js` + `@solidjs/router`,
+and the SDK itself stays dependency-free):
 
 ```sh
-cd web && pnpm install --frozen-lockfile     # devDependencies only: esbuild
+cd web && pnpm install --frozen-lockfile     # devDependencies: vite + esbuild
 pnpm run build:sdk                            # esbuild sdk/src/index.js --bundle --format=esm \
                                               #   --target=es2022 --minify --outfile=dist/repos.js
 ```
 
-Rules: the bundle is a build ARTIFACT (`web/dist/` is gitignored; a placeholder `web/dist/.keep` is
-committed so `go:embed` always resolves); `make web` runs it and `make build` depends on `make web`;
-tests import the SOURCE modules directly (§5) and need no build; CI runs the bundle smoke test only when
-`dist/repos.js` exists. No hashing/immutable scheme for the bundle — `/repos.js` stays `no-cache` + strong
-ETag so a redeploy is picked up on the next fetch.
+Rules: `web/dist/` is build output (gitignored; created by `make web`, which runs `vite build` for the
+SPA FIRST and then the SDK bundle — `vite.config.mjs` uses `emptyOutDir`, so the order is load-bearing);
+`make build` depends on `make web`; tests import the SOURCE modules directly (§5) and need no build; CI runs
+the bundle smoke test only when `dist/repos.js` exists. Content-hashed vite assets under `dist/assets/*`
+are served immutable; `dist/index.html` and `/repos.js` stay `no-cache` + strong ETag so a redeploy is
+picked up on the next fetch.
 
 ### 1.1 Public surface
 
@@ -150,48 +161,54 @@ Every GET sends `Accept: application/json, text/event-stream`. If the response `
 Hazard: leaked readers and unbounded parallel streams if callers forget to abort.
 Avoidance: every method derives its own `AbortController` from the caller's `signal` and closes the `ReadableStream` reader in a `finally`; `refStream` and task-attach loops return a cancellation function in addition to honoring the signal; at most one popup auth promise per client. Playbook: `13_concurrency.md` (ownership: the caller owns the signal, the SDK owns the reader, the SDK closes it).
 
-## 2. Artifact B — the vanilla SPA (`web/src/**`)
+## 2. Artifact B — the SolidJS SPA (`web/src/**`)
 
-Rewrite of the Rust spec §10.2 SPA on **standard ECMAScript** (user decision — replaces SolidJS, which itself replaced React 19 + react-router 7). No state library, no router library, plain CSS files, no build.
+The §10.2 SPA surface implemented as a **SolidJS SPA** (D-WEB-6 — replaces the earlier vanilla-ESM
+rewrite, which had itself replaced SolidJS; the route inventory and page contracts below are unchanged).
+Reactivity is Solid's own signals/stores + context; routing is `@solidjs/router`; styling is Tailwind v4
+CSS-first (`web/src/ui.css`), dark mode by default; pages are `.jsx` components built by vite.
 
-### 2.1 Reactive core — `web/src/lib/reactive.js` (~40 lines, normative API)
+### 2.1 Reactivity — Solid signals/stores + context (normative API)
 
-A signal-lite primitive set. The whole app's reactivity rests on this contract:
+Solid's primitives ARE the app's reactivity (D-WEB-6 — supersedes the earlier ~40-line hand-rolled
+reactive core, which is deleted with the vanilla sources). The contract the app relies on:
 
 ```js
-export function createSignal(initial)   // → [get, set]; get() reads, set(v) or set(prev => next) writes
-export function createEffect(fn)        // runs fn immediately; re-runs when any signal read inside changes
-export function createMemo(fn)          // derived value, cached until a dependency changes
-export function onCleanup(fn)           // registers teardown for the current computation scope (if any)
-export function createRoot(fn)          // scoped root: fn(dispose); teardown on dispose
+import { createSignal, createEffect, createMemo, onCleanup, createRoot } from "solid-js";
+import { createStore } from "solid-js/store";
 ```
 
 **Reactivity contract:**
 
-- Signals are synchronous pull/push: `set` notifies subscribers synchronously; effects run in registration order after a microtask-free synchronous flush (batching is NOT required; each `set` triggers dependent effects immediately — the app is small enough that consistency beats batching).
-- Dependencies are tracked at read time: any `get()` called while an effect/memo is running becomes a dependency. No explicit dependency lists.
-- `createEffect` inside `createRoot` registers its teardown; pages call `createRoot` in `mount` and `dispose()` in `unmount` — the lifecycle rule of §2.5.
-- Memos are lazy-ish: recomputed on first read after invalidation, not eagerly.
-- No props system, no JSX, no VDOM. UI updates are explicit: effects write to DOM nodes (`el.textContent = …`, `el.classList.toggle(…)`) or re-render a `<template>`-stamped list.
+- Signals update through the reactive graph: `set` marks dependents dirty and Solid flushes effects in topological order afterward — synchronous `set`s batch, so an effect reading two signals set together runs once, not twice.
+- Dependencies are tracked at read time: any signal read while an effect/memo is running becomes a dependency. No explicit dependency lists.
+- `onCleanup` inside a component registers teardown on unmount; long-lived non-component scopes use `createRoot` with explicit `dispose()` — the lifecycle rule of §2.5.
+- Memos are cached derivations: recomputed when a dependency changes, read cheaply otherwise.
+- UI updates are Solid components + JSX: effects write to DOM nodes (`el.textContent = …`, `el.classList.toggle(…)`) or re-render a list; no VDOM diffing beyond Solid's fine-grained updates.
 
-**Templates:** static structure lives in `<template>` elements inside `index.html` / page modules, cloned with `template.content.cloneNode(true)` and wired with a tiny `bind(el, map)` helper (query by `data-*` attribute, attach). Pages stay plain functions: `mount(container, params) → unmount()`.
+**Components:** pages are Solid components (`web/src/pages/*.jsx`) mounted by the router; shared UI is the
+router root (`web/src/App.jsx`: header, nav, theme toggle). Data fetching composes over the §2.4 cache via Solid primitives.
 
-### 2.2 npm dependency budget (DECIDED — zero runtime, one dev tool)
+### 2.2 npm dependency budget (DECIDED — `solid-js` + `@solidjs/router` runtime, D-WEB-6)
 
-Zero **runtime** `package.json` dependencies. Exactly one devDependency: `esbuild` (the §1.0 SDK bundle); no framework packages, no lockfile-heavy toolchain under `web/`. Everything previous packages provided is now hand-rolled or native:
+Runtime `package.json` dependencies are exactly **`solid-js`** + **`@solidjs/router`**; state management is
+Solid's own signals/stores + context (no additional state library). DevDependencies are `vite`,
+`vite-plugin-solid`, `@tailwindcss/vite`, `tailwindcss` (the SPA build) plus `esbuild` (the §1.0 SDK
+bundle). Everything previous packages provided that is NOT back in the budget stays hand-rolled or native:
 
 - **Markdown: hand-rolled markdown-lite (~150 lines).** Covers the preview surface: headings, paragraphs, fenced code blocks, inline code, bold/italic, links + autolinks, GFM tables, blockquotes, lists (nested one level), `hr`, images. No plugins, no AST — a line-based emitter feeding the sanitizer below. Preview fidelity is preview-level (prior decision preserved); the code view shows exact text.
 - **Diff: hand-rolled minimal unified-diff parser in JS (~120 lines).** Unchanged from the previous decision: the server sends a single well-formed `git diff` patch (spec §9.5), so a tiny parser with an explicit grammar (§2.8) is smaller than any library.
 - **Syntax highlighting: none at runtime.** Code blobs render as `<pre><code>` with line numbers via a cheap hand-rolled tokenizer for the common cases (keywords/strings/comments/numbers) driven by a filename-extension → language table; unknown extensions render plain.
 - **Sanitization:** markdown preview renders via a ~40-line allowlist sanitizer (tags `p, h1–h6, ul, ol, li, a, code, pre, em, strong, blockquote, table, thead, tbody, tr, th, td, hr, br, img, span`; attributes `href/src/alt/title` only; `href`/`src` schemes restricted to `http, https, mailto, /, #`). Output set via `innerHTML` of the sanitized string. (`innerHTML` of untrusted strings is prohibited everywhere else.)
-- **CSS:** plain CSS files, one per page group, `<link>`ed from `index.html`; no Tailwind, no CSS-in-JS.
+- **CSS:** Tailwind CSS v4, CSS-first (`@import "tailwindcss"` in `web/src/ui.css`, `@tailwindcss/vite`
+  plugin, no tailwind.config, no CDN); dark mode is the default theme (class on `<html>`, persisted).
 
 ### 2.3 Routes (inventory identical to Rust spec §10.2)
 
 | Route | Page |
 |---|---|
 | `/` | owners (list of owners; each → their repos) |
-| `/api` | API docs page (lazy `import()`) |
+| `/api` | API docs page |
 | `/:owner` | repos of an owner |
 | `/:owner/:repo` | repo shell — tabs Code, Commits, WAL, Settings + tasks overlay |
 | `/:owner/:repo/tree/*` | tree at ref/path |
@@ -202,7 +219,9 @@ Zero **runtime** `package.json` dependencies. Exactly one devDependency: `esbuil
 | `/:owner/:repo/settings` | settings (3 sub-tabs) |
 | `/setup` | Setup UI (§2.10) |
 
-All deep-linkable; every UI route returns the SPA `index.html` from the server. Lazy pages: `const Commit = () => import("./pages/commit.js")` resolved on first navigation and cached in a module-level map — dynamic import is native, nothing to wire up.
+All deep-linkable; every UI route returns the SPA `index.html` from the server. Pages are static route
+components (`component={Commit}` with a top-level `import` in `web/src/index.jsx`), bundled into the app
+by vite — no code-splitting wired up.
 
 ### 2.4 Data layer (hand-rolled)
 
@@ -278,59 +297,45 @@ First-class page backed by the Setup API (specified in `05_config.md`): `GET /ap
 
 ## 3. Serving from the Go binary (embedding contract, byte-compatible)
 
-The SPA is **raw files in `web/`**, embedded directly. The SDK bundle is the one build output, embedded alongside:
+The SPA is the **vite-built `web/dist/`**, embedded into the binary. The SDK bundle is embedded alongside:
 
 ```go
-//go:embed all:web
-var web embed.FS            // index.html, dist/repos.js, sdk/src/**, src/**, css — dist/.keep is committed so the embed resolves on fresh checkouts with no toolchain
+//go:embed all:dist
+var web embed.FS            // dist/index.html, dist/assets/*, dist/repos.js — dist/ is build output,
+//                           created by `make web` (vite SPA first, then the esbuild SDK bundle)
 ```
 
 | Path | Cache behavior |
 |---|---|
-| `/_ui/src/*`, `/_ui/css/*` (immutable-by-convention modules) | `Cache-Control: public, max-age=31536000, immutable` only for `/assets/*` if a hashed copy exists; modules are served `Cache-Control: no-cache` + **strong ETag** + `304` on If-None-Match |
-| `/_ui/index.html` (all UI routes) | `Cache-Control: no-cache` + ETag |
+| `/_ui/assets/*` (content-hashed vite output, immutable) | `Cache-Control: public, max-age=31536000, immutable` |
+| `/_ui/index.html` and every UI route (the SPA shell) | `Cache-Control: no-cache` + ETag |
 | `/repos.js` | `Cache-Control: no-cache` + ETag |
 
-Compression: `gzip` via server middleware for text assets (`text/*`, `application/javascript`, `application/json`, `text/css`) when `Accept-Encoding` contains `gzip` and the body is ≥ 1 KiB — on-the-fly `gzip.Writer` with level 6, `Vary: Accept-Encoding` set, no brotli, no precompressed sibling files (the zero-build rule means nothing generates them). Serving details, route registration under `internal/server`, and the `X-Walgit-Capabilities` edge contract are specified in `06_server_http.md`; the API endpoints themselves in `07_api.md`.
+Compression: `gzip` via server middleware for text assets (`text/*`, `application/javascript`, `application/json`, `text/css`) when `Accept-Encoding` contains `gzip` and the body is ≥ 1 KiB — on-the-fly `gzip.Writer` with level 6, `Vary: Accept-Encoding` set, no brotli, no precompressed sibling files. Serving details, route registration under `internal/server`, and the `X-Walgit-Capabilities` edge contract are specified in `06_server_http.md`; the API endpoints themselves in `07_api.md`.
 
 ## 4. Repository layout
 
 ```
 web/
-├── index.html          ← SPA entry: import map, <template>s, css <link>s
+├── index.html          ← SPA shell source: #root, vite entry (built to dist/index.html)
+├── vite.config.mjs     ← SPA build: solid + tailwindcss plugins, base "/_ui/", outDir dist
 ├── sdk/src/            ← artifact A source, SUBMODULES (§1.0): index/core/errors/sse/auth/repo/admin/types
-├── dist/               ← build output: repos.js (gitignored except .keep placeholder)
-├── package.json        ← devDependencies: esbuild. scripts: build:sdk
-├── src/                ← artifact B: main.js router, pages/*.js, lib/{data,reactive,sse,diff,markdown,sanitize,highlight,setup}.js
-├── css/*.css           ← plain CSS, linked from index.html
-└── test/               ← node --test suites (§5): unit/*.test.js, smoke/*.test.js, helpers/server.js
+├── dist/               ← build output, gitignored: index.html, assets/* (hashed), repos.js
+├── package.json        ← runtime: solid-js, @solidjs/router; dev: vite, vite-plugin-solid, @tailwindcss/vite, tailwindcss, esbuild. scripts: build:ui, build:sdk, build
+├── src/                ← artifact B: index.jsx router, pages/*.jsx, lib/*.js, ui.css (Tailwind entry)
+└── test/               ← node --test suites (§5): unit/*.test.js (incl. smoke), helpers/fetch.js
 ```
 
-The SPA has **no build step** (raw modules in, raw modules served). The SDK has exactly one: esbuild from
-`sdk/src/index.js` to `dist/repos.js` (§1.0); `make web` runs it, `make build` depends on it
-(`16_packaging.md` owns the wiring).
+The SPA is vite-built from `web/src/**` into `web/dist/`; the SDK is esbuild-bundled from
+`sdk/src/index.js` to `dist/repos.js` (§1.0); `make web` runs both (`pnpm run build`),
+`make build` depends on it (`16_packaging.md` owns the wiring).
 
 ## 5. Testing the JS (`node --test`, zero npm test deps)
 
-Runner: Node's built-in test runner — `node --test web/test/unit/ web/test/smoke/`. No jest, no vitest, no dependencies. Logic and DOM are **separated by rule**: every module in `web/src/lib/` except `data.js`'s DOM-adjacent bits must be importable in Node with no `document`/`window` access; DOM wiring lives in `web/src/pages/` and `main.js`.
+Runner: Node's built-in test runner — `node --test web/test/unit/*.test.js`. No jest, no vitest, no test-framework dependencies. Logic and DOM are **separated by rule**: every module in `web/src/lib/` except `data.js`'s DOM-adjacent bits must be importable in Node with no `document`/`window` access; DOM wiring lives in `web/src/pages/` and `index.jsx`.
 
-**Pure (headless-testable) modules:** `sdk/src/*.js` (api client groups, injectable `fetch` + stream shim, envelope parser), `lib/sse.js` (frame parser, one parser shared with `sdk/src/sse.js`), `lib/diff.js`, `lib/markdown.js`, `lib/sanitize.js`, `lib/reactive.js`, `lib/setup.js` (setup form validation rules, mirroring the server), `lib/highlight.js`.
-**DOM-wiring modules (not unit-tested):** `pages/*.js`, `main.js`, the router glue, anything touching `document`/`template`/`location` — exercised by smoke tests instead.
-
-```js
-// web/test/unit/reactive.test.js (skeleton)
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { createSignal, createEffect } from "../../src/lib/reactive.js";
-
-test("effect reruns on signal change", () => {
-  const [get, set] = createSignal(1);
-  let runs = 0;
-  createEffect(() => { get(); runs++; });
-  set(2);
-  assert.equal(runs, 2);
-});
-```
+**Pure (headless-testable) modules:** `sdk/src/*.js` (api client groups, injectable `fetch` + stream shim, envelope parser), `lib/sse.js` (frame parser, one parser shared with `sdk/src/sse.js`), `lib/diff.js`, `lib/markdown.js`, `lib/sanitize.js`, `lib/setup.js` (setup form validation rules, mirroring the server), `lib/highlight.js`.
+**DOM-wiring modules (not unit-tested):** `pages/*.jsx`, `index.jsx`, the router glue, anything touching `document`/`location` — exercised by smoke tests instead.
 
 ```js
 // web/test/unit/sdk-envelope.test.js (skeleton)
@@ -348,16 +353,17 @@ test("SSE envelope → result payload", async () => {
 ```
 
 ```js
-// web/test/smoke/server.test.js (skeleton) — real server binary, real fetch
+// web/test/unit/smoke.test.js (skeleton) — real server binary, real fetch.
+// CI serves a build for this file (WALHUB_TEST_WEB_BASE_URL); locally the file
+// skips when no server is up, so `make test` stays green on a cold machine.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startServer } from "./helpers/server.js";   // spawns ./walhub serve on a temp data-dir, waits for /healthz
+const base = process.env.WALHUB_TEST_WEB_BASE_URL ?? "http://127.0.0.1:8080";
 
 test("pages and SDK serve", async () => {
-  const base = await startServer();
-  const ui = await fetch(`${base}/_ui/`);
+  const ui = await fetch(`${base}/`);
   assert.equal(ui.status, 200);
-  assert.match(await ui.text(), /importmap/);
+  assert.match(await ui.text(), /id="root"/);
   const sdk = await fetch(`${base}/repos.js`);
   assert.equal(sdk.status, 200);
   const mod = await import(sdk.url);                   // the served bytes parse as ESM
@@ -365,15 +371,15 @@ test("pages and SDK serve", async () => {
 });
 ```
 
-`web/test/smoke/setup-api.test.js` (same shape): on a fresh data-dir (D5 defaults boot), `GET /api/v1/setup` → `{access: "open"}`, `POST /api/v1/setup/test` with `{server: {listen: "0.0.0.0:9999"}}` → 200, `PUT /api/v1/setup` → 200 with `restart_required` containing `"server.listen"`. Also required: `web/test/unit/setup.test.js` — table-driven cases for the `lib/setup.js` validators mirroring the server (valid values pass; range/enum/format/cross-field violations fail with the server's message).
+Required alongside it: `web/test/unit/setup-api.test.js` (same shape): on a fresh data-dir (D5 defaults boot), `GET /api/v1/setup` → `{access: "open"}`, `POST /api/v1/setup/test` with `{server: {listen: "0.0.0.0:9999"}}` → 200, `PUT /api/v1/setup` → 200 with `restart_required` containing `"server.listen"`. Also required: `web/test/unit/setup-form.test.js` — table-driven cases for the `lib/setup.js` validators mirroring the server (valid values pass; range/enum/format/cross-field violations fail with the server's message).
 
-Make wiring (D3 — all dev/CI targets are Make targets): `test-web:` runs `node --test web/test/unit/ web/test/smoke/`.
+Make wiring (D3 — all dev/CI targets are Make targets): `test-web:` runs `node --test web/test/unit/*.test.js`.
 
 ## 5b. End-to-end: what an operator does
 
 ```bash
-make build   # go build; web/ is embedded raw — no UI build step exists
-make dev     # ./walhub serve with defaults (D5) — UI at http://127.0.0.1:8080/_ui/, SDK at /repos.js
+make build   # go build; web/dist/ is vite-built first (SPA) + esbuild-bundled (SDK) via `make web`
+make dev     # ./walhub serve with defaults (D5) — UI at http://127.0.0.1:8080/, SDK at /repos.js
 ```
 
 A third-party page embeds the SDK as a module — the only supported integration (no IIFE/global build exists): `<script type="module">import repos from "https://walhub.example.com/repos.js"; repos.configure({token:"…"}).repo("demo/hello").tree("main","").then(console.log)</script>`.
@@ -390,11 +396,11 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
 ## Decisions & deviations from the Rust design
 
 - **SolidJS + Tailwind v4 SPA (2026-09-02, explicit user request — supersedes the two vanilla decisions above; DEVIATIONS.md D-WEB-6).** The user reversed the vanilla-ESM direction: runtime deps exactly `solid-js` + `@solidjs/router`; state via Solid signals/stores/context; Tailwind v4 CSS-first with `@custom-variant dark` and dark as the default theme (class on `<html>`, persisted, no CDN — system font stack); vite + vite-plugin-solid + @tailwindcss/vite build `web/src/**` (JSX, no TypeScript) into `web/dist/` (hashed assets immutable, `index.html` no-cache + ETag — reverts D-WEB-3's caching class for built assets). The SDK remains dependency-free and esbuild-bundled; `/repos.js`, `/repos.mjs`-absence, and the dogfood rule are untouched. Pure modules (diff, markdown-lite, sanitizer, highlighter, setup validation, SSE frame parsing) carried over unchanged.
-- **SPA framework: vanilla standard ECMAScript replaces SolidJS** (D2, explicit user decision — itself a supersession of the earlier SolidJS-over-React decision; wire contract untouched — the SDK defines the wire, the framework does not). Native ES modules + import map, `<template>` + a ~40-line hand-rolled reactive core (§2.1), hand-rolled router. No state library, no JSX, no VDOM.
-- **Superseded — dependency set `solid-js`, `@solidjs/router`, `marked` (+ dev: `vite`, `vite-plugin-solid`, `typescript`)**: the npm budget is now **zero runtime dependencies; exactly one devDependency (`esbuild`, §1.0)**. `solid-js`/`@solidjs/router` are replaced by the §2.1 reactive core + hand-rolled router; `marked` by hand-rolled markdown-lite (§2.1) with unchanged preview-fidelity stance and the same allowlist sanitizer.
-- **Superseded (again) — "there is no build"**: a build step returns, scoped tightly (user decision): the SDK is authored as submodules and bundled by **esbuild** (the single devDependency) into `web/dist/repos.js`; the SPA remains unbuilt raw ES modules; runtime npm budget stays zero.
-- **Superseded — `tsc --noEmit` as required gate; vite/pnpm script chain**: no TypeScript anywhere; the only UI-path tooling is the §1.0 esbuild bundle via `make web`. Gates are `make test-web` (§5) and CI greps (dogfood rule, no-TS rule).
-- **Superseded — vite chunk-hash immutable `/assets` scheme with br+gz precompressed siblings**: modules are served raw with `no-cache` + strong ETag; compression is on-the-fly gzip middleware (§3). The behavioral contract (fresh content on deploy, cheap revalidation, compressed text assets) is preserved.
+- **SPA framework: vanilla standard ECMAScript replaces SolidJS** (D2, explicit user decision — itself a supersession of the earlier SolidJS-over-React decision; wire contract untouched — the SDK defines the wire, the framework does not). Native ES modules + import map, `<template>` + a ~40-line hand-rolled reactive core (§2.1), hand-rolled router. No state library, no JSX, no VDOM. **SUPERSEDED 2026-09-02 by explicit user request (DEVIATIONS.md D-WEB-6, first bullet above) — historical only; the shipped stack is SolidJS + Tailwind, vite-built.**
+- **Superseded — dependency set `solid-js`, `@solidjs/router`, `marked` (+ dev: `vite`, `vite-plugin-solid`, `typescript`)**: the npm budget became **zero runtime dependencies; exactly one devDependency (`esbuild`, §1.0)** — and was then superseded AGAIN by D-WEB-6 (first bullet above): runtime is `solid-js` + `@solidjs/router` again, dev tooling is `vite` + `vite-plugin-solid` + `@tailwindcss/vite` + `tailwindcss` + `esbuild`, still no TypeScript. `marked` stays replaced by hand-rolled markdown-lite with unchanged preview-fidelity stance and the same allowlist sanitizer.
+- **Superseded (again) — "there is no build"**: a build step returned, scoped tightly (user decision): the SDK is authored as submodules and bundled by **esbuild** into `web/dist/repos.js` — and, under D-WEB-6, the SPA is built by **vite** into `web/dist/` (first bullet above). Nothing is served unbuilt anymore.
+- **Superseded — `tsc --noEmit` as required gate; vite/pnpm script chain**: no TypeScript anywhere — that half stands. The toolchain half is superseded by D-WEB-6: the UI-path tooling is `pnpm run build` (vite SPA + esbuild SDK) via `make web`. Gates are `make test-web` (§5) and CI greps (dogfood rule, no-TS rule).
+- **Superseded — vite chunk-hash immutable `/assets` scheme with br+gz precompressed siblings**: under the vanilla reading, modules were served raw with `no-cache` + strong ETag and compression was on-the-fly gzip middleware (§3) — REVERTED by D-WEB-6: content-hashed `dist/assets/*` are immutable again (first bullet above); on-the-fly gzip middleware (§3) is preserved. The behavioral contract (fresh content on deploy, cheap revalidation, compressed text assets) is preserved throughout.
 - **Hand-rolled unified-diff parser instead of a diff package** — unchanged: the server emits one well-formed `git diff` shape; a ~120-line parser with the §2.8 grammar beats any library on size and control.
 - **No shiki: hand-rolled mini tokenizer for code blobs** — unchanged: tinted code is an acceptable trade.
 - **Markdown sanitizer hand-rolled (~40 lines allowlist)** — unchanged: render surface is self-produced markdown, attack surface is small and enumerated.

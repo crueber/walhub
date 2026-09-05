@@ -308,7 +308,7 @@ RouteProvider (Seam 1).
 
 ## 9. UI and SDK
 
-Pages (vanilla ESM SPA per 12_web_ui.md; `<template>` + reactive core, `useData` 5 s TTL):
+Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
 
 - **Org settings** `/:org/settings` — sub-tabs profile / members / teams / invitations; member rows
   inline role `<select>`; invite form shows the returned accept link.
@@ -342,6 +342,8 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
 (CAS: GET → absent → PUT Create) — one writer shape; the task's only job is untouched repos, 412 = no-op.
 
 ## Decisions
+
+- **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §9 page sketches read in the shipped idiom: Solid components under `@solidjs/router`, state via Solid signals/stores, Tailwind styling. Routes, gating, and wire shapes are unchanged.
 
 - **Principal = email; profiles are the only identity objects here** — keys/tokens/sessions stay auth-provider territory (Seam 2); this doc owns zero credentials.
 - **`visibility` lives in `access.json`** — one CAS'd object already admin-write and read at every authz decision; a separate visibility object would double the read.

@@ -108,7 +108,7 @@ r := chi.NewRouter()                     // §2.2: middlewares Use'd first
 // health & SDK
 r.Get("/healthz", s.healthz)
 r.Get("/readyz", s.readyz)
-r.Get("/repos.js", s.sdk("repos.js"))    // one plain-ESM SDK file (divergence D2)
+r.Get("/repos.js", s.sdk("repos.js"))    // the esbuild-bundled SDK file (12_web_ui.md §1.0; D-WEB-6)
 r.Get("/services/public/install.sh", s.installSh)
 r.Get("/services/public/ca.pem", s.caPem)
 r.Get("/api/v1", api.Discovery)          // public-informational
@@ -156,7 +156,7 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 |---|---|---|
 | GET | `/healthz` | `{status:"ok", version}` |
 | GET | `/readyz` | §10.2 |
-| GET | `/repos.js` | plain-ESM SDK (single file, divergence D2); no-cache + strong ETag + precompressed |
+| GET | `/repos.js` | esbuild-bundled SDK (single file, 12_web_ui.md §1.0; D-WEB-6); no-cache + strong ETag + precompressed |
 | GET | `/services/public/install.sh[?repo=]` | `text/x-shellscript`, `Cache-Control: public, max-age=300` |
 | GET | `/services/public/ca.pem` | only when this host terminates TLS itself; else 404 |
 | * | `/services/public/*` (other) | deliberate 404 |
@@ -169,7 +169,7 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/setup` | setup UI shell (plain ESM page, D2); assets at `/setup/assets/*` |
+| GET | `/setup` | setup UI shell (SolidJS SPA route, D-WEB-6); assets at `/_ui/assets/*` |
 | GET | `/api/v1/setup` | full config schema + effective values + file state + validation errors |
 | POST | `/api/v1/setup/test` | validate a proposed config without saving |
 | PUT | `/api/v1/setup` | validate + atomically write `<data-dir>/walhub.toml` |
@@ -221,7 +221,7 @@ Hazard: the wildcard dispatch runs on every unmatched request (scanners, probes)
 
 ### 3.4 Bootstrap & setup (zero-config first run)
 
-`internal/setup` owns the schema description for the UI, validate-for-save, the atomic write of `<data-dir>/walhub.toml`, and bootstrap-mode detection; `internal/server` wires its HTTP surface (`s.setupAPI`, `s.setupUI`); `web/src/setup*` is the frontend page (plain ESM, D2).
+`internal/setup` owns the schema description for the UI, validate-for-save, the atomic write of `<data-dir>/walhub.toml`, and bootstrap-mode detection; `internal/server` wires its HTTP surface (`s.setupAPI`, `s.setupUI`); `web/src/pages/Setup.jsx` is the frontend page (SolidJS SPA route, D-WEB-6).
 
 **Boot flow decision tree (normative):**
 
@@ -230,7 +230,7 @@ locate data dir (--data-dir flag > WALHUB_DATA_DIR env; default ~/.local/share/w
 ├─ no <data-dir>/walhub.toml → boot with the first-run defaults (below) + a LOUD setup banner in the logs on every start
 ├─ config file present, parses + validates → normal boot (§10.4)
 └─ config file present but INVALID (parse or validation errors) → SETUP-ONLY MODE:
-     only /setup, /setup/assets/*, /api/v1/setup, /api/v1/setup/test, PUT /api/v1/setup,
+     only /setup, /_ui/*, /api/v1/setup, /api/v1/setup/test, PUT /api/v1/setup,
      /healthz, /readyz, and /services/public/* answer; everything else → 503 plain text
      with a pointer to /setup. The UI shows the exact errors; a saved fix takes effect
      after a restart (the process stays in setup-only mode until restarted).
@@ -248,7 +248,7 @@ locate data dir (--data-dir flag > WALHUB_DATA_DIR env; default ~/.local/share/w
 
 **Data-dir layout:** `<data-dir>/store/` (object store), `<data-dir>/cache/` (prewarm, LFS spool, TLS), `<data-dir>/walhub.toml` (saved by setup Save; the only config file the server reads).
 
-**Setup UI:** `GET /setup` serves the page; `GET /setup/assets/*` serves its ESM/CSS (embedded `fs.FS`, precompressed, like `/_ui`). The page groups ALL config keys by section with current effective values (merging defaults ← file ← env), validates client-side, and Saves via the API.
+**Setup UI:** `GET /setup` serves the SPA shell; its JS/CSS come from `/_ui/assets/*` (the vite bundle, immutable). The page groups ALL config keys by section with current effective values (merging defaults ← file ← env), validates client-side, and Saves via the API.
 
 **Setup API:**
 
@@ -620,7 +620,7 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
 **Divergence (2026-08-31):**
 
 - **D1 — Router is chi.** `github.com/go-chi/chi/v5` (core package ONLY — no `chi/cors`, no `chi/middleware`) replaces Go 1.22 ServeMux patterns (§3.1). Route inventory and handler behavior are unchanged; only registration/matching mechanics moved to chi. CORS stays hand-rolled (§2.3). Backend dependency budget is now exactly: `chi/v5`, `BurntSushi/toml`, `golang.org/x/net` (h2c).
-- **D2 — Frontend is standard ECMAScript.** No TypeScript, no framework, no bundler. The SDK is ONE plain-ESM `web/sdk/repos.js`; the `/repos.mjs` route and the esbuild twin are gone (§3.1, §3.3). `web/src/setup*` is a plain-ESM setup page. Vite/solid-js/marked/esbuild are not used anywhere in this server's surfaces.
+- **D2 — Frontend was standard ECMAScript (SUPERSEDED 2026-09-02 by explicit user request — DEVIATIONS.md D-WEB-6).** Historical: no TypeScript, no framework, no bundler; the SDK was ONE plain-ESM `web/sdk/repos.js`; the `/repos.mjs` route and the esbuild twin were gone (§3.1, §3.3); `web/src/setup*` was a plain-ESM setup page. **Shipped stack:** SolidJS SPA (`solid-js` + `@solidjs/router` runtime, Tailwind v4, vite-built into `web/dist/`; Setup page at `web/src/pages/Setup.jsx`); the SDK stays dependency-free, authored as submodules (`web/sdk/src/*.js`) and esbuild-bundled to `web/dist/repos.js`.
 - **D5 — Zero-config first run.** Missing config boots with built-in defaults (`0.0.0.0:8080`, filesystem store under `<data-dir>/store`, auth `none`, `auto_create_on_push`) instead of fatal exit 2 — the old step-2 "missing config file is a fatal exit 2" of the startup order is superseded by the bootstrap leg (§10.4, §3.4).
 - **D6 — Setup UI + API first-class.** `/setup` + `/api/v1/setup{,/test}` with the open-while-unsecured access rule and the SETUP-ONLY MODE for invalid configs (§3.4, new `internal/setup` package).
 - **Supersession (deliberate, fail-closed):** the Rust rule that auth `mode = "none"` is refused unless the listen address is loopback is REPLACED — auth-none is allowed on any bind with loud warnings (logs, setup UI, `readyz`) and zero refused requests (§3.4, §8.1, §10.4 step 8).

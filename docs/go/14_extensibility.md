@@ -24,7 +24,7 @@ internal/api          # JSON API + SSE + route registry (Seam 1)
 internal/events       # WAL tailing + sinks (Seam 4)
 internal/maintain     # maintainer loop, task kinds (Seam 5), fsck
 internal/config       # walhub.toml + env overrides
-web/                  # vanilla ES-module SPA + SDK, zero npm deps (doc 12)
+web/                  # SolidJS SPA + SDK (D-WEB-6: solid-js + @solidjs/router, Tailwind v4, vite-built; doc 12)
 ```
 
 Extensions live in their own packages (`internal/issues`, `internal/pulls`, …) and depend **only on seam interfaces plus frozen types** — never on each other's internals.
@@ -453,6 +453,12 @@ curl -N -H "Authorization: Bearer $WALHUB_TOKEN" \
 
 ## Decisions & deviations from the Rust design
 
+- **Frontend is a SolidJS + Tailwind v4 SPA (2026-09-02, explicit user request — DEVIATIONS.md D-WEB-6).**
+  The `web/` line in the package tree above supersedes the earlier vanilla-ESM reading: runtime npm
+  dependencies are exactly `solid-js` + `@solidjs/router` (Solid signals/stores + context, no additional
+  state library), styling is Tailwind v4 CSS-first (dark by default, no CDN), still no TypeScript, and
+  the SPA is vite-built into `web/dist/` (the SDK stays dependency-free and esbuild-bundled). No seam
+  or frozen contract is affected — extensions never touch `web/` internals.
 - **New document, no Rust counterpart:** the Rust codebase hard-codes its webhook sink, three auth modes, and fixed ops; walhub makes the same frozen contracts but registers everything else. Rationale: the user's modularity requirement, without weakening a single frozen contract.
 - **`events/cursor.json` generalizes to `events/cursors/<sink>.json`** (one per sink, same body shape). Rationale: a slow sink must not hold back others; at-least-once and dedup semantics are unchanged, and the key family is explicitly added to the frozen overwritable list here.
 - **Bridge serialization weakens from process-wide to per-repo** (single-flight per repo). Rationale: seq-ordered events plus the CAS'd cursor make cross-repo ordering meaningless (§12.2 already says "nothing across repos"); per-repo parallelism is free correctness-preserving concurrency.

@@ -11,14 +11,14 @@ Test framework: stdlib `testing` only. No testify, no gomock (dependency policy,
 
 | Tier | Command | What runs | Bar |
 |---|---|---|---|
-| fast | `make test` → `go test -short -count=1 ./...` + `node --test web/test/` | every unit/integration test honoring `testing.Short()`; hermetic: in-memory store, `t.TempDir()` caches, the real `git` binary; plus the headless JS tests (§6.5) | < 1 min; a watchdog (`timeout 300`) wraps the Go recipe |
+| fast | `make test` → `go test -short -count=1 ./...` + `node --test web/test/unit/*.test.js` | every unit/integration test honoring `testing.Short()`; hermetic: in-memory store, `t.TempDir()` caches, the real `git` binary; plus the headless JS tests (§6.5) | < 1 min; a watchdog (`timeout 300`) wraps the Go recipe |
 | store contract | `make contract` (memory + filesystem, always); `make contract-s3` / `make contract-gcs` for credentialed backends | ONE suite `contract.Run(store, prefix)` (§2) | every case green on every backend: memory + filesystem on every run, S3/GCS whenever their env is set |
 | sim | `make sim` → `go test -count=1 -timeout 15m ./internal/sim/...` | fault-injection over one truth store, one `FaultStore` **per instance link** (§3, §4) | the consistency proof; deterministic under a seed |
 | e2e | `make e2e` → `go test -count=1 ./internal/e2e/...` | real git clients against the running walhub server (smart HTTP, receive/upload-pack, bundle-uri, WAL) **plus the first-run/bootstrap lifecycle scenarios (§5.3)** plus the collaboration full chain (§5.4) | ~60 s; run whenever git-path, boot-path, or collab-path code changes |
 | lint/vet | `make vet` → `go vet ./...` && `gofmt -l` && `go build ./...` | Go equivalent of Rust's `-D warnings`: `go vet` output, any `gofmt -l` line, or any build warning fails the gate | zero findings |
 | race | `make race` → `go test -race -short -count=1 ./...` | full fast tier under the race detector (§6) | zero races |
 | cover | `make cover` | per-package statement coverage of every `internal/...` package, ≥ 95% fail-under (§7) | CI-enforced; new code lands with tests (D7) |
-| web | `make test-web` → `node --test web/test/` | headless JS logic tests + fetch-based server smoke (§6.5) | zero npm dependencies; wired into `make test` and CI |
+| web | `make test-web` → `node --test web/test/unit/*.test.js` | headless JS logic tests + fetch-based server smoke (§6.5) | zero npm dependencies; wired into `make test` and CI |
 | slow | `make test-slow` → `go test -run 'Slow' -count=1 ./...` | `TestSlow*` soaks: 20 k-ref push, 466 k-ref refs render, long bundle chains | nightly-ish; never in fast |
 
 Rules carried over verbatim from §17:
@@ -293,13 +293,18 @@ Mandatory for every PR that touches shared state:
 3. **Deadlock canary** — the test binary runs under `timeout 300` (fast tier); a suite that deadlocks fails the recipe, it does not hang CI silently. Additionally the watchdog pattern from §3.4 of the Rust spec is unit-tested: a stalled-tick detector test asserts the "async runtime stalled" warning fires when a tick is > 2.5 s late (simulated with a fake clock).
 4. **Every goroutine has a shutdown path** — linters cannot check this; review does. The sim's restart machinery is the executable proof that instances shut down on context cancel.
 
-### 6.5 Web/JS test tier (Divergence D2)
+### 6.5 Web/JS test tier (Divergence D2; frontend stack per D-WEB-6)
 
-The frontend is vanilla standard ECMAScript (12_web_ui.md): no TypeScript, no framework, no bundler, zero npm dependencies — so its tests need none either. Runner: Node's built-in `node --test` (Node ≥ 20), invoked by `make test-web`, wired into `make test` and `ci`. `web/package.json` is a dev-only manifest (`{"type": "module"}`, no `dependencies`) purely so Node loads the ESM sources directly.
+The frontend is the SolidJS SPA (12_web_ui.md: `solid-js` + `@solidjs/router` runtime, Tailwind v4,
+vite-built; still no TypeScript) — and its tests still need no test framework: runner is Node's built-in
+`node --test` (Node ≥ 20), invoked by `make test-web`, wired into `make test` and `ci`.
+`web/package.json` carries the runtime (`solid-js`, `@solidjs/router`) plus the build devDependencies
+(`vite`, `vite-plugin-solid`, `@tailwindcss/vite`, `tailwindcss`, `esbuild`); the test files import
+`node:test`/`node:assert` and the ESM sources directly.
 
-- **Logic/DOM split, normative.** Every testable module — the SDK client groups in `web/sdk/src/*.js` (plain ESM submodules; the shipped `dist/repos.js` is the esbuild bundle of them, §1.0 of 12_web_ui.md), the SSE parser, the diff parser, markdown-lite, the ~40-line reactive helpers, the setup-form logic — is a pure ES module with zero DOM access; DOM glue lives in entry modules that import them. This is what makes the tier headless: tests import by relative path (import maps are a browser-only mechanism and never appear in test imports).
-- **`web/test/*.test.js`** — unit cases with `node:assert` in the Go tier's style: repos.js request shaping and error mapping, SSE event framing, diff parsing, markdown-lite, reactive-helper subscriptions, setup-form validation against the `/api/v1/setup` schema. Same assertion discipline: `if (got !== want) throw`.
-- **`web/test/smoke.test.js`** — fetch-based server smoke against `WALHUB_TEST_WEB_BASE_URL` (default `http://127.0.0.1:8080`): `/` serves the app, `/setup` serves, `/api/v1/setup` returns the schema JSON, one SDK call round-trips, and — when `web/dist/repos.js` exists (always in CI and after `make web`) — the BUNDLE imports and its exports match `sdk/src/index.js`. Server absent → the smoke cases skip, so `make test` still passes on a cold machine; CI always has a server up for them. Unit tests import the SOURCE modules directly, so testing needs no build; `make web` produces only the shipped artifact.
+- **Logic/DOM split, normative.** Every testable module — the SDK client groups in `web/sdk/src/*.js` (plain ESM submodules; the shipped `dist/repos.js` is the esbuild bundle of them, §1.0 of 12_web_ui.md), the SSE parser, the diff parser, markdown-lite, the setup-form logic — is a pure ES module with zero DOM access; DOM glue lives in entry modules that import them. This is what makes the tier headless: tests import by relative path (vite aliases are a build-time mechanism and never appear in test imports).
+- **`web/test/unit/*.test.js`** — unit cases with `node:assert` in the Go tier's style: repos.js request shaping and error mapping, SSE event framing, diff parsing, markdown-lite, setup-form validation against the `/api/v1/setup` schema. Same assertion discipline: `if (got !== want) throw`.
+- **`web/test/unit/smoke.test.js`** — fetch-based server smoke against `WALHUB_TEST_WEB_BASE_URL` (default `http://127.0.0.1:8080`): `/` serves the app, `/setup` serves, `/api/v1/setup` returns the schema JSON, one SDK call round-trips, and — when `web/dist/repos.js` exists (always in CI and after `make web`) — the BUNDLE imports and its exports match `sdk/src/index.js`. Server absent → the smoke cases skip, so `make test` still passes on a cold machine; CI always has a server up for them. Unit tests import the SOURCE modules directly, so testing needs no build; `make web` produces only the shipped artifact.
 
 ---
 
@@ -311,8 +316,8 @@ All dev/CI entry points are Make targets (Divergence D3); there is no justfile, 
 T5  := $(shell command -v timeout >/dev/null 2>&1 && echo "timeout 300" || command -v gtimeout >/dev/null 2>&1 && echo "gtimeout 300")
 T15 := $(shell command -v timeout >/dev/null 2>&1 && echo "timeout 900" || command -v gtimeout >/dev/null 2>&1 && echo "gtimeout 900")
 
-web: ## bundle the SDK from submodules: esbuild sdk/src/index.js → dist/repos.js (12_web_ui.md §1.0)
-	pnpm --dir web run build:sdk
+web: ## build the UI: vite (SPA → dist/) then esbuild (SDK → dist/repos.js) (12_web_ui.md §1.0)
+	pnpm --dir web run build
 
 build: web ## compile everything (the SDK bundle is a build dependency)
 	go build ./...
@@ -327,7 +332,7 @@ test: test-go test-web ## fast tier = Go fast tests + web tests
 test-go: ## fast Go tier: hermetic, < 1 min, watchdog-wrapped
 	$(T5) go test -short -count=1 ./...
 test-web: ## headless JS logic tests + fetch smoke (§6.5); tests import source, no build needed
-	node --test web/test/
+	node --test web/test/unit/*.test.js
 race: ## full fast tier under the race detector
 	$(T15) go test -race -short -count=1 ./...
 
@@ -377,7 +382,7 @@ ci: ## what CI runs, in order (fast first, proof last)
 	$(MAKE) vet test race cover contract e2e
 ```
 
-Normative notes: the old `lint` target is `vet` (same three commands); the old `dev-local` recipe became `make dev`, which needs no `--config` because a bare serve boots with the D5 zero-config defaults — export the rustfs dev creds (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` as in `contract-s3`) before `dev` when the store backend is S3. `test-web` runs `node --test web/test/` (§6.5) and is part of `make test` — a Go-only green build is not green. S3/GCS contract targets stay env-gated; memory + filesystem (`contract`) never skip. `cover` discovers packages via `go list ./internal/...`, so every collaboration package (identity, issues, pulls, review, checks, notify, releases, social) is gated at ≥ 95% with no target change — the 09 integration added no new tier, only new suites inside the existing ones (§5.4) plus the `cmd/`-side push fence (outside the gate by §7.1). The `sim` tier has no package yet (`internal/sim` does not exist); until it lands, `e2e` is the end-to-end proof `ci` runs.
+Normative notes: the old `lint` target is `vet` (same three commands); the old `dev-local` recipe became `make dev`, which needs no `--config` because a bare serve boots with the D5 zero-config defaults — export the rustfs dev creds (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` as in `contract-s3`) before `dev` when the store backend is S3. `test-web` runs `node --test web/test/unit/*.test.js` (§6.5) and is part of `make test` — a Go-only green build is not green. S3/GCS contract targets stay env-gated; memory + filesystem (`contract`) never skip. `cover` discovers packages via `go list ./internal/...`, so every collaboration package (identity, issues, pulls, review, checks, notify, releases, social) is gated at ≥ 95% with no target change — the 09 integration added no new tier, only new suites inside the existing ones (§5.4) plus the `cmd/`-side push fence (outside the gate by §7.1). The `sim` tier has no package yet (`internal/sim` does not exist); until it lands, `e2e` is the end-to-end proof `ci` runs.
 
 ### 7.1 The coverage gate (Divergence D7)
 
@@ -418,5 +423,5 @@ The rewrite copies CODE behavior (§20); each of these gets an explicit assertio
 - **D3 — Make replaces just.** Every dev/CI entry point is a Make target (§7: `build`, `fmt`, `vet`, `test`, `race`, `cover`, `test-slow`, `sim`, `contract`, `contract-fs`, `contract-s3`, `contract-gcs`, `e2e`, `image`, `dev`, `dev-store`, `dev-store-stop`, `clean`, `ci`); the justfile is deleted. The old `lint` target is renamed `vet` (supersedes the `just lint` wording above; commands unchanged), and `just dev-local` becomes `make dev`. Rationale: make is ubiquitous — no extra tool to install for a first contribution — and the watchdog/watch-what-you-run semantics port one-to-one.
 - **D7 — Coverage gate.** `make cover` enforces **≥ 95% statement coverage on every `internal/...` package** (`cmd/` excluded), via per-package `-coverprofile` + the `covergate` checker (§7.1), CI-gated. Review bar is near 100%: new code lands with tests — table-driven `httptest` for every handler. This is new (the Rust spec had no coverage gate); it does not supersede any prior decision.
 - **D4 — Filesystem store joins the contract suite as an always-run backend.** `TestContract_Filesystem` runs wherever `TestContract_Memory` runs, no env needed; S3 and GCS stay env-gated (`WALHUB_TEST_S3_ENDPOINT`, `WALHUB_TEST_GCS_BUCKET`) and CI exercises S3 via the rustfs container. Supplements (does not supersede) the `TestContract_LeaseSteal` decision — the suite's "one suite, every backend" rule now has four backends, two of them unconditional.
-- **D2 — Web/JS tests without a toolchain (amended).** The JS tier is `node --test` over headless pure-ESM logic modules plus fetch-based smoke tests (§6.5), wired into `make test` and `ci`; tests import source (`sdk/src/*.js`) and need no build — the only build (`make web`, esbuild) produces the shipped `dist/repos.js`. Amended when the user directed a build step for the modular SDK (2026-08-31, second pass).
+- **D2 — Web/JS tests without a test framework (amended; frontend stack per D-WEB-6).** The JS tier is `node --test` over headless pure-ESM logic modules plus fetch-based smoke tests (§6.5), wired into `make test` and `ci`; tests import source (`sdk/src/*.js`, `src/lib/*.js`) and need no build — the builds (`make web`: vite SPA + esbuild `dist/repos.js`) produce only shipped artifacts. Amended when the user directed a build step for the modular SDK (2026-08-31, second pass); the D-WEB-6 SolidJS + Tailwind port (2026-09-02, DEVIATIONS.md) keeps this tier unchanged — no test framework, no TypeScript.
 - **D5/D6 — Bootstrap and setup lifecycle is e2e-tested.** Four scenarios (§5.3: no-config defaults boot; invalid-config setup-only 503s; setup save → restart → normal; setup API auth matrix incl. `WALHUB_SETUP_TOKEN`) run in `make e2e` and CI. New; no prior decision affected.

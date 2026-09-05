@@ -271,7 +271,7 @@ introduced by this feature.
 
 ## 8. UI and SDK (shapes for 08)
 
-Pages (vanilla ESM SPA, `web/src/pages/`, patterns of `12_web_ui.md`; 08 owns the route table):
+Pages (SolidJS SPA, `web/src/pages/*.jsx`, patterns of `12_web_ui.md`; 08 owns the route table):
 
 | Route | Page |
 |---|---|
@@ -297,6 +297,8 @@ cap 2 GiB; ≤ 100-PR autodraft). The P7 example "release asset imports" has its
 server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not register it.
 
 ## Decisions
+
+- **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §8 page sketches read in the shipped idiom: `.jsx` pages under `web/src/pages/`, shared components per 08. Routes and wire shapes are unchanged.
 
 - Releases are always bound to an existing tag (no tag-less drafts): validation is decidable at
   receive-time via `RepoView.Resolve`; GitHub's claim-a-future-tag drafts need a tag-creation event

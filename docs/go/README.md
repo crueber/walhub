@@ -3,7 +3,7 @@
 The Go rewrite of the walgit design. The behavioral reference is
 [`../MASTER_RUST_SPEC.md`](../MASTER_RUST_SPEC.md) (the Rust implementation's complete specification);
 this directory specifies **how to build walhub in Go** — and where walhub deliberately diverges: a Chi
-router, a zero-dependency vanilla-ECMAScript frontend, zero-config first run with a setup UI, a local
+router, a SolidJS SPA frontend (D-WEB-6), zero-config first run with a setup UI, a local
 filesystem store backend, and Make-based tooling. Everything not listed as a divergence follows the Rust
 spec exactly.
 
@@ -15,9 +15,13 @@ order that matches your work.
 1. **Minimal dependencies.** The backend allows exactly three third-party modules: `github.com/go-chi/chi/v5`
    (the router — core only, all middleware hand-rolled), `github.com/BurntSushi/toml` (config), and
    `golang.org/x/net` (h2c). Everything else is stdlib or hand-rolled (SigV4, GCS JSON API, protobuf wire
-   codec, JWKS, SSE, Prometheus exposition, LRU, singleflight). The frontend budget: **zero** npm runtime
-   dependencies — vanilla ES modules, no TypeScript, no framework; the single dev-time tool is esbuild,
-   bundling the modular SDK sources into the shipped `repos.js` (the SPA is unbuilt). If a design reaches
+   codec, JWKS, SSE, Prometheus exposition, LRU, singleflight). The frontend budget (amended
+   2026-09-02 by explicit user request — DEVIATIONS.md D-WEB-6): runtime npm dependencies are exactly
+   `solid-js` + `@solidjs/router`; state management is Solid's own signals/stores + context (no additional
+   state library); styling is Tailwind CSS v4 (CSS-first `@import "tailwindcss"` + `@tailwindcss/vite`,
+   no config file, no CDN, dark mode by default); still no TypeScript (plain JSX/JS). Dev-time tooling:
+   `vite` + `vite-plugin-solid` + `@tailwindcss/vite` build the SPA into `web/dist/`, and `esbuild`
+   bundles the modular SDK (`web/sdk/src/*.js`) into the shipped `web/dist/repos.js`. If a design reaches
    for another dependency, it is a spec bug.
 2. **Goroutines for performance, zero deadlocks.** I/O parallelism everywhere (striped uploads, batch
    workers, SSE fan-out, sweeps); every concurrency recommendation carries a `### Concurrency` subsection
@@ -55,7 +59,7 @@ readable by walhub and vice versa.
 | [`10_maintenance.md`](10_maintenance.md) | Maintainer loop, compaction, base rebuild, follow, fsck/repair | `internal/maintain` |
 | [`17_ssh.md`](17_ssh.md) | SSH git transport: x/crypto/ssh listener, key auth, command framing | `internal/sshd` |
 | [`11_config_cli.md`](11_config_cli.md) | Every config key (optional file), per-repo settings, env overrides, CLI reference | `internal/config`, `cmd/walhub` |
-| [`12_web_ui.md`](12_web_ui.md) | Vanilla-ESM SPA + SDK (zero npm deps, no build), **setup UI**, `node --test` suite | `web/` |
+| [`12_web_ui.md`](12_web_ui.md) | SolidJS SPA + SDK (D-WEB-6), **setup UI**, `node --test` suite | `web/` |
 | [`13_concurrency.md`](13_concurrency.md) | **The concurrency playbook** — referenced by every other doc | cross-cutting |
 | [`14_extensibility.md`](14_extensibility.md) | Core-vs-extension seams; issues/PRs/multi-user roadmap | cross-cutting |
 | [`15_testing.md`](15_testing.md) | Test pyramid, store contract, FaultStore sim, coverage gate, Make targets | `internal/*/…test` |
@@ -78,3 +82,11 @@ Always:                13 concurrency (read before writing any goroutine), 14 ex
 
 `04` and `05` are the heart; `13` is the law. A feature branch per doc works: each doc names its package,
 its interfaces, and its tests, and the cross-references are by file name.
+
+## Decisions & deviations from the Rust design
+
+- **Frontend is a SolidJS + Tailwind v4 SPA (2026-09-02, explicit user request — DEVIATIONS.md D-WEB-6).**
+  Law 1's frontend budget above supersedes the earlier zero-dependency vanilla-ESM reading: runtime npm
+  dependencies are exactly `solid-js` + `@solidjs/router`, styling is Tailwind v4 CSS-first (dark by
+  default, no CDN), still no TypeScript, and the SPA is vite-built into `web/dist/` (the SDK stays
+  dependency-free and esbuild-bundled).
