@@ -150,7 +150,10 @@ type HookSpec struct {
 	InsecureTLS *bool    `json:"insecure_tls,omitempty"`
 }
 
-// CreateHook validates and Creates one hook config (admin).
+// CreateHook validates and Creates one hook config (admin). Beyond
+// maxHooks the create is refused with ErrConflict (→ 409 plain text):
+// the per-repo sweep/delivery cost is O(hooks), so the cap is the
+// per-repo sweep bound (issue #156).
 func (s *Service) CreateHook(ctx context.Context, owner, repo string, actor string, spec HookSpec) (*Hook, error) {
 	if spec.URL == nil || *spec.URL == "" {
 		return nil, fmt.Errorf("%w: url is required", ErrInvalid)
@@ -160,6 +163,11 @@ func (s *Service) CreateHook(ctx context.Context, owner, repo string, actor stri
 	}
 	if err := validateHookEvents(spec.Events); err != nil {
 		return nil, err
+	}
+	if existing, err := s.ListHooks(ctx, owner, repo); err != nil {
+		return nil, err
+	} else if len(existing) >= s.maxHooks() {
+		return nil, fmt.Errorf("%w: webhook limit reached (%d per repo)", ErrConflict, s.maxHooks())
 	}
 	now := s.nowUTC().Format(dateTimeFmt)
 	h := &Hook{
@@ -192,11 +200,30 @@ func (s *Service) CreateHook(ctx context.Context, owner, repo string, actor stri
 			if err := s.putCreate(ctx, HookKey(owner, repo, h.ID), raw); err != nil {
 				return nil, err
 			}
+			s.armHookSweep(owner, repo, h.Active)
 			return h, nil
 		}
 		return nil, err
 	}
+	s.armHookSweep(owner, repo, h.Active)
 	return h, nil
+}
+
+// armHookSweep marks the repo for a delivery pass after a new or
+// newly-activated hook: the sweep gate skips repos whose allocator
+// did not advance, so without the mark a hook created onto a quiet
+// repo's backlog would wait for the next emission. The wake is the
+// fast path; the pending mark is the backstop for a coalesced drop.
+// Inactive hooks need no delivery and arm nothing.
+func (s *Service) armHookSweep(owner, repo string, active bool) {
+	if !active {
+		return
+	}
+	key := owner + "/" + repo
+	s.hookMu.Lock()
+	s.hookPending[key] = true
+	s.hookMu.Unlock()
+	s.wakeRepo(key)
 }
 
 // GetHook loads one hook; nil when absent.
@@ -289,10 +316,17 @@ func (s *Service) PatchHook(ctx context.Context, owner, repo, id string, spec Ho
 	if err != nil {
 		return nil, err
 	}
+	if result != nil && spec.Active != nil && *spec.Active {
+		// (Re-)activation may leave a backlog behind a cursor that the
+		// sweep gate considers drained — arm a pass like a create.
+		s.armHookSweep(owner, repo, true)
+	}
 	return result, nil
 }
 
-// DeleteHook removes the config, cursor, and deliveries (admin).
+// DeleteHook removes the config, cursor, and deliveries (admin). The
+// sweep watermarks for the repo are dropped too: with no hooks left
+// there is nothing to re-pass, and a later create re-arms from zero.
 func (s *Service) DeleteHook(ctx context.Context, owner, repo, id string) error {
 	if s.GetHook(ctx, owner, repo, id) == nil {
 		return fmt.Errorf("%w: unknown webhook", ErrNotFound)
@@ -302,6 +336,10 @@ func (s *Service) DeleteHook(ctx context.Context, owner, repo, id string) error 
 	}
 	_ = s.Store.Delete(ctx, CursorKey(owner, repo, id), "")
 	_ = s.Store.Delete(ctx, DeliveriesKey(owner, repo, id), "")
+	s.hookMu.Lock()
+	delete(s.hookSeen, owner+"/"+repo)
+	delete(s.hookPending, owner+"/"+repo)
+	s.hookMu.Unlock()
 	return nil
 }
 
@@ -351,21 +389,32 @@ func hookClientFor(h *Hook) *http.Client {
 // sequentially per hook, parallel across hooks (cap 8). The slot is
 // acquired BEFORE spawning (issue #153), so at most FanoutParallel
 // delivery goroutines exist at any instant no matter how many hooks are
-// configured. Best-effort per hook; a failed hook holds back only its
+// configured (and the count itself is capped by maxHooks, issue #156).
+// Best-effort per hook; a failed hook holds back only its
 // own cursor. On ctx cancel the loop stops launching but still waits
 // for in-flight hooks (they observe ctx and fail fast, issue #154).
+// The pass ends with the sweep completion check (one head read): the
+// watermarks it stores are what let the minute sweep skip this repo
+// until new activity or a lagging cursor (issue #156).
 func (s *Service) DeliverRepo(ctx context.Context, owner, repo string) {
 	hooks, err := s.ListHooks(ctx, owner, repo)
 	if err != nil {
 		return
 	}
+	active := []*Hook{}
+	for _, h := range hooks {
+		if h.Active {
+			active = append(active, h)
+		}
+	}
 	sem := make(chan struct{}, FanoutParallel)
 	var wg sync.WaitGroup
+	// delivered tracks the per-hook watermark (last seq delivered or
+	// filter-advanced); guarded by mu, never held across I/O.
+	var mu sync.Mutex
+	delivered := map[string]int{}
 loop:
-	for _, h := range hooks {
-		if !h.Active {
-			continue
-		}
+	for _, h := range active {
 		h := h
 		select {
 		case sem <- struct{}{}:
@@ -376,18 +425,60 @@ loop:
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			s.deliverHook(ctx, owner, repo, h)
+			last := s.deliverHook(ctx, owner, repo, h)
+			mu.Lock()
+			delivered[h.ID] = last
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
+	s.finishHookPass(ctx, owner, repo, active, delivered)
+}
+
+// finishHookPass stores the sweep watermarks for a completed pass: one
+// head read decides whether the next minute sweep must re-pass. pending
+// is true while any active hook lags the head (POST failure or a
+// 256-event backlog — the at-least-once retry contract is unchanged,
+// only the repos that need it pay for it). seen advances to the head
+// regardless: pending covers the shortfall, so the next sweep with no
+// new activity re-passes exactly once per lagging repo. A head-read
+// failure keeps pending (retry next pass — fail closed toward
+// delivery). No active hooks: drained by definition. hookMu is held
+// for the map update only, never across store calls.
+func (s *Service) finishHookPass(ctx context.Context, owner, repo string, active []*Hook, delivered map[string]int) {
+	key := owner + "/" + repo
+	raw, _, err := s.getJSON(ctx, CollabStateKey(owner, repo))
+	pending := true
+	head := 0
+	if err == nil && raw != nil {
+		var st CollabState
+		if jerr := json.Unmarshal(raw, &st); jerr == nil {
+			head = st.NextSeq
+			pending = false
+			for _, h := range active {
+				if delivered[h.ID] < head {
+					pending = true
+					break
+				}
+			}
+		}
+	}
+	s.hookMu.Lock()
+	if head > s.hookSeen[key] {
+		s.hookSeen[key] = head
+	}
+	s.hookPending[key] = pending
+	s.hookMu.Unlock()
 }
 
 // deliverHook scans collab-events/ from the hook's cursor and POSTs each
-// matching event; the cursor CAS-advances past the delivered prefix only.
-// At-least-once: a crash or lost CAS redelivers (consumers dedup on
-// X-Walgit-Delivery). A compacted gap counts and continues from the
-// oldest readable event (honest-gap semantics).
-func (s *Service) deliverHook(ctx context.Context, owner, repo string, h *Hook) {
+// matching event; the cursor CAS-advances past the delivered prefix only,
+// and the returned watermark (highest seq delivered or filter-advanced)
+// feeds the sweep completion check. At-least-once: a crash or lost CAS
+// redelivers (consumers dedup on X-Walgit-Delivery). A compacted gap
+// counts and continues from the oldest readable event (honest-gap
+// semantics).
+func (s *Service) deliverHook(ctx context.Context, owner, repo string, h *Hook) int {
 	cursor := s.readCursor(ctx, owner, repo, h.ID)
 	seq := cursor + 1
 	lastDelivered := cursor
@@ -422,6 +513,7 @@ func (s *Service) deliverHook(ctx context.Context, owner, repo string, h *Hook) 
 	if lastDelivered > cursor {
 		s.advanceCursor(ctx, owner, repo, h.ID, lastDelivered)
 	}
+	return lastDelivered
 }
 
 // probeAhead looks for the next existing event within a small window past

@@ -94,6 +94,12 @@ const (
 	MaxTeamFanout = 100
 	// MaxDeliveries bounds the per-hook deliveries ring (§1.4: 25).
 	MaxDeliveries = 25
+	// DefaultMaxHooksPerRepo caps hook configs per repo (§1.4). The sweep
+	// and delivery cost per repo is O(hooks), so the cap is also the
+	// per-repo sweep bound (issue #156). Overridable per Service via
+	// MaxHooks (composition leaves zero for the default — no config key
+	// in v1, same convention as RetentionDays).
+	DefaultMaxHooksPerRepo = 20
 	// DefaultRetentionDays drops read notifications past this age (§9).
 	DefaultRetentionDays = 30
 	// CollabEventsFloorDays deletes activity events below the minimum
@@ -411,6 +417,12 @@ type Service struct {
 	// leaves zero for the default — no config key in v1, see Decisions).
 	RetentionDays int
 
+	// MaxHooks caps hook configs per repo (CreateHook refuses beyond it
+	// with ErrConflict). Zero or negative selects
+	// DefaultMaxHooksPerRepo; tests set a small positive cap. No config
+	// key in v1 (same convention as RetentionDays).
+	MaxHooks int
+
 	// Logger receives emission drop/failure records (06 §4: no silent
 	// drops — every reserve/append failure path logs). Nil → discard
 	// (same convention as the events bridge Logger).
@@ -446,6 +458,18 @@ type Service struct {
 	// store or network call.
 	fanoutMu   sync.Mutex
 	fanoutSeen map[string]int
+
+	// hookSeen is the webhooks-sweep high-water (issue #156): repo →
+	// highest collab_state NextSeq the sweep has scheduled a pass for.
+	// hookPending marks repos whose last pass left cursors behind the
+	// head (POST failure or a 256-event backlog) plus repos with a new
+	// or newly-activated hook not yet delivered. Both are in-memory
+	// only (a restart re-passes every repo with activity once, then the
+	// watermarks rebuild); guarded by hookMu, never held across a
+	// store or network call.
+	hookMu      sync.Mutex
+	hookSeen    map[string]int
+	hookPending map[string]bool
 }
 
 // New builds a Service over st.
@@ -456,7 +480,8 @@ func New(st store.ObjectStore, roles RoleService) *Service {
 		ubus: newUserBus(), rbus: newRepoBus(),
 		tasks: newTaskTable(), wake: make(chan string, 64),
 		fanoutSeen: map[string]int{},
-		drainCtx:   drainCtx, drainCancel: drainCancel,
+		hookSeen:   map[string]int{}, hookPending: map[string]bool{},
+		drainCtx: drainCtx, drainCancel: drainCancel,
 	}
 }
 
@@ -503,6 +528,16 @@ func (s *Service) retentionDays() int {
 		return s.RetentionDays
 	}
 	return DefaultRetentionDays
+}
+
+// maxHooks resolves the per-repo hook cap: a positive MaxHooks wins,
+// anything else selects the documented default (a misconfigured
+// non-positive value fails open to the default, never to uncapped).
+func (s *Service) maxHooks() int {
+	if s.MaxHooks > 0 {
+		return s.MaxHooks
+	}
+	return DefaultMaxHooksPerRepo
 }
 
 // --- role helpers (same shape as internal/issues) ----------------------------

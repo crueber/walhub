@@ -267,19 +267,108 @@ func (s *Service) eachRepo(ctx context.Context, fn func(owner, repo string)) {
 	})
 }
 
-// sweepWebhooks delivers every repo with hooks. Hook-bearing repos are
-// found by the shared discovery (maintainer path — collab-events/ exists
-// only where fan-out ran; hook configs without events deliver nothing,
-// so they need no pass).
+// sweepWebhooks schedules a delivery pass only where one is due
+// (issue #156): the old full scan LISTed + GET every hook of every
+// repo every minute — O(total hooks) forever, uncapped. Now a repo
+// costs exactly one collab_state GET per pass unless its allocator
+// advanced since the last scheduled pass or its last pass left work
+// behind (pending), in which case one capped hook scan follows (the
+// per-repo cap in CreateHook bounds that scan). Repos without an
+// activity log never reach the hook LIST (hook configs without events
+// deliver nothing, so they need no pass). Wake-ups after each
+// fanned-out event stay the fast path; this sweep is the backstop for
+// coalesced wake drops and failed deliveries.
+//
+// ### Concurrency
+//
+// Hazard: the sweep racing a concurrent delivery pass on the same repo
+// (missed event between the sweep's gate read and the pass's head
+// check). Avoidance: no coordination — both directions fail toward a
+// pass. The gate advances seen only to what it scheduled, and every
+// pass (wake- or sweep-driven) re-derives pending from its own
+// watermarks plus a fresh head read (finishHookPass), so an event
+// landing in any interleaving either advances NextSeq past seen or
+// trips pending. A restart starts with empty watermarks: every repo
+// with activity passes once, then the high-water rebuilds. hookMu
+// guards only the two maps and is never held across a store call.
 func (s *Service) sweepWebhooks(ctx context.Context) {
+	observed := map[string]bool{}
 	s.eachRepo(ctx, func(owner, repo string) {
-		// Only pass repos that actually have hooks.
-		hooks, err := s.ListHooks(ctx, owner, repo)
-		if err != nil || len(hooks) == 0 {
-			return
-		}
-		s.StartWebhooks(ctx, owner+"/"+repo)
+		key := owner + "/" + repo
+		observed[key] = true
+		s.sweepWebhooksRepo(ctx, owner, repo, key)
 	})
+	// Drop watermarks for deleted repos (bounded by the enumeration).
+	s.hookMu.Lock()
+	for key := range s.hookSeen {
+		if !observed[key] {
+			delete(s.hookSeen, key)
+			delete(s.hookPending, key)
+		}
+	}
+	s.hookMu.Unlock()
+}
+
+// sweepWebhooksRepo gates one repo's minute pass: one collab_state GET,
+// then a hook scan only when due. seen advances only past NextSeq
+// values actually scheduled (a LIST error schedules nothing — the next
+// pass retries); pending is never cleared here, only by a completed
+// pass (finishHookPass) or DeleteHook, so a hook created between the
+// LIST and the gate cannot be disarmed by this pass.
+func (s *Service) sweepWebhooksRepo(ctx context.Context, owner, repo, key string) {
+	raw, _, err := s.getJSON(ctx, CollabStateKey(owner, repo))
+	if err != nil || raw == nil {
+		return // no activity log: hooks (if any) have nothing to deliver
+	}
+	var st CollabState
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return
+	}
+	s.hookMu.Lock()
+	seen := s.hookSeen[key]
+	pending := s.hookPending[key]
+	s.hookMu.Unlock()
+	if st.NextSeq <= seen && !pending {
+		return // quiet and drained: this one GET was the whole pass
+	}
+	// Only pass repos that actually have hooks.
+	hooks, err := s.ListHooks(ctx, owner, repo)
+	if err != nil || len(hooks) == 0 {
+		if err == nil {
+			// No hooks: advance seen and disarm. Disarming is safe:
+			// every create arms AFTER its putCreate, so a hook this
+			// LIST missed arms after it (its mark survives), and a
+			// hook it saw would have made len > 0. A delete on a
+			// peer instance that left this one's mark stale heals
+			// here instead of LISTing every minute forever.
+			s.hookMu.Lock()
+			if st.NextSeq > s.hookSeen[key] {
+				s.hookSeen[key] = st.NextSeq
+			}
+			s.hookPending[key] = false
+			s.hookMu.Unlock()
+		}
+		return
+	}
+	active := false
+	for _, h := range hooks {
+		if h.Active {
+			active = true
+			break
+		}
+	}
+	if !active && !pending {
+		// All hooks parked: no delivery to run. seen still advances —
+		// inactivity is inactivity. pending is left alone: only an
+		// active create/activation arms it, and those re-check.
+		s.hookMu.Lock()
+		if st.NextSeq > s.hookSeen[key] {
+			s.hookSeen[key] = st.NextSeq
+		}
+		s.hookMu.Unlock()
+		return
+	}
+	s.StartWebhooks(ctx, key)
 }
 
 // StartWebhooks starts (or joins) the webhooks task for repo. The
