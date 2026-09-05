@@ -3,14 +3,19 @@
 // (GET /api/v1/owners, GET /api/v1/owners/{owner}/repos — 07 §8); the page
 // adds newest-first ordering, per-section caps (lib/owners.js), and the
 // intro card. Star counts ride the shared `social:{o}/{r}` cache entries
-// (<StarCount>, lib/stars.js). No new endpoint, no new SDK method
-// (issues #117, #137).
+// (<StarCount>, lib/stars.js) and last-active stamps the shared
+// `activity:{o}/{r}` entries (<ActivityStamp>, lib/activity.js — latest
+// commit date via `GET …/commits?n=1`, one GET per repo, placeholder-first
+// so first paint never blocks; see the component header for the rejected
+// alternatives). Rows share <RepoRow> with `/:owner` (Repos.jsx) in a
+// responsive two-column grid (one column on narrow widths). No new
+// endpoint, no new SDK method (issues #117, #137, #142).
 
 import repos from "../../sdk/src/index.js";
 import { For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useData } from "../lib/data.js";
-import StarCount from "../components/StarCount.jsx";
+import { RepoRow } from "./Repos.jsx";
 import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
@@ -23,7 +28,7 @@ function OwnerSection(props) {
   const [getRepos] = useData(`repos:${props.owner}`, () => repos.owners.repos(props.owner));
   return (
     <section class="py-3">
-      <h3 class="text-sm font-semibold">
+      <h3 class="text-base font-bold tracking-tight">
         <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}`}>
           {props.owner}
         </A>
@@ -42,19 +47,9 @@ function OwnerSection(props) {
           return (
             <>
               <Show when={shown.length > 0} fallback={<p class="muted mt-1 text-sm">nothing under {props.owner} yet</p>}>
-                <ul class="mt-1 space-y-1">
+                <ul class="mt-1 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
                   <For each={shown}>
-                    {(n) => (
-                      <li class="flex flex-wrap items-baseline gap-x-1.5">
-                        <A
-                          class="text-sm text-emerald-700 hover:underline dark:text-emerald-400"
-                          href={`/${props.owner}/${n}`}
-                        >
-                          {props.owner}/{n}
-                        </A>
-                        <StarCount full={`${props.owner}/${n}`} />
-                      </li>
-                    )}
+                    {(n) => <RepoRow owner={props.owner} name={n} />}
                   </For>
                 </ul>
               </Show>

@@ -1,13 +1,35 @@
 // web/src/pages/Repos.jsx — route "/:owner": the owner's repositories
 // (uncapped — the owners page folds overflow behind a "+N more →" link
 // here). Star counts ride the shared `social:{o}/{r}` cache entries
-// (<StarCount>, lib/stars.js), so counts fetched on `/` are reused here.
+// (<StarCount>, lib/stars.js) and last-active stamps the shared
+// `activity:{o}/{r}` entries (<ActivityStamp>, lib/activity.js), so rows
+// fetched on `/` are reused here. The shared <RepoRow> (link + star count
+// + last-active stamp) renders in a responsive two-column grid, one column
+// on narrow widths — the owners page builds on the same component.
 
 import repos from "../../sdk/src/index.js";
 import { For, Show } from "solid-js";
 import { useParams, A } from "@solidjs/router";
 import { useData } from "../lib/data.js";
 import StarCount from "../components/StarCount.jsx";
+import ActivityStamp from "../components/ActivityStamp.jsx";
+
+/** One repo row: link + star count + last-active stamp. Shared with `/`. */
+export function RepoRow(props) {
+  const full = () => `${props.owner}/${props.name}`;
+  return (
+    <li class="flex flex-wrap items-baseline gap-x-1.5">
+      <A
+        class="text-emerald-700 hover:underline dark:text-emerald-400"
+        href={`/${full()}`}
+      >
+        {full()}
+      </A>
+      <StarCount full={full()} />
+      <ActivityStamp full={full()} />
+    </li>
+  );
+}
 
 export default function Repos() {
   const params = useParams();
@@ -29,19 +51,9 @@ export default function Repos() {
               when={names().length > 0}
               fallback={<p class="muted">nothing under {owner()} yet</p>}
             >
-              <ul class="space-y-1">
+              <ul class="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
                 <For each={names()}>
-                  {(n) => (
-                    <li class="flex flex-wrap items-baseline gap-x-1.5">
-                      <A
-                        class="text-emerald-700 hover:underline dark:text-emerald-400"
-                        href={`/${owner()}/${n}`}
-                      >
-                        {owner()}/{n}
-                      </A>
-                      <StarCount full={`${owner()}/${n}`} />
-                    </li>
-                  )}
+                  {(n) => <RepoRow owner={owner()} name={n} />}
                 </For>
               </ul>
             </Show>
