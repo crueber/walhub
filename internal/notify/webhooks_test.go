@@ -351,6 +351,139 @@ func TestWebhookInsecureTLS(t *testing.T) {
 	}
 }
 
+// TestScrubDeliveryError pins the scrubber unit contract: userinfo,
+// sensitive query values, fragments, KV secrets, and bearer material go;
+// hosts, paths, and non-secret keys stay; clean errors keep exact text.
+func TestScrubDeliveryError(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		leaks []string
+		keeps []string
+		exact bool // output must equal input byte-for-byte
+	}{
+		{
+			name:  "transport-userinfo",
+			in:    `Post "https://hookuser:hookpass123@hooks.example/h": dial tcp 10.0.0.1:443: connect: connection refused`,
+			leaks: []string{"hookuser", "hookpass123"},
+			keeps: []string{"hooks.example", "/h", "connection refused"},
+		},
+		{
+			name:  "user-only-info",
+			in:    `Post "https://hookuser@hooks.example/h": dial tcp: i/o timeout`,
+			leaks: []string{"hookuser"},
+			keeps: []string{"hooks.example"},
+		},
+		{
+			name:  "query-token",
+			in:    `Post "https://hooks.example/h?token=toksecret456&next=ok": dial tcp: connection refused`,
+			leaks: []string{"toksecret456"},
+			keeps: []string{"hooks.example", "next=ok", "token="},
+		},
+		{
+			name:  "secret-query-and-fragment",
+			in:    `Post "https://hooks.example/h?client_secret=shhhTop#fragTok": context deadline exceeded`,
+			leaks: []string{"shhhTop", "fragTok"},
+			keeps: []string{"hooks.example", "client_secret="},
+		},
+		{
+			name:  "kv-secrets",
+			in:    `clone failed: secret=topsecret api_key=AKIA123 password=hunter2 token=tok123 rest`,
+			leaks: []string{"topsecret", "AKIA123", "hunter2", "tok123"},
+			keeps: []string{"secret=[redacted]", "password=[redacted]", "rest"},
+		},
+		{
+			name:  "bearer",
+			in:    `bad response: Bearer abcDEF123.-_~+/= rest`,
+			leaks: []string{"abcDEF123"},
+			keeps: []string{"Bearer [redacted]", "rest"},
+		},
+		{
+			name:  "hostless-match-untouched",
+			in:    `fetch https://?x=1 failed`,
+			keeps: []string{`fetch https://?x=1 failed`},
+			exact: true,
+		},
+		{
+			name:  "clean-error-untouched",
+			in:    `dial tcp 127.0.0.1:1: connect: connection refused`,
+			keeps: []string{`dial tcp 127.0.0.1:1: connect: connection refused`},
+			exact: true,
+		},
+		{
+			name:  "clean-url-untouched",
+			in:    `Post "https://hooks.example/h?next=ok": dial tcp: connection refused`,
+			keeps: []string{`Post "https://hooks.example/h?next=ok": dial tcp: connection refused`},
+			exact: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := scrubDeliveryError(tc.in)
+			if tc.exact && got != tc.in {
+				t.Fatalf("clean error rewritten:\n got %q\nwant %q", got, tc.in)
+			}
+			for _, leak := range tc.leaks {
+				if strings.Contains(got, leak) {
+					t.Fatalf("leaked %q in %q", leak, got)
+				}
+			}
+			for _, keep := range tc.keeps {
+				if !strings.Contains(got, keep) {
+					t.Fatalf("missing %q in %q", keep, got)
+				}
+			}
+		})
+	}
+}
+
+// TestWebhookDeliveryErrorScrubbed pins issue #90 end to end: a failing
+// delivery against a userinfo URL must not persist the password (or any
+// token material) into the deliveries ring.
+func TestWebhookDeliveryErrorScrubbed(t *testing.T) {
+	x := newHarness(t)
+	// Dead loopback port: dial refuses, and the transport error echoes
+	// the request URL — userinfo, password, and query token included.
+	rawURL := "http://hookuser:hookpass123@127.0.0.1:1/hook?token=toksecret456&next=ok"
+	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
+		URL: strPtr(rawURL),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := x.svc.reserveSeq(ctx(), "acme", "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := ActivityEvent{Seq: seq, Repo: "acme/repo", Action: "commented", Kind: "issue", At: x.now.Format(dateTimeFmt)}
+	if err := x.svc.putCreate(ctx(), ActivityKey("acme", "repo", seq), encode(ev)); err != nil {
+		t.Fatal(err)
+	}
+	x.svc.DeliverRepo(ctx(), "acme", "repo")
+	if cur := x.svc.readCursor(ctx(), "acme", "repo", hk.ID); cur != 0 {
+		t.Fatalf("failed cursor advanced to %d", cur)
+	}
+	d := x.svc.ReadDeliveries(ctx(), "acme", "repo", hk.ID)
+	if len(d.Entries) != 1 {
+		t.Fatalf("deliveries = %+v", d.Entries)
+	}
+	got := d.Entries[0].Error
+	if got == "" {
+		t.Fatal("expected a stored transport error")
+	}
+	for _, leak := range []string{"hookpass123", "hookuser", "toksecret456"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("delivery error leaked %q: %q", leak, got)
+		}
+	}
+	// Diagnostic shape survives: host and non-secret query key retained.
+	for _, keep := range []string{"127.0.0.1", "next=ok"} {
+		if !strings.Contains(got, keep) {
+			t.Fatalf("over-scrubbed delivery error, missing %q: %q", keep, got)
+		}
+	}
+}
+
 func testTime() (t time.Time) { return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC) }
 
 // testReader yields deterministic entropy distinct per i.

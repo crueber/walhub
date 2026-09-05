@@ -31,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -476,12 +477,111 @@ func (s *Service) advanceCursor(ctx context.Context, owner, repo, id string, seq
 	})
 }
 
+// deliveryURLRe finds http(s) URLs inside error text (Go transport
+// errors echo the request URL, e.g. Post "https://user:pass@host/hook").
+var deliveryURLRe = regexp.MustCompile(`https?://\S+`)
+
+// bearerRe finds Authorization-style bearer material in free text.
+var bearerRe = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9\-._~+/=]+`)
+
+// sensitiveDeliveryParams are query keys whose values are credential
+// material and must not persist in the deliveries ring.
+var sensitiveDeliveryParams = map[string]bool{
+	"token": true, "access_token": true, "auth_token": true,
+	"api_key": true, "apikey": true, "key": true,
+	"secret": true, "client_secret": true,
+	"password": true, "passwd": true,
+}
+
+// scrubDeliveryError strips credential material from a delivery failure
+// before it lands in the deliveries ring (bucket + admin API): hook URLs
+// may carry userinfo (basic-auth sinks) or query tokens, and both echo
+// in transport errors. The ring keeps the diagnosable shape (host, path,
+// non-secret query keys, status text) with secrets replaced. Pure
+// function, no shared state — safe under the DeliverRepo fan-out.
+func scrubDeliveryError(s string) string {
+	out := deliveryURLRe.ReplaceAllStringFunc(s, scrubDeliveryURL)
+	out = redactDeliveryKV(out, "password=")
+	out = redactDeliveryKV(out, "passwd=")
+	out = redactDeliveryKV(out, "secret=")
+	out = redactDeliveryKV(out, "client_secret=")
+	out = redactDeliveryKV(out, "token=")
+	out = redactDeliveryKV(out, "access_token=")
+	out = redactDeliveryKV(out, "api_key=")
+	out = redactDeliveryKV(out, "apikey=")
+	return bearerRe.ReplaceAllString(out, "Bearer [redacted]")
+}
+
+// scrubDeliveryURL drops userinfo, redacts sensitive query values, and
+// clears the fragment of one URL found in error text; returns the match
+// untouched when there is nothing credential-shaped to remove (so clean
+// errors keep their exact text).
+func scrubDeliveryURL(m string) string {
+	// Peel trailing error-text punctuation that is not part of the URL.
+	core := strings.TrimRight(m, "\"',.;:!?()<>")
+	tail := m[len(core):]
+	u, err := url.Parse(core)
+	if err != nil || u.Host == "" {
+		return m
+	}
+	changed := false
+	if u.User != nil {
+		u.User = nil
+		changed = true
+	}
+	if u.RawQuery != "" {
+		if q, err := url.ParseQuery(u.RawQuery); err == nil {
+			qChanged := false
+			for k := range q {
+				if sensitiveDeliveryParams[strings.ToLower(k)] {
+					q[k] = []string{"[redacted]"}
+					qChanged = true
+				}
+			}
+			if qChanged {
+				u.RawQuery = q.Encode()
+				changed = true
+			}
+		}
+	}
+	if u.Fragment != "" {
+		u.Fragment = ""
+		changed = true
+	}
+	if !changed {
+		return m
+	}
+	return u.String() + tail
+}
+
+// redactDeliveryKV cuts `key<value>` at the next delimiter (whitespace,
+// quote, semicolon, comma, ampersand, closing bracket, or end of string).
+func redactDeliveryKV(s, key string) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(s, key)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i+len(key)])
+		b.WriteString("[redacted]")
+		j := i + len(key)
+		for j < len(s) && !strings.ContainsRune(" \t\n\r\"';,&)]>", rune(s[j])) {
+			j++
+		}
+		s = s[j:]
+	}
+}
+
 // recordDelivery appends one row to the last-25 ring (debugging surface,
-// not durability — best-effort CAS).
+// not durability — best-effort CAS). Transport errors are scrubbed of
+// credential material before storing: they echo the hook URL, which may
+// carry userinfo or query tokens.
 func (s *Service) recordDelivery(ctx context.Context, owner, repo, id string, ev *ActivityEvent, status int, derr error) {
 	entry := DeliveryEntry{Seq: ev.Seq, Event: ev.Action, Status: status, At: s.nowUTC().Format(dateTimeFmt)}
 	if derr != nil {
-		entry.Error = derr.Error()
+		entry.Error = scrubDeliveryError(derr.Error())
 	}
 	_, _ = s.casUpdate(ctx, DeliveriesKey(owner, repo, id), 3, func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		var d DeliveriesDoc
