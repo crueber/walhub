@@ -342,7 +342,11 @@ export default function Issue() {
               </div>
               <div class="grid gap-1 p-3">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Milestone</span>
-                <span>{t().milestone ?? "none"}</span>
+                <div class="flex flex-wrap gap-1">
+                  <Show when={t().milestone} fallback={<span class="muted text-xs">none</span>}>
+                    {(m) => <span>{m()}</span>}
+                  </Show>
+                </div>
               </div>
             </section>
           )}
