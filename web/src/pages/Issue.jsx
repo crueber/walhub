@@ -58,10 +58,21 @@ export default function Issue() {
   // both are newest-first, so concatenation stays ordered).
   const [getExtra, setExtra] = createSignal([]);
   const [getExtraMore, setExtraMore] = createSignal(undefined);
+  // Sidebar mutation guards are per-issue state (see the navigation reset
+  // below); declared here so the reset effect never reads them early.
+  const [getLabelBusy, setLabelBusy] = createSignal(new Set());
+  const [getMilestoneBusy, setMilestoneBusy] = createSignal(false);
   createEffect(() => {
     num(); // reset accumulation when navigating between issues
     setExtra([]);
     setExtraMore(undefined);
+    // Per-issue mutation state must not leak across issues (#143): the
+    // route reuses this component instance, so an in-flight sidebar
+    // mutation on the previous issue would otherwise leave the new
+    // issue's picker triple-guarded (busy early-return swallows the
+    // click with no PATCH and no tray entry — the menu just closes).
+    setLabelBusy(new Set());
+    setMilestoneBusy(false);
   });
 
   const reload = () => {
@@ -196,20 +207,25 @@ export default function Issue() {
   // invalidate reconcile — the same bump pattern as the reaction chips
   // above. One in-flight mutation per label name: a double-click computes
   // the same array twice (idempotent), and the button disables while its
-  // key is busy so the pair cannot happen from one client.
-  const [getLabelBusy, setLabelBusy] = createSignal(new Set());
+  // key is busy so the pair cannot happen from one client. The target
+  // issue is pinned up front (#143): same-route navigation reuses this
+  // component, so the async tail must reconcile the mutated issue even
+  // when the view has moved on.
   const toggleLabelApply = async (name) => {
     const k = String(name).toLowerCase();
     if (getLabelBusy().has(k)) return;
+    const n = num();
+    const ck = key();
     setLabelBusy((prev) => new Set(prev).add(k));
     const next = toggleLabel(thread()?.labels ?? [], name);
-    patchCached(key(), (view) => ({ ...view, thread: { ...view.thread, labels: next } }));
+    patchCached(ck, (view) => ({ ...view, thread: { ...view.thread, labels: next } }));
     try {
-      await ctx.repoClient.issues.patch(num(), { labels: next });
+      await ctx.repoClient.issues.patch(n, { labels: next });
     } catch (err) {
       reportError(err, "issue-labels");
     }
-    reload();
+    if (num() === n) reload();
+    else invalidate(ck);
     setLabelBusy((prev) => {
       const nx = new Set(prev);
       nx.delete(k);
@@ -223,20 +239,24 @@ export default function Issue() {
   // in-flight mutation at a time (the picker disables while busy), and
   // no-op selects skip the round trip entirely (milestonePatch returns
   // null). Clearing sends an explicit null — absent would mean "no
-  // change" server-side.
-  const [getMilestoneBusy, setMilestoneBusy] = createSignal(false);
+  // change" server-side. The target issue is pinned up front (#143):
+  // same-route navigation reuses this component, so the async tail must
+  // reconcile the mutated issue even when the view has moved on.
   const selectMilestone = async (id) => {
     if (getMilestoneBusy()) return;
+    const n = num();
+    const ck = key();
     const fields = milestonePatch(thread()?.milestone ?? null, id);
     if (!fields) return;
     setMilestoneBusy(true);
-    patchCached(key(), (view) => ({ ...view, thread: { ...view.thread, milestone: fields.milestone } }));
+    patchCached(ck, (view) => ({ ...view, thread: { ...view.thread, milestone: fields.milestone } }));
     try {
-      await ctx.repoClient.issues.patch(num(), fields);
+      await ctx.repoClient.issues.patch(n, fields);
     } catch (err) {
       reportError(err, "issue-milestone");
     }
-    reload();
+    if (num() === n) reload();
+    else invalidate(ck);
     setMilestoneBusy(false);
   };
 
