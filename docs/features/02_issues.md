@@ -458,6 +458,16 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   `json.RawMessage` because encoding/json maps an explicit null onto a
   nil `**string`, indistinguishable from absent — null must reach the
   service's clear path, absent must not.
+- **Milestone system lines render titles, never ids** (issue #132).
+  `milestone_changed` events carry ids only (the §7 shape is unchanged);
+  the thread page resolves `from`/`to` through its page-owned
+  `milestones:{o}/{r}` cache (the same source as the sidebar) at render
+  time, so `anon added this to the "v1.1" milestone` reads the title. A
+  deleted milestone (id absent from the cache) renders as the bare id —
+  the §3.1 self-heal stance, shared with the sidebar's `milestoneTitle`.
+  Removal needs no new affordance: the sidebar `+` dropdown's "No
+  milestone" row PATCHes the explicit null above (verified end to end in
+  the browser drive for this change).
 - **Default close-reason + `*none`/`none` filter spellings** (`assignee=*none`,
   `milestone=none`) are implemented exactly as §7 rows state.
 - **Event windows return arrays newest-first** (most recent event at index
