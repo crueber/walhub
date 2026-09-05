@@ -421,6 +421,24 @@ type Service struct {
 	tasks *taskTable
 	wake  chan string
 
+	// Phase-1 drain state (13 §8, same shape as the #74 import fix):
+	// drainCtx is cancelled by Drain; task leaders (webhooks, fanout)
+	// derive their store/network work from it, so a wedged store call
+	// that honors ctx terminates on drain instead of hanging forever
+	// (issue #154). It is independent of any request ctx — delivery
+	// outlives a client disconnect exactly as the old WithoutCancel
+	// did, but no longer outlives the process drain. draining flips at
+	// the same point so new tasks refuse fast (their seqs stay durable
+	// for the redrain sweep). wg tracks the leader goroutines; Drain
+	// itself is non-blocking (cancel only), mirroring importSvc.Drain.
+	// drainCtx/drainCancel are immutable after New (no lock to read);
+	// draining is drainMu-guarded; drainCancel is never called under mu.
+	drainCtx    context.Context
+	drainCancel context.CancelFunc
+	drainMu     sync.Mutex
+	draining    bool
+	wg          sync.WaitGroup
+
 	// fanoutSeen is the redrain high-water (issue #77): repo →
 	// highest activity seq the fan-out sweep has probed. In-memory
 	// only (rebuilt every process start — the restart sweep re-probes
@@ -432,12 +450,34 @@ type Service struct {
 
 // New builds a Service over st.
 func New(st store.ObjectStore, roles RoleService) *Service {
+	drainCtx, drainCancel := context.WithCancel(context.Background())
 	return &Service{
 		Store: st, Roles: roles, Now: time.Now,
 		ubus: newUserBus(), rbus: newRepoBus(),
 		tasks: newTaskTable(), wake: make(chan string, 64),
 		fanoutSeen: map[string]int{},
+		drainCtx:   drainCtx, drainCancel: drainCancel,
 	}
+}
+
+// Drain enters phase-1 drain for the notify surface (13 §8, law 7,
+// same shape as the #74 import fix): in-flight task leaders see
+// cancellation promptly (their store/network work derives from
+// drainCtx), new tasks refuse fast, and dropped fan-out seqs stay
+// durable for the redrain sweep (fanout_pending + no completion
+// record). Idempotent; safe to call with no tasks running.
+func (s *Service) Drain() {
+	s.drainMu.Lock()
+	s.draining = true
+	s.drainMu.Unlock()
+	s.drainCancel() // non-blocking; leaders observe it via drainCtx
+}
+
+// Draining reports whether Drain has begun (phase ≥ 1).
+func (s *Service) Draining() bool {
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	return s.draining
 }
 
 // nowUTC is the clock, UTC (RFC 3339 wire timestamps).

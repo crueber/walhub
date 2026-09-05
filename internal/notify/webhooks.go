@@ -352,7 +352,8 @@ func hookClientFor(h *Hook) *http.Client {
 // acquired BEFORE spawning (issue #153), so at most FanoutParallel
 // delivery goroutines exist at any instant no matter how many hooks are
 // configured. Best-effort per hook; a failed hook holds back only its
-// own cursor.
+// own cursor. On ctx cancel the loop stops launching but still waits
+// for in-flight hooks (they observe ctx and fail fast, issue #154).
 func (s *Service) DeliverRepo(ctx context.Context, owner, repo string) {
 	hooks, err := s.ListHooks(ctx, owner, repo)
 	if err != nil {
@@ -360,6 +361,7 @@ func (s *Service) DeliverRepo(ctx context.Context, owner, repo string) {
 	}
 	sem := make(chan struct{}, FanoutParallel)
 	var wg sync.WaitGroup
+loop:
 	for _, h := range hooks {
 		if !h.Active {
 			continue
@@ -368,7 +370,7 @@ func (s *Service) DeliverRepo(ctx context.Context, owner, repo string) {
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
-			return
+			break loop // stop launching; still Wait for in-flight below
 		}
 		wg.Add(1)
 		go func() {
