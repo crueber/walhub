@@ -1,7 +1,7 @@
 // web/src/pages/Issue.jsx — route "/:owner/:name/issues/:num" (02 §11):
-// the thread page (header, timeline with seq-window older-on-demand,
-// comment composer with close / comment-and-close controls, sidebar with
-// labels/assignees/milestone/state badge). `issue_event` frames refresh the header, `issue` frames the
+// the thread page (header with the state badge, timeline with seq-window older-on-demand,
+// comment composer with close / comment-and-close controls, one sidebar metadata
+// card with labels/assignees/milestone sections). `issue_event` frames refresh the header, `issue` frames the
 // header too — both ride the ONE repo collaboration stream (08 §4), one
 // connection per page via mountStreamRetry; frames invalidate cache keys
 // (coalesced), they never carry full state.
@@ -324,31 +324,37 @@ export default function Issue() {
       <aside class="grid content-start gap-3">
         <Show when={thread()}>
           {(t) => (
-            <>
-              <div class="card grid gap-1 p-3 text-sm">
-                <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">State</span>
-                <span>{t().state}{t().state_reason ? ` (${t().state_reason})` : ""}</span>
-              </div>
-              <div class="card grid gap-2 p-3 text-sm">
-                <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Labels</span>
+            // One metadata container (#107): state lives in the header
+            // above, so the sidebar holds labels/assignees/milestone in
+            // divided sections — each value sits directly under its
+            // header, so a "none" reads as that section's value.
+            <section class="card divide-y divide-zinc-200 text-sm dark:divide-zinc-800" aria-label="Issue metadata">
+              <div class="p-3">
+                <div class="mb-1 flex items-center justify-between gap-2">
+                  <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Labels</span>
+                  <Show when={canTriage()}>
+                    <LabelPicker all={allLabels()} applied={t().labels ?? []} busy={getLabelBusy()} onToggle={toggleLabelApply} />
+                  </Show>
+                </div>
                 <div class="flex flex-wrap gap-1">
                   <For each={t().labels ?? []} fallback={<span class="muted text-xs">none</span>}>
                     {(l) => <LabelChip name={l} map={colorMap()} />}
                   </For>
                 </div>
-                <Show when={canTriage()}>
-                  <LabelPicker all={allLabels()} applied={t().labels ?? []} busy={getLabelBusy()} onToggle={toggleLabelApply} />
-                </Show>
               </div>
-              <div class="card grid gap-1 p-3 text-sm">
+              <div class="grid gap-1 p-3">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Assignees</span>
-                <For each={t().assignees ?? []} fallback={<span class="muted text-xs">none</span>}>
-                  {(a) => <span>{a}</span>}
-                </For>
+                <div class="flex flex-wrap gap-1">
+                  <For each={t().assignees ?? []} fallback={<span class="muted text-xs">none</span>}>
+                    {(a) => <span>{a}</span>}
+                  </For>
+                </div>
+              </div>
+              <div class="grid gap-1 p-3">
                 <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Milestone</span>
                 <span>{t().milestone ?? "none"}</span>
               </div>
-            </>
+            </section>
           )}
         </Show>
       </aside>
