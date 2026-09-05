@@ -169,11 +169,12 @@ func (s *Server) baseURL(r *http.Request) string {
 	if s.cfg.Server.PublicURL != "" {
 		return strings.TrimSuffix(s.cfg.Server.PublicURL, "/")
 	}
-	scheme := "http"
-	if s.tlsOn || r.TLS != nil {
-		scheme = "https"
+	scheme := requestScheme(r)
+	host := ""
+	if r != nil {
+		host = r.Host
 	}
-	return scheme + "://" + r.Host
+	return scheme + "://" + host
 }
 
 func lfsDownloadPath(id git.RepoId, oid string) string {

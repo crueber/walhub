@@ -70,7 +70,6 @@ func (s *Server) mount(r chi.Router) {
 	r.Get("/readyz", s.readyz)
 	r.Get("/repos.js", s.sdkReposJS)
 	r.Get("/services/public/install.sh", s.installSh)
-	r.Get("/services/public/ca.pem", s.caPem)
 
 	// Setup API mounted BEFORE the /api/v1 catch (§3.1).
 	r.Mount("/api/v1/setup", s.setupAPIRouter())
@@ -129,7 +128,7 @@ func (s *Server) mount(r chi.Router) {
 }
 
 // mountSetupOnly registers the §3.4 setup-only subset: /setup*, /api/v1/setup*,
-// /healthz, /readyz, /services/public/*; everything else 503 plain text with
+// /healthz, /readyz, /services/public/install.sh; everything else 503 plain
 // a pointer to /setup.
 func (s *Server) mountSetupOnly(r chi.Router) {
 	r.Get("/healthz", s.healthz)
@@ -140,7 +139,6 @@ func (s *Server) mountSetupOnly(r chi.Router) {
 		g.Handle("/*", s.compress(http.HandlerFunc(s.serveUIAssets)))
 	})
 	r.Get("/services/public/install.sh", s.installSh)
-	r.Get("/services/public/ca.pem", s.caPem)
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		plainStatus(w, http.StatusServiceUnavailable,
 			"walgit: configuration is invalid — open /setup to fix it")

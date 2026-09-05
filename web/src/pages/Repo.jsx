@@ -61,7 +61,7 @@ function CloneMenu(props) {
   // URL-building logic is unchanged (§2.6): the HTTP(S) URL is the server's
   // clone_url (origin fallback), shown VERBATIM so the command always works
   // (issue #124: never upgrade http→https for display — a plain-http server
-  // has no TLS; the pill label below derives from this URL's scheme so pill
+  // terminates no TLS itself; the pill label below derives from this URL's scheme so pill
   // and text always agree). The SSH URL reuses its host at the default
   // ssh port (lib/clone.js — the server never advertises its ssh listen
   // port to the browser, so no port is guessed).

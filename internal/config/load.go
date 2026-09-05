@@ -126,6 +126,10 @@ func decodeFile(path string, c *Config) error {
 	lines := strings.Split(string(src), "\n")
 	msgs := make([]string, 0, len(unknown))
 	for _, key := range unknown {
+		if len(key) > 1 && key[0] == "server" && key[1] == "tls" {
+			msgs = append(msgs, fmt.Sprintf("unsupported key %q (line %d): %s", key.String(), findKeyLine(lines, key), removedTLSHint))
+			continue
+		}
 		msgs = append(msgs, fmt.Sprintf("unknown key %q (line %d)", key.String(), findKeyLine(lines, key)))
 	}
 	return fmt.Errorf("%s: %s", path, strings.Join(msgs, "; "))

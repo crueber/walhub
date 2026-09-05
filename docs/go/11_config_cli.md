@@ -57,8 +57,6 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.accel_redirect` | `false` | answer byte requests with X-Accel-Redirect (edge-fronted hosts only) |
 | `server.public_url` | — | pins absolute URIs (bundle-uri, LFS, recipes, OAuth callback) behind a proxy |
 | `server.cors_origins` | `[]` | exact or one leading `*.`; empty = no cross-origin lane |
-| `server.tls.mode` | `"off"` | `off` \| `self_signed` (generated once under `<cache.dir>/tls/`, served at `/services/public/ca.pem`) \| `files` |
-| `server.tls.cert/key/hostnames` | — | files-mode PEM; self-signed SANs (default localhost, *.localhost, 127.0.0.1, ::1 + public_url host) |
 | `server.ssh.listen` | `""` | SSH git transport bind address; empty = disabled (17_ssh.md) |
 | `server.ssh.host_key` / `host_key_env` | — | OpenSSH/PEM private key: path / env var NAME; auto-generated ed25519 under `<data-dir>/ssh/` when unset |
 | SSH public keys | — | user-managed in the object store via `GET\|POST\|DELETE /api/v1/ssh-keys` and the `/keys` page — not config (17_ssh.md §3) |
@@ -84,7 +82,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `store.gcs.endpoint` | Google endpoint | endpoint override (emulators) |
 | `store.gcs.signing_service_account` | — | signer for `signed_url` serving |
 | `store.gcs.bulk_clients` / `bulk_concurrency` | `4` / `32` | bulk transport separation (spec §4.6) |
-| `cache.dir` | `"/tmp/walgit"` | local cache root (`<dir>/<owner>/<name>.git`; + `tls/`) † |
+| `cache.dir` | `"/tmp/walgit"` | local cache root (`<dir>/<owner>/<name>.git`) † |
 | `cache.mode` | `"auto"` | `budget` \| `disk` \| `auto` (= disk when `maintenance.disk = "ssd"`) |
 | `cache.max_bytes` | `"20GiB"` | budget-mode cap for everything on disk |
 | `cache.disk_high_watermark` | `0.9` | disk-mode eviction trigger (low mark = −0.10) |
@@ -164,11 +162,8 @@ dir = "/tmp/walgit"
 
 ```toml
 [server]
-listen = "0.0.0.0:8443"
-public_url = "https://git.example.com"
-
-[server.tls]
-mode = "self_signed"            # generated once under <cache.dir>/tls/; CA at /services/public/ca.pem
+listen = "0.0.0.0:8080"
+public_url = "https://git.example.com"   # the reverse proxy's origin (it terminates TLS; 16_packaging.md §3.4)
 
 [server.auth]
 mode = "token"
@@ -280,7 +275,7 @@ The setup UI (`/setup`) and its API (`GET /api/v1/setup`, `POST /api/v1/setup/te
 
 - **Atomic write.** The setup API serializes the submitted config to TOML (same key names as §2), writes it to `<data-dir>/walhub.toml.tmp`, fsyncs, then `rename`s it over `<data-dir>/walhub.toml`. Readers see either the old or the new file, never a partial one. Permissions `0600` (the file may contain `token_env`-adjacent material; secrets themselves never live in the file — `token_env` names an env var).
 - **Validate before write.** `PUT /api/v1/setup` runs the full §5 validation on the submitted values FIRST; invalid input writes nothing and returns the per-key errors (this is also what `POST /api/v1/setup/test` does without saving). Only an all-green submission is written.
-- **Restart-required keys.** The save response reports, per key, whether it takes effect without a restart. Restart-required (the default — most keys are consumed once at subsystem construction: store backend, WAL, cache, TLS, auth, listen address, …) vs. read-live (picked up on the next tick/emit): `telemetry.log_format`, `telemetry.log_filter`, `maintenance.interval`, `maintenance.follow_interval`, `wal.freshness_ttl`. walhub does NOT hot-reload the shared `*Config` (§3.6); read-live keys are re-read from the effective config at their point of use, which the setup save updates by writing the file and refreshing the in-memory first-run overlay — a restart is still the supported way to be sure.
+- **Restart-required keys.** The save response reports, per key, whether it takes effect without a restart. Restart-required (the default — most keys are consumed once at subsystem construction: store backend, WAL, cache, auth, listen address, …) vs. read-live (picked up on the next tick/emit): `telemetry.log_format`, `telemetry.log_filter`, `maintenance.interval`, `maintenance.follow_interval`, `wal.freshness_ttl`. walhub does NOT hot-reload the shared `*Config` (§3.6); read-live keys are re-read from the effective config at their point of use, which the setup save updates by writing the file and refreshing the in-memory first-run overlay — a restart is still the supported way to be sure.
 - **Edits apply to the current file (§3.4).** Submitted overrides merge onto the file-visible config — compiled-in defaults ⊕ the first existing candidate file, or the zero-config first-run shape when no file exists — so a save changes only the keys the operator touched; keys the form does not carry keep their file values. Env overlays are never baked into the file: the file keeps its own values and env still wins at load (see the env-interaction bullet below).
 - **Interaction with env (file ⊕ env, env wins).** The saved file participates in the ordinary ladder (§3.1): env overrides and PORT lockstep still apply on top of it, and an env override of a key the operator just set in the UI will silently win — the setup UI therefore shows the effective value (post-env) for every key and warns when a submitted value is masked by an active `WALHUB__`/`WALGIT__`/`PORT` override. Setup never writes env vars.
 - **Invalid-config rescue.** When boot landed in setup-only mode (§3.1 step 2), a successful setup save writes a valid file but does NOT swap the running config; the response says `restart_required: true` for every key and the UI tells the operator to restart. (Boot flow: config present → validate → boot if it all works; config missing → defaults + setup banner; config INVALID → setup-only mode.)
@@ -341,10 +336,9 @@ Each rule is a named function in `internal/config/validate.go`; the list is the 
 5. **store**: `store.backend ∈ {s3,gcs,memory,filesystem}`; for s3, `access_key_env`/`secret_key_env` name existing env vars only at use time (not validated at load — the Rust behavior); `multipart_part_size` ≤ `multipart_threshold` when both are non-zero; for filesystem, `store.root` (default `<data-dir>/store`, §2.3) must be an absolute path or empty (empty = first-run default).
 6. **sizes/timeouts**: every duration/size key parses (§1); `cache.disk_high_watermark ∈ (0,1)` or 0; negative values nowhere.
 7. **placement globs** compile: each entry is `*`, `owner/*`, or `owner/name` (one `/` at most).
-8. **tls**: `mode ∈ {off,self_signed,files}`; `files` requires cert+key paths; `self_signed` implies nothing else.
-9. **roles**: each role ∈ {serve, maintain, events}; duplicates allowed (idempotent), unknown role → error.
-10. **paths**: `cache.dir` is absolute (Rust requires this for the tls/ sibling) unless backend is `memory`.
-11. **ssh** (17_ssh.md §3): config validation checks `listen` shape only — when `[server.ssh]`
+8. **roles**: each role ∈ {serve, maintain, events}; duplicates allowed (idempotent), unknown role → error.
+9. **paths**: `cache.dir` is absolute unless backend is `memory`.
+10. **ssh** (17_ssh.md §3): config validation checks `listen` shape only — when `[server.ssh]`
     is present and `listen` is set, it must be host:port. The host key is a boot-time check in
     the listener builder, not config validation: `host_key_env` set-but-empty is fatal there
     (a silent substitution would bypass the client's pinned host key; auto-generation covers the
@@ -502,6 +496,7 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
 - **Version env var is `WALHUB_BUILD_SHA`** (Rust used `WALGIT_BUILD_SHA`): it is build-time, not deployment-facing, so no compat value; VCS build info from the Go toolchain is the primary source anyway.
 - **`RUST_LOG` honored (kept) as an override of `telemetry.log_filter`**, and `WALHUB_LOG` accepted as the new-style spelling: zero-cost compat for existing log-tuning scripts.
 - **Unknown-key env overrides are soft (ignored + reported) rather than fatal**: matches Rust behavior and keeps a stale variable from taking down a fleet; `--strict` makes them fatal for supervisors.
+- **NEW (2026-09-05) — `server.tls.*` removed; TLS terminates at the reverse proxy** (Forgejo #165): the `server.tls.mode/cert/key/hostnames` keys are gone (validation rules renumbered: roles 8, paths 9, ssh 10). A file that still sets them is rejected at load and a `WALHUB__SERVER__TLS__*` env override is fatal — both with a reverse-proxy pointer. The env fatality is a deliberate exception to the "unknown-key env overrides are soft" rule above: a silently ignored TLS setting would leave the operator believing the server terminates TLS. Absolute-URL building honors `X-Forwarded-Proto` (§9.1 of 06_server_http.md); set `server.public_url` to the canonical external origin behind a proxy.
 
 ### Divergence (2026-08-31)
 

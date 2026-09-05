@@ -378,10 +378,16 @@ func TestBaseURLForms(t *testing.T) {
 		t.Fatalf("public base = %q", got)
 	}
 	s2, _ := newTestServer(t, nil)
-	s2.tlsOn = true
 	req2 := httptest.NewRequest("GET", "http://host.example/x", nil)
+	req2.Header.Set("X-Forwarded-Proto", "https")
 	if got := s2.baseURL(req2); got != "https://host.example" {
-		t.Fatalf("tls base = %q", got)
+		t.Fatalf("proxied base = %q", got)
+	}
+	// A non-https forwarded proto stays http.
+	req3 := httptest.NewRequest("GET", "http://host.example/x", nil)
+	req3.Header.Set("X-Forwarded-Proto", "http")
+	if got := s2.baseURL(req3); got != "http://host.example" {
+		t.Fatalf("plain forwarded base = %q", got)
 	}
 }
 

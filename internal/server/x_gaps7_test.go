@@ -330,14 +330,6 @@ func TestMiddlewareSmallBranches(t *testing.T) {
 	}
 }
 
-func TestTLSServerConfigMissingCert(t *testing.T) {
-	s, _ := newTestServer(t, nil)
-	s.cacheRoot = t.TempDir() // no certs generated
-	if _, err := s.TLSServerConfig(); err == nil {
-		t.Fatal("missing certs must error")
-	}
-}
-
 func TestParseRangeAndServerDefaults(t *testing.T) {
 	if _, _, ok := parseRange("bytes=1-2,3-4", 10); ok {
 		t.Fatal("multi-range must serve full")

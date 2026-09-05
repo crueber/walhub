@@ -53,7 +53,7 @@ The ordered list, outermost first, is FIXED (the Rust spec's stack; the code-vs-
 | # | Middleware | Go notes |
 |---|---|---|
 | 1 | `requestID` | honor inbound `X-Request-Id` else mint a random 16-byte hex UUID; echo on the response; start the `http.request` log record: request_id, method, path, user_agent (truncate to 200 chars), status, bytes_in/out, principal, repo, trace_id (parsed from `X-Cloud-Trace-Context` or `traceparent`). In-flight count increments here and decrements **only when the response body is fully written** (wrap `http.ResponseWriter` with a write-completion hook, not a pre-handler defer). |
-| 2 | `canonicalBrowserHost` | only GET/HEAD that "look like browsers" (Accept contains `text/html`, OR `Sec-Fetch-Dest: document`, OR UA contains `Mozilla`) AND host is loopback (IP loopback or `localhost`) → 302 to `walgit.localhost[:port]`, same path+query, scheme `https` when TLS is on else `http`. Skipped for `/_auth/*`, `/healthz`, `/readyz`, `/services/public*`. Never applies to git/curl clients (they fail the browser test). |
+| 2 | `canonicalBrowserHost` | only GET/HEAD that "look like browsers" (Accept contains `text/html`, OR `Sec-Fetch-Dest: document`, OR UA contains `Mozilla`) AND host is loopback (IP loopback or `localhost`) → 302 to `walgit.localhost[:port]`, same path+query, scheme per `requestScheme` (`https` behind a TLS-terminating proxy via `X-Forwarded-Proto`, else `http`). Skipped for `/_auth/*`, `/healthz`, `/readyz`, `/services/public*`. Never applies to git/curl clients (they fail the browser test). |
 | 3 | `hostFromAuthority` | HTTP/2 only: if `r.Host == ""`, copy `r.URL.Host` (populated from `:authority` by net/http) into `r.Host`. Purely cosmetic normalization for downstream host checks. |
 | 4 | `serverHeaders` | every response — errors, SSE, static — carries `Server:` and `X-Walgit-Server:` = `walgit/<version> (<kind>; <name>[/<instance>])`, kind ∈ `serverless\|ssd\|dev`. Implemented as a ResponseWriter wrapper so late header writes (before WriteHeader) still land. |
 | 5 | `recoverPanic` | `defer recover()` → log with request_id → 500 plain text `internal error` (request_id included). MUST NOT kill the process; MUST NOT swallow the inflight decrement (order matters: recovery inside the inflight-wrapped writer). |
@@ -110,7 +110,6 @@ r.Get("/healthz", s.healthz)
 r.Get("/readyz", s.readyz)
 r.Get("/repos.js", s.sdk("repos.js"))    // the esbuild-bundled SDK file (12_web_ui.md §1.0; D-WEB-6)
 r.Get("/services/public/install.sh", s.installSh)
-r.Get("/services/public/ca.pem", s.caPem)
 r.Get("/api/v1", api.Discovery)          // public-informational
 r.Mount("/api/v1/setup", s.setupAPI)     // internal/setup HTTP surface (§3.4) — mounted BEFORE the /api/v1 catch
 r.Mount("/api/v1", http.StripPrefix("/api/v1", api.NonRepo)) // me/authenticate/owners + /services/api twins
@@ -121,7 +120,7 @@ r.Get("/services/setup.json", gated(s.setupJSON))
 r.Get("/metrics", gated(s.metrics))
 r.Mount("/setup", s.setupUI)             // setup UI shell + assets (§3.4)
 r.Get("/", gated(s.spaHome))             // SPA shell; ?format=text → plain repo list
-r.NotFound(notFound)                     // everything else: deliberate 404 — includes /services/public/* beyond install.sh/ca.pem
+r.NotFound(notFound)                     // everything else: deliberate 404 — includes /services/public/* beyond install.sh
 r.MethodNotAllowed(methodNotAllowed)     // 405 + Allow
 r.HandleFunc("/*", s.repoDispatch)       // EVERYTHING repo-scoped, parsed by hand (§3.2)
 ```
@@ -158,7 +157,6 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 | GET | `/readyz` | §10.2 |
 | GET | `/repos.js` | esbuild-bundled SDK (single file, 12_web_ui.md §1.0; D-WEB-6); no-cache + strong ETag + precompressed |
 | GET | `/services/public/install.sh[?repo=]` | `text/x-shellscript`, `Cache-Control: public, max-age=300` |
-| GET | `/services/public/ca.pem` | only when this host terminates TLS itself; else 404 |
 | * | `/services/public/*` (other) | deliberate 404 |
 | * | `/_auth/*` | self-authing flow (§8.6) |
 | GET | `/api/v1` | discovery JSON, public-informational |
@@ -246,7 +244,7 @@ locate data dir (--data-dir flag > WALHUB_DATA_DIR env; default ~/.local/share/w
 | `server.auto_create_on_push` | `true` |
 | everything else | Rust-spec defaults (11_config_cli.md) |
 
-**Data-dir layout:** `<data-dir>/store/` (object store), `<data-dir>/cache/` (prewarm, LFS spool, TLS), `<data-dir>/walhub.toml` (saved by setup Save; the only config file the server reads).
+**Data-dir layout:** `<data-dir>/store/` (object store), `<data-dir>/cache/` (prewarm, LFS spool), `<data-dir>/walhub.toml` (saved by setup Save; the only config file the server reads).
 
 **Setup UI:** `GET /setup` serves the SPA shell; its JS/CSS come from `/_ui/assets/*` (the vite bundle, immutable). The page groups ALL config keys by section with current effective values (merging defaults ← file ← env), validates client-side, and Saves via the API.
 
@@ -488,7 +486,9 @@ accel_redirect = false
 
 ### 9.1 `GET /services/setup.json[?repo=]` (read-authed, no-cache)
 
-Fields (exact names): `base_url`, `host`, `token_url` (only oidc), `install` (the one-liner), `install_url`, `manual_clone`, `plain_clone`, `blobless_clone`, `bundle_list`, `setup_text`, `ca_url?`, `trust?`. Every UI surface renders recipes from here — never its own copy.
+Fields (exact names): `base_url`, `host`, `token_url` (only oidc), `install` (the one-liner), `install_url`, `manual_clone`, `plain_clone`, `blobless_clone`, `bundle_list`, `setup_text`. Every UI surface renders recipes from here — never its own copy.
+
+- `base_url` = `server.public_url` when set, else `{scheme}://{Host}` where scheme is `https` when the request arrived over TLS *or* carries `X-Forwarded-Proto: https` from the reverse proxy in front (first value wins), else `http` — so a server behind a TLS-terminating proxy advertises `https://` clone URLs. Behind a proxy, set `server.public_url` to the canonical external origin; the header only affects displayed URLs, never auth.
 
 - `manual_clone` = `git -c http.extraHeader="Authorization: Bearer $WALGIT_TOKEN" -c transfer.bundleURI=true -c fetch.bundleURI={base}/{repo}.git/bundles/catchup clone {base}/{repo}.git` (no extraHeader when auth none).
 - `plain_clone` = `git clone -c fetch.bundleURI=<catchup-url> <url>`.
@@ -499,12 +499,11 @@ Fields (exact names): `base_url`, `host`, `token_url` (only oidc), `install` (th
 The Go implementation serves the script from an embedded template (`embed`); its behavior spec:
 
 1. Requires git ≥ 2.46 + curl; exit 1 otherwise.
-2. Self-signed TLS: download `ca.pem`, `git config --global http.https://<host>/.sslCAInfo <file>`.
-3. Token source order: `$WALGIT_TOKEN` → an already-stored token file → the terminal (`$WALGIT_INSTALL_TTY`); no terminal → **exit 2** printing the two things to do (browse to the token page / run the config command). Auth-none mode: sends `X-Walgit-Anonymous: 1`.
-4. Writes `${XDG_CONFIG_HOME:-~/.config}/git/<host-slug>-token` (0600) and `<host-slug>-credential-helper` (0755); the CA at `<host-slug>-ca.pem` when self-signed. Slug = every non-`[a-z0-9]` char → `-` (host-derived, so two walgit hosts coexist).
-5. Git config (exact keys): `credential.https://<host>.helper` reset to `""` then set to the helper path; unset stale `http.https://<host>/.extraHeader`; `transfer.bundleURI true`; **unset** global `fetch.bundleURI` (invalid globally; per-clone only); `fetch.uriProtocols https`.
-6. Self-test: with `?repo=` → `git ls-remote <base>/<repo>.git HEAD`; else `curl …/api/v1/me` and extract the principal (exit 1 on refusal, message names where tokens come from).
-7. With `?repo=` → print ready + exec the plain clone; with `$1` → set/add `origin`; else print the `git remote add origin … && git push -u origin HEAD` recipe.
+2. Token source order: `$WALGIT_TOKEN` → an already-stored token file → the terminal (`$WALGIT_INSTALL_TTY`); no terminal → **exit 2** printing the two things to do (browse to the token page / run the config command). Auth-none mode: sends `X-Walgit-Anonymous: 1`.
+3. Writes `${XDG_CONFIG_HOME:-~/.config}/git/<host-slug>-token` (0600) and `<host-slug>-credential-helper` (0755). Slug = every non-`[a-z0-9]` char → `-` (host-derived, so two walgit hosts coexist).
+4. Git config (exact keys): `credential.https://<host>.helper` reset to `""` then set to the helper path; unset stale `http.https://<host>/.extraHeader`; `transfer.bundleURI true`; **unset** global `fetch.bundleURI` (invalid globally; per-clone only); `fetch.uriProtocols https`.
+5. Self-test: with `?repo=` → `git ls-remote <base>/<repo>.git HEAD`; else `curl …/api/v1/me` and extract the principal (exit 1 on refusal, message names where tokens come from).
+6. With `?repo=` → print ready + exec the plain clone; with `$1` → set/add `origin`; else print the `git remote add origin … && git push -u origin HEAD` recipe.
 
 ### 9.3 Credential helper (`get`/`store`/`erase`)
 
@@ -548,25 +547,24 @@ curl -s localhost:8442/metrics | grep walgit_http_inflight
 
 ### 10.4 Startup order
 
-1. TLS crypto provider init (§11).
-2. **Bootstrap leg (§3.4, `internal/setup`):** resolve the data dir (`--data-dir` flag → `WALHUB_DATA_DIR` → default `~/.local/share/walhub`; containers `/var/lib/walhub`), ensure `store/` + `cache/`, load `<data-dir>/walhub.toml` if present. Missing → first-run defaults + loud setup banner; invalid → SETUP-ONLY MODE (log the exact errors, mount only the §3.4 subset, and skip steps 4–8); valid → continue.
-3. Tracing init (filter from `RUST_LOG`-equivalent env else `telemetry.log_filter`; pretty or Cloud-Logging JSON).
-4. Open store.
-5. Build AppState (wal registry, bundler, auth service + JWKS, per-repo semaphores, metrics registry).
-6. Spawn: prewarm (bounded parallelism `cache.prewarm_parallelism`, default 2), events bridge (if role+sink), maintainer loop (if role), follow loop (if role), watchdog (1 s tick; warns "runtime stalled" when a tick is > 2.5 s late).
-7. Bind:
-   - TLS off: plain TCP, `TCP_NODELAY` per connection, **h2c** (HTTP/2 prior knowledge) + HTTP/1.1 — via `golang.org/x/net/http2/h2c` wrapped around the chi router.
-   - TLS on: `crypto/tls` in-process (lazy handshake on first I/O — net/http does this natively); ALPN `h2`, `http/1.1`.
+1. **Bootstrap leg (§3.4, `internal/setup`):** resolve the data dir (`--data-dir` flag → `WALHUB_DATA_DIR` → default `~/.local/share/walhub`; containers `/var/lib/walhub`), ensure `store/` + `cache/`, load `<data-dir>/walhub.toml` if present. Missing → first-run defaults + loud setup banner; invalid → SETUP-ONLY MODE (log the exact errors, mount only the §3.4 subset, and skip steps 3–7); valid → continue.
+2. Tracing init (filter from `RUST_LOG`-equivalent env else `telemetry.log_filter`; pretty or Cloud-Logging JSON).
+3. Open store.
+4. Build AppState (wal registry, bundler, auth service + JWKS, per-repo semaphores, metrics registry).
+5. Spawn: prewarm (bounded parallelism `cache.prewarm_parallelism`, default 2), events bridge (if role+sink), maintainer loop (if role), follow loop (if role), watchdog (1 s tick; warns "runtime stalled" when a tick is > 2.5 s late).
+6. Bind: plain TCP, `TCP_NODELAY` per connection, **h2c** (HTTP/2 prior knowledge) + HTTP/1.1 — via `golang.org/x/net/http2/h2c` wrapped around the chi router. TLS termination belongs on the reverse proxy in front (§11); the server never wraps the listener.
    - Loopback binds also take the IPv6 twin (`::1`) so `*.localhost` works.
-8. Auth `none` on a non-loopback bind is allowed (§3.4 divergence from the Rust fail-closed rule) — emit the loud warning instead of refusing.
+7. Auth `none` on a non-loopback bind is allowed (§3.4 divergence from the Rust fail-closed rule) — emit the loud warning instead of refusing.
 
 Go shape: one `http.Server` with `BaseContext` carrying the app context; `Serve(l)` on a listener built per the above; h2c via `h2c.NewHandler(r, &http2.Server{})` where `r` is the chi router (§3.1).
 
-## 11. TLS (§8.10–8.11)
+## 11. TLS terminates at the reverse proxy (§8.10–8.11 as diverged)
 
-- Self-signed generation: hand-rolled with `crypto/x509` + `crypto/ecdsa` (P-256) — replaces the Rust rcgen. Written once to `<cache.dir>/tls/{cert,key}.pem` plus `cert.sans` (the SAN list actually used). **Regenerated only when the SAN list changes**: read `cert.sans`, compare with the desired SAN set (default: `localhost`, `*.localhost`, `127.0.0.1`, `::1` + the `public_url` host + `server.tls.hostnames`), rewrite all three files only on mismatch. The cert is published at `/services/public/ca.pem`.
-- `files` mode: cert + key from config paths.
-- HTTP/2 both clear (h2c) and via ALPN; request and response bodies stream both ways; `TCP_NODELAY` on every connection (report-status stalls without it) — set via a wrapped listener's `Accept` loop (`net.TCPConn.SetNoDelay(true)`).
+walhub serves plain HTTP (h2c retained: HTTP/2 prior knowledge + HTTP/1.1 via `golang.org/x/net/http2/h2c`, `TCP_NODELAY` on every connection — set via a wrapped listener's `Accept` loop). There is no in-process TLS: no `server.tls.*` config surface, no cert/key loading, no self-signed generation, no `/services/public/ca.pem`, and no `ca_url`/`trust` fields in `setup.json` (all removed by issue #165).
+
+- Operators terminate TLS at the reverse proxy in front (Caddy or nginx snippets in 16_packaging.md §4). The proxy forwards plain HTTP to `server.listen` and sets `X-Forwarded-Proto: https` so the server advertises `https://` clone URLs (§9.1); `server.public_url` pins the canonical external origin.
+- Residual `server.tls.*` settings fail closed: a TOML file containing them is rejected at load, and a `WALHUB__SERVER__TLS__*` env override is a fatal error — both with a message pointing at the reverse proxy (never a silent ignore).
+- Outbound HTTPS (webhook delivery, OIDC discovery, upstream follow, S3/GCS) is unaffected: it validates against the system root CAs and never used `server.tls.cert/key`.
 
 ## 12. Graceful shutdown — two-phase drain (Rust spec §3.4)
 
@@ -599,10 +597,10 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
 
 - ~~Router is Go 1.22+ `http.ServeMux` plus a hand-rolled `/{owner}/{repo}[.git]/<sub>` fallback instead of a path-matching framework~~ — superseded by divergence D1 (chi); the hand-rolled `/{owner}/{repo}[.git]/<sub>` parsing survives inside the trailing wildcard (§3.2).
 - Middleware is an explicit ordered slice of `func(http.Handler) http.Handler` factories applied via chi `Use` (not tower layers) — the order is load-bearing (§2.2); making it data makes it reviewable and testable.
-- Self-signed TLS uses `crypto/x509`/`crypto/ecdsa` instead of `rcgen` — the SAN-stable regeneration contract (§11) is preserved; rcgen is not needed.
+- ~~Self-signed TLS uses `crypto/x509`/`crypto/ecdsa` instead of `rcgen` — the SAN-stable regeneration contract (§11) is preserved; rcgen is not needed.~~ — superseded by the #165 removal below (no in-process TLS at all).
 - JWKS/JWT verification hand-rolled on `crypto/rsa`/`crypto/ecdsa` instead of a JWT library — per the dependency policy; the algorithm/claim rules are copied verbatim from the Rust spec so behavior is identical.
 - Prometheus exposition hand-rolled (text format writer) instead of a client library — dependency policy; the metric inventory is normative so dashboards survive the rewrite.
-- h2c via `golang.org/x/net/http2/h2c`, the one sanctioned third-party backend module; TLS-mode h2 comes from stdlib ALPN.
+- h2c via `golang.org/x/net/http2/h2c`, the one sanctioned third-party backend module; there is no TLS-mode h2 anymore (plain HTTP only, §11).
 - SIGTERM handling implemented with `signal.NotifyContext` + the two-phase `DrainState` rather than any graceful-shutdown library — the phase semantics are app-specific.
 - The install.sh and credential helper are served from `embed` templates rather than shipped as separate files — single-binary packaging (16_packaging.md) and one source of truth for the host-slug rules.
 - Go adaptation of the request-id span: the Rust "open the span" becomes the structured log record + trace_id extraction, since Go tracing here is slog-based — same observability surface, no otel dependency.
@@ -617,6 +615,7 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   no router change for those.
 - **NEW (2026-09-05) — broker forwarding is uniform across core + collab surfaces** (Forgejo #71): the §8.6 rule resolves at the single entry point `AuthService.AuthenticateForwarded`, and every Seam 1 feature surface (all nine `chain*` closures in `cmd/walhub`) resolves through it — bare `Authenticate` in a feature chain is an auth bug (it attributes brokered actions to the broker). Rationale: one forwarding decision point keeps core git/API lanes and collab handlers identical by construction; fail-closed ordering (errors before forwarding) is inherited, not re-implemented per surface.
 - **NEW (2026-09-05) — issue attachment bytes use `private` cache class** (Forgejo #120, docs/features/02 §12): `GET|HEAD /{o}/{r}/attachments/<sha>/<name>` follows the §5 static contract reimplemented in `internal/issues` (ETag/304/206/416/HEAD/nosniff) with one deliberate token deviation — `Cache-Control: private, max-age=31536000, immutable` instead of `public`. Immutable bytes, but authenticated reads must not sit in shared caches.
+- **NEW (2026-09-05) — server-side TLS removed; termination belongs on the reverse proxy** (Forgejo #165): `server.tls.*` config, cert/key loading, self-signed generation, the TLS listener wrap, `/services/public/ca.pem`, and the `setup.json` `ca_url`/`trust` fields are all gone — the server listens plain HTTP (h2c retained). Rationale: inbound (UI/API/git/SSH) all work behind a TLS-terminating proxy and outbound HTTPS never used the server cert; one fewer crypto surface to own. Residual `server.tls.*` settings fail closed (file rejected at load, env override fatal) with a reverse-proxy pointer. The same change honors `X-Forwarded-Proto` when building absolute URLs (`requestScheme`: proxy header, else the connection), closing the follow-up noted in 12_web_ui.md — no separate issue needed.
 
 **Divergence (2026-08-31):**
 
@@ -624,4 +623,4 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
 - **D2 — Frontend was standard ECMAScript (SUPERSEDED 2026-09-02 by explicit user request — DEVIATIONS.md D-WEB-6).** Historical: no TypeScript, no framework, no bundler; the SDK was ONE plain-ESM `web/sdk/repos.js`; the `/repos.mjs` route and the esbuild twin were gone (§3.1, §3.3); `web/src/setup*` was a plain-ESM setup page. **Shipped stack:** SolidJS SPA (`solid-js` + `@solidjs/router` runtime, Tailwind v4, vite-built into `web/dist/`; Setup page at `web/src/pages/Setup.jsx`); the SDK stays dependency-free, authored as submodules (`web/sdk/src/*.js`) and esbuild-bundled to `web/dist/repos.js`.
 - **D5 — Zero-config first run.** Missing config boots with built-in defaults (`0.0.0.0:8080`, filesystem store under `<data-dir>/store`, auth `none`, `auto_create_on_push`) instead of fatal exit 2 — the old step-2 "missing config file is a fatal exit 2" of the startup order is superseded by the bootstrap leg (§10.4, §3.4).
 - **D6 — Setup UI + API first-class.** `/setup` + `/api/v1/setup{,/test}` with the open-while-unsecured access rule and the SETUP-ONLY MODE for invalid configs (§3.4, new `internal/setup` package).
-- **Supersession (deliberate, fail-closed):** the Rust rule that auth `mode = "none"` is refused unless the listen address is loopback is REPLACED — auth-none is allowed on any bind with loud warnings (logs, setup UI, `readyz`) and zero refused requests (§3.4, §8.1, §10.4 step 8).
+- **Supersession (deliberate, fail-closed):** the Rust rule that auth `mode = "none"` is refused unless the listen address is loopback is REPLACED — auth-none is allowed on any bind with loud warnings (logs, setup UI, `readyz`) and zero refused requests (§3.4, §8.1, §10.4 step 7).

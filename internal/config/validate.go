@@ -21,7 +21,6 @@ func Validate(c *Config) (warnings []string, errs []error) {
 	errs = append(errs, checkStore(c)...)
 	errs = append(errs, checkSizes(c)...)
 	errs = append(errs, checkPlacementGlobs(c)...)
-	errs = append(errs, checkTLS(c)...)
 	errs = append(errs, checkRoles(c)...)
 	errs = append(errs, checkPaths(c)...)
 	errs = append(errs, checkSSH(c)...)
@@ -279,22 +278,7 @@ func validPlacementGlob(g string) bool {
 	return g == "*"
 }
 
-// 8. tls.
-func checkTLS(c *Config) []error {
-	var errs []error
-	switch c.Server.TLS.Mode {
-	case "off", "self_signed":
-	case "files":
-		if c.Server.TLS.Cert == "" || c.Server.TLS.Key == "" {
-			errs = append(errs, fmt.Errorf("server.tls.mode = \"files\" requires server.tls.cert and server.tls.key"))
-		}
-	default:
-		errs = append(errs, fmt.Errorf("server.tls.mode must be one of off|self_signed|files (got %q)", c.Server.TLS.Mode))
-	}
-	return errs
-}
-
-// 9. roles.
+// 8. roles.
 func checkRoles(c *Config) []error {
 	var errs []error
 	for _, r := range c.Server.Roles {
@@ -307,8 +291,7 @@ func checkRoles(c *Config) []error {
 	return errs
 }
 
-// 10. paths: cache.dir absolute (Rust requires this for the tls/ sibling)
-// unless the store backend is memory.
+// 9. paths: cache.dir absolute unless the store backend is memory.
 func checkPaths(c *Config) []error {
 	if c.Store.Backend == "memory" {
 		return nil

@@ -19,14 +19,13 @@ var installShTmpl string
 var credentialHelperTmpl string
 
 type installTmplData struct {
-	Host         string
-	Base         string
-	Slug         string
-	AuthNone     bool
-	Repo         string
-	TokenURL     string
-	CASelfSigned bool
-	Helper       string // the rendered per-host credential helper (§9.3)
+	Host     string
+	Base     string
+	Slug     string
+	AuthNone bool
+	Repo     string
+	TokenURL string
+	Helper   string // the rendered per-host credential helper (§9.3)
 }
 
 // renderInstall renders the script with the host baked in (§9.2). The
@@ -54,13 +53,12 @@ func (s *Server) installSh(w http.ResponseWriter, r *http.Request) {
 	base := s.baseURL(r)
 	host := r.Host
 	d := installTmplData{
-		Host:         host,
-		Base:         base,
-		Slug:         hostSlug(host),
-		AuthNone:     s.cfg.Server.Auth.Mode == "none",
-		Repo:         r.URL.Query().Get("repo"),
-		TokenURL:     base + "/_auth/tokens",
-		CASelfSigned: s.tlsOn || s.cfg.Server.TLS.Mode == "self_signed",
+		Host:     host,
+		Base:     base,
+		Slug:     hostSlug(host),
+		AuthNone: s.cfg.Server.Auth.Mode == "none",
+		Repo:     r.URL.Query().Get("repo"),
+		TokenURL: base + "/_auth/tokens",
 	}
 	body, err := renderInstall(d)
 	if err != nil {

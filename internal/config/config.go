@@ -7,21 +7,17 @@ package config
 
 import "time"
 
+// removedTLSHint explains the #165 removal wherever a residual server.tls.*
+// setting is rejected (TOML file or env overlay): fail closed with a pointer
+// at the reverse proxy, never a bare "unknown key" or a silent ignore.
+const removedTLSHint = "server.tls.* was removed (issue #165): walhub serves plain HTTP (h2c); terminate TLS at the reverse proxy in front of it"
+
 // Duration accepts Rust-spec spellings on the wire/TOML: "5ms", "1h", "30d", "7d", "0s".
 // (time.ParseDuration has no day/week units; this type adds them.)
 type Duration time.Duration
 
 // ByteSize accepts "20GiB", "64MiB", "1GiB", "0B", "512MB" spellings.
 type ByteSize int64
-
-// --- TLS ---
-
-type TLSStruct struct {
-	Mode      string   `toml:"mode"`      // "off" | "self_signed" | "files" (default "off")
-	Cert      string   `toml:"cert"`      // files mode: PEM chain
-	Key       string   `toml:"key"`       // files mode: PKCS#8/PKCS#1 key
-	Hostnames []string `toml:"hostnames"` // self_signed SANs
-}
 
 // --- Auth ---
 
@@ -67,7 +63,6 @@ type Server struct {
 	AccelRedirect         bool      `toml:"accel_redirect"`
 	PublicURL             string    `toml:"public_url"`
 	CorsOrigins           []string  `toml:"cors_origins"`
-	TLS                   TLSStruct `toml:"tls"`
 	Auth                  Auth      `toml:"auth"`
 	SSH                   ServerSSH `toml:"ssh"`
 }
@@ -323,7 +318,6 @@ func Defaults() *Config {
 				SessionTTL:     Duration(30 * 24 * time.Hour),
 				AccessTokenTTL: Duration(90 * 24 * time.Hour),
 			},
-			TLS: TLSStruct{Mode: "off"},
 		},
 		Store: Store{
 			Backend:            "s3",

@@ -201,9 +201,27 @@ func browserLooks(r *http.Request) bool {
 // canonicalSkip are the paths never redirected (§2.2 #2).
 var canonicalSkip = []string{"/_auth/", "/healthz", "/readyz", "/services/public"}
 
+// requestScheme is the outward-facing scheme for absolute URLs built from a
+// request: https when the connection itself is TLS *or* the reverse proxy in
+// front says so via X-Forwarded-Proto (first value wins); else http (#165).
+// Trusted-proxy gating is deliberately absent: the header only affects
+// *displayed* URLs (clone recipes, redirects), never auth or access control.
+func requestScheme(r *http.Request) string {
+	if r != nil {
+		if proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ","); strings.EqualFold(strings.TrimSpace(proto), "https") {
+			return "https"
+		}
+		if r.TLS != nil {
+			return "https"
+		}
+	}
+	return "http"
+}
+
 // canonicalBrowserHost 302s loopback browser-looking GET/HEAD to
-// walgit.localhost[:port], same path+query, scheme https when TLS is on else
-// http. Git/curl clients fail the browser test and never redirect.
+// walgit.localhost[:port], same path+query, scheme per requestScheme (https
+// behind a TLS-terminating proxy, else http). Git/curl clients fail the
+// browser test and never redirect.
 func (s *Server) canonicalBrowserHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if (r.Method != http.MethodGet && r.Method != http.MethodHead) ||
@@ -218,11 +236,7 @@ func (s *Server) canonicalBrowserHost(next http.Handler) http.Handler {
 				return
 			}
 		}
-		scheme := "http"
-		if s.tlsOn {
-			scheme = "https"
-		}
-		w.Header().Set("Location", scheme+"://"+canonicalHost(r.Host)+r.URL.RequestURI())
+		w.Header().Set("Location", requestScheme(r)+"://"+canonicalHost(r.Host)+r.URL.RequestURI())
 		w.WriteHeader(http.StatusFound)
 	})
 }
@@ -447,7 +461,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, tok SessionToken) {
 		Path:     "/",
 		MaxAge:   int(time.Duration(s.cfg.Server.Auth.SessionTTL).Seconds()),
 		HttpOnly: true,
-		Secure:   s.tlsOn || len(s.cfg.Server.CorsOrigins) > 0,
+		Secure:   len(s.cfg.Server.CorsOrigins) > 0,
 		SameSite: sameSiteFor(s.cfg.Server.CorsOrigins),
 	})
 }

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"io"
@@ -485,66 +484,11 @@ func TestMetricsHistogramAndHandler(t *testing.T) {
 	}
 }
 
-// --- TLS ---------------------------------------------------------------------------
+// --- listener (plain HTTP + h2c; #165 removed in-process TLS) ------------------
 
-func TestEnsureSelfSignedStable(t *testing.T) {
-	s, _ := newTestServer(t, nil)
-	s.cacheRoot = t.TempDir()
-	s.cfg.Server.PublicURL = "https://wal.example.com"
-	s.cfg.Server.TLS.Hostnames = []string{"extra.test"}
-	if err := s.EnsureSelfSigned(); err != nil {
-		t.Fatal(err)
-	}
-	certPath, _, sansPath := s.tlsFiles()
-	c1, err := os.ReadFile(certPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Same SAN set → no regeneration (file untouched, mtime stable).
-	if err := s.EnsureSelfSigned(); err != nil {
-		t.Fatal(err)
-	}
-	c2, _ := os.ReadFile(certPath)
-	if !bytes.Equal(c1, c2) {
-		t.Fatal("SAN-stable contract violated: cert regenerated")
-	}
-	// Changed SANs → regeneration.
-	s.cfg.Server.TLS.Hostnames = []string{"other.test"}
-	if err := s.EnsureSelfSigned(); err != nil {
-		t.Fatal(err)
-	}
-	c3, _ := os.ReadFile(certPath)
-	if bytes.Equal(c1, c3) {
-		t.Fatal("SAN change must regenerate")
-	}
-	if _, err := os.Stat(sansPath); err != nil {
-		t.Fatalf("cert.sans missing: %v", err)
-	}
-	// desiredSANs composition.
-	want := s.desiredSANs()
-	if want[0] != "localhost" || want[1] != "*.localhost" || want[2] != "127.0.0.1" || want[3] != "::1" {
-		t.Fatalf("sans head = %v", want)
-	}
-	if !containsString(want, "wal.example.com") || !containsString(want, "other.test") {
-		t.Fatalf("sans tail = %v", want)
-	}
-	// sans helpers.
-	if !sansEqual("a,b,c\n", []string{"c", "b", "a"}) || sansEqual("a,b", []string{"a", "b", "c"}) {
-		t.Fatal("sansEqual truth table broken")
-	}
-	if got := joinSans([]string{"a", "b"}); got != "a,b\n" {
-		t.Fatalf("joinSans = %q", got)
-	}
-	if got := splitSans("a\nb,,c\n"); len(got) != 3 || got[2] != "c" {
-		t.Fatalf("splitSans = %v", got)
-	}
+func TestSDKETagDiffers(t *testing.T) {
 	if sdkETag("x") == sdkETag("y") {
 		t.Fatal("sdkETag must differ per input")
-	}
-	// TLSServerConfig loads the freshly generated pair.
-	tc, err := s.TLSServerConfig()
-	if err != nil || len(tc.Certificates) != 1 || tc.NextProtos[0] != "h2" {
-		t.Fatalf("tls config = %v %v", tc, err)
 	}
 }
 

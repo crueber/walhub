@@ -799,4 +799,10 @@ func TestBaseURLVariants(t *testing.T) {
 	if got := f.env.baseURL(r2); !strings.HasPrefix(got, "https://") {
 		t.Fatalf("tls = %q", got)
 	}
+	// X-Forwarded-Proto from a TLS-terminating proxy → https scheme (#165).
+	r3 := httptest.NewRequest("GET", "http://host.example/x", nil)
+	r3.Header.Set("X-Forwarded-Proto", "https")
+	if got := f.env.baseURL(r3); got != "https://host.example" {
+		t.Fatalf("forwarded = %q", got)
+	}
 }

@@ -26,7 +26,8 @@ This file consolidates, deduplicated, every decision recorded in the `## Decisio
 - **D-DEP-2 — Frontend budget: zero npm runtime dependencies; one devDependency (`esbuild`).** No TypeScript, no framework, no state library, no VDOM.
   Chain: earlier ≤6-npm-dependency budget (`solid-js`, `@solidjs/router`, `marked`; dev `vite`, `vite-plugin-solid`, `typescript`) → superseded by the zero-runtime budget with the single esbuild devDependency.
   Sources: 01, 12, 15, 16, README L1, AGENTS L1. Status: in force (supersedes SolidJS set).
-- **D-DEP-3 — Hand-rolled inventory (no library where a crate was used).** S3 SigV4 (~150 lines, validated against AWS test vectors); GCS JSON-API HTTPS client; protobuf wire codec; JWKS/JWT verification (`crypto/rsa`/`crypto/ecdsa`); self-signed TLS (`crypto/x509`+`crypto/ecdsa`, replacing rcgen); Prometheus text exposition; weighted LRU caches; `singleflight.Group`; CORS and all other middleware (chi core only); `weighted semaphore` + errgroup in `internal/store` (ruling C-1: hand-rolled, no x/sync); cron parser (08); hand-rolled h2c only via `x/net`.
+- **D-DEP-3 — Hand-rolled inventory (no library where a crate was used).** S3 SigV4 (~150 lines, validated against AWS test vectors); GCS JSON-API HTTPS client; protobuf wire codec; JWKS/JWT verification (`crypto/rsa`/`crypto/ecdsa`); Prometheus text exposition; weighted LRU caches; `singleflight.Group`; CORS and all other middleware (chi core only); `weighted semaphore` + errgroup in `internal/store` (ruling C-1: hand-rolled, no x/sync); cron parser (08); hand-rolled h2c only via `x/net`.
+  Rationale: budget is law — hand-roll instead; each hand-rolled piece is behavior-identical to the Rust original. (The `crypto/x509`+`crypto/ecdsa` self-signed TLS piece was REMOVED 2026-09-05 by Forgejo #165 — no in-process TLS at all; the proxy terminates it.)
   Rationale: budget is law — hand-roll instead; each hand-rolled piece is behavior-identical to the Rust original.
   Sources: 01, 02, 03, 06, 07, 08, 12, 13, README L1, AGENTS L1. Status: in force.
 
@@ -90,6 +91,9 @@ This file consolidates, deduplicated, every decision recorded in the `## Decisio
   Sources: 07. Status: in force.
 - **D-API-2 — API behavioral pins & clarifications.** Discovery document lists only real routes derived from the route table (kills the §20.4 phantom merge-queue advertisement); `%x00` field separators in `--format` argv; commit render = two `git show` invocations (header, then patch+numstat); trailer folding joins with `"\n"` + de-indented line; `?raw` blob responses uncapped (the 2 MiB cap is a JSON-shape rule); cross-host `POST ops/{op}` returns 409/SSE `error` (records are instance-local; no attachable stream).
   Sources: 07. Status: in force.
+- **D-HTTP-4 — No server-side TLS; termination belongs on the reverse proxy (2026-09-05, Forgejo #165).** Diverges from MASTER_RUST_SPEC §8.10–8.11 (in-process TLS: `off|self_signed|files`, rcgen/self-signed generation, `/services/public/ca.pem`, `ca_url`/`trust` recipes): walhub serves plain HTTP (h2c retained), holds no `server.tls.*` surface, and honors `X-Forwarded-Proto` when building absolute URLs (proxy header, else the connection; display only, never auth). Residual `server.tls.*` settings fail closed (TOML rejected at load; env override fatal — a deliberate exception to the soft unknown-key rule) with a reverse-proxy pointer; minimal Caddy/nginx snippets live in 16 §3.4.
+  Rationale: inbound (UI/API/git/SSH) all work behind a terminating proxy and outbound HTTPS never used the server cert; verified 2026-09-05 that no flow needs a server cert.
+  Sources: 01, 06, 11, 12, 16. Status: in force.
 
 ## 7. Git & WAL engine
 

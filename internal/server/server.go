@@ -1,7 +1,7 @@
 // Package server implements the walhub HTTP server (doc 06_server_http.md):
 // the ordered middleware chain (§2.2), the chi route tree (§3), git smart HTTP
 // (§4), immutable static objects (§5), LFS (§6), auth in all three modes (§8),
-// setup/bootstrap (§3.4), health/metrics/startup (§10), TLS (§11), and
+// setup/bootstrap (§3.4), health/metrics/startup (§10), and
 // two-phase drain (§12).
 //
 // The engine (internal/wal), the JSON API (internal/api), and the git
@@ -57,7 +57,7 @@ type Server struct {
 
 	inflight  Inflight
 	cacheRoot string
-	dataDir   string // cache.dir; LFS spool + TLS files live under it
+	dataDir   string // cache.dir; the LFS spool lives under it
 
 	version  string // build sha: build-time env → git short sha → "dev"
 	instance string // name[/id] per MASTER_RUST_SPEC §3.4
@@ -65,26 +65,23 @@ type Server struct {
 
 	boot BootState // §3.4 boot decision: normal / defaults / setup-only
 
-	tlsOn bool // whether this listener terminates TLS (scheme selection)
-
 	// Now is overridable for tests.
 	Now func() time.Time
 
 	log *slog.Logger
 }
 
-// Options wires the composition (§10.4 step 5: build AppState).
+// Options wires the composition (§10.4 step 4: build AppState).
 type Options struct {
 	Config    *config.Config
 	Store     store.ObjectStore
 	Engine    Engine
 	API       RouteProvider // internal/api mount; nil in setup-only/defaults-less tests
 	DataDir   string
-	CacheRoot string // cache.dir; LFS spool + TLS files live under it
+	CacheRoot string // cache.dir; the LFS spool lives under it
 	Version   string
 	Instance  string
 	Kind      ServerKind
-	TLSOn     bool
 	Boot      BootState
 	// Notifier wakes the events bridge for a repo ("owner/name"); nil when
 	// the instance runs no bridge (09_events.md §1 — notify then answers 202
@@ -135,7 +132,6 @@ func New(o Options) *Server {
 		version:   o.Version,
 		instance:  o.Instance,
 		kind:      o.Kind,
-		tlsOn:     o.TLSOn,
 		boot:      o.Boot,
 		log:       o.Log,
 		notify:    o.Notifier,
@@ -170,7 +166,7 @@ func (s *Server) serverHeaderValue() string {
 	return v + ")"
 }
 
-// cacheDir resolves a directory under the cache root (§6.3 spool, §11 TLS);
+// cacheDir resolves a directory under the cache root (§6.3 spool);
 // without a configured root it falls back to the OS temp dir (tests/dev).
 func (s *Server) cacheDir(sub string) string {
 	root := s.cacheRoot
@@ -180,7 +176,7 @@ func (s *Server) cacheDir(sub string) string {
 	return root + "/" + sub
 }
 
-// Auth exposes the auth service for composition (§10.4 step 5).
+// Auth exposes the auth service for composition (§10.4 step 4).
 func (s *Server) Auth() *AuthService { return s.authSvc }
 
 // Drain exposes the DrainState for the signal handler (§12).

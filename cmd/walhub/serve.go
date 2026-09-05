@@ -1,12 +1,11 @@
 // serve.go — `walhub serve` (the default): the §10.4 startup order of
 // 06_server_http.md — bootstrap decision tree, store by backend, registry,
 // engine, api env, chi server, loops gated by server.roles, prewarm,
-// watchdog, TLS/h2c listener, and the two-phase drain on SIGTERM/SIGINT.
+// watchdog, plain-HTTP/h2c listener, and the two-phase drain on SIGTERM/SIGINT.
 package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/net/http2"
 
 	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/config"
@@ -152,7 +149,6 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		Version:   version(),
 		Instance:  instanceID(cfg),
 		Kind:      serverKind(cfg),
-		TLSOn:     cfg.Server.TLS.Mode != "off",
 		Boot:      boot,
 		Log:       log,
 		Notifier:  wake,
@@ -170,7 +166,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		apiEnv.SSHKeys = srv.SSHKeyRegistry()
 	}
 
-	// ---- background loops (§10.4 step 6), gated by server.roles ---------------
+	// ---- background loops (§10.4 step 5), gated by server.roles ---------------
 	drainCtx, cancelDrain := context.WithCancel(context.Background())
 	defer cancelDrain()
 
@@ -194,7 +190,9 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		}
 	}
 
-	// ---- listener (§10.4 step 7): TLS/h2c per config ---------------------------
+	// ---- listener (§10.4 step 6): plain HTTP with h2c ---------------------------
+	// TLS termination belongs on the reverse proxy in front of walhub
+	// (#165): the server never wraps the listener.
 	handler := srv.Handler()
 	httpSrv := srv.NewHTTPServer(handler, appCtxer{ctx})
 
@@ -204,14 +202,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		return exitErr
 	}
 	ln = srv.BuildListener(ln) // TCP_NODELAY per connection
-
-	if tlsCfg := tlsConfigFor(srv, cfg); tlsCfg != nil {
-		http2.ConfigureServer(httpSrv, &http2.Server{}) // ALPN h2 over TLS
-		ln = tls.NewListener(ln, tlsCfg)
-		log.Info("listening (tls)", "addr", cfg.Server.Listen, "version", version())
-	} else {
-		log.Info("listening", "addr", cfg.Server.Listen, "version", version())
-	}
+	log.Info("listening", "addr", cfg.Server.Listen, "version", version())
 
 	// ---- SSH git transport (17_ssh.md): disabled unless server.ssh.listen set --
 	if sshSrv, serr := srv.SSH(); serr != nil {
@@ -226,7 +217,7 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 
 	serveErr := make(chan error, 2)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
-	// Loopback IPv6 twin so *.localhost works (§10.4 step 7).
+	// Loopback IPv6 twin so *.localhost works (§10.4 step 6).
 	if twin, ok := loopbackTwin(cfg.Server.Listen); ok {
 		go func() {
 			if tln, terr := net.Listen("tcp", twin); terr == nil {
@@ -305,7 +296,7 @@ type appCtxer struct{ ctx context.Context }
 
 func (a appCtxer) Context() context.Context { return a.ctx }
 
-// watchdog ticks 1 s and warns when a tick is > 2.5 s late (§10.4 step 6).
+// watchdog ticks 1 s and warns when a tick is > 2.5 s late (§10.4 step 5).
 func watchdog(ctx context.Context, log *slog.Logger) {
 	last := time.Now()
 	t := time.NewTicker(time.Second)
@@ -435,27 +426,6 @@ func openStore(cfg *config.Config, dataDir string) (store.ObjectStore, error) {
 	default:
 		return nil, fmt.Errorf("unknown store.backend %q", cfg.Store.Backend)
 	}
-}
-
-// tlsConfigFor returns the TLS config for files/self_signed modes (nil = off).
-func tlsConfigFor(srv *server.Server, cfg *config.Config) *tls.Config {
-	switch cfg.Server.TLS.Mode {
-	case "self_signed":
-		if err := srv.EnsureSelfSigned(); err != nil {
-			slog.Error("self-signed generation failed", "err", err)
-			return nil
-		}
-	case "files":
-		// cert/key paths validated at load.
-	default:
-		return nil
-	}
-	tc, err := srv.TLSServerConfig()
-	if err != nil {
-		slog.Error("tls load failed", "err", err)
-		return nil
-	}
-	return tc
 }
 
 // loopbackTwin reports the IPv6 twin listener address for a 127.0.0.1 bind.

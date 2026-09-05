@@ -205,26 +205,7 @@ func TestValidatePlacementGlobs(t *testing.T) {
 	}
 }
 
-// Rule 8 — tls.
-func TestValidateTLS(t *testing.T) {
-	c := Defaults()
-	c.Server.TLS.Mode = "files"
-	_, errs := Validate(c)
-	errsContain(t, errs, "requires server.tls.cert and server.tls.key")
-
-	c = Defaults()
-	c.Server.TLS.Mode = "bogus"
-	_, errs = Validate(c)
-	errsContain(t, errs, "server.tls.mode must be one of")
-
-	c = Defaults()
-	c.Server.TLS.Mode = "self_signed"
-	if _, errs := Validate(c); len(errs) != 0 {
-		t.Fatalf("self_signed implies nothing else: %v", errs)
-	}
-}
-
-// Rule 9 — roles.
+// Rule 8 — roles.
 func TestValidateRoles(t *testing.T) {
 	c := Defaults()
 	c.Server.Roles = []string{"serve", "maintain", "events", "serve"} // duplicates allowed
@@ -236,7 +217,7 @@ func TestValidateRoles(t *testing.T) {
 	errsContain(t, errs, "must be one of serve|maintain|events")
 }
 
-// Rule 10 — paths.
+// Rule 9 — paths.
 func TestValidatePaths(t *testing.T) {
 	c := Defaults()
 	c.Cache.Dir = "relative/dir"
