@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"git.packden.us/crueber/walhub/internal/store"
@@ -312,5 +313,123 @@ func TestRetentionDeletesFanoutDoneMarkers(t *testing.T) {
 	}
 	if x.svc.fanoutDone(ctx(), "acme", "repo", 1) {
 		t.Fatal("completion record must die with its event")
+	}
+}
+
+// failPrincipalStore fails notification-object Creates for one principal
+// only (reads + the index CAS + every other write delegate): a
+// deterministic per-recipient fault injector for the honest-drain
+// contract (issue #152). The done-marker Create never matches (different
+// prefix), so marker behavior is exactly what the drain decides.
+type failPrincipalStore struct {
+	store.ObjectStore
+	principal string
+}
+
+func (f failPrincipalStore) Put(ctx context.Context, key string, body store.PutBody, opts store.PutOptions) (store.ObjectMeta, error) {
+	if opts.Mode == store.PutCreate &&
+		strings.HasPrefix(key, NotifPrefix(f.principal)) &&
+		!strings.HasSuffix(key, "index.json") {
+		return store.ObjectMeta{}, errors.New("injected recipient failure")
+	}
+	return f.ObjectStore.Put(ctx, key, body, opts)
+}
+
+// countPrincipalNotifs counts one principal's notification objects (the
+// index is excluded — it is a row, not a delivery).
+func countPrincipalNotifs(t *testing.T, st store.ObjectStore, principal string) int {
+	t.Helper()
+	n := 0
+	_ = st.List(ctx(), NotifPrefix(principal), "", func(m store.ObjectMeta) error {
+		if !strings.HasSuffix(m.Key, "/index.json") {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
+// TestFanoutDrainSkipsDoneMarkerOnIncomplete pins issue #152's data-loss
+// direction: an overflow drain that fails some recipients must NOT write
+// the per-seq completion marker — the #77 redrain sweep keys on it, so a
+// marker on an incomplete drain skips the seq forever. The healed sweep
+// then converges idempotently (no duplicate for the healthy recipient).
+// Driven explicitly (enqueue + WaitGroup join + sweep), no sleeps.
+func TestFanoutDrainSkipsDoneMarkerOnIncomplete(t *testing.T) {
+	st := store.NewMemory()
+	at := "2026-09-04T12:00:00Z"
+	writeRaw(t, st, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: 1}))
+	seedActivity(t, st, at, "acme", "repo", 1, true,
+		activityRecipient{Principal: "amy@example.com", Reason: ReasonSubscribed},
+		activityRecipient{Principal: "zed@example.com", Reason: ReasonSubscribed})
+	svc := New(failPrincipalStore{ObjectStore: st, principal: "zed@example.com"}, nil)
+
+	svc.enqueueFanout("acme/repo", 1)
+	waitFanoutQuiescent(t, svc, "acme/repo")
+
+	if n := countPrincipalNotifs(t, st, "amy@example.com"); n != 1 {
+		t.Fatalf("healthy recipient = %d, want 1", n)
+	}
+	if n := countPrincipalNotifs(t, st, "zed@example.com"); n != 0 {
+		t.Fatalf("faulted recipient = %d, want 0", n)
+	}
+	if svc.fanoutDone(ctx(), "acme", "repo", 1) {
+		t.Fatal("incomplete drain must not write the done marker (issue #152: the redrain would skip the seq forever)")
+	}
+
+	// Heal the store: the sweep re-probes the unmarked seq and the drain
+	// converges — zed delivered exactly once, amy not duplicated.
+	svc.Store = st
+	svc.sweepFanout(ctx())
+	waitFanoutQuiescent(t, svc, "acme/repo")
+	if !svc.fanoutDone(ctx(), "acme", "repo", 1) {
+		t.Fatal("healed redrain must mark the recovered seq")
+	}
+	if n := countPrincipalNotifs(t, st, "amy@example.com"); n != 1 {
+		t.Fatalf("redrain duplicated the healthy recipient: %d", n)
+	}
+	if n := countPrincipalNotifs(t, st, "zed@example.com"); n != 1 {
+		t.Fatalf("redrain delivered the faulted recipient %d times, want 1", n)
+	}
+}
+
+// TestFanoutOneExpiredBudgetIsIncomplete pins the budget half of issue
+// #152: recipients stranded by the FanoutBudget report complete=false
+// (no silent loss), and a live-budget redrain converges to full delivery
+// plus the marker. Deterministic: a canceled parent expires the budget
+// before any recipient starts (the memory store honors zero-latency GETs
+// under cancel, so the event still loads and every recipient strands at
+// the budget precheck).
+func TestFanoutOneExpiredBudgetIsIncomplete(t *testing.T) {
+	st := store.NewMemory()
+	at := "2026-09-04T12:00:00Z"
+	writeRaw(t, st, CollabStateKey("acme", "repo"), mustEncode(t, CollabState{NextSeq: 1}))
+	seedActivity(t, st, at, "acme", "repo", 1, true,
+		activityRecipient{Principal: "amy@example.com", Reason: ReasonSubscribed})
+	svc := New(st, nil)
+
+	cctx, cancel := context.WithCancel(ctx())
+	cancel()
+	existed, complete := svc.fanoutOne(cctx, "acme", "repo", "acme/repo", 1)
+	if !existed || complete {
+		t.Fatalf("expired budget = (%v, %v), want (true, false)", existed, complete)
+	}
+	if n := countPrincipalNotifs(t, st, "amy@example.com"); n != 0 {
+		t.Fatalf("stranded recipient delivered %d, want 0", n)
+	}
+
+	// Live-budget redrain converges: full delivery, then the drain marks
+	// the recovered seq.
+	existed, complete = svc.fanoutOne(ctx(), "acme", "repo", "acme/repo", 1)
+	if !existed || !complete {
+		t.Fatalf("live redrain = (%v, %v), want (true, true)", existed, complete)
+	}
+	svc.enqueueFanout("acme/repo", 1)
+	waitFanoutQuiescent(t, svc, "acme/repo")
+	if !svc.fanoutDone(ctx(), "acme", "repo", 1) {
+		t.Fatal("redrain must mark the recovered seq")
+	}
+	if n := countPrincipalNotifs(t, st, "amy@example.com"); n != 1 {
+		t.Fatalf("converged delivery = %d, want exactly 1", n)
 	}
 }
