@@ -81,6 +81,8 @@ Cap: at most `DefaultMaxHooksPerRepo` (20) hook configs per repo (service overri
 `MaxHooks`, zero/negative selects the default; no config key in v1). Creates beyond
 the cap are refused with `409` plain-text. The cap is also the per-repo sweep bound:
 one repo's minute pass never scans more than the cap's worth of hooks (issue #156).
+Repos that already hold more hooks than the cap (created before it) are grandfathered:
+delivery still scans all their hooks and only new creates are refused.
 
 Delivery records: `repos/<o>/<r>/webhooks/<id>/deliveries/recent.json` — one CAS'd last-25 ring
 `{updated_at, entries:[{seq, event, status, at, error?, duration_ms}]}` (debugging surface only, not

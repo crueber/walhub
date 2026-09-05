@@ -90,8 +90,6 @@ func TestWebhookCapEnforced(t *testing.T) {
 	}
 }
 
-func mkConflict() error { return ErrConflict }
-
 // TestSweepQuietRepoBounded is the #156 regression: a repo with MORE
 // hooks than the cap allows (25 seeded directly) costs exactly one
 // collab_state GET per minute sweep once drained — no hook LIST, no
