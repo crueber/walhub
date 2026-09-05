@@ -647,12 +647,6 @@ func TestAttachmentConfig(t *testing.T) {
 	if AttachmentsPrefix("o", "r") != "repos/o/r/attachments/" {
 		t.Fatal("prefix shape")
 	}
-	if attachmentSpoolDir("") != "" {
-		t.Fatal("empty spool dir")
-	}
-	if attachmentSpoolDir("/c") != "/c/attachments-spool" {
-		t.Fatal("spool dir join")
-	}
 }
 
 func TestUploadUnreadableBody(t *testing.T) {

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -541,13 +540,4 @@ func (h *Handler) uploadAttachment(w http.ResponseWriter, r *http.Request, owner
 		return
 	}
 	writeJSON(w, http.StatusCreated, rec)
-}
-
-// attachmentSpoolDir resolves the spool parent for composition (mirrors
-// the releases release-spool wiring).
-func attachmentSpoolDir(cacheDir string) string {
-	if cacheDir == "" {
-		return ""
-	}
-	return filepath.Join(cacheDir, "attachments-spool")
 }

@@ -307,7 +307,7 @@ Pages (SolidJS SPA per `12_web_ui.md`, D-WEB-6; `.jsx` route components, `useDat
 | `/:o/:r/milestones` | milestone CRUD + progress bars + per-milestone linked issues (each milestone lists/links its issues via the server-side `milestone=` list filter; the title links to the filtered issue list) | on save, refetch |
 
 SDK additions (`web/sdk/src/issues.js`, esbuild-bundled into `repos.js` per D-WEB-2; full shapes in 08):
-`repo.issues.{list,create,patch,comment,events,reactions.add,reactions.remove}`, `repo.labels.{list,create,update,delete}`,
+`repo.issues.{list,get,create,patch,comment,events,reactions.add,reactions.remove}`, `repo.labels.{list,create,update,delete}`,
 `repo.milestones.{list,get,create,update,delete}` — thin fetch wrappers over §7 with the SDK's lane/401 rules; thread pages use
 `mountStream` (`12_web_ui.md` §2.5) to follow `issue`/`issue_event` on the repo's existing SSE stream.
 `repo.attachments.upload(file|Blob|Uint8Array, {name?, sha256?, contentType?})` (§12) posts raw bytes with an optional
