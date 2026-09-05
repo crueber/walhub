@@ -143,8 +143,13 @@ func TestOrgsEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created["org"] != "acme" {
 		t.Errorf("create body: %s", w.Body.String())
 	}
-	// Duplicate → 409.
-	if w := doReq(h, "POST", "/api/v1/orgs", `{"org":"acme"}`); w.Code != http.StatusConflict {
+	// Duplicate by the owning creator is idempotent (201, #75 resume);
+	// a rival creator taking the same name gets 409.
+	if w := doReq(h, "POST", "/api/v1/orgs", `{"org":"acme"}`); w.Code != http.StatusCreated {
+		t.Errorf("idempotent re-create = %d", w.Code)
+	}
+	hb := testHandler(s, bob)
+	if w := doReq(hb, "POST", "/api/v1/orgs", `{"org":"acme"}`); w.Code != http.StatusConflict {
 		t.Errorf("dup org = %d", w.Code)
 	}
 	// Bad JSON → 400.

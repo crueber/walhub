@@ -73,29 +73,139 @@ func parseOrg(raw []byte) (*Org, error) {
 	return &o, nil
 }
 
-// CreateOrg reserves the org namespace (Create of org.json; a lost race is
-// 409 "org already exists") and seeds members.json with the creator as
-// owner. Both writes are idempotent for the loser only in the sense that
-// the loser gets a clean 409 and writes nothing further.
+// CreateOrg reserves the org namespace (Create of org.json) and seeds
+// members.json with the creator as owner. Creation is atomic-or-recoverable:
+//
+//   - If the members seed fails, the org.json reservation is rolled back
+//     (best-effort version-guarded delete) and the original error is
+//     returned, so a retry starts clean.
+//   - If org.json already exists, the call resumes instead of blindly
+//     409ing: when the existing org is ownerless (members.json missing, or a
+//     roster with no owner — the crash-between-writes residue) the creator
+//     is bound as owner via CAS; when the creator is already an owner the
+//     create is idempotent success; otherwise it is 409 "org already exists"
+//     and the existing roster is untouched.
+//
+// ### Concurrency
+//
+// Hazard: two concurrent creates for one name racing the members seed, or a
+// retry racing the in-flight winner's seed, stealing ownership or double
+// winning. Avoidance: the namespace (org.json Create) admits exactly one
+// reserver; the owner binding is decided by members.json CAS — the seed's
+// 412 path re-reads and succeeds only when the caller is actually the bound
+// owner (else 409), and the resume path adds the caller as owner only to an
+// ownerless roster (CAS loop, bounded per casUpdate) while a roster that
+// already has owners is never rewritten. Exactly one creator observes
+// success with sole ownership; every loser gets a clean 409 and writes
+// nothing. No in-process locks: store CAS is the lock (13 §3).
 func (s *Service) CreateOrg(ctx context.Context, org, displayName, description, creator string) (*Org, error) {
 	if !ValidOrg(org) {
 		return nil, fmt.Errorf("%w: invalid org %q (lowercase [a-z0-9-], 1-39 chars)", ErrInvalid, org)
 	}
 	now := s.nowUTC().Format(time.RFC3339)
 	o := &Org{Version: 1, Org: org, DisplayName: displayName, Description: description, CreatedAt: now, UpdatedAt: now}
-	if _, err := store.PutBytes(ctx, s.Store, OrgKey(org), encodeOrg(o),
-		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
+	orgMeta, err := store.PutBytes(ctx, s.Store, OrgKey(org), encodeOrg(o),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"})
+	if err != nil {
 		if store.IsPreconditionFailed(err) {
-			return nil, fmt.Errorf("%w: org already exists", ErrConflict)
+			return s.resumeOrgCreate(ctx, org, creator)
 		}
 		return nil, err
 	}
 	m := &Members{Version: 1, Members: []Member{{Principal: normPrincipal(creator), Role: OrgOwner, JoinedAt: now}}, UpdatedAt: now}
 	if _, err := store.PutBytes(ctx, s.Store, MembersKey(org), encodeMembers(m),
-		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil && !store.IsPreconditionFailed(err) {
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
+		if store.IsPreconditionFailed(err) {
+			return s.confirmOrgOwner(ctx, org, o, creator)
+		}
+		// Roll back the reservation: version-guarded so a concurrently
+		// recreated org is never deleted. Best-effort — a failed rollback
+		// still leaves the resume path to heal the ownerless reservation,
+		// and the original error (never the rollback's) is returned.
+		_ = s.Store.Delete(ctx, OrgKey(org), orgMeta.Version)
 		return nil, err
 	}
 	return o, nil
+}
+
+// confirmOrgOwner resolves a 412 on the initial members seed: the seed lost
+// a race (a concurrent resume healed first, or a stale members.json predates
+// the reservation). Read-only arbitration — the loser writes nothing:
+// success iff the caller is the bound owner, else 409. Any ownerless residue
+// this leaves behind converges through resumeOrgCreate on retry.
+func (s *Service) confirmOrgOwner(ctx context.Context, org string, o *Org, creator string) (*Org, error) {
+	m, _, err := s.getMembers(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	if m != nil && isRosterOwner(m, creator) {
+		return o, nil
+	}
+	return nil, fmt.Errorf("%w: org already exists", ErrConflict)
+}
+
+// resumeOrgCreate completes a create whose org.json reservation already
+// exists: idempotent success when the caller is already an owner, a CAS heal
+// binding the caller as owner when the org is ownerless, else 409 leaving
+// the existing roster untouched.
+func (s *Service) resumeOrgCreate(ctx context.Context, org, creator string) (*Org, error) {
+	creator = normPrincipal(creator)
+	now := s.nowUTC().Format(time.RFC3339)
+	_, err := s.casUpdate(ctx, MembersKey(org), func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		if cur == nil {
+			// Crash-between-writes residue (or a rolled-back-then-retried
+			// reservation): bind the creator as owner.
+			m := &Members{Version: 1, Members: []Member{{Principal: creator, Role: OrgOwner, JoinedAt: now}}, UpdatedAt: now}
+			return encodeMembers(m), true, nil
+		}
+		m, perr := parseMembers(cur)
+		if perr != nil {
+			return nil, false, perr
+		}
+		if isRosterOwner(m, creator) {
+			return nil, false, nil
+		}
+		if rosterHasOwner(m) {
+			return nil, false, fmt.Errorf("%w: org already exists", ErrConflict)
+		}
+		m.Members = append(m.Members, Member{Principal: creator, Role: OrgOwner, JoinedAt: now})
+		m.Version++
+		m.UpdatedAt = now
+		sortMembers(m)
+		return encodeMembers(m), true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	got, gerr := s.GetOrg(ctx, org)
+	if gerr != nil {
+		return nil, gerr
+	}
+	if got == nil {
+		return nil, fmt.Errorf("%w: unknown org %q", ErrNotFound, org)
+	}
+	return got, nil
+}
+
+// rosterHasOwner reports whether any roster entry holds the owner role.
+func rosterHasOwner(m *Members) bool {
+	for _, e := range m.Members {
+		if e.Role == OrgOwner {
+			return true
+		}
+	}
+	return false
+}
+
+// isRosterOwner reports whether principal holds the owner role.
+func isRosterOwner(m *Members, principal string) bool {
+	principal = normPrincipal(principal)
+	for _, e := range m.Members {
+		if normPrincipal(e.Principal) == principal && e.Role == OrgOwner {
+			return true
+		}
+	}
+	return false
 }
 
 // GetOrg reads org.json; nil when absent.
