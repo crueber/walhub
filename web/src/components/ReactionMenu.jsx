@@ -109,7 +109,7 @@ export default function ReactionMenu(props) {
       </button>
       <Show when={getOpen() && !empty()}>
         <div
-          class="card absolute left-0 z-30 mt-1 flex gap-1 p-1"
+          class="reaction-drop card absolute left-0 z-30 mt-1 flex gap-1 p-1"
           role="menu"
           aria-label={`Add reaction on comment ${props.seq}`}
           ref={menu}

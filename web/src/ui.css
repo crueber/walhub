@@ -93,9 +93,21 @@
   .empty-state-compact .empty-title { @apply text-sm; }
   .empty-state-compact .empty-hint { @apply text-xs; }
 
-  /* Clone popover (issue #37): solid panel — the shared .card background
-     is translucent in dark mode and tab text would bleed through. */
-  .clone-body { @apply bg-white dark:bg-zinc-900; }
+  /* Floating popovers (issues #37, #115): solid panels — the shared .card
+     background is translucent in dark mode and page text would bleed through.
+     Every absolutely-positioned .card menu carries one of these classes. */
+  .clone-body, .ref-drop, .tasks-drop, .notif-drop, .reaction-drop, .label-drop, .close-drop {
+    @apply bg-white dark:bg-zinc-900;
+  }
+
+  /* Slim themed scrollbars for popover lists (issue #115): thin styled
+     scrollbar in Chromium/Safari, thin + themed in Firefox. */
+  .scroll-slim { scrollbar-width: thin; scrollbar-color: var(--color-zinc-400) transparent; }
+  .dark .scroll-slim { scrollbar-color: var(--color-zinc-600) transparent; }
+  .scroll-slim::-webkit-scrollbar { width: 8px; }
+  .scroll-slim::-webkit-scrollbar-track { background: transparent; }
+  .scroll-slim::-webkit-scrollbar-thumb { border-radius: 9999px; border: 2px solid transparent; background-clip: padding-box; background-color: var(--color-zinc-300); }
+  .dark .scroll-slim::-webkit-scrollbar-thumb { background-color: var(--color-zinc-700); }
 
   /* Progress bar + error tray */
   .progress { @apply fixed inset-x-0 top-0 z-50 h-0.5; }

@@ -88,7 +88,7 @@ function ChooserMenu(props) {
           ref={menuRef}
           role="menu"
           aria-label={props.menuLabel ?? props.toggleLabel}
-          class="card absolute bottom-full right-0 z-10 mb-1 grid min-w-52 gap-0.5 p-1"
+          class="close-drop card absolute bottom-full right-0 z-10 mb-1 grid min-w-52 gap-0.5 p-1"
           onKeyDown={onMenuKey}
         >
           <For each={CLOSE_CHOICES}>
