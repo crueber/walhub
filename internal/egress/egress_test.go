@@ -74,6 +74,8 @@ func TestBlockedIP(t *testing.T) {
 		{name: "mapped metadata", ip: "::ffff:169.254.169.254", blocked: true},
 		{name: "mapped benchmark", ip: "::ffff:198.18.0.1", blocked: true},
 		{name: "mapped test-net-1", ip: "::ffff:192.0.2.1", blocked: true},
+		{name: "mapped test-net-2", ip: "::ffff:198.51.100.1", blocked: true},
+		{name: "mapped test-net-3", ip: "::ffff:203.0.113.1", blocked: true},
 		{name: "mapped loopback", ip: "::ffff:127.0.0.1", blocked: false},
 		{name: "mapped public", ip: "::ffff:8.8.8.8", blocked: false},
 

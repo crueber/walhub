@@ -254,8 +254,11 @@ key agent on the host — use https + token). `git stderr` is scrubbed
 packet, record, or error. Acceptance: bucket + record + packet + error
 grep-clean (tested).
 
-SSRF: deny-private default (loopback/RFC1918/ULA/link-local/multicast
-via stdlib `net` parse — no new dep), `url_allowlist` (empty = GitHub
+SSRF: deny-private default (loopback plus the shared `internal/egress`
+range table — RFC1918, CGNAT, benchmark 198.18/15, TEST-NET-1/2/3, ULA,
+link-local, multicast, unspecified, reserved, incl. mapped-v6; loopback
+is denied here even though the egress table allows it for dev webhooks),
+`url_allowlist` (empty = GitHub
 always reachable; other hosts need the list or the explicit
 `dangerous:true` confirm), `allow_file_urls=false`. Residuals named:
 DNS TOCTOU (check-time vs clone-time resolution can differ) and redirect
@@ -402,6 +405,13 @@ clean.
   stays internal — GET merges the ring mirror (fresh on every packet);
   pruned windows (past the 1 h retention) answer 404 per the §3 status
   table, and `import.json` stays the durable truth.
+- **SSRF deny-private delegates to the shared egress table (fix #96):**
+  `isPrivateIP` no longer keeps its own range list — it denies loopback
+  explicitly, then defers to `egress.BlockedIP` (RFC1918, CGNAT,
+  benchmark 198.18/15, TEST-NET-1/2/3, ULA, link-local, multicast,
+  unspecified, reserved, incl. mapped-v6). The issue suspected PR #88's
+  table already covered the gaps; it did, but `url.go` never used it —
+  the gap was real. Unparseable input fails closed.
 - **Non-wedging imports (fix #79):** the manifest used to commit
   BEFORE ingest/refs/admin/doc, so any later failure left a refless,
   admin-less repo whose retry 409'd "delete and retry" to a caller
