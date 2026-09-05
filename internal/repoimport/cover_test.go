@@ -208,6 +208,7 @@ func TestIsPrivateIPShapes(t *testing.T) {
 		{"fd00::1", true}, {"fc12::9", true}, {"fe80::1", true},
 		{"93.184.216.34", false}, {"2606:2800:220:1:248:1893:25c8:1946", false},
 		{"8.8.8.8", false},
+		{"bogus", true}, // unparseable (net.ParseIP → nil) fails closed
 	} {
 		if got := isPrivateIP(net.ParseIP(tc.ip)); got != tc.priv {
 			t.Fatalf("isPrivateIP(%s) = %v, want %v", tc.ip, got, tc.priv)

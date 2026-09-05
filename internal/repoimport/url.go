@@ -199,8 +199,9 @@ func CheckSSRF(n Normalized, cfg SSRFConfig, resolve func(host string) ([]net.IP
 	return checkPrivate(host, cfg.AllowPrivate, resolve)
 }
 
-// checkPrivate denies loopback/RFC1918/ULA/link-local/multicast resolutions
-// unless explicitly allowed. resolve defaults to net.DefaultResolver.LookupIP.
+// checkPrivate denies resolutions isPrivateIP refuses (loopback plus the
+// shared egress table) unless explicitly allowed. resolve defaults to
+// net.DefaultResolver.LookupIP.
 func checkPrivate(host string, allow bool, resolve func(host string) ([]net.IP, error)) error {
 	if allow {
 		return nil
