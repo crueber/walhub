@@ -205,8 +205,12 @@ func (s *Service) wakeRepo(repo string) {
 
 // Run serves wake-ups and sweeps until ctx ends (composition:
 // `go svc.Run(ctx)`). Webhook sweeps run every minute; retention runs
-// once a day. Every goroutine exits via ctx (13 channel rule).
+// once a day. A fan-out redrain runs once at startup (the issue #77
+// restart backstop — pending drains whose task died with the last
+// process re-enqueue before wake-ups are served) and on every minute
+// tick. Every goroutine exits via ctx (13 channel rule).
 func (s *Service) Run(ctx context.Context) {
+	s.sweepFanout(ctx)
 	webhooksTick := time.NewTicker(time.Minute)
 	retentionTick := time.NewTicker(24 * time.Hour)
 	defer webhooksTick.Stop()
@@ -219,17 +223,18 @@ func (s *Service) Run(ctx context.Context) {
 			s.StartWebhooks(ctx, repo)
 		case <-webhooksTick.C:
 			s.sweepWebhooks(ctx)
+			s.sweepFanout(ctx)
 		case <-retentionTick.C:
 			s.RunRetention(ctx)
 		}
 	}
 }
 
-// sweepWebhooks delivers every repo with hooks. Hook-bearing repos are
-// found by LIST over the collab-events prefixes (maintainer path —
-// collab-events/ exists only where fan-out ran; hook configs without
-// events deliver nothing, so they need no pass).
-func (s *Service) sweepWebhooks(ctx context.Context) {
+// eachRepo visits every owner/repo pair once via the store prefix LISTs.
+// Both minute sweeps share this discovery: no new global LIST dimension
+// (no users/ scan, no collab-events/ LIST — the fan-out redrain probes
+// seqs by key, never lists them).
+func (s *Service) eachRepo(ctx context.Context, fn func(owner, repo string)) {
 	seen := map[string]bool{}
 	_ = s.Store.ListPrefixes(ctx, "repos/", func(ownerSlash string) error {
 		owner := strings.TrimSuffix(strings.TrimPrefix(ownerSlash, "repos/"), "/")
@@ -246,14 +251,24 @@ func (s *Service) sweepWebhooks(ctx context.Context) {
 				return nil
 			}
 			seen[key] = true
-			// Only pass repos that actually have hooks.
-			hooks, err := s.ListHooks(ctx, owner, repo)
-			if err != nil || len(hooks) == 0 {
-				return nil
-			}
-			s.StartWebhooks(ctx, key)
+			fn(owner, repo)
 			return nil
 		})
+	})
+}
+
+// sweepWebhooks delivers every repo with hooks. Hook-bearing repos are
+// found by the shared discovery (maintainer path — collab-events/ exists
+// only where fan-out ran; hook configs without events deliver nothing,
+// so they need no pass).
+func (s *Service) sweepWebhooks(ctx context.Context) {
+	s.eachRepo(ctx, func(owner, repo string) {
+		// Only pass repos that actually have hooks.
+		hooks, err := s.ListHooks(ctx, owner, repo)
+		if err != nil || len(hooks) == 0 {
+			return
+		}
+		s.StartWebhooks(ctx, owner+"/"+repo)
 	})
 }
 
@@ -312,8 +327,11 @@ func (s *Service) drainFanout(repo string, e *taskEntry) {
 	for {
 		seqs := e.drain()
 		if ok {
+			bctx := context.Background()
 			for _, seq := range seqs {
-				s.fanoutOne(context.Background(), owner, name, repo, seq)
+				if s.fanoutOne(bctx, owner, name, repo, seq) {
+					s.markFanoutDone(bctx, owner, name, seq)
+				}
 			}
 		}
 		// A malformed repo has nothing to fan out to: drained seqs
@@ -328,13 +346,16 @@ func (s *Service) drainFanout(repo string, e *taskEntry) {
 
 // fanoutOne completes one activity event's recipient set: Create (412 =
 // done) + index CAS + SSE frame per recipient. Best-effort per
-// recipient; the activity event stays the backfill truth.
-func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq int) {
+// recipient; the activity event stays the backfill truth. It reports
+// whether the event existed — a gap writes no completion record (the gap
+// will never fill, so a marker would be a lie the sweep must re-probe;
+// absence simply never enqueues).
+func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq int) bool {
 	fctx, cancel := context.WithTimeout(ctx, FanoutBudget)
 	defer cancel()
 	ev := s.readActivity(fctx, owner, name, seq)
 	if ev == nil {
-		return
+		return false
 	}
 	var payload activityPayload
 	_ = json.Unmarshal(ev.Payload, &payload)
@@ -378,6 +399,101 @@ func (s *Service) fanoutOne(ctx context.Context, owner, name, repo string, seq i
 		}()
 	}
 	wg.Wait()
+	return true
+}
+
+// --- fanout redrain (issue #77) --------------------------------------------------
+
+// maxFanoutRedrainSeqs bounds one repo's redrain probe window per sweep
+// pass (a maintainer-pass unit must stay bounded, P7 — the retention
+// 600/scan bound is the older sibling). A deeper backlog converges
+// across minute passes; the high-water still advances past the probed
+// window so no pass repeats work.
+const maxFanoutRedrainSeqs = 32
+
+// sweepFanout re-drains activity events whose notify-fanout task never
+// completed: overflow/shortfall emissions carry fanout_pending in the
+// payload (the only queue that survives a restart), and any seq without
+// a collab-fanout/ completion record re-enqueues here. Discovery reuses
+// the shared repo enumeration (no new global LIST); hookless repos are
+// covered too — pending fan-out exists independently of webhooks. Quiet
+// repos cost exactly one GET (collab_state) per pass; only repos whose
+// allocator advanced since the last pass probe seqs. Drained seqs are
+// skipped by their completion record, so the sweep is read-only plus
+// in-memory enqueues — the worker still writes every notification and
+// every completion record.
+//
+// ### Concurrency
+//
+// Hazard: the sweep racing a live drain on the same seq (double drain).
+// Avoidance: no coordination at all — both paths are idempotent
+// (deterministic ids + Create-412 + index dedup) and the completion
+// Create arbitrates; whoever writes it second 412s into success. Hazard:
+// two instances sweeping concurrently. Avoidance: same story —
+// cross-process duplicates collapse in the idempotent Creates, exactly
+// the webhooks cursor's at-least-once discipline. fanoutMu guards only
+// the high-water map and is never held across a store or network call.
+func (s *Service) sweepFanout(ctx context.Context) {
+	observed := map[string]bool{}
+	s.eachRepo(ctx, func(owner, repo string) {
+		key := owner + "/" + repo
+		observed[key] = true
+		s.sweepFanoutRepo(ctx, owner, repo, key)
+	})
+	// Drop high-water for deleted repos (bounded by the enumeration).
+	s.fanoutMu.Lock()
+	for key := range s.fanoutSeen {
+		if !observed[key] {
+			delete(s.fanoutSeen, key)
+		}
+	}
+	s.fanoutMu.Unlock()
+}
+
+// sweepFanoutRepo probes one repo's unprobed window (seen, next_seq],
+// capped per pass, and enqueues pending undrained seqs.
+func (s *Service) sweepFanoutRepo(ctx context.Context, owner, repo, key string) {
+	s.fanoutMu.Lock()
+	if s.fanoutSeen == nil {
+		s.fanoutSeen = map[string]int{}
+	}
+	seen := s.fanoutSeen[key]
+	s.fanoutMu.Unlock()
+	raw, _, err := s.getJSON(ctx, CollabStateKey(owner, repo))
+	if err != nil || raw == nil {
+		return // never emitted: nothing to redrain
+	}
+	var st CollabState
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return
+	}
+	if st.NextSeq <= seen {
+		return
+	}
+	end := st.NextSeq
+	if end-seen > maxFanoutRedrainSeqs {
+		end = seen + maxFanoutRedrainSeqs
+	}
+	for seq := seen + 1; seq <= end; seq++ {
+		ev := s.readActivity(ctx, owner, repo, seq)
+		if ev == nil {
+			continue // gap — honest-gap semantics, never enqueued
+		}
+		var payload activityPayload
+		_ = json.Unmarshal(ev.Payload, &payload)
+		if !payload.FanoutPending {
+			continue // sync-complete: fanned out on the request path
+		}
+		if s.fanoutDone(ctx, owner, repo, seq) {
+			continue
+		}
+		s.enqueueFanout(key, seq)
+	}
+	s.fanoutMu.Lock()
+	if end > s.fanoutSeen[key] {
+		s.fanoutSeen[key] = end
+	}
+	s.fanoutMu.Unlock()
 }
 
 // --- notify-retention ----------------------------------------------------------------------
@@ -604,6 +720,11 @@ func (s *Service) retainRepoEvents(ctx context.Context, owner, repo string, now 
 			break // seq-ordered ≈ time-ordered: the rest is newer
 		}
 		_ = s.Store.Delete(ctx, ActivityKey(owner, repo, seq), "")
+		// The fan-out completion record dies with its event (issue
+		// #77): a redrain probe reads the event first, so an orphaned
+		// marker is inert — but leaving them accumulates one tiny
+		// object per drained overflow emission forever.
+		_ = s.Store.Delete(ctx, FanoutDoneKey(owner, repo, seq), "")
 		deleted++
 	}
 }

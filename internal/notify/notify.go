@@ -19,6 +19,7 @@
 //	repos/<o>/<r>/meta/social.json                   CAS'd counters + watcher_list (07-owned shape; 06 writes until 07 lands)
 //	repos/<o>/<r>/meta/collab_state.json             CAS'd activity seq allocator {"next_seq": N}
 //	repos/<o>/<r>/collab-events/<seq:012x>.json      immutable activity events, Create-only (§5.3)
+//	repos/<o>/<r>/collab-fanout/<seq:012x>.json      per-seq fan-out completion records (§8 redrain)
 //	repos/<o>/<r>/webhooks/<id>.json                 CAS'd hook config (§1.4)
 //	repos/<o>/<r>/webhooks/cursors/<id>.json         CAS'd per-hook cursor (§5.3)
 //	repos/<o>/<r>/webhooks/<id>/deliveries/recent.json  CAS'd last-25 ring (§1.4)
@@ -52,6 +53,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/identity"
@@ -410,6 +412,14 @@ type Service struct {
 	rbus  *repoBus
 	tasks *taskTable
 	wake  chan string
+
+	// fanoutSeen is the redrain high-water (issue #77): repo →
+	// highest activity seq the fan-out sweep has probed. In-memory
+	// only (rebuilt every process start — the restart sweep re-probes
+	// the recent window); guarded by fanoutMu, never held across a
+	// store or network call.
+	fanoutMu   sync.Mutex
+	fanoutSeen map[string]int
 }
 
 // New builds a Service over st.
@@ -418,6 +428,7 @@ func New(st store.ObjectStore, roles RoleService) *Service {
 		Store: st, Roles: roles, Now: time.Now,
 		ubus: newUserBus(), rbus: newRepoBus(),
 		tasks: newTaskTable(), wake: make(chan string, 64),
+		fanoutSeen: map[string]int{},
 	}
 }
 

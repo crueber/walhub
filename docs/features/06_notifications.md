@@ -288,8 +288,38 @@ per-user stream is a browser-lane, credentials-included stream).
 | Kind | Key | Startable | Work |
 |---|---|---|---|
 | `webhooks` | `(repo, "webhooks")` | via sweep + wake-up after each fanned-out event | delivery loop, §5.3 |
-| `notify-fanout` | `(repo, "notify-fanout")` | internal (overflow fallback, §4) | bulk notification Create burst for > 100 recipients |
+| `notify-fanout` | `(repo, "notify-fanout")` | internal (overflow fallback, §4) + redrain sweep (§8.1) | bulk notification Create burst for > 100 recipients; per-seq `collab-fanout/` completion record on drain |
 | `notify-retention` | global (maintainer pass unit, `Ops: nil`) | no | §9 retention + index compaction |
+
+## 8.1 Fan-out redrain (restart safety, issue #77)
+
+The §4 overflow contract ("the activity payload is the only queue that survives a restart") was
+aspirational: the `(repo, kind)` task table is in-memory, so a `notify-fanout` task in flight at
+process death left its seqs attached to a table that no longer exists. The redrain closes it with
+two durable pieces and one sweep — no new task kind, no new global LIST:
+
+- **Pending flag:** overflow/shortfall emissions set `fanout_pending: true` in the activity payload.
+  Sync-complete emissions omit it (`omitempty`, zero byte change on the common path and on their
+  webhook bodies).
+- **Completion records:** `repos/<o>/<r>/collab-fanout/<seq:012x>.json` (Create-only `{"seq","at"}`,
+  412-tolerant), written by the drain after `fanoutOne` completes a seq. Retention (§9) deletes the
+  record alongside its activity event.
+- **Sweep:** `Run` executes one redrain pass at startup (before serving wake-ups), then every minute
+  beside the webhooks sweep. Discovery reuses the webhooks repo enumeration (no new LIST dimension;
+  hookless repos are covered — pending fan-out exists independently of webhooks). Per repo the sweep
+  reads `collab_state` (quiet repos cost exactly one GET per pass) and probes only the unprobed
+  window `(seen, next_seq]` capped at 32 seqs/pass (deeper backlogs converge across passes; gaps are
+  skipped with honest-gap semantics). An in-memory high-water per repo bounds repeat work; it is
+  rebuilt every restart, which is exactly what makes the restart pass complete. Pending seqs without
+  a completion record re-enqueue onto the existing `notify-fanout` single-flight.
+
+### Concurrency
+
+Hazard: the sweep racing a live drain on the same seq (double drain), or two instances sweeping
+concurrently. Avoidance: no coordination at all — both paths are idempotent (deterministic ids +
+Create-412 + index dedup) and the completion Create arbitrates; a lost write re-drains on the next
+pass, never skipping (at-least-once, the webhooks cursor discipline). The high-water lock guards
+only the map and is never held across a store or network call.
 
 ## 9. Retention and compaction
 
@@ -366,6 +396,18 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   every goroutine exits via context). Same latent shape fixed in the sibling `internal/api` SSE
   envelope (`Close()` now ends the stream, not just the ticker); the 10 s keepalive wire contract is
   unchanged. Rationale: Stop-without-close cannot terminate a range; teardown must signal the waiter.
+- **Undrained fan-out is restart-safe (issue #77, 2026-09-05):** the §4 claim ("the activity payload
+  is the only queue that survives a restart") is now true — previously nothing re-drained events
+  whose `notify-fanout` task was in flight at process death. Overflow/shortfall emissions set
+  `fanout_pending` in the payload; the drain writes a Create-only per-seq completion record
+  (`repos/<o>/<r>/collab-fanout/<seq>.json`, deleted by retention alongside its event); `Run`
+  redrains at startup and every minute via `sweepFanout`, which reuses the webhooks repo enumeration
+  (no new global LIST) and probes at most 32 unprobed seqs per repo per pass (1 GET for quiet
+  repos). Per-seq records instead of a per-repo cursor because sync emissions must not pay a cursor
+  CAS on the hot path (law 6); sweep/worker races and multi-instance sweeps collapse in the
+  idempotent Creates (at-least-once, the webhooks cursor discipline). Rationale: the durable queue
+  was write-only without a reader — the sweep is that reader, scoped to recent activity so a restart
+  never scans the bucket.
 
 ## Explicitly out of scope
 
