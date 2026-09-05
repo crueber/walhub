@@ -21,6 +21,16 @@
 // onto the current entry on a miss. Lock order is always
 // taskTable.mu → taskEntry.mu (endIfQuiescent is the ONLY place both
 // are held); no lock is held across any store or network call.
+//
+// Drain (issue #154): both leaders run on the service drainCtx
+// (cancelled by Service.Drain at phase 1), never on a detached
+// WithoutCancel/Background — a wedged store call that honors ctx
+// terminates on drain instead of hanging forever. Leaders are tracked
+// in Service.wg (Add before spawn, Done deferred). New tasks refuse
+// fast once draining; a leader observing a dead drainCtx force-ends
+// via tasks.end (the deliberate exception to the endIfQuiescent-only
+// rule — safe because undrained seqs stay sweep-durable for the
+// redrain, and no worker will ever be needed again in this process).
 package notify
 
 import (
@@ -272,19 +282,30 @@ func (s *Service) sweepWebhooks(ctx context.Context) {
 	})
 }
 
-// StartWebhooks starts (or joins) the webhooks task for repo.
+// StartWebhooks starts (or joins) the webhooks task for repo. The
+// leader is tracked in the service WaitGroup and derives its work from
+// the service drainCtx, not the caller's ctx (kept for API stability):
+// delivery outlives a client disconnect, but phase-1 drain cancels it
+// promptly — a wedged store call that honors ctx terminates instead of
+// hanging forever (issue #154). Refuses fast (nil) once draining.
 func (s *Service) StartWebhooks(ctx context.Context, repo string) *TaskRecord {
 	owner, name, ok := splitRepo(repo)
 	if !ok {
+		return nil
+	}
+	if s.Draining() {
 		return nil
 	}
 	e, joined := s.tasks.begin(repo, TaskKindWebhooks, s.nowUTC())
 	if joined {
 		return e.rec
 	}
+	// A leader begun just before Drain still runs: drainFanout-style,
+	// DeliverRepo observes the dead drainCtx and ends at once.
+	s.wg.Add(1)
 	go func() {
-		bctx := context.WithoutCancel(ctx)
-		s.DeliverRepo(bctx, owner, name)
+		defer s.wg.Done()
+		s.DeliverRepo(s.drainCtx, owner, name)
 		s.tasks.end(repo, TaskKindWebhooks, "webhooks pass", s.nowUTC())
 	}()
 	return e.rec
@@ -297,20 +318,36 @@ func (s *Service) StartWebhooks(ctx context.Context, repo string) *TaskRecord {
 // set idempotently (deterministic ids + index dedup). A joiner whose
 // entry was ended between its begin and attach re-enqueues onto the
 // current entry (the seq is re-attached there), so no interleaving
-// orphans a seq on a detached entry (issue #72).
+// orphans a seq on a detached entry (issue #72). The leader is tracked
+// in the service WaitGroup and works on the service drainCtx, so
+// phase-1 drain cancels a wedged store call promptly (issue #154).
+// Refuses fast once draining: the seq stays durable (fanout_pending
+// without a completion record) for the redrain sweep.
 func (s *Service) enqueueFanout(repo string, seq int) {
 	for {
+		if s.Draining() {
+			// Refuse fast: every seq that reaches here is durable
+			// (fanout_pending with no completion record), so the
+			// redrain sweep re-drives it after the restart.
+			return
+		}
 		e, joined := s.tasks.begin(repo, TaskKindFanout, s.nowUTC())
 		e.attach(seq)
 		if !joined {
+			// A leader begun just before Drain still runs:
+			// drainFanout observes the dead drainCtx and ends at once.
+			s.wg.Add(1)
 			go func() {
-				s.drainFanout(repo, e)
+				defer s.wg.Done()
+				s.drainFanout(s.drainCtx, repo, e)
 			}()
 			return
 		}
 		if s.tasks.current(repo, TaskKindFanout, e) {
 			return
 		}
+		// Detached between begin and attach: loop, re-checking
+		// Draining first so drain never mints a leaderless entry.
 	}
 }
 
@@ -318,18 +355,40 @@ func (s *Service) enqueueFanout(repo string, seq int) {
 // the leader re-checks the attachment, and the task ends only via
 // endIfQuiescent — an empty drain followed by a late attach refuses
 // the end and drains again instead of dropping the seq (issue #72).
-func (s *Service) drainFanout(repo string, e *taskEntry) {
+// ctx is the service drainCtx: every store call observes phase-1 cancel,
+// and the loop re-checks ctx between seqs so a drain short-circuits a
+// deep backlog instead of working through it (issue #154).
+func (s *Service) drainFanout(ctx context.Context, repo string, e *taskEntry) {
 	owner, name, ok := splitRepo(repo)
 	note := "fanout drained"
 	if !ok {
 		note = "bad repo"
 	}
 	for {
+		if ctx.Err() != nil {
+			// Phase-1 drain: stop doing store work at once and
+			// force-end (NOT endIfQuiescent — a pending attach must
+			// not keep a leaderless entry running). Undrained seqs
+			// stay durable via fanout_pending with no completion
+			// record, so the redrain sweep re-drives them; a
+			// concurrent joiner sees a detached entry and
+			// re-enqueues, which refuses fast once draining.
+			s.tasks.end(repo, TaskKindFanout, "draining", s.nowUTC())
+			return
+		}
 		seqs := e.drain()
 		if ok {
-			bctx := context.Background()
-			for _, seq := range seqs {
-				existed, complete := s.fanoutOne(bctx, owner, name, repo, seq)
+			for i, seq := range seqs {
+				if ctx.Err() != nil {
+					// Draining mid-backlog: re-attach the
+					// remainder (sweep-visible) and fall through
+					// to the top, which force-ends.
+					for _, r := range seqs[i:] {
+						e.attach(r)
+					}
+					break
+				}
+				existed, complete := s.fanoutOne(ctx, owner, name, repo, seq)
 				if !existed {
 					continue // gap — honest-gap semantics, no marker
 				}
@@ -337,7 +396,7 @@ func (s *Service) drainFanout(repo string, e *taskEntry) {
 					continue // incomplete — no marker; the redrain
 					// re-drives the seq idempotently (issue #152)
 				}
-				s.markFanoutDone(bctx, owner, name, seq)
+				s.markFanoutDone(ctx, owner, name, seq)
 			}
 		}
 		// A malformed repo has nothing to fan out to: drained seqs

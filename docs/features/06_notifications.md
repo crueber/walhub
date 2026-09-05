@@ -504,13 +504,30 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   logged (`notify: fanout incomplete …` with repo/seq/recipients/failed), and the drain skips
   the marker on incomplete so the sweep re-drives the seq — re-drain is idempotent
   (deterministic ids + Create-412 + index dedup), so the retry converges without duplicates.
-  No new locks (one counter mutex held only around the increment, never across a store call, 13
-  §2); no signature change beyond the second return (existing callers ignore it as a statement).
-  Regression: `TestFanoutDrainSkipsDoneMarkerOnIncomplete` (fault-injected recipient failure →
-  no marker; healed sweep converges exactly-once; verified FAILING pre-fix) +
-  `TestFanoutOneExpiredBudgetIsIncomplete` (canceled budget → `(true, false)`; live redrain
-  converges + marks). Rationale: the marker is a completion claim — writing it on a partial
-  drain is the lie that orphans the remainder.
+   No new locks (one counter mutex held only around the increment, never across a store call, 13
+   §2); no signature change beyond the second return (existing callers ignore it as a statement).
+   Regression: `TestFanoutDrainSkipsDoneMarkerOnIncomplete` (fault-injected recipient failure →
+   no marker; healed sweep converges exactly-once; verified FAILING pre-fix) +
+   `TestFanoutOneExpiredBudgetIsIncomplete` (canceled budget → `(true, false)`; live redrain
+   converges + marks). Rationale: the marker is a completion claim — writing it on a partial
+   drain is the lie that orphans the remainder.
+- **Notify task leaders observe phase-1 drain (issue #154, 2026-09-05):** `StartWebhooks`
+   detached its work with `WithoutCancel` and `drainFanout` used `Background()` — neither ran
+   in a tracked WaitGroup, so a wedged store call hung them forever, immune to drain/shutdown.
+   Same shape as the #74 import fix: the service owns a `drainCtx` (cancelled by the new
+   `Service.Drain`, wired into serve.go phase 1 beside `importSvc.Drain`), both leaders derive
+   their store/network work from it and are tracked in `Service.wg`, and new tasks refuse fast
+   once draining (`StartWebhooks` → nil, `enqueueFanout` → drop — every such seq is durable
+   via `fanout_pending` with no completion record, so the redrain sweep re-drives it). A leader
+   observing a dead drainCtx force-ends via `tasks.end` — the deliberate exception to the
+   #72 endIfQuiescent-only rule, safe because no worker will ever be needed again in this
+   process — and `drainFanout` re-checks ctx between seqs so drain short-circuits a deep
+   backlog. No new locks (one drain mutex around a bool, never across a store call, 13 §2);
+   `StartWebhooks` keeps its signature (caller ctx ignored, documented). Regression:
+   `TestDrainInterruptsWedgedWebhooks` + `TestDrainInterruptsWedgedFanout` (wedged store +
+   drain → prompt end; verified HANGING pre-fix with the task stuck `running`) +
+   `TestDrainRefusesNewTasks`. Rationale: every goroutine exits via context (13 §8) — a
+   task immune to drain is a shutdown hang.
 
 ## Explicitly out of scope
 

@@ -260,6 +260,13 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	if collab != nil && collab.importSvc != nil {
 		collab.importSvc.Drain()
 	}
+	// Notify task leaders (webhooks, fanout) derive their store work
+	// from the service drainCtx: Drain cancels them promptly so a
+	// wedged store call terminates instead of hanging shutdown
+	// (issue #154 — same shape as the #74 import fix above).
+	if collab != nil && collab.notifySvc != nil {
+		collab.notifySvc.Drain()
+	}
 	if maintainerDone != nil {
 		select {
 		case <-maintainerDone:
