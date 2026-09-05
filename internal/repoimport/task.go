@@ -35,7 +35,9 @@ import (
 )
 
 // runImport executes one import (ctx is the task/command ctx — drain or
-// SIGINT cancels the clone mid-flight via CommandContext SIGKILL).
+// SIGINT cancels the clone mid-flight via CommandContext SIGKILL; the
+// table runCtx is cancelled by reg.Tasks().Drain() at phase 1, which
+// composition calls alongside Service.Drain).
 func (s *Service) runImport(ctx context.Context, n *importNarr, id string, params Params, token string) error {
 	ctx = n.Ctx()
 	target := params.target()
@@ -107,7 +109,19 @@ func (s *Service) runImport(ctx context.Context, n *importNarr, id string, param
 	s.lfsNotice(ctx, n, scratch)
 
 	// Commit point: manifest.pb PutCreate (the CAS decides ownership —
-	// same arbitration as create, 13 §3, and forks, 03 §7).
+	// same arbitration as create, 13 §3, and forks, 03 §7). A commit
+	// attempted after drain begins must fail, never land: the service
+	// flag covers Drain (checked first — it is set even if the table
+	// drain races behind), and the body ctx covers every other cancel
+	// (table Drain at phase 1, CLI SIGINT). Both refuse with a
+	// retryable 503 (law 7), before the CAS, so no post-drain manifest
+	// can exist.
+	if s.Draining() {
+		return interruptedErr()
+	}
+	if err := ctx.Err(); err != nil {
+		return &StatusError{Status: 503, Message: "import interrupted; safe to retry"}
+	}
 	h, err := s.reg.Create(ctx, target, format)
 	if err != nil {
 		var we *wal.WalError
