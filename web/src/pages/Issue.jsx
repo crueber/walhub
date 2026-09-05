@@ -62,6 +62,13 @@ export default function Issue() {
   // below); declared here so the reset effect never reads them early.
   const [getLabelBusy, setLabelBusy] = createSignal(new Set());
   const [getMilestoneBusy, setMilestoneBusy] = createSignal(false);
+  // Reaction guards are per-issue state too (#146): seqs are per-issue
+  // event seqs, so a `seq:content` key busy on the previous issue must
+  // never disable (or swallow clicks on) the new issue's chips. Declared
+  // here for the same never-read-early reason as the sidebar guards.
+  const [getBusy, setBusy] = createSignal(new Set());
+  const busyKey = (seq, content) => `${seq}:${content}`;
+  const isBusy = (seq, content) => getBusy().has(busyKey(seq, content));
   createEffect(() => {
     num(); // reset accumulation when navigating between issues
     setExtra([]);
@@ -71,8 +78,13 @@ export default function Issue() {
     // mutation on the previous issue would otherwise leave the new
     // issue's picker triple-guarded (busy early-return swallows the
     // click with no PATCH and no tray entry — the menu just closes).
+    // Same for in-flight reactions (#146): the busy early-return fires
+    // no mutation and posts no tray entry, so the chip just does
+    // nothing. Clearing is safe — the tail's finally only deletes its
+    // own key, a no-op on the fresh set.
     setLabelBusy(new Set());
     setMilestoneBusy(false);
+    setBusy(new Set());
   });
 
   const reload = () => {
@@ -91,12 +103,22 @@ export default function Issue() {
   const events = () => [...(getView()?.events ?? []), ...getExtra()].filter((ev) => ev.type !== "reaction_changed");
   const more = () => (getExtraMore() === undefined ? getView()?.events_more : getExtraMore());
 
+  // Comment/close tails are pinned to their issue (#146): same-route
+  // navigation reuses this component, so the async tail must reconcile
+  // the mutated issue even when the view has moved on — the same
+  // pin/reconcile shape as the #143 sidebar mutations. Throwing still
+  // skips the tail (CommentComposer keeps the text on failure).
   const comment = async (body) => {
-    await ctx.repoClient.issues.comment(num(), body);
-    reload();
+    const n = num();
+    const ck = key();
+    await ctx.repoClient.issues.comment(n, body);
+    if (num() === n) reload();
+    else invalidate(ck);
   };
 
   const commentAndClose = async (body, reason) => {
+    const n = num();
+    const ck = key();
     // No atomic comment+close endpoint (PATCH takes state only): post the
     // body first when non-empty (GitHub semantics — empty body just
     // closes), then close with the EXPLICIT reason chosen in the composer
@@ -106,17 +128,21 @@ export default function Issue() {
     // success); after a comment-posted / close-failed split the plain
     // Close menu finishes the job.
     if (String(body ?? "").trim()) {
-      await ctx.repoClient.issues.comment(num(), body);
+      await ctx.repoClient.issues.comment(n, body);
     }
-    await ctx.repoClient.issues.patch(num(), closePatch(reason));
-    reload();
+    await ctx.repoClient.issues.patch(n, closePatch(reason));
+    if (num() === n) reload();
+    else invalidate(ck);
   };
 
   // Explicit-reason close (#109): the composer chooser supplies
   // completed|not_planned; closePatch refuses to build a body without one.
   const close = async (reason) => {
-    await ctx.repoClient.issues.patch(num(), closePatch(reason));
-    reload();
+    const n = num();
+    const ck = key();
+    await ctx.repoClient.issues.patch(n, closePatch(reason));
+    if (num() === n) reload();
+    else invalidate(ck);
   };
 
   // One in-flight reaction mutation per (seq, content): the plus-menu
@@ -124,10 +150,8 @@ export default function Issue() {
   // can never double-fire — and the server dedups sequential duplicate
   // adds per (actor, target, content) anyway (02 §8). Buttons disable
   // while their key is busy; both are native <button>s (keyboard free)
-  // with a theme-agnostic disabled treatment.
-  const [getBusy, setBusy] = createSignal(new Set());
-  const busyKey = (seq, content) => `${seq}:${content}`;
-  const isBusy = (seq, content) => getBusy().has(busyKey(seq, content));
+  // with a theme-agnostic disabled treatment. The guard set itself is
+  // declared up top (per-issue state, reset on navigation).
   const withBusy = async (seq, content, fn) => {
     const k = busyKey(seq, content);
     if (getBusy().has(k)) return;
@@ -146,9 +170,11 @@ export default function Issue() {
   // Optimistic summary step on the cached thread view (#42a): the chip
   // paints synchronously via the generation-safe patchCached path, and the
   // guarded invalidate() refetch reconciles the guess (or rolls it back
-  // when the mutation fails). Never bypasses the #41 ordering guard.
-  const bump = (seq, content, delta) =>
-    patchCached(key(), (view) => ({
+  // when the mutation fails). Never bypasses the #41 ordering guard. The
+  // cache key is the caller's pinned key (#146): the paint must name the
+  // clicked issue even when the view navigates mid-flight.
+  const bump = (ck, seq, content, delta) =>
+    patchCached(ck, (view) => ({
       ...view,
       thread: {
         ...view.thread,
@@ -156,15 +182,22 @@ export default function Issue() {
       },
     }));
 
+  // The target issue is pinned up front (#146): same-route navigation
+  // reuses this component, so the PATCH and the reconcile name the
+  // clicked issue even when the view has moved on — the same shape as
+  // the #143 sidebar mutations.
   const react = (seq, content) =>
     withBusy(seq, content, async () => {
-      bump(seq, content, +1);
+      const n = num();
+      const ck = key();
+      bump(ck, seq, content, +1);
       try {
-        await ctx.repoClient.issues.reactions.add(num(), { target_event_seq: seq, content });
+        await ctx.repoClient.issues.reactions.add(n, { target_event_seq: seq, content });
       } catch (err) {
         reportError(err, "issue-react");
       }
-      reload();
+      if (num() === n) reload();
+      else invalidate(ck);
     });
 
   // Summary chips toggle (#36): remove when the clicker already reacted,
@@ -172,17 +205,20 @@ export default function Issue() {
   // remove-404 falls back to add (GitHub semantics); any other remove
   // failure just reports — only a double failure reports, never a silent
   // no-op. The optimistic guess follows the same path (−1, then +2 on the
-  // 404 fallback to undo the guess and apply the add).
+  // 404 fallback to undo the guess and apply the add). Pinned up front
+  // like react above (#146).
   const toggleReaction = (seq, content) =>
     withBusy(seq, content, async () => {
-      bump(seq, content, -1);
+      const n = num();
+      const ck = key();
+      bump(ck, seq, content, -1);
       try {
-        await ctx.repoClient.issues.reactions.remove(num(), seq, content);
+        await ctx.repoClient.issues.reactions.remove(n, seq, content);
       } catch (err) {
         if (err?.notFound || err?.status === 404) {
-          bump(seq, content, +2);
+          bump(ck, seq, content, +2);
           try {
-            await ctx.repoClient.issues.reactions.add(num(), { target_event_seq: seq, content });
+            await ctx.repoClient.issues.reactions.add(n, { target_event_seq: seq, content });
           } catch (addErr) {
             reportError(addErr, "issue-react");
           }
@@ -190,13 +226,17 @@ export default function Issue() {
           reportError(err, "issue-react");
         }
       }
-      reload();
+      if (num() === n) reload();
+      else invalidate(ck);
     });
 
   const patch = async (fields) => {
+    const n = num();
+    const ck = key();
     try {
-      await ctx.repoClient.issues.patch(num(), fields);
-      reload();
+      await ctx.repoClient.issues.patch(n, fields);
+      if (num() === n) reload();
+      else invalidate(ck);
     } catch (err) {
       reportError(err, "issue-patch");
     }

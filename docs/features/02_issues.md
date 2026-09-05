@@ -481,6 +481,20 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   the menu just closes). No-op selects still skip the round trip
   silently by design (`milestonePatch` returns null); every real click
   either PATCHes or reports.
+- **Reaction and comment/close tails are pinned to their issue**
+  (issue #146, 2026-09-05). Same stale-key shape as #143, same treatment:
+  `react`/`toggleReaction` (add, remove, and the remove-404 fallback add),
+  `comment`, `commentAndClose`, `close`, and the reopen `patch` capture
+  `num()`/`key()` before the first await. Single-step tails only
+  reconciled the wrong key (the old `reload()` invalidated the NEW
+  issue's key and stranded the mutated issue on its optimistic guess
+  until an SSE frame arrived); the two-step `commentAndClose` was worse
+  — its close PATCH evaluated `num()` after the comment POST resolved,
+  so a mid-flight navigation closed the NEW issue instead. The reaction
+  `seq:content` busy guards reset on navigation with the sidebar guards,
+  so an in-flight reaction on the previous issue never disables or
+  swallows clicks on the new issue's chips. No behavior change when the
+  view does not move: same issue still takes the `reload()` branch.
 - **Default close-reason + `*none`/`none` filter spellings** (`assignee=*none`,
   `milestone=none`) are implemented exactly as §7 rows state.
 - **Event windows return arrays newest-first** (most recent event at index
