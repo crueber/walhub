@@ -74,7 +74,7 @@ test("repo.urls deep links (§1.1)", () => {
   assert.equal(u.html, `${BASE}/demo/hello`);
   assert.equal(u.clone, `${BASE}/demo/hello.git`);
   assert.equal(u.api, `${BASE}/demo/hello/api`);
-  assert.equal(u.raw("main", "a/b.txt"), `${BASE}/demo/hello/raw/main/a/b.txt`);
+  assert.equal(u.raw("main", "a/b.txt"), `${BASE}/demo/hello/api/blob/main/a/b.txt?raw`);
   assert.equal(u.tree("v1"), `${BASE}/demo/hello/tree/v1`);
   assert.equal(u.blob("main", "x.md"), `${BASE}/demo/hello/blob/main/x.md`);
   assert.equal(u.commit("deadbeef"), `${BASE}/demo/hello/commit/deadbeef`);

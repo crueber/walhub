@@ -24,6 +24,9 @@ export class RepoClient {
 
   /**
    * Deep links (§1.1 `repo.urls`): html/clone/api + raw/tree/blob/commit.
+   * raw() is the §9.5 `?raw` byte endpoint on the api blob route — the old
+   * `/{o}/{r}/raw/…` page shape never existed server-side (issue #182: it
+   * 404s), so the deep link rides the endpoint `repo.raw()` fetches.
    */
   get urls() {
     const b = this.client.base;
@@ -32,7 +35,7 @@ export class RepoClient {
       html: root,
       clone: `${root}.git`,
       api: `${root}/api`,
-      raw: (rev, path = "") => `${root}/raw/${rev}${path ? `/${path}` : ""}`,
+      raw: (rev, path = "") => `${root}/api/blob/${rev}${path ? `/${path}` : ""}?raw`,
       tree: (rev, path = "") => `${root}/tree/${rev}${path ? `/${path}` : ""}`,
       blob: (rev, path = "") => `${root}/blob/${rev}${path ? `/${path}` : ""}`,
       commit: (sha) => `${root}/commit/${sha}`,

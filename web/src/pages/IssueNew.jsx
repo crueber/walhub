@@ -90,7 +90,7 @@ export default function IssueNew() {
               placeholder="Steps to reproduce… (markdown; #N links issues)"
             />
           }>
-            <div class="card prose-sm p-3" innerHTML={renderBody(getBody())} />
+            <div class="card markdown-body p-3" innerHTML={renderBody(getBody())} />
           </Show>
         </label>
         <div class="flex items-center justify-between">

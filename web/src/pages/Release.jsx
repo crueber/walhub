@@ -109,7 +109,11 @@ export default function Release() {
                 <span class="card-meta ml-auto"><DateTime value={rel().published_at ?? rel().created_at} /></span>
               </div>
               <h2 class="mb-2 text-lg font-semibold">{rel().name}</h2>
-              <div class="markdown-body" innerHTML={renderBody(rel().body ?? "")} />
+              {/* release notes have no file dir (issue #182): the tag names the
+                  ref, the repo root is the base */}
+              <div class="markdown-body" innerHTML={renderBody(rel().body ?? "", {
+                owner: ctx.owner, repo: ctx.name, ref: rel().tag, dir: "",
+              })} />
               <p class="card-meta mt-2">
                 tag {rel().tag_sha?.slice(0, 12)} · by {rel().author}
               </p>

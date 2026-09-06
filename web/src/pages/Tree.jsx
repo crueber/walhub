@@ -91,6 +91,13 @@ function DocTabs(props) {
   };
 
   const selPath = () => ((props.dirPath ? `${props.dirPath}/` : "") + (sel() ?? ""));
+  // Rendered-tab link context (issue #182): the file's own coordinates, so
+  // relative images/links resolve against the repo at the page's display
+  // ref — the same ref string the tree links above use (sha fallback).
+  // props: owner, repo, docRef (display short-ref; named to dodge Solid's
+  // reserved `ref` prop, which the compiler drops on components),
+  // dirPath (the file's dir).
+  const mdCtx = () => ({ owner: props.owner, repo: props.repo, ref: props.docRef, dir: props.dirPath ?? "" });
   // The tab body's blob coordinates (issue #172): the ONLY acceptable
   // revision is the tree payload's resolved commit sha — never a UI display
   // string (ref names split the blob route's {rev} segment and 404). Null
@@ -160,7 +167,7 @@ function DocTabs(props) {
                   role="tabpanel"
                   id="doctab-panel"
                   aria-label={sel()}
-                  innerHTML={renderBody(getDoc()?.contents ?? "")}
+                  innerHTML={renderBody(getDoc()?.contents ?? "", mdCtx())}
                 />
               </Match>
             </Switch>
@@ -213,6 +220,9 @@ export default function Tree() {
                 dirPath={t().path ?? ""}
                 rev={t().sha}
                 repoClient={ctx.repoClient}
+                owner={ctx.owner}
+                repo={ctx.name}
+                docRef={shortRef(t().ref) || t().sha}
               />
             </>
           );

@@ -120,8 +120,15 @@ export default function Blob() {
                         </pre>
                       }
                     >
-                      {/* the sanitizer is the only innerHTML gate (§2.2) */}
-                      <div class="markdown-body p-4" innerHTML={renderBody(b().contents ?? "")} />
+                      {/* the sanitizer is the only innerHTML gate (§2.2); the md
+                          context (issue #182) resolves relative images/links
+                          against this file's own repo + display ref + dir */}
+                      <div class="markdown-body p-4" innerHTML={renderBody(b().contents ?? "", {
+                        owner: ctx.owner,
+                        repo: ctx.name,
+                        ref: shortRef(b().ref),
+                        dir: String(b().path ?? "").split("/").slice(0, -1).join("/"),
+                      })} />
                     </Show>
                   </Match>
                   <Match when={true}>
