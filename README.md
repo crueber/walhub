@@ -2,27 +2,19 @@
 
 A git host in Go: **git over smart HTTP (v0/v2), LFS, bundle-uri, a JSON API with SSE, and a web UI — where the object store is the only database.**
 
-It serves repositories whose entire state — refs, packs, config, policy, events, web UI — lives as
-objects in a bucket (filesystem, S3, or GCS). Instances are disposable; wipe one and you lose nothing
-but warmth.
+It serves repositories whose entire state — refs, packs, config, policy, events, web UI — lives as objects in a bucket (filesystem, S3, or GCS). Instances are disposable; wipe one and you lose nothing but warmth.
 
 <p align="center">
-  <a href="docs/img/repo-overview.png"><img src="docs/img/repo-overview.png" width="32%" alt="Repository overview: refs, file tree, clone"></a>
-  <a href="docs/img/code-view.png"><img src="docs/img/code-view.png" width="32%" alt="Blob view with syntax highlighting"></a>
-  <a href="docs/img/setup.png"><img src="docs/img/setup.png" width="32%" alt="Setup: labels left, fields right, working examples under every label"></a>
+  <a href="docs/img/repo-overview.png"><img src="docs/img/repo-overview.png" width="32%" alt="Repository overview: refs, file tree, clone"></a> <a href="docs/img/code-view.png"><img src="docs/img/code-view.png" width="32%" alt="Blob view with syntax highlighting"></a> <a href="docs/img/setup.png"><img src="docs/img/setup.png" width="32%" alt="Setup: labels left, fields right, working examples under every label"></a>
 </p>
 
 <p align="center"><sub>Browse repositories, read code, configure everything. Click any screenshot to view it full size.</sub></p>
 
 ## Inspired by walgit
 
-walhub exists because of **Tobi Lütke's fantastic [walgit](https://github.com/tobi/walgit)**. It
-proved that a git host can put everything on an object store, and it is the direct inspiration for
-this project. Thank you, Tobi.
+walhub exists because of **Tobi Lütke's fantastic [walgit](https://github.com/tobi/walgit)**. It proved that a git host can put everything on an object store, and it is the direct inspiration for this project. Thank you, Tobi.
 
-We aim to stay **object-protocol compliant** with walgit: the bucket key layout, the protobuf wire
-encoding, and git wire behavior all follow walgit's formats. The visual direction is our own, and
-as the screenshots above show, it looks quite different.
+We aim to stay **object-protocol compliant** with walgit: the bucket key layout, the protobuf wire encoding, and git wire behavior all follow walgit's formats. The visual direction is our own, and as the screenshots above show, it looks quite different.
 
 ## Quick start
 
@@ -31,10 +23,7 @@ make build          # bundles the SDK (esbuild) and compiles the binary — web/
 ./walhub            # zero-config: 0.0.0.0:8080, filesystem store, auth "none" (loud warning)
 ```
 
-Then open **http://localhost:8080** — the SPA renders, `/setup` configures everything for real use.
-No config file exists yet, so the first run is deliberately friction-free; save one from `/setup` and
-restart. An invalid config file puts the server in **setup-only mode** (everything but setup/health
-answers 503) until you fix it through the same UI.
+Then open **http://localhost:8080** — the SPA renders, `/setup` configures everything for real use. No config file exists yet, so the first run is deliberately friction-free; save one from `/setup` and restart. An invalid config file puts the server in **setup-only mode** (everything but setup/health answers 503) until you fix it through the same UI.
 
 Push something — repositories auto-create on push by default:
 
@@ -45,13 +34,11 @@ git remote add origin http://localhost:8080/you/demo.git
 git push -u origin main          # browse it at http://localhost:8080/you/demo
 ```
 
-Auth: `none` (everyone anonymous — dev only), `token` (static bearer/basic tokens), or `oidc`
-(any OpenID Connect issuer, plus walgit-issued `wgt_` access tokens minted in the UI).
+Auth: `none` (everyone anonymous — dev only), `token` (static bearer/basic tokens), or `oidc` (any OpenID Connect issuer, plus walgit-issued `wgt_` access tokens minted in the UI).
 
 ## Run with docker compose (prebuilt image)
 
-GitHub Actions publishes the image on every push to [`ghcr.io/crueber/walhub`](https://github.com/crueber/walhub/pkgs/container/walhub)
-— pull it instead of building:
+GitHub Actions publishes the image on every push to [`ghcr.io/crueber/walhub`](https://github.com/crueber/walhub/pkgs/container/walhub) — pull it instead of building:
 
 ```yaml
 # docker-compose.yml — walhub alone: filesystem store on a named volume
@@ -75,12 +62,9 @@ volumes:
 docker compose up -d        # update later with: docker compose pull && docker compose up -d
 ```
 
-Then open **http://localhost:8080/setup** — the same zero-config first boot as the binary: save a
-config from the setup page and restart the container. Repositories auto-create on push under
-`http://localhost:8080/<owner>/<repo>.git`.
+Then open **http://localhost:8080/setup** — the same zero-config first boot as the binary: save a config from the setup page and restart the container. Repositories auto-create on push under `http://localhost:8080/<owner>/<repo>.git`.
 
-Git also works over **SSH**: the stack publishes port 2222 and enables the SSH transport
-(`WALHUB__SERVER__SSH__LISTEN`). Add your public key on the **/keys** page, then:
+Git also works over **SSH**: the stack publishes port 2222 and enables the SSH transport (`WALHUB__SERVER__SSH__LISTEN`). Add your public key on the **/keys** page, then:
 
 ```sh
 git clone ssh://git@localhost:2222/<owner>/<repo>.git
@@ -88,11 +72,7 @@ git clone ssh://git@localhost:2222/<owner>/<repo>.git
 
 The host key auto-generates into the data volume, so it is stable across container restarts.
 
-For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml) — the shipped
-stack builds from source; to run it from the published image instead, replace the `walhub`
-service's `build: .` with `image: ghcr.io/crueber/walhub:latest` (the rustfs service and the
-`WALHUB__STORE__*` env stay as they are). [`compose.standalone.yml`](compose.standalone.yml) is
-the same standalone shape as above, built from source instead of pulled.
+For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml) — the shipped stack builds from source; to run it from the published image instead, replace the `walhub` service's `build: .` with `image: ghcr.io/crueber/walhub:latest` (the rustfs service and the `WALHUB__STORE__*` env stay as they are). [`compose.standalone.yml`](compose.standalone.yml) is the same standalone shape as above, built from source instead of pulled.
 
 ## What's in the box
 
@@ -116,12 +96,7 @@ make test-web  # node --test over the headless JS modules
 make image     # OCI image
 ```
 
-Backend: Go 1.27 (module `git.packden.us/crueber/walhub`), exactly three third-party modules
-(chi, BurntSushi/toml, x/net). Frontend: any Node for tests; pnpm 11 for the vite/esbuild build
-(`pnpm --dir web install`). CI is Woodpecker on the Forgejo origin (`pipeline.yaml`); GitHub
-Actions (`.github/workflows/docker.yml`) tests the mirror and publishes the image to GHCR on
-every push. The container build is `Dockerfile`, with compose examples in
-`compose.standalone.yml` (filesystem store) and `compose.yaml` (S3-backed via rustfs).
+Backend: Go 1.27 (module `git.packden.us/crueber/walhub`), exactly three third-party modules (chi, BurntSushi/toml, x/net). Frontend: any Node for tests; pnpm 11 for the vite/esbuild build (`pnpm --dir web install`). CI is Woodpecker on the Forgejo origin (`pipeline.yaml`); GitHub Actions (`.github/workflows/docker.yml`) tests the mirror and publishes the image to GHCR on every push. The container build is `Dockerfile`, with compose examples in `compose.standalone.yml` (filesystem store) and `compose.yaml` (S3-backed via rustfs).
 
 ## License
 
