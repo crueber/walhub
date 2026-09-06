@@ -1,5 +1,8 @@
-// web/test/unit/md-urls.test.js — issue #182: relative-URL resolution at
-// render time (web/src/lib/render-md.js) + the prose CSS pass (ui.css).
+// web/test/unit/md-urls.test.js — issues #182/#185: relative-URL resolution
+// at render time (web/src/lib/render-md.js) + the prose CSS pass (ui.css).
+// #185 amends the #182 "others → raw" trade-off: images still go raw, but
+// EVERY other relative link lands on an in-app view (blob; trailing-slash
+// or repo-root → tree).
 //
 // The resolver is a pure string layer over marked's HTML, so the whole
 // matrix runs headless under node --test. The DOMPurify gate itself needs a
@@ -40,15 +43,24 @@ test("dot segments normalize; .. past the root clamps (never escapes)", () => {
   assert.equal(hrefOf(renderMarkdownHtml("[a](a//b.md)", SUB)), "/o/r/blob/main/docs/a/b.md");
   const up = hrefOf(renderMarkdownHtml("[a](../../../../etc/passwd)", SUB));
   assert.ok(!up.split("?")[0].split("#")[0].split("/").includes(".."), `no .. segment: ${up}`);
-  assert.ok(up.startsWith("/o/r/api/blob/main/"), `clamped inside the repo: ${up}`);
+  assert.ok(up.startsWith("/o/r/blob/main/"), `clamped inside the repo: ${up}`);
 });
 
-test("non-markdown relative links resolve to the raw-bytes endpoint", () => {
-  assert.equal(hrefOf(renderMarkdownHtml("[a](f.zip)", SUB)), "/o/r/api/blob/main/docs/f.zip?raw");
-  assert.equal(hrefOf(renderMarkdownHtml("[a](sub/)", SUB)), "/o/r/api/blob/main/docs/sub?raw");
-  assert.equal(hrefOf(renderMarkdownHtml("[a](/abs/f.zip)", SUB)), "/o/r/api/blob/main/abs/f.zip?raw");
-  // .md as a directory name is not a markdown file
-  assert.equal(hrefOf(renderMarkdownHtml("[a](x.md/y)", SUB)), "/o/r/api/blob/main/docs/x.md/y?raw");
+test("non-markdown relative links resolve to the in-app blob view (issue #185)", () => {
+  assert.equal(hrefOf(renderMarkdownHtml("[a](f.zip)", SUB)), "/o/r/blob/main/docs/f.zip");
+  assert.equal(hrefOf(renderMarkdownHtml("[a](/abs/f.zip)", SUB)), "/o/r/blob/main/abs/f.zip");
+  // .md as a directory name is not a markdown file — still the blob route
+  assert.equal(hrefOf(renderMarkdownHtml("[a](x.md/y)", SUB)), "/o/r/blob/main/docs/x.md/y");
+  // the issue's case: a LICENSE-style link lands on the blob view, not raw
+  assert.equal(hrefOf(renderMarkdownHtml("[MIT @ Christopher Rueber](LICENSE)", ROOT)), "/o/r/blob/main/LICENSE");
+});
+
+test("trailing-slash links (and the repo root) resolve to the tree view", () => {
+  assert.equal(hrefOf(renderMarkdownHtml("[a](sub/)", SUB)), "/o/r/tree/main/docs/sub");
+  assert.equal(hrefOf(renderMarkdownHtml("[a](/docs/)", SUB)), "/o/r/tree/main/docs");
+  assert.equal(hrefOf(renderMarkdownHtml("[a](./)", SUB)), "/o/r/tree/main/docs");
+  assert.equal(hrefOf(renderMarkdownHtml("[a](/)", SUB)), "/o/r/tree/main");
+  assert.equal(hrefOf(renderMarkdownHtml("[a](sub/?a=b#L10)", SUB)), "/o/r/tree/main/docs/sub?a=b#L10");
 });
 
 test("markdown extensions match case-insensitively, leaf only", () => {
@@ -56,10 +68,11 @@ test("markdown extensions match case-insensitively, leaf only", () => {
   assert.equal(hrefOf(renderMarkdownHtml("[a](notes.Markdown)", ROOT)), "/o/r/blob/main/notes.Markdown");
 });
 
-test("query strings and fragments survive rewriting", () => {
+test("query strings and fragments survive rewriting (verbatim on views, &raw on raw)", () => {
   assert.equal(hrefOf(renderMarkdownHtml("[a](b.md#L10)", SUB)), "/o/r/blob/main/docs/b.md#L10");
-  assert.equal(hrefOf(renderMarkdownHtml("[a](f.zip?a=b#L10)", SUB)), "/o/r/api/blob/main/docs/f.zip?a=b&raw#L10");
-  assert.equal(hrefOf(renderMarkdownHtml("[a](f.zip#L10)", SUB)), "/o/r/api/blob/main/docs/f.zip?raw#L10");
+  assert.equal(hrefOf(renderMarkdownHtml("[a](f.zip?a=b#L10)", SUB)), "/o/r/blob/main/docs/f.zip?a=b#L10");
+  assert.equal(hrefOf(renderMarkdownHtml("[a](f.zip#L10)", SUB)), "/o/r/blob/main/docs/f.zip#L10");
+  assert.equal(srcOf(renderMarkdownHtml("![i](a.png?a=b#L10)", SUB)), "/o/r/api/blob/main/docs/a.png?a=b&raw#L10");
 });
 
 test("anchors, absolute, protocol-relative and mailto URLs are untouched", () => {
