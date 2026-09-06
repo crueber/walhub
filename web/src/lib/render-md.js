@@ -61,12 +61,17 @@ const purify = hasDOM && DOMPurify && typeof DOMPurify.sanitize === "function" ?
 //   images (img src) ........ → the raw-bytes endpoint at the same ref
 //     (/{o}/{r}/api/blob/{ref}/{path}?raw — 07_api.md §9.5, the same shape
 //     RepoClient.urls.raw builds; click-to-full-size keeps working).
-//   links to *.md/*.markdown → /{o}/{r}/blob/{ref}/{path} (the in-app blob
-//     view, consistent with the doctabs feature).
-//   other relative links .... → the raw-bytes endpoint (bytes, not the blob
-//     view: a non-renderable target must not land on the 2 MiB render-cap
-//     page — documented trade-off). A source ?query gains &raw, a bare
-//     source gains ?raw, a #frag-only suffix keeps ?raw ahead of the frag.
+//   every other relative link → the in-app blob view at the same ref
+//     (/{o}/{r}/blob/{ref}/{path} — AMENDED by issue #185: the #182
+//     "others → raw" trade-off served LICENSE-style targets as raw
+//     downloads instead of showing them; raw stays one click away via the
+//     blob page's raw pill). A trailing "/" on the path — or a resolution
+//     to the repo root itself — is the directory signal → the tree view
+//     (/{o}/{r}/tree/{ref}[/{path}]). That slash is the only directory
+//     signal available at render time (no tree fetch), so a slash-less
+//     link to a directory lands on the blob route and 404s honestly.
+//     ?query / #frag suffixes ride blob/tree targets verbatim (no ?raw
+//     merge — that merge is images-only now).
 //   anchors (#frag), scheme URLs (http/https/mailto/… — and javascript:/data:),
 //   protocol-relative (//host) → untouched. Dangerous schemes pass through
 //   byte-identical so the DOMPurify gate still sees and drops them: the
@@ -92,7 +97,6 @@ const purify = hasDOM && DOMPurify && typeof DOMPurify.sanitize === "function" ?
 const MD_LINK_RE = /(<a\b[^>]*?\shref\s*=\s*)("[^"]*"|'[^']*')/gi;
 const MD_IMG_RE = /(<img\b[^>]*?\ssrc\s*=\s*)("[^"]*"|'[^']*')/gi;
 const SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
-const MD_EXT_RE = /\.(?:md|markdown)$/i;
 
 function splitUrlSuffix(url) {
   const i = url.search(/[?#]/);
@@ -106,7 +110,8 @@ function rawBase(ctx) {
   return `/${ctx.owner}/${ctx.repo}/api/blob/${ctx.ref}`;
 }
 
-// Merge the ?raw marker with a preserved source suffix: a source query gains
+// Merge the ?raw marker with a preserved source suffix (images only —
+// blob/tree link targets carry their suffix verbatim): a source query gains
 // &raw, anything else (?raw ahead of a #frag, or a bare ?raw).
 function withRaw(suffix) {
   const h = suffix.indexOf("#");
@@ -133,9 +138,17 @@ function rewriteUrl(url, ctx, isImage) {
   const [path, suffix] = splitUrlSuffix(url);
   const resolved = normalizeRepoPath(path, ctx.dir);
   if (isImage) return `${rawBase(ctx)}/${resolved}${withRaw(suffix)}`;
-  const leaf = resolved.split("/").pop() ?? "";
-  if (MD_EXT_RE.test(leaf)) return `/${ctx.owner}/${ctx.repo}/blob/${ctx.ref}/${resolved}${suffix}`;
-  return `${rawBase(ctx)}/${resolved}${withRaw(suffix)}`;
+  // Issue #185 (amends the #182 "others → raw" trade-off): every non-image
+  // relative link lands on an in-app view. A trailing slash — or a
+  // resolution to the repo root — is the cheap directory signal (no tree
+  // fetch at render time) → the tree view; a slash-less link to a
+  // directory lands on the blob route and 404s honestly.
+  if (!resolved || path.endsWith("/")) {
+    return resolved
+      ? `/${ctx.owner}/${ctx.repo}/tree/${ctx.ref}/${resolved}${suffix}`
+      : `/${ctx.owner}/${ctx.repo}/tree/${ctx.ref}${suffix}`;
+  }
+  return `/${ctx.owner}/${ctx.repo}/blob/${ctx.ref}/${resolved}${suffix}`;
 }
 
 function rewriteAttr(html, re, ctx, isImage) {
