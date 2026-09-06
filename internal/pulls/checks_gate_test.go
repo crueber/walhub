@@ -55,6 +55,12 @@ func TestMergeConsultsChecksGate(t *testing.T) {
 		seedMergeable(t, e, hexSHA(1), hexSHA(2))
 		entered := make(chan struct{})
 		release := make(chan struct{})
+		// Guaranteed release: if any assertion before the explicit release
+		// fails, Cleanup still unblocks the worker (its ctx is
+		// WithoutCancel, so the ctx.Done arm can never fire — issue #180).
+		var releaseOnce sync.Once
+		releaseGate := func() { releaseOnce.Do(func() { close(release) }) }
+		t.Cleanup(releaseGate)
 		gate := &fakeChecksGate{err: errors.New("merge refused: required checks not green for " + hexSHA(2) + ": ci/build (failure), lint (missing)"), entered: entered, release: release}
 		e.svc.Checks = gate
 		rec, err := e.svc.StartMerge(ctx(), "o", "r", 1, maintainer(), MergeInput{Strategy: StrategyMerge}, "corr-c1")
@@ -67,7 +73,7 @@ func TestMergeConsultsChecksGate(t *testing.T) {
 		// The worker blocks in the gate: the running snapshot above is
 		// deterministic, not a scheduling win (issue #180).
 		awaitGate(t, entered)
-		close(release)
+		releaseGate()
 		done := waitTask(5*time.Second, func() *TaskRecord { return e.svc.MergeTask("o", "r") })
 		if done == nil || done.State != TaskError {
 			t.Fatalf("task = %+v", done)
