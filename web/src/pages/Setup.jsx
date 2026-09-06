@@ -8,7 +8,7 @@
 
 import { createSignal, createMemo, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { reportError } from "../lib/data.js";
-import { validateSetup, normalizeSetup, isRestartLikely, FIELDS, fmtSpecDuration, fmtSpecSize, tomlFragment, fieldAppliesToMode, fieldAppliesToBackend, filterSetupToVisible, effectiveStoreBackend } from "../lib/setup.js";
+import { validateSetup, normalizeSetup, isRestartLikely, FIELDS, fmtSpecDuration, fmtSpecSize, tomlFragment, fieldAppliesToMode, fieldAppliesToBackend, filterSetupToVisible, effectiveStoreBackend, splitAdvanced } from "../lib/setup.js";
 
 const FIELD_BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
 
@@ -331,6 +331,70 @@ export default function Setup() {
                   copied = setTimeout(() => setCopied(false), 1500);
                 } catch { /* clipboard unavailable — the code stays selectable */ }
               };
+              // Per-section Advanced group (issue #168): sane-default knobs from
+              // the FIELDS `advanced` flag render inside a collapsed native
+              // disclosure. Collapsed ≠ unmounted — values, inline hints, and
+              // the test/save payloads are byte-identical either way; only the
+              // open/closed state is UI-only (native <details>, no JS state).
+              const { essential: essKeys, advanced: advKeys } = splitAdvanced(g.keys ?? []);
+              const advKeySet = new Set(advKeys.map((k) => k.key));
+              const renderRow = (k) => {
+                const field = FIELD_BY_KEY.get(k.key) ?? { type: k.type ?? "string" };
+                const fromFile = k.value !== k.default;
+                const inId = `setup-in-${k.key.replaceAll(".", "--")}`;
+                const lbId = `setup-lb-${k.key.replaceAll(".", "--")}`;
+                return (
+                  <Show when={fieldAppliesToMode(field, authMode()) && fieldAppliesToBackend(field, storeBackend())}>
+                    <div class="setup-row" data-key={k.key}>
+                      {/* left: the key, its provenance chip, and a working
+                          example that stays visible while typing */}
+                      <div class="setup-label-col">
+                        <label id={lbId} class="setup-label" for={inId}>
+                          <code class="font-mono text-sm">{k.key}</code>
+                          <Show when={fromFile} fallback={<span class="muted text-xs">default</span>}>
+                            <span class="chip">file</span>
+                          </Show>
+                        </label>
+                        <Show when={field.ex}>
+                          <p class="setup-examples">
+                            <span class="muted">e.g.</span> <span class="setup-ex">{field.ex}</span>
+                            <Show when={field.note}>
+                              <span class="setup-note">{field.note}</span>
+                            </Show>
+                          </p>
+                        </Show>
+                      </div>
+                      {/* right: the control, with the client validator's
+                          inline hints directly under it */}
+                      <div class="setup-input-col">
+                        <FieldInput
+                          field={field}
+                          k={k.key}
+                          id={inId}
+                          labelId={lbId}
+                          value={() => getValue(k.key)}
+                          onInput={onInput}
+                        />
+                        <div class="key-errors">
+                          <For each={getErrors().filter((e) => e.key === k.key)}>
+                            {(e) => <p class={e.severity === "warn" ? "warn-line" : "err-line"}>{e.message}</p>}
+                          </For>
+                        </div>
+                      </div>
+                    </div>
+                  </Show>
+                );
+              };
+              // Applicable advanced rows under the current mode/backend gates —
+              // the disclosure renders only when at least one row applies, so
+              // no section ever shows an empty Advanced group.
+              const advVisibleCount = () => advKeys.filter((k) => {
+                const field = FIELD_BY_KEY.get(k.key) ?? {};
+                return fieldAppliesToMode(field, authMode()) && fieldAppliesToBackend(field, storeBackend());
+              }).length;
+              // Inline-hint errors sitting inside the collapsed group surface as
+              // a count on the summary so a hidden typo is still discoverable.
+              const advErrorCount = () => getErrors().filter((e) => advKeySet.has(e.key)).length;
               return (
                 <section class="card setup-section p-4" data-section={section}>
                   <h3 class="mb-2 font-semibold">{section}</h3>
@@ -347,55 +411,22 @@ export default function Setup() {
                       </p>
                     </div>
                   </Show>
-                  <For each={g.keys ?? []}>
-                    {(k) => {
-                      const field = FIELD_BY_KEY.get(k.key) ?? { type: k.type ?? "string" };
-                      const fromFile = k.value !== k.default;
-                      const inId = `setup-in-${k.key.replaceAll(".", "--")}`;
-                      const lbId = `setup-lb-${k.key.replaceAll(".", "--")}`;
-                      return (
-                        <Show when={fieldAppliesToMode(field, authMode()) && fieldAppliesToBackend(field, storeBackend())}>
-                          <div class="setup-row" data-key={k.key}>
-                            {/* left: the key, its provenance chip, and a working
-                                example that stays visible while typing */}
-                            <div class="setup-label-col">
-                              <label id={lbId} class="setup-label" for={inId}>
-                                <code class="font-mono text-sm">{k.key}</code>
-                                <Show when={fromFile} fallback={<span class="muted text-xs">default</span>}>
-                                  <span class="chip">file</span>
-                                </Show>
-                              </label>
-                              <Show when={field.ex}>
-                                <p class="setup-examples">
-                                  <span class="muted">e.g.</span> <span class="setup-ex">{field.ex}</span>
-                                  <Show when={field.note}>
-                                    <span class="setup-note">{field.note}</span>
-                                  </Show>
-                                </p>
-                              </Show>
-                            </div>
-                            {/* right: the control, with the client validator's
-                                inline hints directly under it */}
-                            <div class="setup-input-col">
-                              <FieldInput
-                                field={field}
-                                k={k.key}
-                                id={inId}
-                                labelId={lbId}
-                                value={() => getValue(k.key)}
-                                onInput={onInput}
-                              />
-                              <div class="key-errors">
-                                <For each={getErrors().filter((e) => e.key === k.key)}>
-                                  {(e) => <p class={e.severity === "warn" ? "warn-line" : "err-line"}>{e.message}</p>}
-                                </For>
-                              </div>
-                            </div>
-                          </div>
-                        </Show>
-                      );
-                    }}
+                  <For each={essKeys}>
+                    {(k) => renderRow(k)}
                   </For>
+                  <Show when={advVisibleCount() > 0}>
+                    <details class="setup-advanced" data-advanced-for={section}>
+                      <summary class="setup-advanced-toggle">
+                        <span>Advanced</span>
+                        <Show when={advErrorCount() > 0}>
+                          <span class="chip-draft">{advErrorCount()} issue{advErrorCount() === 1 ? "" : "s"}</span>
+                        </Show>
+                      </summary>
+                      <For each={advKeys}>
+                        {(k) => renderRow(k)}
+                      </For>
+                    </details>
+                  </Show>
                   {/* OIDC discovery test: validates the issuer typed in the form */}
                   <Show when={isAuth && authMode() === "oidc"}>
                     <div class="mt-3 flex flex-wrap items-center gap-2">

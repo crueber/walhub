@@ -77,6 +77,11 @@
   .setup-ex { @apply font-mono text-[11px] text-zinc-600 dark:text-zinc-300; }
   .setup-note { @apply block text-[11px] text-zinc-400 dark:text-zinc-500; }
   .setup-callout { @apply mb-3 rounded-lg border border-sky-300 bg-sky-50 p-3 dark:border-sky-900 dark:bg-sky-950/50; }
+  /* Setup page Advanced groups (issue #168): native <details> disclosure,
+     collapsed by default; the summary is the keyboard baseline. */
+  .setup-advanced { @apply mt-1 border-t border-zinc-100 pt-1 dark:border-zinc-800/60; }
+  .setup-advanced-toggle { @apply flex cursor-pointer items-center gap-2 py-2 text-sm font-medium
+                           text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100; }
 
   /* Tables */
   .data-table { @apply w-full text-sm; }
