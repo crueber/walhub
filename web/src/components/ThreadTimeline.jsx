@@ -15,7 +15,11 @@
 // props: { events, textFor(ev) → string|null (null = comment body),
 //   actionsFor?(ev) → JSX (per-comment extras, e.g. reaction buttons),
 //   summaryFor?(ev) → JSX|null (per-comment summary row under the body,
-//     e.g. the reaction emoji+count chips; null = no row) }.
+//     e.g. the reaction emoji+count chips; null = no row),
+//   mdCtx? → optional { owner, repo, ref, dir } for relative-URL resolution
+//     (issue #182). Thread bodies carry no file coordinates, so callers pass
+//     nothing and relative URLs stay verbatim — there is no repo file to
+//     resolve them against. }.
 // Dates render via the shared <DateTime> (issue #133).
 
 import { For, Show } from "solid-js";
@@ -58,7 +62,7 @@ export default function ThreadTimeline(props) {
                     <DateTime value={ev.at} />
                     <Show when={props.actionsFor}>{props.actionsFor(ev)}</Show>
                   </p>
-                  <div class="prose-sm" innerHTML={renderBody(ev.body ?? "")} />
+                  <div class="markdown-body" innerHTML={renderBody(ev.body ?? "", props.mdCtx)} />
                   {props.summaryFor?.(ev)}
                 </article>
               </li>
