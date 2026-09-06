@@ -161,5 +161,5 @@ export function renderMarkdownHtml(src, ctx) {
 /** renderBody(src, ctx?) → HTML safe for innerHTML (marked + resolve + pinned DOMPurify). Browser-only. */
 export function renderBody(src, ctx) {
   if (!purify) throw new Error("renderBody requires a DOM (DOMPurify); use renderMarkdownHtml in Node");
-  return purify.sanitize(resolveMarkdownUrls(marked.parse(String(src ?? "")), ctx), PURIFY_CONFIG);
+  return purify.sanitize(renderMarkdownHtml(src, ctx), PURIFY_CONFIG);
 }
