@@ -3,6 +3,7 @@ package pulls
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,19 @@ func TestMergeStrategies(t *testing.T) {
 			openBasic(t, e, "o", "r")
 			seedMergeable(t, e, hexSHA(1), hexSHA(2))
 			e.closer.Closed = []int{3}
+			// Controllable allow gate: the worker blocks here, so the
+			// running snapshot below is deterministic (issue #180 — the
+			// same transient-running pin as the deny tests).
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			// Guaranteed release: if any assertion before the explicit
+			// release fails, Cleanup still unblocks the worker (its ctx is
+			// WithoutCancel, so the ctx.Done arm can never fire — issue #180).
+			var releaseOnce sync.Once
+			releaseGate := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(releaseGate)
+			gate := &fakeReviewGate{entered: entered, release: release}
+			e.svc.Reviews = gate
 			rec, err := e.svc.StartMerge(ctx(), "o", "r", 1, maintainer(), MergeInput{Strategy: strategy, DeleteHead: true}, "corr-1")
 			if err != nil {
 				t.Fatalf("StartMerge: %v", err)
@@ -40,9 +54,14 @@ func TestMergeStrategies(t *testing.T) {
 			if rec.State != TaskRunning {
 				t.Fatalf("must return running: %+v", rec)
 			}
+			awaitGate(t, entered)
+			releaseGate()
 			done := waitTask(5*time.Second, func() *TaskRecord { return e.svc.MergeTask("o", "r") })
 			if done == nil || done.State != TaskOK {
 				t.Fatalf("task = %+v", done)
+			}
+			if gate.calls != 1 {
+				t.Fatalf("gate calls = %d", gate.calls)
 			}
 			sha, _ := done.Result["sha"].(string)
 			if len(sha) != 40 {

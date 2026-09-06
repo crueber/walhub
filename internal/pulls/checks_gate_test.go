@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -17,13 +18,27 @@ type fakeChecksGate struct {
 	lastHead   string
 	lastBase   string
 	lastMerger string
+	// entered/release make the StartMerge → running snapshot deterministic
+	// (same controllable-gate shape as fakeReviewGate, issue #180).
+	entered   chan struct{}
+	release   chan struct{}
+	enterOnce sync.Once
 }
 
-func (f *fakeChecksGate) CheckRequiredChecks(_ context.Context, _, _, headSHA, baseRef, merger string) error {
+func (f *fakeChecksGate) CheckRequiredChecks(ctx context.Context, _, _, headSHA, baseRef, merger string) error {
 	f.calls++
 	f.lastHead = headSHA
 	f.lastBase = baseRef
 	f.lastMerger = merger
+	if f.entered != nil {
+		f.enterOnce.Do(func() { close(f.entered) })
+	}
+	if f.release != nil {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+		}
+	}
 	return f.err
 }
 
@@ -38,7 +53,15 @@ func TestMergeConsultsChecksGate(t *testing.T) {
 		e.roles.Roles["merger@example.com"] = "maintain"
 		openBasic(t, e, "o", "r")
 		seedMergeable(t, e, hexSHA(1), hexSHA(2))
-		gate := &fakeChecksGate{err: errors.New("merge refused: required checks not green for " + hexSHA(2) + ": ci/build (failure), lint (missing)")}
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		// Guaranteed release: if any assertion before the explicit release
+		// fails, Cleanup still unblocks the worker (its ctx is
+		// WithoutCancel, so the ctx.Done arm can never fire — issue #180).
+		var releaseOnce sync.Once
+		releaseGate := func() { releaseOnce.Do(func() { close(release) }) }
+		t.Cleanup(releaseGate)
+		gate := &fakeChecksGate{err: errors.New("merge refused: required checks not green for " + hexSHA(2) + ": ci/build (failure), lint (missing)"), entered: entered, release: release}
 		e.svc.Checks = gate
 		rec, err := e.svc.StartMerge(ctx(), "o", "r", 1, maintainer(), MergeInput{Strategy: StrategyMerge}, "corr-c1")
 		if err != nil {
@@ -47,6 +70,10 @@ func TestMergeConsultsChecksGate(t *testing.T) {
 		if rec.State != TaskRunning {
 			t.Fatalf("must return running: %+v", rec)
 		}
+		// The worker blocks in the gate: the running snapshot above is
+		// deterministic, not a scheduling win (issue #180).
+		awaitGate(t, entered)
+		releaseGate()
 		done := waitTask(5*time.Second, func() *TaskRecord { return e.svc.MergeTask("o", "r") })
 		if done == nil || done.State != TaskError {
 			t.Fatalf("task = %+v", done)
