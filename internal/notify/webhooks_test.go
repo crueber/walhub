@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -475,6 +476,10 @@ func TestWebhookInsecureTLS(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer tlsSrv.Close()
+	// The self-signed rejection below is the asserted behavior (cursor
+	// stays put); silence the server-side handshake-error line so it never
+	// reads as a symptom in CI output (issue #178).
+	tlsSrv.Config.ErrorLog = log.New(io.Discard, "", 0)
 
 	hk, err := x.svc.CreateHook(ctx(), "acme", "repo", "amy@example.com", HookSpec{
 		URL: strPtr(tlsSrv.URL),

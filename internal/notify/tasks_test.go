@@ -407,7 +407,12 @@ func TestFanoutTerminalDrainKeepsLateSeq(t *testing.T) {
 // recipient each) each enqueued from R concurrent goroutines, so
 // attaches race terminal drains continuously. Every seq must still
 // produce its notification — pre-fix, an attach landing between the
-// terminal drain and end orphaned the seq (issue #72).
+// terminal drain and end orphaned the seq (issue #72) — and the drained
+// task must reach TaskFinished. Delivery and termination poll in
+// separate windows (issue #178): under parallel load a starved runner
+// may spend most of the delivery budget before the last notification
+// lands while the finish lands milliseconds later, and a single shared
+// deadline misreports that as "lost 0/60".
 func TestFanoutConcurrentEnqueueLosesNothing(t *testing.T) {
 	x := newHarness(t)
 	const repo = "acme/repo"
@@ -435,7 +440,8 @@ func TestFanoutConcurrentEnqueueLosesNothing(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	deadline := time.Now().Add(15 * time.Second)
+	// Phase 1 (no-loss pin): every seq produces its notification.
+	deliverBy := time.Now().Add(15 * time.Second)
 	for {
 		done := true
 		for _, p := range principals {
@@ -445,20 +451,39 @@ func TestFanoutConcurrentEnqueueLosesNothing(t *testing.T) {
 			}
 		}
 		if done {
-			if rec := x.svc.TaskStatus(repo, TaskKindFanout); rec != nil && rec.State == TaskFinished {
-				break
-			}
-			done = false
+			break
 		}
-		if time.Now().After(deadline) {
-			var missing []string
-			for _, p := range principals {
-				if countNotifs(t, x, p) != 1 {
-					missing = append(missing, p)
-				}
-			}
+		if time.Now().After(deliverBy) {
+			missing := missingNotifs(t, x, principals)
 			t.Fatalf("lost %d/%d fan-out seqs: %v", len(missing), n, missing)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	// Phase 2 (termination pin): the drained task reaches TaskFinished.
+	// Fresh window (see doc comment): the finished record is never reaped
+	// (bounded recent cache, no TTL — tasks.go finishLocked), so a timeout
+	// here means the drain genuinely stalled, not that delivery was lost.
+	finishBy := time.Now().Add(15 * time.Second)
+	for {
+		if rec := x.svc.TaskStatus(repo, TaskKindFanout); rec != nil && rec.State == TaskFinished {
+			return
+		}
+		if time.Now().After(finishBy) {
+			t.Fatalf("fan-out delivered %d/%d but task never finished: %+v",
+				n-len(missingNotifs(t, x, principals)), n, x.svc.TaskStatus(repo, TaskKindFanout))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// missingNotifs lists principals without exactly one notification.
+func missingNotifs(t *testing.T, x *harness, principals []string) []string {
+	t.Helper()
+	var missing []string
+	for _, p := range principals {
+		if countNotifs(t, x, p) != 1 {
+			missing = append(missing, p)
+		}
+	}
+	return missing
 }
