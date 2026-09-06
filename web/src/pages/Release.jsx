@@ -1,5 +1,5 @@
 // web/src/pages/Release.jsx — route "/:owner/:name/releases/:tag" (07 §8):
-// markdown-lite rendered body (allowlist sanitizer), assets table (name,
+// marked GFM rendered body (DOMPurify gate), assets table (name,
 // size, sha256 short, download), edit/publish/delete per role, asset
 // upload (client hashes via `crypto.subtle`, streams
 // `POST …/assets/{name}`) and asset delete.
@@ -8,8 +8,7 @@ import { createSignal, For, Show } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
-import { renderMarkdown } from "../lib/markdown.js";
-import { sanitize } from "../lib/sanitize.js";
+import { renderBody } from "../lib/render-md.js";
 import { ReleaseBadges } from "./Releases.jsx";
 import DateTime from "../components/DateTime.jsx";
 
@@ -110,7 +109,7 @@ export default function Release() {
                 <span class="card-meta ml-auto"><DateTime value={rel().published_at ?? rel().created_at} /></span>
               </div>
               <h2 class="mb-2 text-lg font-semibold">{rel().name}</h2>
-              <div class="markdown-body" innerHTML={sanitize(renderMarkdown(rel().body ?? ""))} />
+              <div class="markdown-body" innerHTML={renderBody(rel().body ?? "")} />
               <p class="card-meta mt-2">
                 tag {rel().tag_sha?.slice(0, 12)} · by {rel().author}
               </p>

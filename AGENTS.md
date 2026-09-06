@@ -22,8 +22,11 @@ contracts, exactly like `14_extensibility.md`.
    transport only — amended 2026-09-02 by explicit user request for SSH git transport; see
    `docs/go/17_ssh.md` decision 17.1). Frontend (amended 2026-09-02 by
    explicit user request — the user directed the SolidJS SPA + Tailwind replacement of the vanilla-ESM
-   UI; agents must treat this as approved, see `DEVIATIONS.md` D-WEB-6): runtime npm dependencies are
-   exactly **`solid-js` + `@solidjs/router`**; state management is Solid's own signals/stores + context
+   UI; agents must treat this as approved, see `DEVIATIONS.md` D-WEB-6) and amended 2026-09-06 by
+   explicit user request for marked + DOMPurify markdown rendering (see `DEVIATIONS.md` D-WEB-7):
+   runtime npm dependencies are
+   exactly **`solid-js` + `@solidjs/router` + `marked` + `dompurify`** (pinned: `marked@18.0.11` MIT,
+   `dompurify@3.4.15` MPL-2.0-or-Apache-2.0; both zero-dependency); state management is Solid's own signals/stores + context
    (NO additional state library); styling is **Tailwind CSS v4** (CSS-first `@import "tailwindcss"`,
    `@tailwindcss/vite` plugin, no config file, no CDN, dark mode by default). Still NO TypeScript
    (plain JSX/JS). Dev-time tooling: `vite` + `vite-plugin-solid` + `@tailwindcss/vite` build the SPA
@@ -174,7 +177,7 @@ internal/maintain   maintainer loop: checkpoints, bundles, compaction, fsck/repa
 internal/sshd       SSH git transport (x/crypto/ssh): sessions, key auth, command parsing
 internal/config     walhub.toml (optional) + WALHUB__ env overrides, per-repo settings, validation
 internal/policy     push policy rule language (protect/history/size effects)
-web/                SolidJS SPA (JSX, no TypeScript; solid-js + @solidjs/router; Tailwind v4, dark by
+web/                SolidJS SPA (JSX, no TypeScript; solid-js + @solidjs/router + marked + dompurify (D-WEB-7); Tailwind v4, dark by
                     default) built by vite into web/dist/, plus the dependency-free modular SDK esbuild-
                     bundled to web/dist/repos.js — `make web` runs both builds and `make build` depends
                     on it. The binary embeds dist/: the SPA shell at / and every UI route, hashed

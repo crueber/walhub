@@ -7,7 +7,7 @@
 // renders as a SINGLE-LINE muted system message ("{actor} {text}", e.g.
 // "anon added the approved label"), centered, clearly not a comment.
 // Compensating events are normal rows (never rewrite history); comment
-// bodies go through markdown-lite + sanitizer. `aria-live="polite"` so
+// bodies go through renderBody (marked GFM + DOMPurify). `aria-live="polite"` so
 // SSE-appended rows announce. Dedup key (num, event_seq) is the caller's
 // job (they pass seq-keyed lists); rows carry DOM ids so deep links work
 // with keyboard nav.
@@ -19,8 +19,7 @@
 // Dates render via the shared <DateTime> (issue #133).
 
 import { For, Show } from "solid-js";
-import { renderMarkdown } from "../lib/markdown.js";
-import { sanitize } from "../lib/sanitize.js";
+import { renderBody } from "../lib/render-md.js";
 import DateTime from "./DateTime.jsx";
 
 export default function ThreadTimeline(props) {
@@ -59,7 +58,7 @@ export default function ThreadTimeline(props) {
                     <DateTime value={ev.at} />
                     <Show when={props.actionsFor}>{props.actionsFor(ev)}</Show>
                   </p>
-                  <div class="prose-sm" innerHTML={sanitize(renderMarkdown(ev.body ?? ""))} />
+                  <div class="prose-sm" innerHTML={renderBody(ev.body ?? "")} />
                   {props.summaryFor?.(ev)}
                 </article>
               </li>

@@ -1,14 +1,13 @@
 // web/src/pages/Blob.jsx — Code tab blob view (§2.7 decision tree):
 // too_large → placeholder; binary → "binary file, {human size}"; .md → Preview|Code
-// toggle (markdown-lite + sanitizer in preview, tokenizer in code view); else
+// toggle (marked GFM + DOMPurify in preview, tokenizer in code view); else
 // line-numbered <pre> tinted by the mini tokenizer. Raw deep link comes from
 // the SDK's urls builder (§1.1) — no hand-built API URLs.
 
 import { createSignal, For, Show, Switch, Match } from "solid-js";
 import { A } from "@solidjs/router";
 import { useResolved } from "../lib/data.js";
-import { renderMarkdown } from "../lib/markdown.js";
-import { sanitize } from "../lib/sanitize.js";
+import { renderBody } from "../lib/render-md.js";
 import { fmtSize } from "../lib/format.js";
 import { languageFor, highlight } from "../lib/highlight.js";
 import { useRepo, shortRef } from "./Repo.jsx";
@@ -122,7 +121,7 @@ export default function Blob() {
                       }
                     >
                       {/* the sanitizer is the only innerHTML gate (§2.2) */}
-                      <div class="markdown-body p-4" innerHTML={sanitize(renderMarkdown(b().contents ?? ""))} />
+                      <div class="markdown-body p-4" innerHTML={renderBody(b().contents ?? "")} />
                     </Show>
                   </Match>
                   <Match when={true}>
