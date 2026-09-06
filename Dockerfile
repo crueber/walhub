@@ -10,7 +10,7 @@
 FROM docker.io/library/node:22-alpine AS web
 RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 WORKDIR /src/web
-COPY web/package.json web/pnpm-lock.yaml ./
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 # --ignore-scripts: esbuild's postinstall only validates its platform
 # binary (shipped as an optional dependency); pnpm 11's build-script gate
 # would otherwise fail the fresh install.
