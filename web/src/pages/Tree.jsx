@@ -6,7 +6,7 @@ import { A } from "@solidjs/router";
 import { useResolved, useData } from "../lib/data.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
-import { docCandidates, defaultDocFile, docBlobPath, docSlug, docFromHash } from "../lib/doctabs.js";
+import { docCandidates, defaultDocFile, docFetchArgs, docSlug, docFromHash } from "../lib/doctabs.js";
 import { fmtSize, fmtMode } from "../lib/format.js";
 import { useRepo, shortRef } from "./Repo.jsx";
 
@@ -92,11 +92,13 @@ function DocTabs(props) {
   };
 
   const selPath = () => ((props.dirPath ? `${props.dirPath}/` : "") + (sel() ?? ""));
-  // Per-segment encoding: a raw "#" would cut the fetch URL at the fragment
-  // (the backend decodes one segment at a time, so this round-trips).
-  const selFetchPath = () => docBlobPath(props.dirPath ?? "", sel() ?? "");
+  // The tab body's blob coordinates (issue #172): the ONLY acceptable
+  // revision is the tree payload's resolved commit sha — never a UI display
+  // string (ref names split the blob route's {rev} segment and 404). Null
+  // means "do not fetch": loading renders with no doomed request, no tray.
+  const selArgs = () => (sel() ? docFetchArgs(props.rev, props.dirPath ?? "", sel()) : null);
   const [getDoc] = useData(
-    () => (sel() ? `sha:${props.rev}:blob:${selPath()}` : "doctabs:none"),
+    () => (selArgs() ? `sha:${selArgs().rev}:blob:${selPath()}` : "doctabs:none"),
     () => {
       if (!sel()) return Promise.resolve(null);
       // The tree payload already carries the probed readme: no fetch for it.
@@ -104,7 +106,9 @@ function DocTabs(props) {
       if (pre != null) {
         return Promise.resolve({ name: sel(), path: selPath(), size: pre.length, contents: pre });
       }
-      return props.repoClient.blob(props.rev, selFetchPath());
+      const args = selArgs();
+      if (!args) return Promise.resolve(null); // unresolved rev: never fetch a display string
+      return props.repoClient.blob(args.rev, args.path);
     },
     Infinity, // sha-addressed payloads are immutable
   );
@@ -208,7 +212,7 @@ export default function Tree() {
                 entries={t().entries}
                 readme={t().readme}
                 dirPath={t().path ?? ""}
-                rev={t().sha ?? t().ref}
+                rev={t().sha}
                 repoClient={ctx.repoClient}
               />
             </>

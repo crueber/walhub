@@ -107,3 +107,25 @@ export function docFromHash(hash, ordered) {
   }
   return ordered.includes(name) ? name : null;
 }
+
+/** A resolved commit revision: exactly 40 lowercase hex chars (backend shas). */
+export const SHA_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * docFetchArgs(rev, dirPath, name) → {rev, path} for the tab body's blob
+ * fetch, or null when rev is not a resolved commit sha (issue #172).
+ *
+ * The ONLY acceptable revision is the tree payload's resolved commit sha —
+ * the same resolution the tree listing itself uses. Ref names, short shas,
+ * header-pill text, and cache-key fragments are UI display strings: the blob
+ * route splits `{rev}` on "/" (a full ref name mangles into rev="refs"), so
+ * interpolating one guarantees a 404 whose entry then sits on "loading…"
+ * forever (sha-addressed entries never revalidate). A null return means
+ * "do not fetch" — the caller renders loading without tray-spamming a
+ * doomed request.
+ */
+export function docFetchArgs(rev, dirPath, name) {
+  if (!SHA_RE.test(String(rev ?? ""))) return null;
+  if (name == null || String(name) === "") return null;
+  return { rev: String(rev), path: docBlobPath(dirPath ?? "", name) };
+}

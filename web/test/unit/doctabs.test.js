@@ -15,6 +15,7 @@ import {
   docCandidates,
   defaultDocFile,
   docBlobPath,
+  docFetchArgs,
   docSlug,
   docFromHash,
 } from "../../src/lib/doctabs.js";
@@ -121,4 +122,35 @@ test("anchor: missing/malformed/foreign hashes fall back to null", () => {
   assert.equal(docFromHash("#nope.md", ordered), null);
   assert.equal(docFromHash("#%E0%A4%A", ordered), null); // malformed % sequence
   assert.equal(docFromHash("#a.md", []), null);
+});
+
+test("fetch args (issue #172): resolved 40-hex sha + encoded path pass through", () => {
+  const sha = "85ab5fbcc2bbcab038377fd84741687bb6a19c64";
+  assert.deepEqual(docFetchArgs(sha, "", "README.md"), { rev: sha, path: "README.md" });
+  assert.deepEqual(docFetchArgs(sha, "docs", "a b.md"), { rev: sha, path: "docs/a%20b.md" });
+  assert.deepEqual(docFetchArgs(sha, "", "my notes (v2)#1.md"), {
+    rev: sha,
+    path: "my%20notes%20(v2)%231.md",
+  });
+});
+
+test("fetch args (issue #172): UI display strings never become the revision", () => {
+  const sha = "85ab5fbcc2bbcab038377fd84741687bb6a19c64";
+  // Full ref names (header-pill text) would split the blob route's {rev}.
+  for (const display of [
+    "refs/heads/main",
+    "refs/tags/v1.0",
+    "main",
+    "SHA:85AB5FBCC2BBCAB038377FD84741687BB6A19C64",
+    sha.toUpperCase(), // backend shas are lowercase; never guess case
+    sha.slice(0, 12), // short shas are display truncations, not revisions
+    "",
+    null,
+    undefined,
+  ]) {
+    assert.equal(docFetchArgs(display, "", "README.md"), null, String(display));
+  }
+  // No tab file, no fetch — even with a valid sha.
+  assert.equal(docFetchArgs(sha, "", ""), null);
+  assert.equal(docFetchArgs(sha, "", null), null);
 });
