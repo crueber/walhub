@@ -4,8 +4,7 @@
 import { createSignal, createEffect, For, Show, Switch, Match } from "solid-js";
 import { A } from "@solidjs/router";
 import { useResolved, useData } from "../lib/data.js";
-import { renderMarkdown } from "../lib/markdown.js";
-import { sanitize } from "../lib/sanitize.js";
+import { renderBody } from "../lib/render-md.js";
 import { docCandidates, defaultDocFile, docFetchArgs, docSlug, docFromHash } from "../lib/doctabs.js";
 import { fmtSize, fmtMode } from "../lib/format.js";
 import { useRepo, shortRef } from "./Repo.jsx";
@@ -39,7 +38,7 @@ function Breadcrumb(props) {
 // DocTabs (issue #170): the current directory's *.md/*.markdown files as
 // client-side tabs below the file list — README (case-insensitive) first and
 // default-selected, rest alphabetical (lib/doctabs.js, unit-tested). Tab
-// bodies render through the blob MD pipeline (renderMarkdown + sanitize);
+// bodies render through the blob MD pipeline (renderBody: marked + DOMPurify);
 // non-selected bodies fetch lazily through the existing blob endpoint keyed
 // on the commit sha (immutable → shared with the blob page's cache entry),
 // so the pre-filled probed readme costs zero round trips and each newly
@@ -161,7 +160,7 @@ function DocTabs(props) {
                   role="tabpanel"
                   id="doctab-panel"
                   aria-label={sel()}
-                  innerHTML={sanitize(renderMarkdown(getDoc()?.contents ?? ""))}
+                  innerHTML={renderBody(getDoc()?.contents ?? "")}
                 />
               </Match>
             </Switch>

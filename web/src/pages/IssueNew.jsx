@@ -1,12 +1,11 @@
 // web/src/pages/IssueNew.jsx — route "/:owner/:name/issues/new" (02 §11):
-// the create form (title, markdown-lite body, preview toggle).
+// the create form (title, markdown body, preview toggle).
 
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { reportError } from "../lib/data.js";
-import { renderMarkdown } from "../lib/markdown.js";
-import { sanitize } from "../lib/sanitize.js";
+import { renderBody } from "../lib/render-md.js";
 import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
 
 export default function IssueNew() {
@@ -88,10 +87,10 @@ export default function IssueNew() {
               onInput={(e) => setBody(e.target.value)}
               onPaste={onPaste}
               onDrop={onDrop}
-              placeholder="Steps to reproduce… (markdown-lite; #N links issues)"
+              placeholder="Steps to reproduce… (markdown; #N links issues)"
             />
           }>
-            <div class="card prose-sm p-3" innerHTML={sanitize(renderMarkdown(getBody()))} />
+            <div class="card prose-sm p-3" innerHTML={renderBody(getBody())} />
           </Show>
         </label>
         <div class="flex items-center justify-between">
