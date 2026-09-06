@@ -1,11 +1,12 @@
 // web/src/pages/Tree.jsx — Code tab: tree at ref/path via the §9.2 resolve →
-// sha chain, breadcrumbs, entry listing, README markdown-lite preview.
+// sha chain, breadcrumbs, entry listing, directory-docs markdown tabs.
 
-import { For, Show } from "solid-js";
+import { createSignal, createEffect, For, Show, Switch, Match } from "solid-js";
 import { A } from "@solidjs/router";
-import { useResolved } from "../lib/data.js";
+import { useResolved, useData } from "../lib/data.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { sanitize } from "../lib/sanitize.js";
+import { docCandidates, defaultDocFile, docBlobPath, docSlug, docFromHash } from "../lib/doctabs.js";
 import { fmtSize, fmtMode } from "../lib/format.js";
 import { useRepo, shortRef } from "./Repo.jsx";
 
@@ -31,6 +32,138 @@ function Breadcrumb(props) {
         }}
       </For>
     </nav>
+    </Show>
+  );
+}
+
+// DocTabs (issue #170): the current directory's *.md/*.markdown files as
+// client-side tabs below the file list — README (case-insensitive) first and
+// default-selected, rest alphabetical (lib/doctabs.js, unit-tested). Tab
+// bodies render through the blob MD pipeline (renderMarkdown + sanitize);
+// non-selected bodies fetch lazily through the existing blob endpoint keyed
+// on the commit sha (immutable → shared with the blob page's cache entry),
+// so the section adds zero round trips until a tab is opened and one per
+// newly opened tab after. The tree payload's probed readme pre-fills its
+// tab with no fetch. Blobs over the JSON cap answer too_large and render
+// the same cap note as Blob.jsx.
+function DocTabs(props) {
+  // props: entries, readme, dirPath, rev (commit sha), repoClient.
+  const list = () => docCandidates(props.entries, props.readme);
+  const head = () => defaultDocFile(list());
+  const [getSel, setSel] = createSignal(null); // explicit choice; null = head
+  let lastDir = null;
+  createEffect(() => {
+    const key = `${props.rev ?? ""}@${props.dirPath ?? ""}`;
+    const files = list();
+    if (key !== lastDir) {
+      // New directory: honor a deep-link #anchor when it names a tab here,
+      // else fall back to the README-first head.
+      lastDir = key;
+      const hash = typeof location !== "undefined" ? location.hash : "";
+      setSel(docFromHash(hash, files) ?? head());
+    } else if (getSel() != null && !files.includes(getSel())) {
+      setSel(head()); // refetch renamed the file out from under us
+    }
+  });
+  const sel = () => getSel() ?? head();
+
+  const select = (name) => {
+    setSel(name);
+    try {
+      history.replaceState(null, "", `#${docSlug(name)}`);
+    } catch {
+      /* non-browser (SSR/tests): selection still applies */
+    }
+  };
+
+  // Roving tabindex: arrows move selection and focus, Home/End jump.
+  const onKeys = (e) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const files = list();
+    if (!files.length) return;
+    let i = files.indexOf(sel());
+    if (e.key === "ArrowRight") i = (i + 1) % files.length;
+    else if (e.key === "ArrowLeft") i = (i - 1 + files.length) % files.length;
+    else if (e.key === "Home") i = 0;
+    else i = files.length - 1;
+    select(files[i]);
+    e.currentTarget.querySelector(`[data-index="${i}"]`)?.focus();
+  };
+
+  const selPath = () => ((props.dirPath ? `${props.dirPath}/` : "") + (sel() ?? ""));
+  // Per-segment encoding: a raw "#" would cut the fetch URL at the fragment
+  // (the backend decodes one segment at a time, so this round-trips).
+  const selFetchPath = () => docBlobPath(props.dirPath ?? "", sel() ?? "");
+  const [getDoc] = useData(
+    () => (sel() ? `sha:${props.rev}:blob:${selPath()}` : "doctabs:none"),
+    () => {
+      if (!sel()) return Promise.resolve(null);
+      // The tree payload already carries the probed readme: no fetch for it.
+      const pre = props.readme?.name === sel() ? props.readme.contents : undefined;
+      if (pre != null) {
+        return Promise.resolve({ name: sel(), path: selPath(), size: pre.length, contents: pre });
+      }
+      return props.repoClient.blob(props.rev, selFetchPath());
+    },
+    Infinity, // sha-addressed payloads are immutable
+  );
+
+  return (
+    <Show when={list().length > 0}>
+      <section class="doctabs card mt-4" aria-label="directory documentation">
+        <div
+          class="seg flex flex-wrap items-center gap-1.5 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800"
+          role="tablist"
+          aria-label="markdown files in this directory"
+          onKeyDown={onKeys}
+        >
+          <For each={list()}>
+            {(name, i) => (
+              <button
+                type="button"
+                role="tab"
+                id={`doctab-${i()}`}
+                data-index={i()}
+                aria-selected={sel() === name}
+                aria-controls="doctab-panel"
+                tabindex={sel() === name ? "0" : "-1"}
+                title={name}
+                class="pill cursor-pointer"
+                classList={{ "!border-emerald-500 !text-emerald-600 dark:!text-emerald-400": sel() === name }}
+                onClick={() => select(name)}
+              >
+                {name}
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={sel()} fallback={<p class="muted p-4">loading…</p>}>
+          <Show when={getDoc() != null} fallback={<p class="muted p-4">loading…</p>}>
+            <Switch>
+              <Match when={getDoc()?.too_large}>
+                <p class="muted italic p-6 text-center">
+                  This file is too large to render (<span title={getDoc()?.size != null ? `${getDoc().size} bytes` : undefined}>{getDoc()?.size == null ? "?" : fmtSize(getDoc().size)}</span>; the render cap is 2 MiB).
+                  Fetch it raw from the API.
+                </p>
+              </Match>
+              <Match when={getDoc()?.binary}>
+                <p class="muted italic p-6 text-center">binary file, <span title={getDoc()?.size != null ? `${getDoc().size} bytes` : undefined}>{getDoc()?.size == null ? "?" : fmtSize(getDoc().size)}</span></p>
+              </Match>
+              <Match when={true}>
+                {/* the sanitizer is the innerHTML gate (§2.2) */}
+                <div
+                  class="markdown-body p-4"
+                  role="tabpanel"
+                  id="doctab-panel"
+                  aria-label={sel()}
+                  innerHTML={sanitize(renderMarkdown(getDoc()?.contents ?? ""))}
+                />
+              </Match>
+            </Switch>
+          </Show>
+        </Show>
+      </section>
     </Show>
   );
 }
@@ -71,13 +204,13 @@ export default function Tree() {
                   </For>
                 </tbody>
               </table>
-              <Show when={t().readme?.contents}>
-                <section class="readme card mt-4 p-4">
-                  <h2 class="mb-2 font-semibold">{t().readme.name}</h2>
-                  {/* the sanitizer is the innerHTML gate (§2.2) */}
-                  <div class="markdown-body" innerHTML={sanitize(renderMarkdown(t().readme.contents))} />
-                </section>
-              </Show>
+              <DocTabs
+                entries={t().entries}
+                readme={t().readme}
+                dirPath={t().path ?? ""}
+                rev={t().sha ?? t().ref}
+                repoClient={ctx.repoClient}
+              />
             </>
           );
         }}
