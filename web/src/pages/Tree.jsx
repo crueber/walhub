@@ -42,8 +42,8 @@ function Breadcrumb(props) {
 // bodies render through the blob MD pipeline (renderMarkdown + sanitize);
 // non-selected bodies fetch lazily through the existing blob endpoint keyed
 // on the commit sha (immutable → shared with the blob page's cache entry),
-// so the section adds zero round trips until a tab is opened and one per
-// newly opened tab after. The tree payload's probed readme pre-fills its
+// so the pre-filled probed readme costs zero round trips and each newly
+// opened tab costs one after. The tree payload's probed readme pre-fills its
 // tab with no fetch. Blobs over the JSON cap answer too_large and render
 // the same cap note as Blob.jsx.
 function DocTabs(props) {
