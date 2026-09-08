@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -476,32 +477,84 @@ func applyPortOverride(cfg *config.Config) {
 }
 
 // ---- RepoRegistry adapter (07_api.md §8: answered from the STORE) --------------
-
+//
+// Owners/Repos are MANIFEST-gated: a prefix without repos/<o>/<r>/manifest.pb
+// is not a repository (issue #200). Stale prefixes linger after Delete: the
+// sweep removes every listed object, but the filesystem CAS sidecars
+// (<name>.lock) persist by design — invisible to List, yet their directory
+// keeps the name behind ListPrefixes — and a fork-provisioned prefix
+// (fork.json written before the child manifest lands, #150) is likewise
+// unborn. Gating on the manifest keeps both out of the listings on every
+// backend; Exists already gates the same way, so re-create/re-import after a
+// delete sees a clean name.
 type repoRegistry struct {
 	reg *wal.Registry
 	st  store.ObjectStore
 }
 
 func (r *repoRegistry) Owners(ctx context.Context) ([]string, error) {
+	owners, err := listOwners(ctx, r.st)
+	if err != nil {
+		return nil, err
+	}
 	out := []string{}
-	err := r.st.ListPrefixes(ctx, "repos/", func(m string) error {
-		out = append(out, strings.TrimSuffix(strings.TrimPrefix(m, "repos/"), "/"))
-		return nil
-	})
-	return out, err
+	for _, owner := range owners {
+		repos, rerr := r.liveRepos(ctx, owner)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if len(repos) > 0 {
+			out = append(out, owner)
+		}
+	}
+	return out, nil
 }
 
 func (r *repoRegistry) Repos(ctx context.Context, owner string) ([]string, error) {
-	out := []string{}
-	prefix := "repos/" + owner + "/"
-	err := r.st.ListPrefixes(ctx, prefix, func(m string) error {
-		name := strings.TrimPrefix(m, prefix)
-		if strings.HasSuffix(name, "/") {
-			out = append(out, strings.TrimSuffix(name, "/"))
-		}
-		return nil
-	})
-	return out, err
+	return r.liveRepos(ctx, owner)
+}
+
+// liveRepos lists the manifest-backed repos under owner: the raw prefix
+// listing minus deleted-repo ghosts (manifest.pb swept, sidecar litter
+// behind) and unborn fork-provisioned prefixes (fork.json, manifest not yet
+// written — #150, which the row-level tolerateMissing still covers as a
+// race). Manifest Heads run in parallel (limit 8, mirroring
+// wal.refreshList); a missing/unreadable manifest drops the name — the same
+// fail-closed choice as refreshList, so a transient store error hides a repo
+// from one listing refresh rather than resurrecting a deleted one.
+//
+// ### Concurrency
+// Hazard: parallel Head goroutines appending to one slice. Avoidance: a
+// single mutex guards the collect; no lock is held across a store call (the
+// Head happens before the lock). Output is sorted after the join.
+func (r *repoRegistry) liveRepos(ctx context.Context, owner string) ([]string, error) {
+	names, err := listRepos(ctx, r.st, owner)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return []string{}, nil
+	}
+	g, gctx := store.WithContext(ctx)
+	g.SetLimit(8)
+	var mu sync.Mutex
+	live := make([]string, 0, len(names))
+	for _, name := range names {
+		name := name
+		g.Go(func() error {
+			meta, herr := r.st.Head(gctx, "repos/"+owner+"/"+name+"/"+store.Manifest)
+			if herr != nil || meta == nil {
+				return nil // absent/unreadable manifest = not a repo
+			}
+			mu.Lock()
+			live = append(live, name)
+			mu.Unlock()
+			return nil
+		})
+	}
+	_ = g.Wait()
+	sort.Strings(live)
+	return live, nil
 }
 
 func (r *repoRegistry) Exists(ctx context.Context, id git.RepoId) (bool, error) {

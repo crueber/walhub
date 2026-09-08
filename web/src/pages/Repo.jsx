@@ -6,7 +6,7 @@
 import repos from "../../sdk/src/index.js";
 import { createContext, useContext, createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
-import { useData, reportError, REPO_TTL } from "../lib/data.js";
+import { useData, reportError, REPO_TTL, tolerateMissing } from "../lib/data.js";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, cloneCommand, copyText } from "../lib/clone.js";
 import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
@@ -463,7 +463,11 @@ export default function Repo(props) {
   const location = useLocation();
   const full = () => `${params.owner}/${params.name}`;
   const repoClient = repos.repo(full());
-  const [getSummary] = useData(() => `repo:${full()}`, () => repoClient.get(), REPO_TTL);
+  // A 404 summary is an expected state, not a failure (issue #200: the repo
+  // was deleted, or never existed) — it resolves to null so the header
+  // renders "not found" instead of "loading…" forever. Any other error keeps
+  // the data-layer contract (tray, value stays undefined → still loading).
+  const [getSummary] = useData(() => `repo:${full()}`, () => tolerateMissing(repoClient.get(), null), REPO_TTL);
 
   const ctx = {
     get owner() { return params.owner; },
@@ -479,7 +483,8 @@ export default function Repo(props) {
     <RepoCtx.Provider value={ctx}>
       <div class="repo-shell">
         <div class="repo-header mb-3 flex flex-wrap items-center gap-3">
-          <Show when={getSummary()} fallback={<span class="muted">loading…</span>}>
+          <Show when={getSummary() !== undefined} fallback={<span class="muted">loading…</span>}>
+            <Show when={getSummary()} fallback={<span class="muted">repository not found — it may have been deleted</span>}>
             {(s) => (
               <div class="repo-title">
                 <h1 class="text-xl font-semibold">
@@ -495,6 +500,7 @@ export default function Repo(props) {
                 </div>
               </div>
             )}
+            </Show>
           </Show>
           <div class="ml-auto flex items-center gap-2">
             <StarToggle repo={repoClient} />

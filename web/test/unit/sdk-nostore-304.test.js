@@ -54,3 +54,16 @@ test("withNoStore restores the arming when fn throws", async () => {
   await c.me();
   assert.equal(calls[0].init.cache, undefined);
 });
+
+test("owners listings always bypass the HTTP cache (issue #200)", async () => {
+  // The server answers these SWR (max-age=0, stale-while-revalidate=60); a
+  // stale-while-revalidate hit would resurrect a just-deleted repo in
+  // /explore for up to 60 s, so the listings never read the HTTP cache.
+  const { fetch, calls } = fakeFetch(() => jsonResponse([]));
+  const c = new ReposClient({ base: BASE, fetch });
+  assert.deepEqual(await c.owners.list(), []);
+  assert.deepEqual(await c.owners.repos("demo"), []);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].init.cache, "no-store");
+  assert.equal(calls[1].init.cache, "no-store");
+});
