@@ -1,4 +1,4 @@
-# design.md — working on the walhub UI and CSS
+# DESIGN.md — working on the walhub UI and CSS
 
 > How to build, style, and extend the frontend so every page looks like one product.
 > Stack context: SolidJS + `@solidjs/router`, Tailwind v4 (CSS-first), dark-by-default — the decision
