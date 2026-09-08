@@ -66,11 +66,11 @@ export default function Landing() {
           Object-protocol compliant with walgit — bucket layout, protobuf wire encoding, and git wire
           behavior follow walgit's formats.
         </p>
-        <p class="muted mt-3 text-sm">
-          <A class="hover:underline" href="/how-it-works">
+        <p class="muted mt-4 flex flex-wrap items-center justify-center gap-3 text-sm">
+          <A class="btn px-4 py-2" href="/how-it-works">
             How it works →
-          </A>{" "}
-          the object-store idea and the WAL, in depth.
+          </A>
+          <span>the object-store idea and the WAL, in depth.</span>
         </p>
       </section>
 
@@ -134,17 +134,16 @@ git push -u origin main          # browse it at http://localhost:8080/you/demo`}
           over SSH on port 2222 — add your public key on the{" "}
           <A class="hover:underline" href="/keys">/keys</A> page.
         </p>
-        <p class="mt-4">
+        <p class="mt-4 flex flex-wrap items-center gap-3">
           <A class="btn primary px-4 py-2" href="/explore">
             Browse repositories →
           </A>
+          <A class="btn px-4 py-2" href="/how-it-works">
+            How it works →
+          </A>
         </p>
         <p class="muted mt-3 text-sm">
-          New here?{" "}
-          <A class="hover:underline" href="/how-it-works">
-            How it works →
-          </A>{" "}
-          the object-store idea and the WAL, in depth.
+          New here? The object-store idea and the WAL, in depth.
         </p>
       </section>
     </div>
