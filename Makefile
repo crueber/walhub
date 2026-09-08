@@ -49,6 +49,9 @@ contract-s3: ## store contract against rustfs (make dev-store first)
 contract-gcs: ## store contract against a real GCS bucket
 	WALHUB_TEST_GCS_BUCKET=$${WALHUB_TEST_GCS_BUCKET:?set WALHUB_TEST_GCS_BUCKET} $(GO) test -count=1 ./internal/store/ -run TestContractGCS
 
+landing-gifs: ## regenerate the landing-page concept GIFs (MANUAL: run only when scenes change; freshness pinned by the golden test)
+	$(GO) run ./internal/devtools/landinggif -out web/public/concepts/
+
 e2e: ## smart-HTTP end-to-end against the real git binary
 	$(T15) $(GO) test -count=1 ./internal/e2e/...
 
@@ -70,4 +73,4 @@ ci: vet test race cover contract e2e ## everything that must be green before a m
 help: ## show targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: web build fmt vet test test-go test-web race cover sim contract contract-s3 contract-gcs e2e image dev-store dev-store-stop clean ci help
+.PHONY: web build fmt vet test test-go test-web race cover sim contract contract-s3 contract-gcs e2e image dev-store dev-store-stop clean ci help landing-gifs

@@ -49,9 +49,7 @@ export default function App(props) {
             walhub
           </A>
           <nav class="site-nav flex items-center gap-4">
-            <A href="/" end>
-              owners
-            </A>
+            <A href="/explore">explore</A>
             <A href="/import">import</A>
             <A href="/api">API</A>
             <A href="/keys">keys</A>

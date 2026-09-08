@@ -156,16 +156,11 @@ func TestSPAHome(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("home content-type = %q", ct)
 	}
-	// ?format=text → owner list.
-	if rec := do("http://x/?format=text", true); rec.Body.String() != "alice\nbob\n" {
-		t.Fatalf("text home = %q", rec.Body.String())
+	// ?format=text moved to /explore (issue #187): / answers the shell
+	// unconditionally, even for text requests.
+	if rec := do("http://x/?format=text", true); !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Fatalf("landing home must serve the shell, got %q", rec.Body.String())
 	}
-	// API seam failure → 503.
-	api.err = &apiErrString{"boom"}
-	if rec := do("http://x/?format=text", true); rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("api failure = %d", rec.Code)
-	}
-	api.err = nil
 	// ownerPage / repoPage / serveSPA all render the shell.
 	rec = httptest.NewRecorder()
 	s.ownerPage(rec, httptest.NewRequest("GET", "/o", nil))
@@ -183,6 +178,73 @@ func TestSPAHome(t *testing.T) {
 type apiErrString struct{ s string }
 
 func (e *apiErrString) Error() string { return e.s }
+
+// TestExplorePage: GET /explore serves the owners shell; ?format=text (or a
+// text/plain Accept without text/html) answers the plain owner list (moved
+// from / by issue #187 — the machine twin follows the page; pre-1.0
+// no-alias: / has no text branch anymore).
+func TestExplorePage(t *testing.T) {
+	api := &fakeAPI{owners: []string{"alice", "bob"}}
+	s, h := newTestServer(t, func(o *Options) { o.API = api })
+	do := func(url string, auth bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", url, nil)
+		if auth {
+			req.Header.Set("Authorization", "Bearer tok123")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	// Anonymous + no anonymous read → gated 401.
+	if rec := do("http://x/explore", false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon explore = %d", rec.Code)
+	}
+	// HTML shell.
+	rec := do("http://x/explore", true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `/_ui/assets/`) || !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Fatalf("html explore must serve the built SPA shell: %d %.160s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("explore content-type = %q", ct)
+	}
+	_ = s
+	// ?format=text → owner list.
+	if rec := do("http://x/explore?format=text", true); rec.Body.String() != "alice\nbob\n" {
+		t.Fatalf("text explore = %q", rec.Body.String())
+	}
+	if rec := do("http://x/explore?format=text", true); !strings.Contains(rec.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("text explore content-type = %q", rec.Header().Get("Content-Type"))
+	}
+	// text/plain Accept (without text/html) → owner list too.
+	req := httptest.NewRequest("GET", "http://x/explore", nil)
+	req.Header.Set("Authorization", "Bearer tok123")
+	req.Header.Set("Accept", "text/plain")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Body.String() != "alice\nbob\n" {
+		t.Fatalf("accept-text explore = %q", rec.Body.String())
+	}
+	// text/html Accept still gets the shell (query param absent).
+	req = httptest.NewRequest("GET", "http://x/explore", nil)
+	req.Header.Set("Authorization", "Bearer tok123")
+	req.Header.Set("Accept", "text/html, text/plain")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Fatalf("html-accept explore must serve the shell, got %q", rec.Body.String())
+	}
+	// API seam failure → 503.
+	api.err = &apiErrString{"boom"}
+	if rec := do("http://x/explore?format=text", true); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("api failure = %d", rec.Code)
+	}
+	api.err = nil
+	// /explore must be the explicit route, not the owner wildcard: an owner
+	// literally named "explore" is shadowed (documented reservation).
+	if rec := do("http://x/explore", true); rec.Code != http.StatusOK {
+		t.Fatalf("explore route = %d", rec.Code)
+	}
+}
 
 func TestSetupJSONRecipes(t *testing.T) {
 	s, _ := newTestServer(t, nil)
@@ -255,6 +317,78 @@ func TestServeUIAssets(t *testing.T) {
 	}
 	if _, ok := uiAsset("app.js"); ok {
 		t.Fatal("uiAsset is a stub and must miss")
+	}
+}
+
+// TestUIAssetConcepts: /_ui/concepts/*.gif (issue #187) resolve + serve as
+// image/gif with the no-cache (never immutable) class — stable filenames
+// whose bytes change on regeneration. Requires the built UI (run make web;
+// same precondition as TestUIAssetResolvers).
+func TestUIAssetConcepts(t *testing.T) {
+	s, _ := newTestServer(t, nil)
+	b, ok := uiAsset("concepts/push.gif")
+	if !ok || len(b) == 0 || string(b[:6]) != "GIF89a" {
+		t.Fatal("concepts/push.gif must resolve to GIF bytes (run make web)")
+	}
+	if _, ok := uiAsset("concepts/push.png"); ok {
+		t.Fatal("non-gif concept names must miss")
+	}
+	if _, ok := uiAsset("concepts/../../go.mod"); ok {
+		t.Fatal("traversal via concepts/ prefix must fail")
+	}
+	// MIME + cache class + ETag through the handler.
+	req := httptest.NewRequest("GET", "http://x/_ui/concepts/push.gif", nil)
+	req.Header.Set("Authorization", "Bearer tok123")
+	rec := httptest.NewRecorder()
+	s.serveUIAssets(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("concepts gif = %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/gif" {
+		t.Fatalf("concepts content-type = %q, want image/gif", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("concepts cache-control = %q, want no-cache (never immutable)", cc)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("concepts gif must carry an ETag")
+	}
+	req = httptest.NewRequest("GET", "http://x/_ui/concepts/push.gif", nil)
+	req.Header.Set("Authorization", "Bearer tok123")
+	req.Header.Set("If-None-Match", etag)
+	rec = httptest.NewRecorder()
+	s.serveUIAssets(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("conditional concepts gif = %d, want 304", rec.Code)
+	}
+}
+
+// TestCompressBypassesImages: the compress middleware must not gzip
+// image/* bodies (issue #187 B2 — gzipping LZW GIFs is pure CPU per
+// request); SSE + precompressed bodies keep their existing bypass.
+func TestCompressBypassesImages(t *testing.T) {
+	s, _ := newTestServer(t, nil)
+	run := func(ct string) *httptest.ResponseRecorder {
+		h := s.compress(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", ct)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("bytes"))
+		}))
+		req := httptest.NewRequest("GET", "http://x/_ui/concepts/push.gif", nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := run("image/gif"); rec.Header().Get("Content-Encoding") == "gzip" {
+		t.Fatal("image/gif must bypass gzip")
+	}
+	if rec := run("text/event-stream"); rec.Header().Get("Content-Encoding") == "gzip" {
+		t.Fatal("SSE must bypass gzip")
+	}
+	if rec := run("text/html; charset=utf-8"); rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatal("text/html must still gzip")
 	}
 }
 

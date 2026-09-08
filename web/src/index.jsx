@@ -11,6 +11,7 @@ import App from "./App.jsx";
 import { initData } from "./lib/data.js";
 
 import Owners from "./pages/Owners.jsx";
+import Landing from "./pages/Landing.jsx";
 import Import from "./pages/Import.jsx";
 import Repos from "./pages/Repos.jsx";
 import Repo from "./pages/Repo.jsx";
@@ -47,7 +48,8 @@ initData(repos); // the dogfood client, one instance
 render(
   () => (
     <Router root={App}>
-      <Route path="/" component={Owners} />
+      <Route path="/" component={Landing} />
+      <Route path="/explore" component={Owners} />
       <Route path="/import" component={Import} />
       <Route path="/setup" component={Setup} />
       <Route path="/api" component={Apidocs} />
@@ -80,7 +82,7 @@ render(
         <Route path="/wal" component={Wal} />
         <Route path="/settings" component={Settings} />
       </Route>
-      <Route path="*" component={Owners} />
+      <Route path="*" component={Landing} />
     </Router>
   ),
   document.getElementById("root"),
