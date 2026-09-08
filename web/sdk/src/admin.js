@@ -18,6 +18,18 @@ export function attachAdmin(repo) {
   repo.get = (opts) => client._call(p(""), { method: "GET", ...opts });
   /** Create (write): `PUT …/api`. */
   repo.create = (opts) => client._call(p(""), { method: "PUT", sse: false, ...opts });
+  /**
+   * Placeholder create (write): `PUT …/api?placeholder=true`
+   * (+ `&object_format=sha1|sha256`) — the repoPut flag ride (same
+   * server writer as `POST /api/v1/repos`; the top-level twin lives at
+   * `client.repos.create`). Existing `repo.create(opts)` stays
+   * byte-identical (no flag) per the frozen PUT semantic.
+   */
+  repo.createPlaceholder = (params = {}, opts = {}) => {
+    const q = new URLSearchParams({ placeholder: "true" });
+    if (params.object_format) q.set("object_format", params.object_format);
+    return client._call(`${p("")}?${q}`, { method: "PUT", sse: false, ...opts });
+  };
   /** Delete (admin): `DELETE …/api`. */
   repo.delete = (opts) => client._call(p(""), { method: "DELETE", sse: false, ...opts });
 

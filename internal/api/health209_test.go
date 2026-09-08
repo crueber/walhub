@@ -554,7 +554,9 @@ func TestSummaryOverviewRoundTrips(t *testing.T) {
 	id := git.RepoId{Owner: "demo", Name: "walgit"}
 	fsckKey := id.StorePrefix() + store.Fsck
 
-	// Empty summary: zero store GETs (probe skipped on data in hand).
+	// Empty summary: at most the #210 placeholder sidecar probe (R1 B1 —
+	// the fsck.pb probe is still skipped on data in hand; the sidecar is
+	// probed ONLY when HeadSeq==0 && refs==0, so real repos pay +0).
 	f := newFixture(t)
 	cs := &countStore{ObjectStore: f.env.Store}
 	f.env.Store = cs
@@ -562,17 +564,32 @@ func TestSummaryOverviewRoundTrips(t *testing.T) {
 	if w := f.req("GET", "/demo/walgit/api"); w.Code != 200 {
 		t.Fatalf("empty summary = %d", w.Code)
 	}
-	if n := cs.totalGets(); n != 0 {
-		t.Fatalf("empty summary issued %d store GETs, want 0", n)
+	if n := cs.totalGets(); n > 1 {
+		t.Fatalf("empty summary issued %d store GETs, want ≤1 (sidecar only)", n)
+	}
+	if n := cs.gets[id.StorePrefix()+PlaceholderKeySuffix]; n > 1 {
+		t.Fatalf("empty summary sidecar probes = %d, want ≤1", n)
+	}
+	if n := cs.gets[fsckKey]; n != 0 {
+		t.Fatalf("empty summary must skip the fsck.pb probe, got %d", n)
 	}
 
-	// Healthy summary, never audited: exactly the probe miss.
+	// Healthy summary, never audited: exactly the fsck probe miss added —
+	// the placeholder sidecar is never probed for non-empty repos (R1 B1:
+	// real repos pay +0).
 	f.view.summaries["demo/walgit"] = SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1}
+	healthyBefore := cs.totalGets()
 	if w := f.req("GET", "/demo/walgit/api"); w.Code != 200 {
 		t.Fatalf("healthy summary = %d", w.Code)
 	}
-	if n := cs.totalGets(); n != 1 || cs.gets[fsckKey] != 1 {
-		t.Fatalf("healthy summary GETs = %v, want exactly one fsck.pb probe", cs.gets)
+	if d := cs.totalGets() - healthyBefore; d != 1 {
+		t.Fatalf("healthy summary issued %d GETs, want exactly the fsck.pb probe", d)
+	}
+	if n := cs.gets[fsckKey]; n != 1 {
+		t.Fatalf("healthy summary fsck probes = %d, want 1", n)
+	}
+	if n := cs.gets[id.StorePrefix()+PlaceholderKeySuffix]; n != 1 {
+		t.Fatalf("healthy summary must not probe the sidecar (real pays +0), probes = %v", cs.gets)
 	}
 
 	// Degraded summary: exactly the probe hit (no second read).

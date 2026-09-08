@@ -204,7 +204,8 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| PUT | `/{o}/{r}` or `{lane}` (repo root) | require_write | create repo; `?object_format=sha1\|sha256`; 201/409 |
+| PUT | `/{o}/{r}` or `{lane}` (repo root) | require_write | create repo; `?object_format=sha1\|sha256`; `?placeholder=true` selects placeholder create-semantics (sidecar + eager access default, 201 placeholder shape / 200 `already:true` / 409 with winner URL — 07_api.md §9.1.1); 201/409 |
+| POST | `/api/v1/repos` (+ `/api-browser/v1` twin) | require_write | explicit create (issue #210): thin wrapper over the one writer; 201 + `Location:` / 200 `already:true` / 409 plain text with winner URL; discovery lists `/api/v1/repos` (ExtraRoutes + RegisterExposed, Feature 10 precedent) |
 | DELETE | `/{o}/{r}` or `{lane}` | require_admin | 204 |
 | PUT/DELETE | `{lane}/policy` | require_admin | policy document |
 | PUT/DELETE | `{lane}/settings` | require_admin | ≤ 16 KiB else 413; validated; 200 `{revision}` |
@@ -213,7 +214,7 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 
 **Gated (`require_auth` = read):** SPA shell + `/_ui/*` assets, `/services/setup.json`, `/metrics` (`text/plain; version=0.0.4`), `GET /` (landing page shell, always HTML — the front door makes zero API calls), `GET /explore` (owners-list shell; `?format=text` or text Accept → plain one-per-line owner list), `GET /how-it-works` (deep-dive shell, always HTML — zero API calls, no text twin), `/{owner}`, `/{owner}/{repo}`, `/{owner}/teams/{slug}` UI page routes (tree/blob/commits/commit/wal/settings/issues/labels/milestones/pulls/pull all return `index.html`, `no-cache`). The setup routes above are NOT in this group — their access rule is §3.4 (open exactly while no config file exists, the config is invalid, or auth mode is `none`).
 
-**Reserved single-segment UI names** (explicit routes shadow those owner names; an owner literally named `explore` loses its `/:owner` UI page — its section link then points at `/explore`, the list, not its repos — while its git/API paths are unaffected; same precedent as the existing names): `import`, `api`, `keys`, `setup`, `explore`, `how-it-works`.
+**Reserved single-segment UI names** (explicit routes shadow those owner names; an owner literally named `explore` loses its `/:owner` UI page — its section link then points at `/explore`, the list, not its repos — while its git/API paths are unaffected; same precedent as the existing names): `import`, `api`, `keys`, `setup`, `explore`, `how-it-works`, `new` (the `/new` create form, issue #210 — served through the `/:owner` shell shape like `/import`, so no explicit server route was added; an owner literally named `new` loses its `/:owner` UI page only).
 
 **Both API lanes hit the same handlers.** `/{owner}/{repo}/api/…` (bearer/same-origin) and `/{owner}/{repo}/api-browser/…` (cross-origin browser, `credentials: include`) differ only in the `Lane` value passed to the handler (which changes cache headers and auth-redirect behavior per 07_api.md). Same for `/api/v1` vs `/api-browser/v1` in the non-repo lane.
 
@@ -631,6 +632,17 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   skipped the pack upload and recorded an unsatisfiable manifest entry). The known-set match
   also accepts the bare form of stored checksums, so a materialized pre-fix (`pack-`-prefixed)
   entry is recognized and never re-published as a new bare entry.
+- **NEW (2026-09-08) — explicit create-repo placeholder** (Forgejo #210, R1 + review
+  normative): `PUT /{o}/{r}` gains `?placeholder=true` (selects placeholder create-semantics on
+  the existing PUT — the flag AS the shape, not a shim; without it the path is byte-identical),
+  and `POST /api/v1/repos` (+ `/api-browser/v1` twin) is the discoverable twin via
+  `server.ExtraRoutes` + `api.RegisterExposed` (Feature 10 precedent — no core-table edit, law 8;
+  discovery lists `/api/v1/repos`). First-push adoption lives in `pushPipeline` post-CAS
+  post-response (same-process hint-gated `api.PlaceholderHints`, fire-and-forget Delete on the
+  control-plane transport; wal/git untouched; push budgets unchanged — the push-budget test passes
+  unmodified). `/new` is a client route served through the `/:owner` shell shape (like `/import`,
+  no explicit server route) and joins the reserved single-segment UI names (§3). Wire shapes and
+  the six Decisions entries live in 07_api.md §9.1.1/§14.
 - **NEW (2026-09-05) — server-side TLS removed; termination belongs on the reverse proxy** (Forgejo #165): `server.tls.*` config, cert/key loading, self-signed generation, the TLS listener wrap, `/services/public/ca.pem`, and the `setup.json` `ca_url`/`trust` fields are all gone — the server listens plain HTTP (h2c retained). Rationale: inbound (UI/API/git/SSH) all work behind a TLS-terminating proxy and outbound HTTPS never used the server cert; one fewer crypto surface to own. Residual `server.tls.*` settings fail closed (file rejected at load, env override fatal) with a reverse-proxy pointer. The same change honors `X-Forwarded-Proto` when building absolute URLs (`requestScheme`: proxy header, else the connection), closing the follow-up noted in 12_web_ui.md — no separate issue needed.
 
 **Divergence (2026-08-31):**

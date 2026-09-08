@@ -406,6 +406,48 @@ health field: `"<head sha>"` (`""` when unborn, as before), suffixed `~degraded`
 without the suffix a revalidating client would 304 on the same head sha and keep showing
 `healthy` after damage lands.
 
+`placeholder` is the **explicit-create projection** (issue #210, R1 B1 — additive
+`{created_by, created_at, expires_at} | null`, omitted when null): probed from
+`repos/<o>/<r>/meta/placeholder.json` by exact key (never LIST) **only when the in-hand data
+already says empty** (`HeadSeq == 0 && refs == 0`) — real repos pay **+0 round trips**; the
+empty path pays at most +1 GET. UI affordances key on `refs == 0 && marker`, never marker
+alone (a stale marker on a real repo — crash between push CAS and marker delete — renders as
+real and carries no projection).
+
+`PUT` here creates (require_write, `?object_format=sha1|sha256`, `201`/`409` exists); with
+`?placeholder=true` it selects placeholder create-semantics on the same PUT (the manifest is
+created as today, plus the `meta/placeholder.json` sidecar and the eager `access.json` default
+— see §9.1.1); without the flag the path is byte-identical to today. `DELETE` (require_admin)
+→ `204`.
+
+### 9.1.1 Explicit create — `POST /api/v1/repos` (+ `/api-browser/v1` twin; issue #210)
+
+The discoverable create action (the `PUT` lane root is undiscoverable — no UI, no SDK method
+on `repo.js`): `POST /api/v1/repos` with JSON body `{owner, name, object_format? (sha1|sha256,
+default sha1), placeholder? (default true), visibility? (public|private)}` (require_write; in
+`none` mode anonymous inherits the existing write). Naming validation is `git.ParseRepoId`
+(two segments, `[A-Za-z0-9._-]{1,100}`, no leading `.`, not `..`, `.git` suffix stripped —
+`400` plain-text on violation; case preserved verbatim, `Acme/X` and `acme/X` are distinct
+prefixes). Thin wrapper over the one writer implementation (Seam 7: no second writer — the
+`PUT`-flag and `POST`-twin paths share it). Served via `server.ExtraRoutes` +
+`api.RegisterExposed` (both-lane twins, discovery lists `/api/v1/repos`; Feature 10
+precedent — no core-table edit, law 8).
+
+Responses (all added fields enumerated here — additive per 14 §14.12): `201
+{owner, name, full_name, placeholder:true, clone_url, html_url}` (+ `Location:` the repo URL,
++ non-blocking `warning:"owner name collides with a UI route"` when the owner hits a reserved
+single-segment UI name — creation allowed, only the `/:owner` page misroutes); idempotent
+`200 {…, placeholder:true, already:true}` for a same-principal re-create of a still-unborn
+placeholder (no state change — double-click/retry-safe); `409` **plain text** carrying the
+winner URL (`repository already exists: <html_url>` — the frozen 409 convention stays
+`writePlain`, never a JSON envelope, so the UI links the squatter); `PUT` without the flag on
+an existing placeholder keeps the legacy `409 "repository already exists"`. Creation under an
+org prefix additionally requires org membership (member+; one exact-key `members.json` GET —
+non-member → `403`, unclaimed prefix → legacy-open, probe errors → `503`; see
+`docs/features/01_identity_permissions.md`). First push adopts (never 409s — the push path
+has no conflict surface by construction); same-principal re-create after the first push (now
+real) is `409`. No expiry sweep in this change (`expires_at` always null; TTL off by default).
+
 ### 9.2 Refs
 
 - `GET …/refs` → `{"head":{"name":"refs/heads/main","sha":"…"}}` or `{"head":null}` — O(1): the default
@@ -727,3 +769,37 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   …/ops/fsck` was verified already addressable, so no new endpoint was added and the `repair-check`
   option is closed. Rationale: detection + guidance is the gap (repair already exists); the UI must
   distinguish "empty, guide me" from "broken, toast me" without parsing prose.
+- **Explicit create-repo placeholder (issue #210, R1 + review normative):**
+  - *Sidecar classification:* `repos/<o>/<r>/meta/placeholder.json` is Create-once
+    (`PutCreate`; 412 = already a placeholder — idempotent) + Delete-on-transition (cleared
+    post-push-CAS, post-response), Delete-then-Create ONLY, never Update — the invitation class
+    (01 §7: Create-only, delete-on-terminal, NOT overwritable), so **no §14.11 frozen-list change**
+    was required; the adopting change states the classification here. No new manifest state, no
+    new WAL kind, no new bucket family for the repo itself ("non-real" is a UI designation).
+  - *Org create-gate (01 §5 matrix amendment):* creation under an org prefix requires org
+    membership (member+) — 403 only on proven non-membership, unclaimed prefixes stay
+    legacy-open, probe errors → 503 (never 403-as-404). Rationale: without it placeholder
+    creation becomes name-squatting inside someone else's org.
+  - *`?placeholder=true` justified AS the shape* (pre-1.0 rule): it selects create-semantics on
+    the existing PUT — not an alias/shim/deprecated flag; the frozen 409-with-`html_url` stays
+    plain text (`writePlain`), and every added response field is enumerated in §9.1.1.
+  - *Discovery via `RegisterExposed`* (Feature 10 precedent): `POST /api/v1/repos` (+
+    `/api-browser/v1` twin) rides `server.ExtraRoutes` — no core-table edit (law 8). The
+    `01/02/03/C2/05/06` routes stay out of discovery; this exception is per-feature, not a rule
+    change.
+  - *SDK:* `repo.create(opts)` stays flag-less (frozen PUT); the flag rides new
+    `repo.createPlaceholder({object_format})`, and the top-level twin is `client.repos.create()`
+    (new `create.js` submodule + naming validation mirroring `ParseRepoId`; `S1`
+    reuse-or-justify — one server writer, two entry shapes mirroring the two routes).
+  - *Adoption is guarantee + hint, not a push branch:* the push path never branches on
+    placeholder-ness (Open wins, no `ErrExists`, no 409 surface by construction — verified, not
+    added); the marker clear is a same-process hint-gated (`api.PlaceholderHints`: create Adds,
+    push Consumes) post-CAS post-response fire-and-forget Delete on the control-plane transport
+    (server orchestrates, wal/git untouched). Push budgets unchanged (the push-budget test passes
+    unmodified — unhinted pushes issue zero marker ops); stale markers are harmless (readers key
+    on `refs==0 && marker`) and a maintainer sweep is future work.
+  - *Auth-none (B5):* no eager `user:anonymous` binding (fails subject validation — subjects are
+    emails); none-mode materializes a visibility-only doc or relies on synthesis (existing
+    flag-driven grants); the access-bootstrap race is Create-wins, adopt-don't-overwrite.
+  - *Expiry:* `expires_at` always null in this change (TTL off by default, no sweep, no
+    `placeholders_per_principal` counter — rate-limit + docs only, per S5/`§8` cuts).

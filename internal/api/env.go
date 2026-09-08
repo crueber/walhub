@@ -484,6 +484,20 @@ type Env struct {
 	// CheckRead after the flag gate passes.
 	Access ReadAccess
 
+	// OrgGate is the org-namespace create gate (Forgejo #210 §3): creation
+	// under an org prefix ALSO requires org membership. Nil → legacy-open
+	// (no gate). 403 only on proven non-membership; probe errors → 503.
+	OrgGate OrgGate
+
+	// AccessBoot materializes the eager access.json default at placeholder
+	// creation (#210 §3). Nil → no eager write (read-time synthesis only).
+	AccessBoot AccessBootstrap
+
+	// PlaceholderHints is the same-process adoption hint set (#210 §4):
+	// create paths Add, the server Consumes post-push. Nil → the push
+	// path issues no marker ops at all (push-budget default).
+	PlaceholderHints *PlaceholderHints
+
 	// GroupExpander resolves team:/role: policy spellings at load time
 	// (docs/features/01 §6, Seam 3). Nil → no expansion. Wired by
 	// composition when internal/identity is compiled in.

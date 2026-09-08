@@ -14,6 +14,7 @@ import Owners from "./pages/Owners.jsx";
 import Landing from "./pages/Landing.jsx";
 import HowItWorks from "./pages/HowItWorks.jsx";
 import Import from "./pages/Import.jsx";
+import New from "./pages/New.jsx";
 import Repos from "./pages/Repos.jsx";
 import Repo from "./pages/Repo.jsx";
 import Tree from "./pages/Tree.jsx";
@@ -53,6 +54,7 @@ render(
       <Route path="/explore" component={Owners} />
       <Route path="/how-it-works" component={HowItWorks} />
       <Route path="/import" component={Import} />
+      <Route path="/new" component={New} />
       <Route path="/setup" component={Setup} />
       <Route path="/api" component={Apidocs} />
       <Route path="/keys" component={Keys} />

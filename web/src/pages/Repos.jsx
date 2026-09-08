@@ -38,9 +38,26 @@ export default function Repos() {
     () => `repos:${owner()}`,
     () => repos.owners.repos(owner())
   );
+  // Writers-only New button (mirrors require_write so the button never
+  // promises what POST /api/v1/repos refuses): hidden for anonymous
+  // without write. One me() fetch, no tray (missing = hidden).
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const canWrite = () => {
+    const me = getMe();
+    if (!me) return false;
+    if (me.anonymous) return false;
+    return me.write !== false;
+  };
   return (
     <div class="repos-page">
-      <h2 class="mb-1 text-xl font-semibold">{owner()}</h2>
+      <div class="mb-1 flex items-center justify-between">
+        <h2 class="text-xl font-semibold">{owner()}</h2>
+        <Show when={canWrite()}>
+          <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
+            New repository
+          </A>
+        </Show>
+      </div>
       <Show when={getRepos()} fallback={<p class="muted">loading…</p>}>
         {(names) => (
           <>

@@ -95,6 +95,8 @@ export default ReposClient;   // named exports: ReposClient, ReposError
 | `me()`, `signIn()`, `owners.list()`, `owners.repos(o)`, `configure(opts)` | `/api/v1/…` |
 | `repo.urls` | `{html, clone, api, raw(rev,path), tree(rev,path), blob(rev,path), commit(sha)}` deep links |
 | `repo.get/create/delete` | repo root (`PUT` create write / `DELETE` admin) |
+| `repo.createPlaceholder({object_format})` | `PUT …/api?placeholder=true` (issue #210 — the flag ride; `repo.create` stays flag-less) |
+| `repos.create({owner, name, object_format?, placeholder?, visibility?})` | `POST /api/v1/repos` twin (issue #210 — new `create.js` submodule; naming validation mirrors `ParseRepoId`; UI-route-collision helper) |
 | `repo.refs()` | O(1) head |
 | `repo.branches(q)/tags(q)` | paged ref lists (`{q?, prefix?, after?, n?}`; JSON-only accept) |
 | `repo.refStream(kind, q, onRef)` | SSE ref stream (`event: ref` … `event: done`) |
@@ -212,6 +214,7 @@ bundle). Everything previous packages provided that is NOT back in the budget st
 | `/` | landing (static marketing + concept GIFs + quickstart; zero API calls) |
 | `/explore` | owners (list of owners; each → their repos) |
 | `/how-it-works` | developer deep-dive (object-store idea + WAL internals; zero API calls) |
+| `/new` | create-repo placeholder form (issue #210 — owner/name/format/visibility → `POST /api/v1/repos` → 201 navigates to `/{o}/{r}`; 409/400 inline, never a tray) |
 | `/api` | API docs page |
 | `/:owner` | repos of an owner |
 | `/:owner/:repo` | repo shell — tabs Code, Commits, Issues, Pulls, Checks, Releases, Settings + tasks overlay |
@@ -302,6 +305,31 @@ GIF reuse: all four concept scenes reappear with alt text imported verbatim from
   the #117 caps); extraction/date-choice constants live in headless-testable
   `web/src/lib/activity.js` (`web/test/unit/activity.test.js`). No new endpoint, no new SDK
   method (`repo.commits()`, 07 §9.6); no new deps.
+
+### 2.3.2 Create form (`/new`, issue #210)
+
+`web/src/pages/New.jsx`: owner (prefilled from `?owner=` or the signed-in principal via
+`me()`), name, object_format (advanced, default sha1), visibility toggle (rides the POST body
+into the materialized `access.json`) → `repos.create()` → `201` navigates to `/{o}/{r}`
+(placeholder view); `409` renders "already exists — take me there" (the winner URL parsed from
+the plain-text body, linked inline); `400`s render field errors inline (client-side
+`validateRepoName` prefails fast — the server re-validates; never a tray). Writers-only entry
+buttons on `/` (Owners) and `/:owner` (Repos) mirror `require_write` (hidden for anonymous
+without write, so the button never promises what the POST refuses). `/new` is a client route
+(served through the `/:owner` shell shape like `/import` — no explicit server route) and joins
+the reserved single-segment UI names (06 §3). Headless cover: `web/test/unit/create.test.js`
+(SDK twin paths + lane, flag-ride query, frozen flag-less `repo.create`, naming validation,
+UI-route-collision set, the `refs==0 && marker` view predicate).
+
+### 2.3.3 Placeholder repo view (issue #210)
+
+The Code tab's `EmptyRepoGuide` plus placeholder extras (rendered ONLY when the summary carries
+the `placeholder` projection — `health:"empty"` + marker, never marker alone): creator +
+created-at line, expiry note if set (always null in this change — TTL off), verbatim clone/push
+commands (server `clone_url`, `copyText` parity with `CloneMenu`), and the admin-only Delete
+(existing `repo.delete()` + the danger-zone typed-confirm idiom inline; success invalidates
+`owners`/`repos:{owner}`/`repo:{full}` and navigates to `/:owner`). Stale markers on real repos
+carry no projection, so the guide clears on the first push with no client change.
 
 ### 2.4 Data layer (hand-rolled)
 
@@ -520,3 +548,4 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
 - **FIXED (issue #195) — deep-dive linked from the landing bottom instead of the header nav:** the `how it works` header nav entry is gone (single `site-nav` serves desktop + mobile — no separate mobile variant exists, so one removal covers both); the quickstart section at the landing bottom gains a "New here? How it works → the object-store idea and the WAL, in depth." link next to the Browse repositories CTA (the hero cross-link stays). Route, server reservation, and zero-API-call rule unchanged. §2.3.x documents the nav removal. No new deps. Headless cover: `how-it-works.test.js` nav-absence pin + quickstart-placement pin, `landing.test.js` nav-absence pin.
 - **FIXED (issue #200) — deleted repos vanish from /explore; re-import lands visible:** three layers, no new deps. (1) Backend listings are manifest-gated (07 §14). (2) The SDK's `owners.list()`/`ownerRepos()` always send `cache: "no-store"` — the endpoints answer SWR (`max-age=0, stale-while-revalidate=60`), and a SWR hit resurrected a just-deleted repo for up to 60 s after the delete; the data-layer 5 s TTL still bounds repeat reads, so this only skips the HTTP cache. (3) The delete danger zone invalidates `owners` + `repos:{owner}` + the repo's own entries before navigating home (`Settings.jsx`); a landed import invalidates `owners` + `repos:{owner}` so it appears without a manual refresh (`Import.jsx`); the repo shell renders "repository not found — it may have been deleted" on a 404 summary via `tolerateMissing` instead of "loading…" forever (`Repo.jsx`). Headless cover: `sdk-nostore-304.test.js` (listing no-store pins). Browser proof: UI delete → /explore "no repositories yet" immediately, re-create → row back, dark + light (the only console 404 is the by-design empty-repo `commits?n=1` fetch, #142).
 - **Self-heal UX (issue #209, R1 + review normative):** empty repos guide, degraded repos warn inline — nothing toasts. (1) `EmptyRepoGuide` (`web/src/components/EmptyRepoGuide.jsx`) on the Code tab when the summary is known-empty (`health:"empty"`, unborn-shape fallback for old servers): verbatim server `clone_url` (issue #124 rule) + `git remote add origin` / `git push -u origin main` with CloneMenu-parity protocol toggle and copy buttons; static commands, no recipes fetch. Tree/*, Commits, Blob, and Commit pages render the same guide instead of redirecting (no URL churn). (2) Fetch suppression: `useResolved` short-circuits on known-empty (step 0 peek via `peekCached`, selArgs-null pattern — the old by-design empty-repo resolve/`commits?n=1` probes from #142/#200 are now *suppressed*, removing 1–2 requests per empty-repo page load); `Commit.jsx` suppresses its direct-sha fetch the same way. (3) Degraded: amber shell banner (summary `health:"degraded"`, links Settings → WAL) + inline `DegradedNotice` on read pages via `tolerateDegraded` (404 + known-degraded only — never a global mute; real "repo deleted under you" 404s still flow through #200's shell) + the WAL object-health card (§2.9). Healed objects refetch via page retry buttons and the re-audit `sha:` invalidation. `reportError` itself is untouched (frozen tray behavior for real errors). SDK `RepoInfo`/`Overview` typedefs gain the new fields (also correcting `branches`/`tags` to counts — the server sends integers, 07 §9.1). No new npm deps. Headless cover: `web/test/unit/empty-degraded.test.js` (predicates, marker matching incl. damage exclusion, peek, degraded gating, sentinel flows with empty tray); browser proof: empty repo zero toasts + guide, degraded fixture banner, both themes, console clean.
+- **Explicit create-repo placeholder UX (issue #210, R1 + review normative):** `/new` (`web/src/pages/New.jsx`, §2.3.2) + the placeholder view (§2.3.3). `PlaceholderExtras` renders below the guide commands only when the summary carries the `placeholder` projection (`refs==0 && marker`, never marker alone — stale markers on real repos carry no projection, so the guide clears on first push with no client change): creator + created-at line, expiry note if set, admin Delete (typed-confirm inline, existing `repo.delete()`, invalidates `owners`/`repos:{owner}`/`repo:{full}` then navigates to `/:owner`). Writers-only New buttons on `/` + `/:owner` mirror `require_write`. No new npm deps. Headless cover: `web/test/unit/create.test.js` (SDK twin paths + lanes, flag-ride query, naming validation, UI-route-collision set, view predicate) with `sdk-surface.test.js` pinning the two new members; browser proof in EVIDENCE.md (create → push → real, both themes, console clean).
