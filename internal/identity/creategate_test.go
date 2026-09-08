@@ -51,7 +51,7 @@ func TestEnsureRepoAccess(t *testing.T) {
 	st := store.NewMemory()
 	s := New(st, nil)
 	// Valid creator → materialized with admin binding.
-	if err := s.EnsureRepoAccess(ctx, "acme", "r1", "Alice@Example.com"); err != nil {
+	if err := s.EnsureRepoAccess(ctx, "acme", "r1", "Alice@Example.com", ""); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	doc, _, err := s.GetAccess(ctx, "acme", "r1")
@@ -65,7 +65,7 @@ func TestEnsureRepoAccess(t *testing.T) {
 		t.Fatalf("visibility: %q", doc.Visibility)
 	}
 	// Idempotent: second call adopts (no overwrite, no error).
-	if err := s.EnsureRepoAccess(ctx, "acme", "r1", "bob@example.com"); err != nil {
+	if err := s.EnsureRepoAccess(ctx, "acme", "r1", "bob@example.com", ""); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
 	doc, _, _ = s.GetAccess(ctx, "acme", "r1")
@@ -74,7 +74,7 @@ func TestEnsureRepoAccess(t *testing.T) {
 	}
 	// Anonymous creator (auth-none) → visibility-only doc, no invalid
 	// user:anonymous binding.
-	if err := s.EnsureRepoAccess(ctx, "acme", "r2", "anon"); err != nil {
+	if err := s.EnsureRepoAccess(ctx, "acme", "r2", "anon", ""); err != nil {
 		t.Fatalf("anon: %v", err)
 	}
 	doc, _, err = s.GetAccess(ctx, "acme", "r2")
@@ -83,5 +83,20 @@ func TestEnsureRepoAccess(t *testing.T) {
 	}
 	if len(doc.RoleBindings) != 0 {
 		t.Fatalf("anon bindings must be empty: %+v", doc.RoleBindings)
+	}
+	// Private request → private doc (the POST visibility toggle's last
+	// mile — must not silently materialize public).
+	if err := s.EnsureRepoAccess(ctx, "acme", "r3", "alice@example.com", "private"); err != nil {
+		t.Fatalf("private: %v", err)
+	}
+	doc, _, err = s.GetAccess(ctx, "acme", "r3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Visibility != VisibilityPrivate {
+		t.Fatalf("private visibility: %q", doc.Visibility)
+	}
+	if len(doc.RoleBindings) != 1 || doc.RoleBindings[0].Subject != "user:alice@example.com" {
+		t.Fatalf("private bindings: %+v", doc.RoleBindings)
 	}
 }

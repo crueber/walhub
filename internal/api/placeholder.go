@@ -102,8 +102,14 @@ type OrgGate interface {
 // Implementations skip the creator binding when the creator is not a valid
 // user: subject (auth-none anonymous) and may skip materialization entirely,
 // relying on read-time synthesis (R1 B5).
+//
+// visibility is the POST body's visibility ("public"|"private"; "" from the
+// PUT-flag path, which has no visibility concept) — "private" materializes
+// a private doc, anything else the public default. Callers validate the
+// spelling; implementations treat unknown as public (never fail creation
+// on a visibility paraphrase).
 type AccessBootstrap interface {
-	EnsureRepoAccess(ctx context.Context, owner, repo, creator string) error
+	EnsureRepoAccess(ctx context.Context, owner, repo, creator, visibility string) error
 }
 
 // PlaceholderHints is the same-process adoption hint set (push-budget
@@ -192,7 +198,7 @@ func (h *handlers) checkOrgGate(w http.ResponseWriter, r *http.Request, id git.R
 // Hazard: holding nothing across the network — both PUTs are independent.
 // Avoidance: parallel goroutines joined on a WaitGroup; no lock of any
 // kind is held (law 13: never hold a lock across a store call).
-func (h *handlers) createPlaceholder(r *http.Request, id git.RepoId, format git.ObjectFormat, principal string) error {
+func (h *handlers) createPlaceholder(r *http.Request, id git.RepoId, format git.ObjectFormat, principal, visibility string) error {
 	if h.env.Store == nil {
 		return nil // no store → marker skipped (tests without a store)
 	}
@@ -228,7 +234,7 @@ func (h *handlers) createPlaceholder(r *http.Request, id git.RepoId, format git.
 		if h.env.AccessBoot == nil {
 			return
 		}
-		if err := h.env.AccessBoot.EnsureRepoAccess(r.Context(), id.Owner, id.Name, principal); err != nil {
+		if err := h.env.AccessBoot.EnsureRepoAccess(r.Context(), id.Owner, id.Name, principal, visibility); err != nil {
 			errCh <- err
 		}
 	}()
@@ -390,7 +396,7 @@ func (ch *CreateHandler) post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if placeholder {
-		if err := h.createPlaceholder(r, id, format, p.Name); err != nil {
+		if err := h.createPlaceholder(r, id, format, p.Name, body.Visibility); err != nil {
 			mapViewErr(w, err)
 			return
 		}

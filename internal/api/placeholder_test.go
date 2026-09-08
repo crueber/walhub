@@ -33,12 +33,12 @@ func (f *fakeOrgGate) IsOrgMember(_ context.Context, org, principal string) (boo
 }
 
 type fakeAccessBoot struct {
-	calls [][3]string
+	calls [][4]string
 	err   error
 }
 
-func (f *fakeAccessBoot) EnsureRepoAccess(_ context.Context, owner, repo, creator string) error {
-	f.calls = append(f.calls, [3]string{owner, repo, creator})
+func (f *fakeAccessBoot) EnsureRepoAccess(_ context.Context, owner, repo, creator, visibility string) error {
+	f.calls = append(f.calls, [4]string{owner, repo, creator, visibility})
 	return f.err
 }
 
@@ -87,8 +87,8 @@ func TestPutPlaceholderCreatesSidecar(t *testing.T) {
 	if doc.ExpiresAt != nil {
 		t.Fatalf("expires_at must be null (TTL off): %+v", doc)
 	}
-	// Eager access default ran once.
-	if len(b.calls) != 1 || b.calls[0] != [3]string{"acme", "newthing", "alice@example.com"} {
+	// Eager access default ran once (PUT-flag path: no visibility concept).
+	if len(b.calls) != 1 || b.calls[0] != [4]string{"acme", "newthing", "alice@example.com", ""} {
 		t.Fatalf("access boot calls: %v", b.calls)
 	}
 }
@@ -283,8 +283,7 @@ func TestPostReposValidation(t *testing.T) {
 	// Bad visibility → 400.
 	if w := call(`{"owner":"acme","name":"x","visibility":"galaxy"}`); w.Code != 400 {
 		t.Fatalf("bad visibility = %d", w.Code)
-	}
-	// .git suffix stripped.
+	} // .git suffix stripped.
 	if w := call(`{"owner":"acme","name":"sfx.git"}`); w.Code != 201 {
 		t.Fatalf("git suffix = %d (%s)", w.Code, w.Body.String())
 	}
@@ -300,6 +299,40 @@ func TestPostReposValidation(t *testing.T) {
 	w = httptest.NewRecorder()
 	if ch.Handle(w, r) {
 		t.Fatal("unrelated path must not be claimed")
+	}
+}
+
+func TestPostReposVisibilityThreaded(t *testing.T) {
+	// The POST visibility toggle must reach the eager access default —
+	// "private" must not silently materialize public (review on #218).
+	f, _, b := placeholderFixture(t)
+	ch := &CreateHandler{Env: f.env}
+	call := func(payload string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/api/v1/repos", strings.NewReader(payload))
+		r.Header.Set("Content-Type", "application/json")
+		r = r.WithContext(WithPrincipal(r.Context(), *writerPrincipal("alice@example.com")))
+		w := httptest.NewRecorder()
+		ch.Handle(w, r)
+		return w
+	}
+	if w := call(`{"owner":"acme","name":"priv","visibility":"private"}`); w.Code != 201 {
+		t.Fatalf("private = %d (%s)", w.Code, w.Body.String())
+	}
+	if len(b.calls) != 1 || b.calls[0][3] != "private" {
+		t.Fatalf("visibility not threaded to access boot: %v", b.calls)
+	}
+	f2, _, b2 := placeholderFixture(t)
+	ch2 := &CreateHandler{Env: f2.env}
+	r := httptest.NewRequest("POST", "/api/v1/repos", strings.NewReader(`{"owner":"acme","name":"pub"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = r.WithContext(WithPrincipal(r.Context(), *writerPrincipal("alice@example.com")))
+	w := httptest.NewRecorder()
+	ch2.Handle(w, r)
+	if w.Code != 201 {
+		t.Fatalf("default = %d (%s)", w.Code, w.Body.String())
+	}
+	if len(b2.calls) != 1 || b2.calls[0][3] != "" {
+		t.Fatalf("default visibility must be empty (public default): %v", b2.calls)
 	}
 }
 

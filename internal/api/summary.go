@@ -139,7 +139,10 @@ func (h *handlers) repoPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if placeholder {
-		if err := h.createPlaceholder(r, id, format, principal); err != nil {
+		// The PUT-flag path has no visibility concept: the eager default
+		// is always public (the POST twin's visibility toggle is the
+		// private path).
+		if err := h.createPlaceholder(r, id, format, principal, ""); err != nil {
 			mapViewErr(w, err)
 			return
 		}

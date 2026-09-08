@@ -46,22 +46,31 @@ func (s *Service) IsOrgMember(ctx context.Context, org, principal string) (exist
 }
 
 // EnsureRepoAccess materializes the 01 §10 synthesized default eagerly at
-// placeholder creation ({visibility:"public",
-// role_bindings:[{subject:"user:<creator>", role:"admin"}]}), so the
-// placeholder page has a deterministic visibility + an admin for the
-// Danger-Zone delete. Uses the SAME Create-with-synthesis writer shape as
-// 01 §10 Concurrency (412 = someone raced us — adopt, don't overwrite).
+// placeholder creation (visibility + [{subject:"user:<creator>",
+// role:"admin"}]), so the placeholder page has a deterministic visibility +
+// an admin for the Danger-Zone delete. Uses the SAME Create-with-synthesis
+// writer shape as 01 §10 Concurrency (412 = someone raced us — adopt, don't
+// overwrite).
+//
+// visibility is the create request's visibility ("public"|"private"; "" from
+// the PUT-flag path means the public default). Unknown spellings fall back
+// to public — creation never fails on a visibility paraphrase (the POST
+// twin 400s unknown spellings before this runs).
 //
 // Auth-none behavior (R1 B5): no eager "user:anonymous"/"user:anon"
 // binding — user: subjects are emails and such a binding fails subject
 // validation. When the creator is not a valid principal, materialize a
 // visibility-only doc (no bindings); when even that races, adopt. Callers
 // with no store-backed need pass a nil Store at their own risk (no-op).
-func (s *Service) EnsureRepoAccess(ctx context.Context, owner, repo, creator string) error {
+func (s *Service) EnsureRepoAccess(ctx context.Context, owner, repo, creator, visibility string) error {
 	if s == nil || s.Store == nil {
 		return nil
 	}
-	doc := &AccessDoc{Version: 1, Visibility: VisibilityPublic, RoleBindings: []AccessBinding{}}
+	vis := VisibilityPublic
+	if visibility == string(VisibilityPrivate) {
+		vis = VisibilityPrivate
+	}
+	doc := &AccessDoc{Version: 1, Visibility: vis, RoleBindings: []AccessBinding{}}
 	if ValidPrincipal(creator) {
 		doc.RoleBindings = append(doc.RoleBindings, AccessBinding{
 			Subject: "user:" + normPrincipal(creator),
