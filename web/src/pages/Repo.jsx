@@ -216,11 +216,16 @@ function WatchToggle(props) {
 function RefPicker(props) {
   const repo = props.repo;
   const navigate = useNavigate();
+  // The trigger is the head pill (issue #214): `head` arrives as a getter so a
+  // background summary refresh moves the pill without remounting the picker.
+  const head = () => (typeof props.head === "function" ? props.head() : props.head);
+  const label = () => (head() ? `${shortRef(head().name)} @ ${String(head().sha).slice(0, 10)}` : "refs");
   const [getRefs, setRefs] = createSignal([]);
   const [getKind, setKind] = createSignal("branches");
   const [getQuery, setQuery] = createSignal("");
   const [getOpen, setOpen] = createSignal(false);
   let root;
+  let trigger;
 
   const stream = mountStream(
     (signal, emit) => repo.refStream(getKind(), { q: getQuery(), n: 50 }, emit, { signal }),
@@ -244,11 +249,26 @@ function RefPicker(props) {
     navigate(`/${props.full}/tree/${kind === "tag" ? r.name : shortRef(r.name)}`);
   };
 
+  // Esc dismisses the picker and returns focus to the pill trigger. The
+  // trigger button is the keyboard baseline otherwise: it toggles on
+  // Enter/Space natively and Tab walks the dialog controls.
+  const onKey = (e) => {
+    if (e.key === "Escape" && getOpen()) {
+      setOpen(false);
+      stream.cancel();
+      trigger?.focus();
+    }
+  };
+
   return (
-    <div class="ref-picker relative" ref={root}>
+    <div class="ref-picker relative" ref={root} onKeyDown={onKey}>
       <button
+        ref={trigger}
         type="button"
         class="pill cursor-pointer select-none"
+        aria-haspopup="listbox"
+        aria-expanded={getOpen()}
+        title={head() ? "Switch branch or tag" : "Browse branches and tags"}
         onClick={() => {
           const next = !getOpen();
           setOpen(next);
@@ -256,10 +276,10 @@ function RefPicker(props) {
           if (!next) stream.cancel();
         }}
       >
-        refs ▾
+        {label()} ▾
       </button>
       <Show when={getOpen()}>
-        <div class="ref-drop card absolute right-0 z-30 mt-2 w-80 p-2">
+        <div class="ref-drop card absolute left-0 z-30 mt-2 w-80 p-2" role="listbox" aria-label="Branches and tags">
           <div class="ref-controls mb-2 flex gap-2">
             <select
               class="input"
@@ -274,6 +294,8 @@ function RefPicker(props) {
               type="search"
               placeholder="filter refs…"
               autocomplete="off"
+              aria-label="Filter branches and tags"
+              ref={(el) => el?.focus()}
               onInput={(e) => { setQuery(e.currentTarget.value.trim()); search(); }}
             />
           </div>
@@ -498,7 +520,7 @@ export default function Repo(props) {
                 </h1>
                 <div class="repo-meta mt-1 flex items-center gap-2 text-xs">
                   <Show when={s().head} fallback={<span class="pill">empty</span>}>
-                    <span class="pill">{shortRef(s().head.name)} @ {String(s().head.sha).slice(0, 10)}</span>
+                    <RefPicker full={full()} repo={repoClient} head={() => s().head} />
                   </Show>
                   <span class="muted">{s().branches ?? 0} branches · {s().tags ?? 0} tags</span>
                 </div>
@@ -510,7 +532,6 @@ export default function Repo(props) {
             <StarToggle repo={repoClient} />
             <WatchToggle repo={repoClient} />
             <TasksOverlay repo={repoClient} />
-            <RefPicker full={full()} repo={repoClient} />
             <Show when={getSummary()}>
               {(s) => <CloneMenu full={full()} summary={s()} />}
             </Show>
