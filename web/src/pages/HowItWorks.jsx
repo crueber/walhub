@@ -285,6 +285,26 @@ export default function HowItWorks() {
           <A class="hover:underline" href="/setup">/setup</A>, watch a live manifest on a repo's WAL
           tab, or read the <A class="hover:underline" href="/api">/api docs</A>.
         </p>
+        {/* Trace: issue #206 — the object-store idea came from Cursor's "Git at any
+            scale" writeup; external link is a plain <a> (never the router <A>) with
+            target _blank + rel noopener, CTA-styled like the landing buttons. */}
+        <div class="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <p class="text-sm leading-relaxed">
+            Where the original idea came from: Cursor's{" "}
+            <q class="font-medium">Git at any scale</q> — git objects on a dumb object store.
+          </p>
+          <p class="mt-3">
+            <a
+              class="btn primary px-4 py-2"
+              href="https://cursor.com/blog/git-at-any-scale"
+              target="_blank"
+              rel="noopener"
+            >
+              Read &ldquo;Git at any scale&rdquo; &#8599;
+            </a>
+          </p>
+          <p class="muted mt-2 text-xs">&#8599; external link &mdash; leaves walhub</p>
+        </div>
       </section>
     </div>
   );

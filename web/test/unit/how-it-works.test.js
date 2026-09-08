@@ -1,5 +1,6 @@
 // web/test/unit/how-it-works.test.js — developer deep-dive page
-// (/how-it-works, issue #191, R1; nav removal issue #195): source pins for the
+// (/how-it-works, issue #191, R1; nav removal issue #195; cursor inspiration
+// link issue #206): source pins for the
 // route, the nav-entry absence, section anchors,
 // section anchors, verbatim GIF alt reuse, the zero-API-call rule, and the
 // cross-links. No DOM: JSX is pinned as source text, mirroring landing.test.js.
@@ -114,4 +115,16 @@ test("cross-links: Landing bottom → deep-dive, deep-dive → / + /setup, Wal t
   assert.ok(HOW.includes('href="/setup"'), "deep-dive links to /setup");
   assert.ok(HOW.includes('href="/explore"'), "deep-dive links to /explore");
   assert.ok(WAL.includes("/how-it-works#wal"), "Wal tab links to the deep-dive");
+});
+
+test("inspiration link (issue #206): cursor button, external warning, internal links stay", () => {
+  assert.ok(HOW.includes("https://cursor.com/blog/git-at-any-scale"), "links to the Cursor writeup");
+  assert.ok(HOW.includes('target="_blank"'), "external link opens in a new tab");
+  assert.ok(HOW.includes('rel="noopener"'), "external link carries rel noopener");
+  assert.ok(HOW.includes("btn primary"), "external link is a CTA-styled button");
+  assert.ok(HOW.includes("leaves walhub"), "external-link warning says it leaves walhub");
+  assert.ok(HOW.includes("original idea"), "framed as where the original idea came from");
+  assert.ok(!HOW.includes('<A href="https://cursor.com'), "external link is a plain <a>, not the router <A>");
+  assert.ok(HOW.includes('href="/explore"'), "internal /explore link stays reachable");
+  assert.ok(HOW.includes('href="/setup"'), "internal /setup link stays reachable");
 });
