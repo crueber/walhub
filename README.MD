@@ -4,11 +4,13 @@ A git host in Go: **git over smart HTTP (v0/v2), LFS, bundle-uri, a JSON API wit
 
 It serves repositories whose entire state — refs, packs, config, policy, events, web UI — lives as objects in a bucket (filesystem, S3, or GCS). Instances are disposable; wipe one and you lose nothing but warmth.
 
-<p align="center">
-  <a href="docs/img/repo-overview.png"><img src="docs/img/repo-overview.png" width="32%" alt="Repository overview: refs, file tree, clone"></a> <a href="docs/img/code-view.png"><img src="docs/img/code-view.png" width="32%" alt="Blob view with syntax highlighting"></a> <a href="docs/img/setup.png"><img src="docs/img/setup.png" width="32%" alt="Setup: labels left, fields right, working examples under every label"></a>
-</p>
+[![Repository overview: refs, file tree, clone](docs/img/repo-overview.png)](docs/img/repo-overview.png)
 
-<p align="center"><sub>Browse repositories, read code, configure everything. Click any screenshot to view it full size.</sub></p>
+[![Blob view with syntax highlighting](docs/img/code-view.png)](docs/img/code-view.png)
+
+[![Setup: labels left, fields right, working examples under every label](docs/img/setup.png)](docs/img/setup.png)
+
+*Browse repositories, read code, configure everything. Click any screenshot to view it full size.*
 
 ## Inspired by walgit
 
