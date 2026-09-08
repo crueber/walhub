@@ -246,6 +246,42 @@ func TestExplorePage(t *testing.T) {
 	}
 }
 
+// TestHowItWorksPage: GET /how-it-works serves the deep-dive shell (issue
+// #191, R1 B1) — gated, unconditional HTML (no ?format=text branch), and the
+// explicit route (an owner literally named "how-it-works" is shadowed).
+func TestHowItWorksPage(t *testing.T) {
+	api := &fakeAPI{owners: []string{"alice", "bob"}}
+	_, h := newTestServer(t, func(o *Options) { o.API = api })
+	do := func(url string, auth bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", url, nil)
+		if auth {
+			req.Header.Set("Authorization", "Bearer tok123")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	// Anonymous + no anonymous read → gated 401.
+	if rec := do("http://x/how-it-works", false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon how-it-works = %d", rec.Code)
+	}
+	// HTML shell, no-cache.
+	rec := do("http://x/how-it-works", true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `/_ui/assets/`) || !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Fatalf("html how-it-works must serve the built SPA shell: %d %.160s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("how-it-works content-type = %q", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "no-cache") {
+		t.Fatalf("how-it-works cache-control = %q", cc)
+	}
+	// No text twin here (R1 S1): ?format=text still serves the shell.
+	if rec := do("http://x/how-it-works?format=text", true); !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Fatalf("how-it-works must serve the shell unconditionally, got %q", rec.Body.String())
+	}
+}
+
 func TestSetupJSONRecipes(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 	s.cfg.Server.PublicURL = "https://walgit.example.com"

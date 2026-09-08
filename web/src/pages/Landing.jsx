@@ -66,6 +66,12 @@ export default function Landing() {
           Object-protocol compliant with walgit — bucket layout, protobuf wire encoding, and git wire
           behavior follow walgit's formats.
         </p>
+        <p class="muted mt-3 text-sm">
+          <A class="hover:underline" href="/how-it-works">
+            How it works →
+          </A>{" "}
+          the object-store idea and the WAL, in depth.
+        </p>
       </section>
 
       <div class="divide-y divide-zinc-200 dark:divide-zinc-800">

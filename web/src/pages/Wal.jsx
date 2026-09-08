@@ -5,6 +5,7 @@
 // segments (newest 5 + "all"). Solid port of pages/wal.js (D-WEB-6).
 
 import { For, Show, createSignal, onCleanup } from "solid-js";
+import { A } from "@solidjs/router";
 import { useDataRefetchable, DEFAULT_TTL, invalidate, reportError } from "../lib/data.js";
 import { mountStream } from "../lib/sse.js";
 import { useRepo, fmtBytes } from "./Repo.jsx";
@@ -298,6 +299,12 @@ export default function Wal() {
 
   return (
     <div class="wal-page space-y-4">
+      <p class="muted text-sm">
+        What am I looking at?{" "}
+        <A class="hover:underline" href="/how-it-works#wal">
+          How the WAL works →
+        </A>
+      </p>
       <Show when={getOverview()} fallback={<p class="muted">loading overview…</p>}>
         {(o) => {
           const health = () => o().health ?? {};

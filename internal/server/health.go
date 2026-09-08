@@ -175,6 +175,16 @@ func (s *Server) explorePage(w http.ResponseWriter, r *http.Request) {
 	s.serveSPA(w, r)
 }
 
+// howItWorksPage answers GET /how-it-works (the developer deep-dive page
+// shell — static marketing, zero API calls, issue #191). Like spaHome: the
+// shell unconditionally, no ?format=text branch (R1 S1 — the text twin lives
+// at /explore only). Gated (§3.3); the explicit route reserves the
+// single-segment name (an owner literally named "how-it-works" loses its
+// /:owner UI page; git/API paths unaffected).
+func (s *Server) howItWorksPage(w http.ResponseWriter, r *http.Request) {
+	s.serveSPA(w, r)
+}
+
 // ownerPage answers /{owner} (gated; index.html, no-cache).
 func (s *Server) ownerPage(w http.ResponseWriter, r *http.Request) {
 	s.serveSPA(w, r)

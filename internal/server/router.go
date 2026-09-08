@@ -119,14 +119,17 @@ func (s *Server) mount(r chi.Router) {
 	r.Get("/setup", s.setupUI)
 
 	// SPA shell: / is the landing page, /explore is the owners list (issue
-	// #187). /explore MUST be explicit: otherwise it falls into the /*
-	// wildcard → repoDispatch → treated as owner "explore" (single-segment
-	// shape serves the same shell today, but the ?format=text branch lives
-	// only on explorePage — and the explicit route documents the name
-	// reservation: an owner literally named "explore" loses its /:owner UI
-	// page; its git/API paths are unaffected).
+	// #187), /how-it-works is the developer deep-dive (issue #191).
+	// /explore and /how-it-works MUST be explicit: otherwise they fall into
+	// the /* wildcard → repoDispatch → treated as owner "explore" /
+	// "how-it-works" (single-segment shape serves the same shell today, but
+	// the ?format=text branch lives only on explorePage — and the explicit
+	// routes document the name reservation: an owner literally named
+	// "explore" or "how-it-works" loses its /:owner UI page; its git/API
+	// paths are unaffected).
 	r.Get("/", s.gated(s.spaHome))
 	r.Get("/explore", s.gated(s.explorePage))
+	r.Get("/how-it-works", s.gated(s.howItWorksPage))
 
 	r.NotFound(notFound)                 // deliberate 404, plain text
 	r.MethodNotAllowed(methodNotAllowed) // 405 + Allow
