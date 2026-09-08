@@ -8,7 +8,7 @@
 
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { useData, reportError, asList } from "../lib/data.js";
+import { useData, reportError, asList, invalidate } from "../lib/data.js";
 import { dangerMatches } from "../lib/danger.js";
 import {
   SETTINGS_GROUP,
@@ -562,8 +562,9 @@ export function DangerConfirm(props) {
 // DangerZone renders as the sidebar's Danger Zone section content (issue
 // #123 — no longer pinned below every tab). First entry: Delete Repository —
 // admin-only on the server (`DELETE …/api` → 204, 403 otherwise and the
-// 403 text lands in the entry's error line); success navigates to the
-// owners list because the repo page no longer exists.
+// 403 text lands in the entry's error line); success invalidates the owners,
+// repo-list, and repo entries (issue #200) and navigates home because the
+// repo page no longer exists.
 function DangerZone(props) {
   const navigate = useNavigate();
   const full = () => props.ctx.full;
@@ -572,6 +573,17 @@ function DangerZone(props) {
     // No reportError here: the throw lands in DangerConfirm's plain-text
     // error line (tray + inline would surface the same failure twice).
     await props.repo.delete();
+    // Drop every cache entry naming the repo so /explore never renders the
+    // deleted row from stale data (issue #200): the owners list, this
+    // owner's repo list, and this repo's own entries. invalidate() on a key
+    // with no entry is a no-op; entries that exist refetch at once, so the
+    // listings are fresh before the user can reach them.
+    const owner = full().split("/")[0];
+    invalidate("owners");
+    invalidate(`repos:${owner}`);
+    invalidate(`repo:${full()}`);
+    invalidate(`social:${full()}`);
+    invalidate(`activity:${full()}`);
     navigate("/");
   }
 

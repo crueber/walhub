@@ -9,7 +9,7 @@ import { createSignal, For, Show, onCleanup } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { normalizeSource } from "../../sdk/src/import.js";
-import { reportError } from "../lib/data.js";
+import { reportError, invalidate } from "../lib/data.js";
 
 export default function Import() {
   const [search] = useSearchParams();
@@ -57,6 +57,17 @@ export default function Import() {
     }
   };
 
+  // A landed import must be visible without a manual refresh (issue #200,
+  // including re-import after a delete): drop the owners list and this
+  // owner's repo list so /explore refetches them. invalidate() on a missing
+  // key is a no-op.
+  const landedVisible = (repo) => {
+    if (!repo) return;
+    invalidate("owners");
+    const owner = String(repo).split("/")[0];
+    if (owner) invalidate(`repos:${owner}`);
+  };
+
   const start = async (e) => {
     e.preventDefault();
     if (getBusy()) return;
@@ -87,6 +98,7 @@ export default function Import() {
         // Idempotent no-op (200): the source already landed.
         setOutcome({ ...started.import, repo: started.repo, noop: true });
         setPhase("done");
+        landedVisible(started.repo);
         return;
       }
       const id = started?.task?.id;
@@ -95,6 +107,7 @@ export default function Import() {
       const result = await repos.imports.attach(id, onEvent, { signal });
       setOutcome(result);
       setPhase("done");
+      landedVisible(result?.repo ?? `${getOwner().trim()}/${getName().trim()}`);
     } catch (err) {
       if (err?.status === 499 || signal.aborted) return; // navigated away
       const msg = String(err?.message ?? err ?? "import failed");

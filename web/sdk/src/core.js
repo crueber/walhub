@@ -234,14 +234,25 @@ export class ReposClient {
     return this._authenticate();
   }
 
-  /** @returns {Promise<string[]>} */
+  /**
+   * @returns {Promise<string[]>}
+   *
+   * Always `cache: "no-store"` (issue #200): the server answers SWR
+   * (`max-age=0, stale-while-revalidate=60`), and a stale-while-revalidate
+   * hit would resurrect a just-deleted repo in /explore for up to 60 s. The
+   * data-layer TTL still bounds repeat reads; this only skips the HTTP cache.
+   */
   ownersList() {
-    return this._call("/api/v1/owners", { method: "GET" });
+    return this._call("/api/v1/owners", { method: "GET", cache: "no-store" });
   }
 
-  /** @param {string} owner @returns {Promise<string[]>} */
+  /**
+   * @param {string} owner @returns {Promise<string[]>}
+   *
+   * Same no-store rationale as ownersList (issue #200).
+   */
   ownerRepos(owner) {
-    return this._call(`/api/v1/owners/${encodeURIComponent(owner)}/repos`, { method: "GET" });
+    return this._call(`/api/v1/owners/${encodeURIComponent(owner)}/repos`, { method: "GET", cache: "no-store" });
   }
 
   /** `owners.list()` / `owners.repos(o)` per the §1.1 table naming. */
