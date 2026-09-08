@@ -25,6 +25,8 @@ const SURFACE = [
   { name: "owners.repos", run: (c) => c.owners.repos("demo"), method: "GET", path: "/api/v1/owners/demo/repos" },
   { name: "repo.get", run: (c) => c.repo("o/r").get(), method: "GET", path: "/o/r/api" },
   { name: "repo.create", run: (c) => c.repo("o/r").create(), method: "PUT", path: "/o/r/api" },
+  { name: "repo.createPlaceholder", run: (c) => c.repo("o/r").createPlaceholder({ object_format: "sha1" }), method: "PUT", path: "/o/r/api?placeholder=true&object_format=sha1" },
+  { name: "repos.create", run: (c) => c.repos.create({ owner: "o", name: "r" }), method: "POST", path: "/api/v1/repos" },
   { name: "repo.delete", run: (c) => c.repo("o/r").delete(), method: "DELETE", path: "/o/r/api" },
   { name: "repo.refs", run: (c) => c.repo("o/r").refs(), method: "GET", path: "/o/r/api/refs" },
   { name: "repo.branches", run: (c) => c.repo("o/r").branches({ q: "x" }), method: "GET", path: "/o/r/api/refs/branches?q=x" },

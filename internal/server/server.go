@@ -16,6 +16,7 @@ import (
 
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -49,6 +50,12 @@ type Server struct {
 
 	// readGate is the identity require_read hook (01 §4.1); nil → legacy.
 	readGate ReadGate
+
+	// placeholderHints is the same-process #210 adoption hint set: pushes
+	// consume a hint left by the create path and clear the marker
+	// post-response. Nil → the push path issues no marker ops (budget
+	// default). Shared with api.Env by composition (serveHTTP).
+	placeholderHints *api.PlaceholderHints
 
 	// repoExtras fronts repoDispatch with feature repo-subpath surfaces
 	// (repo_extra.go: the 14.3 routing note for non-lane families like
@@ -92,6 +99,9 @@ type Options struct {
 	// ReadGate is the identity require_read hook (01 §4.1); nil → legacy
 	// flag-only read gating on the git/LFS read paths.
 	ReadGate ReadGate
+	// PlaceholderHints is the shared #210 adoption hint set (api.Env and
+	// the server point at one instance); nil → no push-path marker ops.
+	PlaceholderHints *api.PlaceholderHints
 }
 
 // BootState is the §3.4 boot decision tree outcome.
@@ -146,6 +156,7 @@ func New(o Options) *Server {
 	registerInventory(s.metrics)
 	s.authSvc = NewAuthService(&o.Config.Server.Auth, o.Now)
 	s.readGate = o.ReadGate
+	s.placeholderHints = o.PlaceholderHints
 	return s
 }
 

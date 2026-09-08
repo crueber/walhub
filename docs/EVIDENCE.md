@@ -38,6 +38,7 @@ requested or when a review questions a hot path).
 | E11 | 2026-09-04 | Repository import (`internal/repoimport`) | What does one URL import cost, and does it grow with repo size? | Flat: 6 GETs+HEADs + 12 control PUTs + 0 LISTs at 50 and 400 commits; wall grows with pack bytes only. Cannot explode: exact-key probes, ref enumeration local + capped, pool-gated git, no lock held across I/O. |
 | E12 | 2026-09-08 | Landing concept GIFs (`internal/devtools/landinggif`) | Do 4 animated diagrams + stills fit the byte budgets with no new deps, and what does the landing page weigh? | Yes: 82,618 bytes total (budgets ≤ 150 KB, each asset ~45% headroom); page is shell + 1 JS + 1 CSS + lazy images, zero API calls. |
 | E13 | 2026-09-08 | Self-heal serving cost (`internal/api`, issue #209) | Do the summary `health`, the 404 marker, and the overview fsck projection add store round trips to any budgeted path? | No change: empty summary +0, non-empty summary +1, overview +1 (all exact-key probes, never LIST); push/sync/checkpoint engine paths untouched; empty Code-tab path removes 1–2 UI fetches. |
+| E14 | 2026-09-08 | Explicit create-repo placeholder (`internal/api`, `internal/server`, `internal/identity`, issue #210) | Do placeholder create, first-push adoption, and the summary projection add round trips to any budgeted path? | Create = 1 window (manifest + sidecar + access Creates parallel); first push +0 on-response (hint-gated off-response delete, 0 ops unhinted); empty summary ≤1 (sidecar only), real summary +0; sim budgets unchanged. |
 
 ---
 
@@ -925,7 +926,7 @@ budgets never call.
 
 | path | GETs | shape |
 |---|---|---|
-| `GET …/api` on an empty repo | **0** | probe skipped — branch on data in hand |
+| `GET …/api` on an empty repo | **≤1** | placeholder sidecar probe only (#210); the fsck probe stays skipped — branch on data in hand |
 | `GET …/api` on a non-empty repo (probe miss or hit) | **1** | exact-key `fsck.pb` probe, never LIST |
 | `GET …/overview` (report absent or present) | **1** | exact-key probe, stated (R1 B1) |
 | push / refs-sync / checkpoint engine paths | **0 new** | no handler code on those paths; sim assertions untouched |
@@ -941,4 +942,61 @@ SWR-cached (`max-age=0, stale-while-revalidate=60`, 5 s data-layer TTL).
 probes on the SWR summary read (non-empty only) and the no-store admin
 overview — both off the law-6 budgeted paths. Cannot regress silently:
 `TestSummaryOverviewRoundTrips` fails on any second probe, any LIST, or any
-probe on the empty path.
+`fsck.pb` probe on the empty path. (Issue #210 adds the one stated exception:
+the empty path may carry the placeholder *sidecar* probe — ≤1 GET, never the
+fsck probe; see E14.)
+
+## E14 — Explicit create-repo placeholder cost: create window, +0 push, +0 real summary (2026-09-08)
+
+**Area:** placeholder create (`PUT ?placeholder=true`, `POST /api/v1/repos`),
+first-push adoption (`pushPipeline` + `api.PlaceholderHints`), summary
+`placeholder` projection, org gate + eager `access.json`
+(`internal/api/placeholder.go`, `summary.go`, `internal/server/bind_ssh.go`,
+`internal/identity/creategate.go`; issue #210, R1 + review normative).
+
+**Question:** do placeholder create, first-push adoption, and the summary
+projection add store round trips to any budgeted path (15_testing.md §4.1:
+push ≤ 5, warm refs 1, cold refs 2, checkpoint 4)?
+
+**Method.** Harnesses (all over the **memory store** unless noted):
+`TestSummaryOverviewRoundTrips` (`internal/api/health209_test.go`, extended —
+per-key counting decorator over the real mounted handlers); the new
+`TestPushFastPathZeroCollabRoundTrips`-adjacent unit pins
+(`internal/server/placeholder_adopt_test.go` — hint-gated delete counting);
+the live two-transport proof below (real `git` binary over HTTP + SSH against
+a filesystem-store server on this workstation: create → placeholder view →
+`git push -u origin main` → real).
+
+**Results.**
+
+| path | cost | shape |
+|---|---|---|
+| placeholder create | **1 window** | manifest Create, then sidecar + access Creates in parallel (independent keys, law 6); second's 412 after first's success is adopt, never rollback (manifest-without-sidecar is a valid empty repo) |
+| first push (HTTP and SSH) | **+0 on-response** | no marker read on the hot path ever; the marker clear is a hint-gated post-CAS post-response fire-and-forget Delete (same-process hint only — unhinted pushes issue zero marker ops, pinned by the unmodified push-budget test: cold 8 / warm 9 ops, 0 collab keys) |
+| `GET …/api` on an empty repo | **≤1** | sidecar exact-key probe only (fsck probe still skipped); real repos +0 (branch on data in hand) |
+| `GET …/api` on a real repo | **+0** | stale markers carry no projection (never marker alone) |
+| org gate (create only) | **+1** | one exact-key `members.json` GET on the human-rate create path, never hot |
+| sim budgets (push/sync/checkpoint) | **unchanged** | engine paths untouched; `make sim` assertions hold |
+
+Live proof (2026-09-08, filesystem backend, zero-config `auth:none` + SSH key
+registry): `PUT …?placeholder=true` → 201 `{placeholder:true, clone_url}`;
+summary `health:"empty"` + `placeholder:{created_by,created_at,expires_at:null}`;
+same-principal re-PUT → 200 `already:true`; flag-less re-PUT → legacy 409;
+`POST /api/v1/repos` → 201 + `Location:` (discovery lists `/api/v1/repos`);
+real `git push -u origin main` over HTTP **and** SSH each landed first try
+(no 409); summary flipped `empty→healthy` with the projection gone; bucket
+scan confirmed the marker deleted for pushed repos and retained for the
+unpushed one; `DELETE` → 204 and re-create → 201. Real-Chromium pass
+(`cdp210a/b.mjs`, HeadlessChrome over :9222, `walgit.localhost` canonical
+host): `/new` form → create → placeholder view (verbatim clone URL, push
+commands, creator line, delete affordance), same-principal re-create
+navigates (200 `already:true`), real `git push` → Code tab renders the tree
+(guide cleared), `/new` in light — 24/24 checks, both themes, zero toasts,
+console clean (screenshots `cdp210-shots/`).
+
+**Verdict.** No budget change: the create window parallelizes, the push path
+gains zero on-response trips (zero total when unhinted), and the summary
+projection is empty-only. Cannot regress silently: the round-trip test fails
+on any second probe or any fsck probe on the empty path, the push-budget
+test fails on any collab key touched by a push, and the adopt tests fail on
+any unhinted marker op.

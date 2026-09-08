@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
@@ -261,6 +262,7 @@ func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Princip
 		return nil
 	}
 	report := git.Report{UnpackOK: true, Sideband: managedReq.Has("side-band-64k")}
+	landed := false
 	for _, c := range managed {
 		report.Refs = append(report.Refs, git.RefReport{Ref: c.Ref, OK: false, Reason: git.ManagedRefReason()})
 	}
@@ -269,10 +271,60 @@ func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Princip
 			report.Refs = append(report.Refs, git.RefReport{Ref: rr.Name, OK: false, Reason: rr.Err.Error()})
 		} else {
 			report.Refs = append(report.Refs, git.RefReport{Ref: rr.Name, OK: true})
+			landed = true
 		}
 	}
 	_, _ = out.Write(report.EncodeReport())
+	// First-push adoption (Forgejo #210 §4, R1 S3): the ref CAS above is
+	// the commit point; marker deletion is post-commit cleanup in the same
+	// goroutine that just CAS'd, AFTER the report is on the wire (never
+	// gating the push response, +0 hot-path round trips — law 6). Never
+	// read the marker here (no GET per push). The delete fires ONLY on a
+	// consumed same-process creation hint (api.PlaceholderHints): pushes
+	// to auto-created or pre-existing repos issue ZERO marker ops (the
+	// push budget test pins this). A missed hint (restart, another
+	// instance) leaves a stale marker that readers ignore on real repos.
+	// The push path never branches on placeholder-ness for the ref write:
+	// Open succeeds on the existing manifest, so no ErrExists/409 surface
+	// exists here by construction (guarantee + contract test).
+	if landed {
+		s.adoptPlaceholder(id)
+	}
 	return nil
+}
+
+// adoptPlaceholder clears the #210 placeholder marker post-commit,
+// post-response, fire-and-forget on the control-plane transport (S3: the
+// server orchestrates the store Delete; wal/git untouched — law 8
+// layering). Async so the push budget (≤5) is unchanged; errors are logged
+// and dropped (stale markers are harmless by the refs==0 && marker rule).
+//
+// The gate is the same-process hint set: without a consumed hint no store
+// op issues at all (not even a Delete of an absent key — Deletes are
+// bucket round trips too).
+//
+// ### Concurrency
+// Hazard: mutating shared Server state from a spawned goroutine. Avoidance:
+// none mutated — Consume takes the hints mutex briefly (never held across
+// I/O), and the spawned goroutine captures only the repo id, the store
+// handle, and the logger (all safe for concurrent use). It exits via its
+// own timeout context (channel rule: no channel, no leak).
+func (s *Server) adoptPlaceholder(id git.RepoId) {
+	if s.placeholderHints == nil || !s.placeholderHints.Consume(id) {
+		return
+	}
+	st := s.store
+	if st == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		key := id.StorePrefix() + "meta/placeholder.json"
+		if err := st.Delete(ctx, key, ""); err != nil {
+			s.log.Debug("placeholder adopt: marker delete failed (stale, harmless)", "repo", id.String(), "err", err)
+		}
+	}()
 }
 
 // countingReader tracks how many bytes the request has consumed; the cap is

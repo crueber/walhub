@@ -102,6 +102,10 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		apiEnv = api.NewEnv(st, &repoRegistry{reg: reg, st: st}, cfg, engine, version(), hostname())
 		apiEnv.Tasks = &opsTasks{reg: reg, eng: engine}
 		apiEnv.Instance = reg.InstanceID()
+		// Explicit create-repo placeholder (#210 §4): one hint set shared
+		// by the api create paths (Add) and the server push pipeline
+		// (Consume) — same process, so adoption needs no push-path read.
+		apiEnv.PlaceholderHints = &api.PlaceholderHints{}
 		// Features 01–08 assemble in exactly one place (collab.go,
 		// 09 §4 touch point 3); integration tests reuse buildCollab
 		// so the measured composition is the shipped composition.
@@ -154,6 +158,9 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		Log:       log,
 		Notifier:  wake,
 		ReadGate:  readGateOf(ident),
+		// #210 adoption hints: the same instance apiEnv carries above
+		// (nil in setup-only — no create or push paths exist there).
+		PlaceholderHints: placeholderHintsOf(apiEnv),
 	})
 	// Features 01–08 mount here (collab.go chainCollab, 09 §4 touch
 	// point 3: one block per package + the per-user SSE mounts that
@@ -290,6 +297,16 @@ func readGateOf(ident *identity.Service) server.ReadGate {
 		return nil
 	}
 	return ident
+}
+
+// placeholderHintsOf shares the #210 adoption hint set between the api
+// create paths and the server push pipeline (nil in setup-only mode →
+// no push-path marker ops).
+func placeholderHintsOf(env *api.Env) *api.PlaceholderHints {
+	if env == nil {
+		return nil
+	}
+	return env.PlaceholderHints
 }
 
 // appCtxer adapts the process context to http.Server BaseContext.

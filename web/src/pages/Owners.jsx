@@ -70,13 +70,27 @@ function OwnerSection(props) {
 
 export default function Owners() {
   const [getOwners] = useData("owners", () => repos.owners.list());
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const canWrite = () => {
+    const me = getMe();
+    if (!me) return false;
+    if (me.anonymous) return false;
+    return me.write !== false;
+  };
   return (
     <div class="owners-page">
       <div class="mb-4 flex items-center justify-between">
         <h2 class="text-xl font-semibold">Owners</h2>
-        <A class="btn primary px-3 py-1" href="/import">
-          Import repository
-        </A>
+        <div class="flex gap-2">
+          <Show when={canWrite()}>
+            <A class="btn primary px-3 py-1" href="/new">
+              New repository
+            </A>
+          </Show>
+          <A class="btn px-3 py-1" href="/import">
+            Import repository
+          </A>
+        </div>
       </div>
       <section class="card mb-6 p-4">
         <p class="text-sm leading-relaxed">

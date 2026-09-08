@@ -203,6 +203,26 @@ a fork removes only the fork. A deleted fork can leave a stale entry in the pare
 (03 §7); fork-network readers MUST treat a missing child manifest as absent (conditional-GET miss =
 skip), never as an error — the GC liveness rule stays total over a partially-deleted network.
 
+### 5.2 Explicit-create org gate + eager access default (issue #210)
+
+Creation under an org prefix (`orgs/<org>/members.json` exists) ALSO requires org membership
+(member+): one exact-key roster GET on the create path (human-rate, never hot — same cost class
+as the P6 team expansion probes). Non-member → `403`; unclaimed owner prefix (no org object) →
+today's open behavior persists (back-compat; claiming a populated prefix is out of scope); probe
+errors → `503`, never 403-as-404. The gate is injected into `internal/api` as the `OrgGate`
+interface (law 8: core defines the seam, this package implements `IsOrgMember` — no upward
+import). Rationale: without it placeholder creation becomes name-squatting inside someone else's
+org (the valuable prefixes are org-owned).
+
+At placeholder creation the §10 synthesized default is materialized eagerly
+(`{visibility:"public", role_bindings:[{subject:"user:<creator>", role:"admin"}]}`), so the
+placeholder page has a deterministic visibility + an admin for the Danger-Zone delete
+(Create-with-synthesis writer shape per §10 Concurrency: 412 = someone raced us — adopt, don't
+overwrite). Auth-none: no eager `user:anonymous` binding (user: subjects are emails — such a
+binding fails subject validation); none-mode materializes a visibility-only doc or relies on
+read-time synthesis with the existing flag-driven grants. Policy/templates are NOT evaluated at
+create (policy gates pushes; owner-scoped templates are a documented future).
+
 ## 6. Policy engine integration (Seam 3 amendment)
 
 `policy.json` stays the frozen envelope; effects are untouched. The amendment is to **group member
@@ -386,6 +406,13 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   sorted names, so a server-side "newest" sort or paginated shape   would need per-repo manifest/log reads (or a new endpoint carrying creation times) rather than
   inventing metadata the listing does not have. Rationale: read-only reuse keeps the round-trip budget (1 + shown-owners GETs,
   SWR-cached) and the CAS surface untouched.
+- **Explicit-create org gate + eager access default (issue #210, §5.2, R1 B5/S2):** creation
+  under an org prefix requires membership (403 only on proven non-membership; unclaimed prefixes
+  legacy-open; probe errors 503); the §10 synthesized default materializes eagerly at create
+  (Create-wins, adopt-don't-overwrite); auth-none skips the creator binding (no
+  `user:anonymous` — fails subject validation) and relies on flag-driven grants. Sidecar
+  classification, the flag shape, and discovery live in 07_api.md §14 (this doc owns the gate +
+  the default, not the marker).
 
 ## Explicitly out of scope
 

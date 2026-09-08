@@ -5,7 +5,7 @@
 // notice takes a retry that invalidates the cached degraded sentinel.
 
 import { createSignal, Show, onCleanup } from "solid-js";
-import { A } from "@solidjs/router";
+import { A, useNavigate } from "@solidjs/router";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, copyText } from "../lib/clone.js";
 import { invalidate } from "../lib/data.js";
 
@@ -31,10 +31,98 @@ function CopyButton(props) {
 }
 
 /**
+ * PlaceholderExtras — the #210 affordances on top of the empty guide,
+ * rendered ONLY when the summary carries the placeholder projection
+ * (refs==0 && marker — never marker alone; a stale marker on a real repo
+ * never reaches this branch because real repos carry no projection).
+ * Creator + created-at line, expiry note if set, admin-only Delete
+ * (existing repo.delete() + the danger-zone typed confirm idiom, inline).
+ */
+export function PlaceholderExtras(props) {
+  const navigate = useNavigate();
+  const [getTyped, setTyped] = createSignal("");
+  const [getBusy, setBusy] = createSignal(false);
+  const [getErr, setErr] = createSignal("");
+  const [getArmed, setArmed] = createSignal(false);
+  const ph = () => props.summary?.placeholder;
+  const full = () => props.full;
+
+  const remove = async () => {
+    if (getTyped() !== full() || getBusy()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await props.repoClient.delete();
+      const owner = full().split("/")[0];
+      invalidate("owners");
+      invalidate(`repos:${owner}`);
+      invalidate(`repo:${full()}`);
+      navigate(`/${owner}`);
+    } catch (e) {
+      setErr(String(e?.message ?? e ?? "delete failed"));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Show when={ph()}>
+      <div class="placeholder-extras space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+        <p class="muted text-xs">
+          reserved by {ph().created_by} · {ph().created_at}
+        </p>
+        <Show when={ph().expires_at}>
+          <p class="text-xs text-amber-700 dark:text-amber-400">
+            expires {ph().expires_at}
+          </p>
+        </Show>
+        <div class="placeholder-delete">
+          <Show
+            when={getArmed()}
+            fallback={
+              <button type="button" class="btn px-2 py-1 text-xs" onClick={() => setArmed(true)}>
+                Delete this placeholder…
+              </button>
+            }
+          >
+            <p class="mb-1 text-xs text-zinc-600 dark:text-zinc-300">
+              Type {full()} to confirm.
+            </p>
+            <div class="flex flex-wrap items-center gap-2">
+              <input
+                class="input w-64 max-w-full font-mono text-xs"
+                type="text"
+                placeholder={full()}
+                value={getTyped()}
+                onInput={(e) => setTyped(e.currentTarget.value)}
+                aria-label={`Type ${full()} to confirm`}
+                disabled={getBusy()}
+              />
+              <button
+                type="button"
+                class="rounded border border-red-600 bg-red-600 px-2 py-1 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40 dark:border-red-500 dark:bg-red-700"
+                disabled={getTyped() !== full() || getBusy()}
+                onClick={remove}
+              >
+                {getBusy() ? "working…" : "Delete"}
+              </button>
+            </div>
+            <Show when={getErr()}>
+              <p class="err-line !mt-2 !text-xs">{getErr()}</p>
+            </Show>
+          </Show>
+        </div>
+      </div>
+    </Show>
+  );
+}
+
+/**
  * EmptyRepoGuide — the Code-tab block for unborn repos (summary health
  * "empty"): verbatim clone URL + `git remote add` / `git push -u origin
  * main` with copy buttons and the CloneMenu protocol-toggle parity. Static
- * commands only — no recipes fetch.
+ * commands only — no recipes fetch. When the summary carries the #210
+ * placeholder projection, the creator/created line + admin Delete ride
+ * below the commands (PlaceholderExtras).
  */
 export function EmptyRepoGuide(props) {
   const [getProto, setProto] = createSignal("http");
@@ -85,6 +173,7 @@ export function EmptyRepoGuide(props) {
           <CopyButton text={pushCmd} />
         </div>
       </div>
+      <PlaceholderExtras full={props.full} summary={props.summary} repoClient={props.repoClient} />
     </section>
   );
 }

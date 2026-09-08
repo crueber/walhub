@@ -194,7 +194,7 @@ export default function Tree() {
                 resolve + tree fetches never issued — zero toasts by
                 construction. Any tree/* path lands on the same guide. */}
             <Show when={t().empty}>
-              <EmptyRepoGuide full={ctx.full} summary={ctx.summary?.()} />
+              <EmptyRepoGuide full={ctx.full} summary={ctx.summary?.()} repoClient={ctx.repoClient} />
             </Show>
             {/* Degraded repo, object missing: inline notice, never a toast. */}
             <Show when={t().degraded}>

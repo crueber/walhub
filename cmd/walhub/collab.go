@@ -33,6 +33,7 @@ import (
 type collabWiring struct {
 	ident           *identity.Service
 	identHandler    *identity.Handler
+	createHandler   *api.CreateHandler // #210 POST /api/v1/repos twin (Seam 1)
 	issuesSvc       *issues.Service
 	issuesHandler   *issues.Handler
 	pullsSvc        *pulls.Service
@@ -63,9 +64,19 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// access-bootstrap op (Seam 5).
 	c.ident = identity.New(st, cfg)
 	c.identHandler = &identity.Handler{Svc: c.ident}
+	var _ api.OrgGate = c.ident
+	var _ api.AccessBootstrap = c.ident
 	if apiEnv != nil {
 		apiEnv.Access = c.ident
 		apiEnv.GroupExpander = c.ident.PolicyExpander()
+		apiEnv.OrgGate = c.ident
+		apiEnv.AccessBoot = c.ident
+		// Explicit create-repo placeholder (Forgejo #210, R1 B2): the
+		// POST /api/v1/repos twin (+ /api-browser/v1 twin) via the
+		// server.ExtraRoutes chain + api.RegisterExposed discovery
+		// (Feature 10 precedent). No core-table edit (law 8).
+		api.RegisterExposed(api.ExposedTemplatesCreate...)
+		c.createHandler = &api.CreateHandler{Env: apiEnv}
 		if ot, ok := apiEnv.Tasks.(*opsTasks); ok {
 			ot.ident = c.ident
 		}
@@ -197,5 +208,11 @@ func chainCollab(srv *server.Server, c *collabWiring) {
 	}
 	if c.importHandler != nil {
 		chainImport(srv, c.importHandler)
+	}
+	if c.createHandler != nil {
+		// #210 create twin: authentication resolves through the server
+		// chain (Seam 2) — the handler gates via Env.gate on the
+		// injected principal, same as the PUT lane root.
+		srv.ChainExtra(c.createHandler)
 	}
 }
