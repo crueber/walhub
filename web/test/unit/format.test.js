@@ -1,9 +1,10 @@
 // web/test/unit/format.test.js — fmtSize helper (issues #27, #29): b/k/MB/GB
-// boundaries, 0/undefined handling; fmtMode helper (issue #29): git modes as
-// rwx triplets.
+// boundaries, 0/undefined handling; fmtMode helper (issues #29, #211): git
+// modes as ls-style rows (leading type char + rwx triplets); fmtSizeParts +
+// entryKind (issue #211: split size columns, [file type] column).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fmtSize, fmtMode } from "../../src/lib/format.js";
+import { fmtSize, fmtSizeParts, fmtMode, entryKind } from "../../src/lib/format.js";
 
 test("bytes under 1 KiB render with no space, lowercase b", () => {
   assert.equal(fmtSize(0), "0b");
@@ -34,21 +35,76 @@ test("missing or invalid sizes render as ?", () => {
   assert.equal(fmtSize("not-a-number"), "?");
 });
 
-test("fmtMode maps known git modes to rwx triplets", () => {
-  assert.equal(fmtMode("100644"), "rw-r--r--");
-  assert.equal(fmtMode("100755"), "rwxr-xr-x");
-  assert.equal(fmtMode("120000"), "rwxrwxrwx");
-  assert.equal(fmtMode("160000"), "m---------");
-  assert.equal(fmtMode("040000"), "rwxr-xr-x");
-  assert.equal(fmtMode("40000"), "rwxr-xr-x");
+test("fmtSize output is unchanged by the #211 split-column refactor", () => {
+  assert.equal(fmtSize(92), "92b");
+  assert.equal(fmtSize(48372), "47.2k");
+  assert.equal(fmtSize(3 * 1024 * 1024), "3MB");
+  assert.equal(fmtSize(2.5 * 1024 * 1024 * 1024), "2.5GB");
 });
 
-test("fmtMode falls back to the low permission bits; blanks stay blank", () => {
-  assert.equal(fmtMode("100600"), "rw-------");
-  assert.equal(fmtMode("644"), "rw-r--r--");
-  assert.equal(fmtMode(100755), "rwxr-xr-x");
+test("fmtSizeParts splits the issue #211 examples: 414 B, 17 KB, 18 MB", () => {
+  assert.deepEqual(fmtSizeParts(414), { num: "414", unit: "B" });
+  assert.deepEqual(fmtSizeParts(17 * 1024), { num: "17", unit: "KB" });
+  assert.deepEqual(fmtSizeParts(18 * 1024 * 1024), { num: "18", unit: "MB" });
+});
+
+test("fmtSizeParts shares fmtSize's ladder and rounding", () => {
+  assert.deepEqual(fmtSizeParts(0), { num: "0", unit: "B" });
+  assert.deepEqual(fmtSizeParts(1023), { num: "1023", unit: "B" });
+  assert.deepEqual(fmtSizeParts(1024), { num: "1", unit: "KB" });
+  assert.deepEqual(fmtSizeParts(1536), { num: "1.5", unit: "KB" });
+  assert.deepEqual(fmtSizeParts(48372), { num: "47.2", unit: "KB" });
+  assert.deepEqual(fmtSizeParts(1048575), { num: "1024", unit: "KB" });
+  assert.deepEqual(fmtSizeParts(1024 * 1024 * 1024), { num: "1", unit: "GB" });
+  assert.deepEqual(fmtSizeParts(2.5 * 1024 * 1024 * 1024), { num: "2.5", unit: "GB" });
+});
+
+test("fmtSizeParts invalid input keeps the ? placeholder with an empty unit", () => {
+  assert.deepEqual(fmtSizeParts(undefined), { num: "?", unit: "" });
+  assert.deepEqual(fmtSizeParts(null), { num: "?", unit: "" });
+  assert.deepEqual(fmtSizeParts(NaN), { num: "?", unit: "" });
+  assert.deepEqual(fmtSizeParts(-1), { num: "?", unit: "" });
+  assert.deepEqual(fmtSizeParts("not-a-number"), { num: "?", unit: "" });
+});
+
+test("fmtMode renders ls-style rows: leading type char + triplet (#211)", () => {
+  assert.equal(fmtMode("100644"), ".rw-r--r--");
+  assert.equal(fmtMode("100755"), ".rwxr-xr-x");
+  assert.equal(fmtMode("120000"), "lrwxrwxrwx");
+  assert.equal(fmtMode("160000"), "m---------");
+  assert.equal(fmtMode("040000"), "drwxr-xr-x");
+  assert.equal(fmtMode("40000"), "drwxr-xr-x");
+});
+
+test("fmtMode canonical modes decide alone; type only aids the fallback", () => {
+  assert.equal(fmtMode("100644", "blob"), ".rw-r--r--");
+  assert.equal(fmtMode("040000", "tree"), "drwxr-xr-x");
+  assert.equal(fmtMode("160000", "commit"), "m---------");
+  assert.equal(fmtMode("100600"), ".rw-------");
+  assert.equal(fmtMode("644"), ".rw-r--r--");
+  assert.equal(fmtMode(100755), ".rwxr-xr-x");
+  assert.equal(fmtMode("755", "tree"), "drwxr-xr-x");
+  assert.equal(fmtMode("0755", "tree"), "drwxr-xr-x");
+  assert.equal(fmtMode("120000", "blob"), "lrwxrwxrwx");
+});
+
+test("fmtMode blanks stay blank (no bare type char)", () => {
   assert.equal(fmtMode(undefined), "");
   assert.equal(fmtMode(null), "");
   assert.equal(fmtMode(""), "");
   assert.equal(fmtMode("not-a-mode"), "");
+  assert.equal(fmtMode("not-a-mode", "tree"), "");
+});
+
+test("entryKind labels the #211 type column (mode decides symlink/submodule)", () => {
+  assert.equal(entryKind("tree", "040000"), "dir");
+  assert.equal(entryKind("tree", undefined), "dir");
+  assert.equal(entryKind("blob", "100644"), "file");
+  assert.equal(entryKind("blob", "100755"), "file");
+  assert.equal(entryKind("blob", "120000"), "symlink");
+  assert.equal(entryKind("commit", "160000"), "submodule");
+  assert.equal(entryKind("commit", undefined), "submodule");
+  assert.equal(entryKind(undefined, "160000"), "submodule");
+  assert.equal(entryKind("blob", undefined), "file");
+  assert.equal(entryKind(undefined, undefined), "file");
 });

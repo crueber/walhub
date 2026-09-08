@@ -6,7 +6,9 @@ import { A } from "@solidjs/router";
 import { useResolved, useData } from "../lib/data.js";
 import { renderBody } from "../lib/render-md.js";
 import { docCandidates, defaultDocFile, docFetchArgs, docSlug, docFromHash } from "../lib/doctabs.js";
-import { fmtSize, fmtMode } from "../lib/format.js";
+import { fmtSize, fmtMode, fmtSizeParts, entryKind } from "../lib/format.js";
+import { latestActivity } from "../lib/activity.js";
+import DateTime from "../components/DateTime.jsx";
 import { useRepo, shortRef } from "./Repo.jsx";
 import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
@@ -183,6 +185,30 @@ export default function Tree() {
   const ctx = useRepo();
   const [getTree] = useResolved(() => ctx.owner, () => ctx.name, () => ctx.rest || "", "tree");
 
+  // Issue #211 last-modified column: git trees carry no mtime, and the tree
+  // payload carries no per-entry stamp (TreeResult.commit is never populated
+  // server-side), so per-file last-touch would cost one `log -1 -- <path>`
+  // per row (N+1, unbounded) — deliberately not done. Every row instead
+  // shares the containing commit's stamp: one extra `commits?n=1` at the
+  // resolved sha (immutable → Infinity cache, shared across directory
+  // navigations at the same commit; the tree IS the state at that commit, so
+  // every entry is current as of it). It never blocks first paint: rows
+  // render from the tree payload and the date cells ("" until this lands)
+  // fill in when it arrives. No backend change: the endpoint already exists.
+  const [getHead] = useData(
+    () => {
+      const t = getTree();
+      return t && t.sha && !t.empty && !t.degraded ? `sha:${t.sha}:commits1` : "tree:date:none";
+    },
+    () => {
+      const t = getTree();
+      if (!t || !t.sha || t.empty || t.degraded) return Promise.resolve(null);
+      return ctx.repoClient.commits({ ref: t.sha, n: 1 });
+    },
+    Infinity,
+  );
+  const treeDate = () => latestActivity(getHead());
+
   return (
     <div class="tree-page">
       <Show when={getTree()} fallback={<p class="muted">loading tree…</p>}>
@@ -205,12 +231,22 @@ export default function Tree() {
                 <Breadcrumb full={ctx.full} path={t().path ?? ""} rev={t().ref} />
                 <table class="data-table tree-table">
                   <thead>
-                    <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24 text-right">size</th></tr>
+                    <tr><th class="w-28">mode</th><th class="w-16 text-right" colspan="2">size</th><th class="w-20">type</th><th class="w-8" /><th>name</th><th class="w-48 text-right">last modified</th></tr>
                   </thead>
                   <tbody>
                     <For each={t().entries ?? []}>
-                      {(e) => (
+                      {(e) => {
+                        // Split size columns (#211): number + unit cells; dirs
+                        // and submodules carry size -1 (no stamp), a null blob
+                        // size keeps the old "-" placeholder. Exact bytes stay
+                        // in the title tooltip, as before.
+                        const parts = () => (e.type === "blob" && e.size != null ? fmtSizeParts(e.size) : null);
+                        return (
                         <tr>
+                          <td class="entry-mode muted font-mono text-xs" title={e.mode ?? undefined}>{fmtMode(e.mode, e.type)}</td>
+                          <td class="entry-size-num muted tabular text-right text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{parts() ? parts().num : e.type === "blob" ? "-" : ""}</td>
+                          <td class="entry-size-unit muted text-xs">{parts()?.unit ?? ""}</td>
+                          <td class="entry-type muted text-xs">{entryKind(e.type, e.mode)}</td>
                           <td class="entry-icon">{e.type === "tree" ? "📁" : e.type === "commit" ? "↗" : "📄"}</td>
                           <td class="entry-name">
                             <Show
@@ -220,10 +256,10 @@ export default function Tree() {
                               <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${ctx.full}/blob/${treeRest()}/${e.name}`}>{e.name}</A>
                             </Show>
                           </td>
-                          <td class="entry-mode muted font-mono text-xs" title={e.mode ?? undefined}>{fmtMode(e.mode)}</td>
-                          <td class="entry-size muted tabular text-right text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{e.type === "blob" ? (e.size == null ? "-" : fmtSize(e.size)) : ""}</td>
+                          <td class="entry-date muted text-right text-xs"><DateTime value={treeDate()} /></td>
                         </tr>
-                      )}
+                        );
+                      }}
                     </For>
                   </tbody>
                 </table>
