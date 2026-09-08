@@ -7,49 +7,115 @@
 
 const UNITS = ["b", "k", "MB", "GB", "TB", "PB"];
 
+// scaleSteps(v) → { text, step }: the shared 1024-step ladder behind fmtSize
+// and fmtSizeParts. step 0 = bytes (integer text); higher steps divide by
+// 1024 with ≥100 → integer else one trimmed decimal. Extracted (issue #211)
+// so the two size spellings cannot drift apart; fmtSize output is unchanged.
+function scaleSteps(v) {
+  if (v < 1024) return { text: String(Math.floor(v)), step: 0 };
+  let scaled = v;
+  let step = 0;
+  while (scaled >= 1024 && step < UNITS.length - 1) {
+    scaled /= 1024;
+    step++;
+  }
+  const text = scaled >= 100 ? String(Math.round(scaled)) : String(Math.round(scaled * 10) / 10);
+  return { text, step };
+}
+
 /** fmtSize(n) → "92b" / "47.2k" / "3MB" / "1GB"-style; null/undefined/NaN → "?". */
 export function fmtSize(n) {
   if (n === null || n === undefined) return "?";
   const v = Number(n);
   if (!Number.isFinite(v) || v < 0) return "?";
-  if (v < 1024) return `${Math.floor(v)}b`;
-  let scaled = v;
-  let u = 0;
-  while (scaled >= 1024 && u < UNITS.length - 1) {
-    scaled /= 1024;
-    u++;
-  }
-  const s = scaled >= 100 ? String(Math.round(scaled)) : String(Math.round(scaled * 10) / 10);
-  return `${s}${UNITS[u]}`;
+  const { text, step } = scaleSteps(v);
+  return `${text}${UNITS[step]}`;
 }
 
-// --- git modes as rwx triplets ------------------------------------------------
-// Tree entry modes arrive as octal strings ("100644"). Regular files and
-// directories map onto their permission triplets; the two special object
-// types carry no permission bits, so they get fixed glyphs:
+// --- split size columns (issue #211) ------------------------------------------
+// The Code tab shows the number and the unit in their own columns ("414"
+// "B", "17" "KB", "18" "MB"). Units are the uppercase issue spellings over
+// 1024-steps (B = bytes, KB = KiB, … — NOT SI/decimal). fmtSize keeps its
+// #27/#29 lowercase single-string form ("92b"/"47.2k") for inline call sites
+// (Blob header, doctabs notes), so the two spellings coexist deliberately:
+// one string → fmtSize, two columns → fmtSizeParts. Same ladder and same
+// rounding in both (via scaleSteps). Invalid input → { num: "?", unit: "" }
+// so the number cell still shows the "?" placeholder and the unit stays
+// empty.
+const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
+
+/**
+ * fmtSizeParts(n) → { num, unit } e.g. { num: "47.2", unit: "KB" }.
+ * null/undefined/NaN/negative → { num: "?", unit: "" }.
+ */
+export function fmtSizeParts(n) {
+  if (n === null || n === undefined) return { num: "?", unit: "" };
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return { num: "?", unit: "" };
+  const { text, step } = scaleSteps(v);
+  return { num: text, unit: SIZE_UNITS[step] };
+}
+
+// --- git modes as ls-style rows (issue #211) ------------------------------------
+// Tree entry modes arrive as octal strings ("100644"). The column renders a
+// 10-char ls -la-style cell: a leading type char plus the 9-char permission
+// triplet (issue examples: `.rw-rw-r--`, `drwxrwxr-x`):
 //
-//   100644 → rw-r--r--    100755 → rwxr-xr-x    040000/40000 → rwxr-xr-x
-//   120000 (symlink) → rwxrwxrwx (a link resolves to whatever it points at)
-//   160000 (gitlink) → m--------- ("m" marks a submodule commit pointer; the
-//                        dashes mark "no permission bits" — decided, issue #29)
+//   100644 → .rw-r--r--    100755 → .rwxr-xr-x    040000/40000 → drwxr-xr-x
+//   120000 (symlink) → lrwxrwxrwx (a link resolves to whatever it points at)
+//   160000 (gitlink) → m--------- (unchanged from #29: the `m` that marked a
+//                        submodule commit pointer IS the leading type char,
+//                        and the nine dashes mark "no permission bits")
+//
+// Leading-char decisions (documented per AGENTS.md law 12):
+// - Regular files take `.`, not ls's `-`: the issue's example is `.rw-rw-r--`
+//   (eza-style), and `-` already means "missing size" elsewhere in this table.
+// - Symlinks take `l` (ls convention): their type from ls-tree is "blob", so
+//   the mode (120000) — not the type — is what detects them.
+// - Submodules take `m` (kept from #29), not `d`: a gitlink is a commit
+//   pointer, not a navigable directory listing.
+// - `type` (the ls-tree "blob"|"tree"|"commit" string) only disambiguates
+//   non-canonical mode strings on the fallback path; canonical modes decide
+//   alone, so fmtMode("040000") is "drwxr-xr-x" with no second argument.
 const MODE_GLYPHS = {
   "100644": "rw-r--r--",
   "100755": "rwxr-xr-x",
   "120000": "rwxrwxrwx",
-  "160000": "m---------",
+  "160000": "---------", // the lead `m` comes from modeLead; the body marks "no bits"
   "40000": "rwxr-xr-x",
   "040000": "rwxr-xr-x",
 };
 
 /**
- * fmtMode(mode) → "rw-r--r--"-style. Known git modes map via the table above;
- * any other octal falls back to its low 9 permission bits; missing/blank or
- * non-octal input renders as "" (call sites leave the cell empty).
+ * fmtMode(mode, type?) → ".rw-r--r--"-style (leading type char + 9 permission
+ * chars). Known git modes map via the table above; any other octal falls
+ * back to its low 9 permission bits with the lead from `type`
+ * ("tree" → d, "commit" → m, else "."); missing/blank or non-octal input
+ * renders as "" (call sites leave the cell empty).
  */
-export function fmtMode(mode) {
+export function fmtMode(mode, type) {
   if (mode === undefined || mode === null) return "";
   const s = String(mode).trim();
   if (s === "") return "";
+  const body = fmtModeBody(s);
+  if (body === "") return "";
+  return modeLead(s, type) + body;
+}
+
+// modeLead(s, type) → the ls-style leading char: d = tree, l = symlink,
+// m = submodule/gitlink, . = regular file. Canonical modes decide alone;
+// `type` only covers non-canonical mode strings (e.g. a bare "755" from a
+// tree object still leads `d`).
+function modeLead(s, type) {
+  if (s === "040000" || s === "40000" || type === "tree") return "d";
+  if (s === "160000" || type === "commit") return "m";
+  if (s === "120000") return "l";
+  return ".";
+}
+
+// fmtModeBody(s) → the 9 permission chars (glyph table, else low-3-bits
+// fallback); "" when s carries no octal digits.
+function fmtModeBody(s) {
   if (MODE_GLYPHS[s] !== undefined) return MODE_GLYPHS[s];
   const digits = s.replace(/[^0-7]/g, "").slice(-3);
   if (digits === "") return "";
@@ -59,6 +125,21 @@ export function fmtMode(mode) {
     out += (d & 4 ? "r" : "-") + (d & 2 ? "w" : "-") + (d & 1 ? "x" : "-");
   }
   return out;
+}
+
+// --- [file type] column (issue #211) ------------------------------------------
+// entryKind(type, mode) → "dir" | "symlink" | "submodule" | "file": the text
+// label for the type column. ls-tree reports symlinks as type "blob" (mode
+// 120000) and submodules as type "commit" (mode 160000), so the mode decides
+// those two; "tree" is always a dir; everything else is a file. The existing
+// leading 📁/📄/↗ icon cell in Tree.jsx is kept as-is (scan aid, zero cost) —
+// this label is the issue's explicit [file type] column, not a replacement.
+export function entryKind(type, mode) {
+  const m = mode === undefined || mode === null ? "" : String(mode).trim();
+  if (type === "tree" || m === "040000" || m === "40000") return "dir";
+  if (type === "commit" || m === "160000") return "submodule";
+  if (m === "120000") return "symlink";
+  return "file";
 }
 
 // --- app-wide date display (issue #133) --------------------------------------
