@@ -77,6 +77,20 @@ test("Landing makes zero API calls (static front door)", () => {
   assert.ok(!LANDING.includes("from \"../../sdk/"), "Landing must not import the SDK");
 });
 
+test("deep-dive links read as CTAs: secondary .btn treatment, both themes + focus", () => {
+  // Issue #199: bare hover-underline spans didn't read as clickable. Both
+  // deep-dive links (hero + quickstart bottom) are secondary .btn buttons
+  // complementing the adjacent primary Browse CTA — .btn carries both themes
+  // in ui.css; keyboard focus comes from the global :focus-visible rule.
+  const btnLinks = [...LANDING.matchAll(/<A class="([^"]*)" href="\/how-it-works">/g)];
+  assert.equal(btnLinks.length, 2, "hero + bottom deep-dive links must both exist");
+  for (const [, cls] of btnLinks) {
+    assert.ok(cls.includes("btn"), `deep-dive link must carry .btn (got "${cls}")`);
+    assert.ok(!cls.includes("primary"), "deep-dive stays secondary next to the primary Browse CTA");
+  }
+  assert.ok(!LANDING.includes('class="hover:underline" href="/how-it-works"'), "no bare deep-dive span remains");
+});
+
 test("Owners page moved: route comment + slimmed intro linking /", () => {
   assert.ok(OWNERS.includes('route "/explore"'), "header comment names /explore");
   assert.ok(OWNERS.includes('href="/"'), "slimmed intro links back to /");
