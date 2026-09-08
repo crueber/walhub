@@ -872,9 +872,9 @@ trips; the landing page makes zero API calls, pinned by
 | `make landing-gifs` wall | ~55 ms | manual target, never on the build path |
 
 Frame timings (delays in 100ths): push `200 50 50 60 180 180 200`
-(~8.0 s); bucket `200 60 200 60 50 50 220` (~8.4 s); fetch
-`200 60 150 50 200 200` (~7.1 s); collab `200 60 150 150 150 200 200`
-(~9.1 s). Every hold ≥ 150 (key holds ≥ 180/1.8 s), every motion step ≥ 50
+(~9.2 s); bucket `200 60 200 60 50 50 220` (~8.4 s); fetch
+`200 60 150 50 200 200` (~8.6 s); collab `200 60 150 150 150 200 200`
+(~11.1 s). Every hold ≥ 150 (key holds ≥ 180/1.8 s), every motion step ≥ 50
 (0.5 s, above browser minimum-delay clamping), ≤ 3 moving elements per
 frame, numbered captions baked on every frame.
 

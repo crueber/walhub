@@ -52,7 +52,7 @@ func str(s string) string {
 
 // --- scene 1: push -----------------------------------------------------------
 
-// pushScene: push → objects land in the bucket (7 frames, ≈ 8 s).
+// pushScene: push → objects land in the bucket (7 frames, ≈ 9 s).
 func pushScene() []frame {
 	laptop := func(c *canvas, ci uint8) {
 		c.labelBox(40, 100, 170, 110, ci, str("YOU"), str("git push"))
@@ -147,7 +147,7 @@ func bucketScene() []frame {
 
 // --- scene 3: fetch ----------------------------------------------------------
 
-// fetchScene: fetch/clone reads objects back (6 frames, ≈ 7 s).
+// fetchScene: fetch/clone reads objects back (6 frames, ≈ 8.5 s).
 func fetchScene() []frame {
 	bucket := func(c *canvas, ci uint8) {
 		c.labelBox(40, 100, 170, 130, ci, str("BUCKET"), str("REFS"), str("PACKS"))
@@ -193,7 +193,7 @@ func fetchScene() []frame {
 
 // --- scene 4: collab ---------------------------------------------------------
 
-// collabScene: collaboration as objects alongside git data (7 frames, ≈ 9 s).
+// collabScene: collaboration as objects alongside git data (7 frames, ≈ 11 s).
 // Tightest scene (most distinct elements) — implemented and reviewed first
 // (S3); fallback would be splitting into two GIFs, not enlarging.
 func collabScene() []frame {
