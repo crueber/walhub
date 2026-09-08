@@ -42,3 +42,14 @@ test("Blob keeps rev for subpath hrefs", () => {
   assert.ok(src.includes("shortRef(props.rev)"), "Blob subpath hrefs still use rev");
   assert.ok(src.includes("rev={"), "Blob call site still passes rev");
 });
+
+test("Tree keeps rev for subpath hrefs (issue #189)", () => {
+  const src = srcOf("../../src/pages/Tree.jsx");
+  assert.ok(src.includes("shortRef(props.rev)"), "Tree subpath hrefs still use rev");
+  assert.ok(src.includes("rev={"), "Tree call site still passes rev");
+  assert.match(
+    src,
+    /\/tree\/\$\{shortRef\(props\.rev\)\}\/\$\{sub\(\)\}/,
+    "Tree intermediate crumbs link to /{full}/tree/{ref}/{subpath}",
+  );
+});
