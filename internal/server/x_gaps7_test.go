@@ -235,17 +235,15 @@ func TestWalEngineNewLocalPackMissingPackFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	packDir := h.Repo().PackDir()
-	// A stray idx without its pack: candidate found, PackPath cleared.
+	// A stray idx without its pack is never claimed: a hollow claim
+	// would skip the pack-body upload and record a manifest entry no
+	// reader can satisfy (#205).
 	idx := filepath.Join(packDir, "orphan.idx")
 	if err := os.WriteFile(idx, []byte("junk"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p := e.newLocalPack(h)
-	if p == nil || p.Checksum != "orphan" {
-		t.Fatalf("pack = %+v", p)
-	}
-	if p.PackPath != "" || p.IdxSize == 0 {
-		t.Fatalf("missing pack file must clear PackPath: %+v", p)
+	if p := e.newLocalPack(h); p != nil {
+		t.Fatalf("pack-less idx must yield nil (no silent upload skip), got %+v", p)
 	}
 }
 

@@ -412,6 +412,13 @@ clean.
   unspecified, reserved, incl. mapped-v6). The issue suspected PR #88's
   table already covered the gaps; it did, but `url.go` never used it —
   the gap was real. Unparseable input fails closed.
+- **Tier-2 repack base records bare-hex checksums (fix #205):** the
+  `FullRepack` tail derives its checksum via `git.PackChecksumFromIdx`
+  (not `TrimSuffix`-only) and builds the serving path as
+  `pack-<bare>.pack`, so the base lands under `wal/<bare>.pack` like the
+  tier-0 trailer-derived packs — and the `imported` dedupe map finally
+  spans both tiers in one shape. Same-file `AddPack` installs are a
+  no-op (05_wal_engine.md).
 - **Non-wedging imports (fix #79):** the manifest used to commit
   BEFORE ingest/refs/admin/doc, so any later failure left a refless,
   admin-less repo whose retry 409'd "delete and retry" to a caller

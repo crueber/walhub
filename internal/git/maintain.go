@@ -21,6 +21,16 @@ type PackDiff struct {
 	Removed []string // idx basenames present before only
 }
 
+// PackChecksumFromIdx maps a git on-disk idx basename (the PackDiff.New
+// shape, "pack-<hex>.idx") to the bucket-contract checksum: the bare pack
+// trailing SHA, hex (02_storage_protobuf.md §2.2: PackRef.checksum;
+// key = wal/<checksum>.pack). The `pack-` infix is git's local naming only
+// and MUST NOT reach the manifest or the bucket (#205). Non-canonical
+// basenames (no infix) pass through minus the ".idx" suffix; "" stays "".
+func PackChecksumFromIdx(idxBase string) string {
+	return strings.TrimPrefix(strings.TrimSuffix(idxBase, ".idx"), "pack-")
+}
+
 func idxSet(repo *LocalRepo) (map[string]bool, error) {
 	entries, err := os.ReadDir(repo.PackDir())
 	if err != nil {

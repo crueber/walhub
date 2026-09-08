@@ -1033,13 +1033,21 @@ func (h *RepoHandle) PublishSettings(ctx context.Context, settingsToml, author, 
 }
 
 // installPackFile copies an add-pack upload into objects/pack with the
-// canonical pack-<checksum>.pack name (§5.3.3 add_pack).
+// canonical pack-<checksum>.pack name (§5.3.3 add_pack). When the source
+// already IS that file (the import/CLI repack tails publish packs living
+// in the serving copy), the copy is a no-op: rewriting it would truncate
+// a read-only repack output (EACCES, #205).
 func installPackFile(repo *git.LocalRepo, path, checksum string) error {
+	dst := filepath.Join(repo.PackDir(), "pack-"+checksum+".pack")
+	if srcFi, serr := os.Stat(path); serr == nil {
+		if dstFi, derr := os.Stat(dst); derr == nil && os.SameFile(srcFi, dstFi) {
+			return nil
+		}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &WalError{Kind: WalErrIo, Detail: path, Wrapped: err}
 	}
-	dst := filepath.Join(repo.PackDir(), "pack-"+checksum+".pack")
 	if err := os.WriteFile(dst, data, 0o644); err != nil {
 		return &WalError{Kind: WalErrIo, Detail: dst, Wrapped: err}
 	}

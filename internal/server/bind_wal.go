@@ -199,6 +199,10 @@ func (e *WalEngine) newLocalPack(h *wal.RepoHandle) *wal.PreparedPack {
 	if m != nil {
 		for _, p := range m.Packs {
 			known[p.Checksum] = true
+			// Pre-#205 manifests stored git's on-disk `pack-` infix in
+			// the checksum; match the bare form too so a materialized
+			// legacy pack is never re-published as a new bare entry.
+			known[strings.TrimPrefix(p.Checksum, "pack-")] = true
 		}
 	}
 	packDir := h.Repo().PackDir()
@@ -208,7 +212,10 @@ func (e *WalEngine) newLocalPack(h *wal.RepoHandle) *wal.PreparedPack {
 	}
 	type candidate struct {
 		checksum string
+		base     string // on-disk basename without extension (sibling files share it)
 		modTime  int64
+		packSize uint64
+		idxSize  uint64
 	}
 	var cands []candidate
 	for _, f := range entries {
@@ -216,33 +223,38 @@ func (e *WalEngine) newLocalPack(h *wal.RepoHandle) *wal.PreparedPack {
 		if f.IsDir() || !strings.HasSuffix(name, ".idx") {
 			continue
 		}
-		sum := strings.TrimSuffix(name, ".idx")
-		if known[sum] {
+		base := strings.TrimSuffix(name, ".idx")
+		// Bucket contract (02 §2.2, #205): the checksum is the bare
+		// trailing SHA — git's `pack-` infix never reaches the manifest.
+		sum := git.PackChecksumFromIdx(name)
+		if sum == "" || known[sum] {
+			continue
+		}
+		// The sibling .pack must exist: claiming an idx without its
+		// pack silently skips the pack-body upload and records a
+		// manifest entry no reader can satisfy (#205).
+		packFi, err := os.Stat(filepath.Join(packDir, base+".pack"))
+		if err != nil {
 			continue
 		}
 		info, err := f.Info()
 		if err != nil {
 			continue
 		}
-		cands = append(cands, candidate{checksum: sum, modTime: info.ModTime().UnixNano()})
+		cands = append(cands, candidate{checksum: sum, base: base, modTime: info.ModTime().UnixNano(), packSize: uint64(packFi.Size()), idxSize: uint64(info.Size())})
 	}
 	if len(cands) == 0 {
 		return nil
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].modTime > cands[j].modTime })
 	c := cands[0]
-	pack := &wal.PreparedPack{Checksum: c.checksum}
-	pack.PackPath = filepath.Join(packDir, c.checksum+".pack")
-	pack.IdxPath = filepath.Join(packDir, c.checksum+".idx")
-	if fi, err := os.Stat(pack.PackPath); err == nil {
-		pack.PackSize = uint64(fi.Size())
-	} else {
-		pack.PackPath = ""
+	return &wal.PreparedPack{
+		Checksum: c.checksum,
+		PackPath: filepath.Join(packDir, c.base+".pack"),
+		IdxPath:  filepath.Join(packDir, c.base+".idx"),
+		PackSize: c.packSize,
+		IdxSize:  c.idxSize,
 	}
-	if fi, err := os.Stat(pack.IdxPath); err == nil {
-		pack.IdxSize = uint64(fi.Size())
-	}
-	return pack
 }
 
 // Placement answers the §4.3 decision from the host placement config.

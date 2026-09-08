@@ -261,11 +261,15 @@ func TestWalEngineNewLocalPackSkipsKnownAndDirs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(packDir, "stray.pack"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(packDir, "aa.idx"), []byte("junk"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(packDir, "bb.idx"), []byte("junk"), 0o644); err != nil {
-		t.Fatal(err)
+	// Complete (.pack + .idx) pairs are candidates; only the checksum
+	// shape changed under #205 (bare trailing SHA), not the pairing.
+	for _, base := range []string{"pack-aa", "pack-bb"} {
+		if err := os.WriteFile(filepath.Join(packDir, base+".idx"), []byte("junk"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(packDir, base+".pack"), []byte("junk"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	p := e.newLocalPack(h)
 	if p == nil || (p.Checksum != "aa" && p.Checksum != "bb") {

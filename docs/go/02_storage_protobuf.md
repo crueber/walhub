@@ -759,3 +759,16 @@ if errors.Is(err, store.ErrRetriesExhausted) { /* treat as contention/failure */
   Go generics can't express Rust's trait bounds cleanly; explicit function args keep the helper
   usable with hand-rolled codec types and make the pure-function requirement of `f` visible at the
   call site.
+- **NEW (2026-09-08) — bare-hex `PackRef.checksum` enforced at producers (#205):** the
+  §2.2 contract (`checksum` = pack trailing SHA, hex; key = `wal/<checksum>.pack`) was
+  violated by three producers that derived the checksum with `TrimSuffix`-only on git's
+  on-disk `pack-<hex>.idx` names, keeping the `pack-` infix in the manifest and the bucket
+  keys (`wal/pack-<hex>.pack`); re-ingest of a materialized legacy file stacked a new
+  `pack-` layer per push. All three producers now strip the infix (via the
+  `git.PackChecksumFromIdx` helper, 04_git.md) and build local paths as
+  `pack-<bare>.pack/.idx`. Wire-contract note: readers were and are shape-agnostic (every
+  local filename and bucket key derives from the stored checksum), so pre-fix buckets keep
+  reading — including mixed old/new live sets. No repair/fsck rewrite pass is added: the
+  old entries are self-consistent, and compaction folds legacy tier-0 packs into bare
+  tier-1 packs (supersedes by stored checksum; `gcSuperseded` deletes the old keys after
+  the retention window), so live sets converge on bare shape without a dedicated migration.

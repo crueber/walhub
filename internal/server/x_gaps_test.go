@@ -286,7 +286,8 @@ func TestBundlesDispatchBusyAndErrors(t *testing.T) {
 func TestWalEngineNewLocalPackFindsIngestedPack(t *testing.T) {
 	ctx := context.Background()
 	cfg := walTestCfg(t)
-	reg := wal.NewRegistry(ctx, store.NewMemory(), cfg)
+	st := store.NewMemory()
+	reg := wal.NewRegistry(ctx, st, cfg)
 	defer reg.Close()
 	e := NewWalEngine(reg, cfg)
 	id := mustRepoID(t, "o/r")
@@ -308,8 +309,9 @@ func TestWalEngineNewLocalPackFindsIngestedPack(t *testing.T) {
 
 	// The fetched pack objects are loose/alternates; force a pack via
 	// pack-objects so the pack dir holds an idx the manifest doesn't know.
+	// The `pack` base mirrors ingest's canonical `pack-<hex>` on-disk names.
 	packDir := repo.PackDir()
-	packName := filepath.Join(packDir, "gen")
+	packName := filepath.Join(packDir, "pack")
 	cmd = exec.Command("git", "pack-objects", "-q", packName)
 	cmd.Dir = repo.Path
 	cmd.Stdin = strings.NewReader(oid + "\n")
@@ -336,22 +338,62 @@ func TestWalEngineNewLocalPackFindsIngestedPack(t *testing.T) {
 	}
 	_ = pack
 
+	// Bucket contract (#205): the checksum is the bare trailing SHA —
+	// git's on-disk `pack-` infix never reaches the manifest.
+	wantSum := git.PackChecksumFromIdx(foundIdx)
+	if strings.Contains(wantSum, "pack-") {
+		t.Fatalf("PackChecksumFromIdx(%q) = %q, want bare hex", foundIdx, wantSum)
+	}
+
 	p := e.newLocalPack(h)
 	if p == nil {
 		t.Fatal("newLocalPack must find the fresh idx")
 	}
-	if p.Checksum != foundIdx {
-		t.Fatalf("checksum = %q want %q", p.Checksum, foundIdx)
+	if p.Checksum != wantSum {
+		t.Fatalf("checksum = %q want %q", p.Checksum, wantSum)
 	}
 	if p.IdxSize == 0 || p.PackSize == 0 {
 		t.Fatalf("sizes = %d %d", p.PackSize, p.IdxSize)
+	}
+	if _, err := os.Stat(p.PackPath); err != nil {
+		t.Fatalf("PackPath %q must exist (no silent upload skip): %v", p.PackPath, err)
+	}
+
+	// Drop the fetched ref: the seed fetch above created refs/heads/main
+	// locally, which would turn the create below into a ref conflict
+	// (Seq 0, per-ref error — a silent no-commit the old test ignored).
+	cmd = exec.Command("git", "update-ref", "-d", "refs/heads/main")
+	cmd.Dir = repo.Path
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + repo.Path}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("delete seed ref: %v: %s", err, out)
 	}
 
 	// And a full publish through the real funnel succeeds with the pack.
 	req := &git.PushRequest{Commands: []git.PushCommand{{
 		Old: strings.Repeat("0", 40), New: oid, Ref: "refs/heads/main"}}}
-	if _, err := e.Publish(ctx, id, req, "alice", wal.ObjectAccess{Local: repo}); err != nil {
+	res, err := e.Publish(ctx, id, req, "alice", wal.ObjectAccess{Local: repo})
+	if err != nil {
 		t.Fatalf("publish with pack: %v", err)
+	}
+	if res.Seq == 0 {
+		t.Fatalf("publish committed nothing (per-ref %+v) — want the pack entry", res.PerRef)
+	}
+
+	// The manifest records the bare checksum and both objects land under
+	// bare keys (upload happened — nothing silently skipped).
+	m := readTestManifest(t, ctx, st, id)
+	if len(m.Packs) != 1 {
+		t.Fatalf("manifest packs = %d, want exactly the pushed pack", len(m.Packs))
+	}
+	if m.Packs[0].Checksum != wantSum {
+		t.Fatalf("manifest checksum = %q want bare %q", m.Packs[0].Checksum, wantSum)
+	}
+	for _, suf := range []string{".pack", ".idx"} {
+		ok, err := store.Exists(ctx, st, id.StorePrefix()+"wal/"+wantSum+suf)
+		if err != nil || !ok {
+			t.Fatalf("wal/%s%s missing (pack upload skipped): %v %v", wantSum, suf, ok, err)
+		}
 	}
 }
 

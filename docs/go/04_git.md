@@ -678,3 +678,10 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   Rust hard-codes tokio timeouts/worker counts; Go makes them explicit for operators (documented in doc 11).
 - **`git.binary` is plumbed everywhere** (unlike Rust, which hardcodes `"git"` — §20 item 5): one field on
   `Layer`, zero cost, closes the known discrepancy.
+- **NEW (2026-09-08) — `git.PackChecksumFromIdx` is the single source of truth for idx-basename →
+  bucket checksum (#205):** `PackDiff.New` basenames (`pack-<hex>.idx`) map to the bare trailing
+  SHA (02_storage_protobuf.md §2.2) by stripping the `.idx` suffix plus one `pack-` infix layer.
+  The three producers that each hand-rolled `TrimSuffix`-only (push, server import, CLI import)
+  all call it now, so the on-disk infix can never reach the manifest again; single-strip (not
+  strip-all) keeps doubled legacy names mapping to their stored legacy checksums instead of
+  colliding with bare ones.

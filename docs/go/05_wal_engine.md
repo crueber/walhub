@@ -453,3 +453,9 @@ Background prefetch (from §6.2): after a refs-only sync, if `wal.prefetch_packs
 - **Eviction lock order fixed as `syncMu → rw.TryWrite → stateMu`** (global nesting order `syncMu → packMu → rw.TryWrite → stateMu`) — one stated order prevents the classic eviction/refresh deadlock; the spec's "both try-locks, skip on failure" is preserved.
 - **`packed-refs` offline apply is done in-process (parse-map-rename), not via `git update-ref`** — the spec requires it to work before packs exist and atomically across many refs; a full-file rewrite with tmp+rename is the boring correct shape (04_git.md owns the format details).
 - **Task broadcast drops packets for slow subscribers instead of blocking** — the spec's per-repo broadcast channel (capacity 1024) is mapped to bounded per-subscriber channels + a 200-packet replay ring; lossy progress bars are semantically fine, replay covers SSE reconnects.
+- **NEW (2026-09-08) — `installPackFile` skips when src and dst are the same file (#205):** the
+  import/CLI repack tails `AddPack` packs already living in the serving copy under the canonical
+  `pack-<checksum>.pack` name (read-only git repack output). The pre-fix code only survived this
+  by accident (the prefixed checksum built a doubled `pack-pack-<hex>.pack` copy); with bare
+  checksums the copy targets itself, and `WriteFile`-truncate on a `0444` file is EACCES. Same
+  inode (`os.SameFile`) → no-op; every other shape copies exactly as before.
