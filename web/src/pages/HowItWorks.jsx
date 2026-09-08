@@ -36,7 +36,7 @@ export default function HowItWorks() {
     <div class="how-page mx-auto max-w-4xl">
       <section class="py-10 text-center">
         <h1 class="text-3xl font-bold tracking-tight">How walhub works</h1>
-        {/* Trace: README.MD L3–5; AGENTS.md law 4 ("The bucket is the repository"). */}
+        {/* Trace: README L3–5; AGENTS.md law 4 ("The bucket is the repository"). */}
         <p class="muted mx-auto mt-4 max-w-2xl text-sm leading-relaxed">
           walhub is a git host whose only database is an object store. Every repository's state —
           refs, packs, config, policy — lives as objects in a bucket (filesystem, S3, or GCS).
