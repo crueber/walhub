@@ -30,6 +30,7 @@ test("routes: / is Landing, /explore is Owners, * falls back to Landing", () => 
 test("nav points at /explore; brand stays /", () => {
   assert.ok(APP.includes('href="/explore"'), "nav must link /explore");
   assert.ok(!APP.includes(">owners<"), "owners nav label must be gone");
+  assert.ok(!APP.includes("/how-it-works"), "how-it-works must not be in the header nav (issue #195)");
   assert.ok(APP.includes('href="/"'), "brand link stays /");
 });
 

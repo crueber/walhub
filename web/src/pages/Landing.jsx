@@ -139,6 +139,13 @@ git push -u origin main          # browse it at http://localhost:8080/you/demo`}
             Browse repositories →
           </A>
         </p>
+        <p class="muted mt-3 text-sm">
+          New here?{" "}
+          <A class="hover:underline" href="/how-it-works">
+            How it works →
+          </A>{" "}
+          the object-store idea and the WAL, in depth.
+        </p>
       </section>
     </div>
   );
