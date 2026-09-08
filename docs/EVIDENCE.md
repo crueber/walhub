@@ -972,7 +972,7 @@ a filesystem-store server on this workstation: create → placeholder view →
 | path | cost | shape |
 |---|---|---|
 | placeholder create | **1 window** | manifest Create, then sidecar + access Creates in parallel (independent keys, law 6); second's 412 after first's success is adopt, never rollback (manifest-without-sidecar is a valid empty repo) |
-| first push (HTTP and SSH) | **+0 on-response** | no marker read on the hot path ever; the marker clear is a hint-gated post-CAS post-response fire-and-forget Delete (same-process hint only — unhinted pushes issue zero marker ops, pinned by the unmodified push-budget test: cold 9 / warm 8 ops, 0 collab keys) |
+| first push (HTTP and SSH) | **+0 on-response** | no marker read on the hot path ever; the marker clear is a hint-gated post-CAS post-response fire-and-forget Delete (same-process hint only — unhinted pushes issue zero marker ops, pinned by the unmodified push-budget test: cold 8 / warm 9 ops, 0 collab keys) |
 | `GET …/api` on an empty repo | **≤1** | sidecar exact-key probe only (fsck probe still skipped); real repos +0 (branch on data in hand) |
 | `GET …/api` on a real repo | **+0** | stale markers carry no projection (never marker alone) |
 | org gate (create only) | **+1** | one exact-key `members.json` GET on the human-rate create path, never hot |
