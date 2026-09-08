@@ -1,5 +1,6 @@
 // web/test/unit/how-it-works.test.js — developer deep-dive page
-// (/how-it-works, issue #191, R1): source pins for the route, nav entry,
+// (/how-it-works, issue #191, R1; nav removal issue #195): source pins for the
+// route, the nav-entry absence, section anchors,
 // section anchors, verbatim GIF alt reuse, the zero-API-call rule, and the
 // cross-links. No DOM: JSX is pinned as source text, mirroring landing.test.js.
 import { test } from "node:test";
@@ -27,13 +28,10 @@ test("route: /how-it-works renders HowItWorks next to the other static routes", 
   assert.match(INDEX, /<Route path="\*" component=\{Landing\} \/>/, "* fallback stays Landing");
 });
 
-test("nav carries how it works after explore; brand stays /", () => {
-  assert.ok(APP.includes('href="/how-it-works"'), "nav must link /how-it-works");
-  assert.ok(APP.includes(">how it works<"), "nav label is lowercase like the rest");
-  assert.ok(
-    APP.indexOf('href="/explore"') < APP.indexOf('href="/how-it-works"'),
-    "how-it-works sorts after explore",
-  );
+test("nav drops how it works (issue #195); brand stays /", () => {
+  assert.ok(!APP.includes('href="/how-it-works"'), "nav must not link /how-it-works");
+  assert.ok(!APP.includes(">how it works<"), "nav label must be gone");
+  assert.ok(APP.includes('href="/explore"'), "explore nav entry stays");
 });
 
 test("sections: hero + TOC + idea/wal/push/read/checkpoints/boundaries anchors", () => {
@@ -105,9 +103,13 @@ test("HowItWorks makes zero API calls (static page like /)", () => {
   assert.ok(!HOW.includes("from \"../sdk/"), "HowItWorks must not import the SDK");
 });
 
-test("cross-links: Landing → deep-dive, deep-dive → / + /setup, Wal tab → #wal", () => {
+test("cross-links: Landing bottom → deep-dive, deep-dive → / + /setup, Wal tab → #wal", () => {
   assert.ok(LANDING.includes('href="/how-it-works"'), "Landing links to the deep-dive");
   assert.ok(LANDING.includes("How it works →"), "Landing cross-link label");
+  assert.ok(
+    LANDING.indexOf('id="quickstart"') < LANDING.lastIndexOf('href="/how-it-works"'),
+    "deep-dive link sits at the landing bottom (quickstart area, issue #195)",
+  );
   assert.ok(HOW.includes('href="/"'), "deep-dive links back to /");
   assert.ok(HOW.includes('href="/setup"'), "deep-dive links to /setup");
   assert.ok(HOW.includes('href="/explore"'), "deep-dive links to /explore");
