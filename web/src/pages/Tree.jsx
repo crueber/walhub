@@ -22,7 +22,7 @@ function Breadcrumb(props) {
             <>
               {" / "}
               <Show when={i() === parts().length - 1} fallback={
-                <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}/tree/${sub()}`}>{part}</A>
+                <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}/tree/${shortRef(props.rev)}/${sub()}`}>{part}</A>
               }>
                 <strong>{part}</strong>
               </Show>
@@ -189,7 +189,7 @@ export default function Tree() {
           const treeRest = () => (t().ref ? `${shortRef(t().ref)}` : "") + (t().path ? `/${t().path}` : "");
           return (
             <>
-              <Breadcrumb full={ctx.full} path={t().path ?? ""} />
+              <Breadcrumb full={ctx.full} path={t().path ?? ""} rev={t().ref} />
               <table class="data-table tree-table">
                 <thead>
                   <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24 text-right">size</th></tr>
