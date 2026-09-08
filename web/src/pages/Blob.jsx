@@ -11,6 +11,7 @@ import { renderBody } from "../lib/render-md.js";
 import { fmtSize } from "../lib/format.js";
 import { languageFor, highlight } from "../lib/highlight.js";
 import { useRepo, shortRef } from "./Repo.jsx";
+import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
 function Breadcrumb(props) {
   const parts = () => (props.path ? props.path.split("/") : []);
@@ -54,6 +55,9 @@ export default function Blob() {
     <div class="blob-page">
       <Show when={getBlob()} fallback={<p class="muted">loading blob…</p>}>
         {(b) => {
+          // Empty repo → guide (issue #209); degraded + missing → inline notice.
+          if (b().empty) return <EmptyRepoGuide full={ctx.full} summary={ctx.summary?.()} />;
+          if (b().degraded) return <DegradedNotice full={ctx.full} cacheKey={`sha:${b().sha}:blob:${b().path ?? ""}`} />;
           const name = () => b().name ?? (b().path ?? "").split("/").pop() ?? "";
           const lang = () => languageFor(name());
           const isMd = () => /\.(md|markdown)$/i.test(name());

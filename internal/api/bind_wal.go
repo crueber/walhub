@@ -161,6 +161,68 @@ func refFromEntry(e git.RefEntry) Ref {
 	return Ref{Name: e.Name, SHA: sha}
 }
 
+// emptyMarker is the machine-readable 404 prefix (07_api.md §9.9; issue
+// #209): resolve/tree/blob/commits/commit on an UNBORN repo (manifest
+// HeadSeq == 0, no refs) stay 404 (frozen wire behavior) but carry this
+// prefix so the UI can guide instead of traying. Damage-404s (refs present,
+// objects missing) NEVER carry it — see unbornState.
+const emptyMarker = "empty repository: "
+
+// summarizeSnapshot folds one ref snapshot into SummaryData (counts + head).
+// It is the single fold behind Summary and the unborn predicate alike, so
+// the two can never disagree about what "no refs" means.
+func summarizeSnapshot(snap *git.RefSnapshot) SummaryData {
+	s := SummaryData{Branches: 0, Tags: 0}
+	for _, e := range snap.Refs {
+		switch {
+		case strings.HasPrefix(e.Name, "refs/heads/"):
+			s.Branches++
+			if e.Name == snap.HeadTarget {
+				r := refFromEntry(e)
+				s.Head = &r
+			}
+		case strings.HasPrefix(e.Name, "refs/tags/"):
+			s.Tags++
+		}
+	}
+	return s
+}
+
+// unbornState reports the exact "empty repository" predicate (review S2):
+// manifest HeadSeq == 0 with no resolvable head and zero branches/tags.
+// Fail-closed: any manifest error (or a nil engine) → false, so a damaged
+// repo never misclassifies as empty. A nil manifest counts as HeadSeq 0 —
+// only test fakes omit it; production always has it post-sync.
+//
+// Costs no new hot-path round trips: the snapshot fold is the caller's, and
+// the manifest snapshot is served from the open handle in memory (the sync
+// that produced the snapshot already fetched it).
+func (v *walView) unbornState(ctx context.Context, id git.RepoId, s SummaryData) bool {
+	if s.Head != nil || s.Branches != 0 || s.Tags != 0 {
+		return false
+	}
+	if v.engine == nil {
+		return false
+	}
+	m, err := v.engine.Manifest(ctx, id)
+	if err != nil {
+		return false
+	}
+	return m == nil || m.HeadSeq == 0
+}
+
+// unbornOnFailure is the failure-path unborn check for the serve-level
+// recipes (tree/blob/commits/commit): the git command already failed, so one
+// refs snapshot (law 6: verification goes on the failure path) decides
+// whether the 404 earns the empty marker. Any snapshot error → false.
+func (v *walView) unbornOnFailure(ctx context.Context, id git.RepoId) bool {
+	_, snap, _, err := v.snapshot(ctx, id)
+	if err != nil || snap == nil {
+		return false
+	}
+	return v.unbornState(ctx, id, summarizeSnapshot(snap))
+}
+
 func (v *walView) Sync(ctx context.Context, id git.RepoId, level SyncLevel) error {
 	if v.engine == nil {
 		return ErrPending
@@ -178,11 +240,17 @@ func (v *walView) Resolve(ctx context.Context, id git.RepoId, rest string) (Reso
 	// Empty rest → the default branch (HEAD); unborn HEAD → not found.
 	if rest == "" {
 		if snap.HeadTarget == "" {
+			if v.unbornState(ctx, id, summarizeSnapshot(snap)) {
+				return Resolution{}, fmt.Errorf("%w: "+emptyMarker+"unborn HEAD", ErrNotFound)
+			}
 			return Resolution{}, fmt.Errorf("%w: unborn HEAD", ErrNotFound)
 		}
 		if e, ok := snap.Get(snap.HeadTarget); ok {
 			res.Ref, res.SHA, res.Kind = e.Name, string(e.Oid), kindOf(e.Name)
 			return res, nil
+		}
+		if v.unbornState(ctx, id, summarizeSnapshot(snap)) {
+			return Resolution{}, fmt.Errorf("%w: "+emptyMarker+"HEAD", ErrNotFound)
 		}
 		return Resolution{}, fmt.Errorf("%w: HEAD", ErrNotFound)
 	}
@@ -227,6 +295,9 @@ func (v *walView) Resolve(ctx context.Context, id git.RepoId, rest string) (Reso
 		}
 	}
 	if sha == "" {
+		if v.unbornState(ctx, id, summarizeSnapshot(snap)) {
+			return Resolution{}, fmt.Errorf("%w: "+emptyMarker+"%s", ErrNotFound, segs[0])
+		}
 		return Resolution{}, fmt.Errorf("%w: %s", ErrNotFound, segs[0])
 	}
 	res.Ref, res.SHA, res.Path, res.Kind = "", sha, strings.Join(segs[1:], "/"), "commit"
@@ -314,6 +385,9 @@ func (v *walView) Tree(ctx context.Context, id git.RepoId, sha, path string) (Tr
 	}
 	out, err := v.gitCmd(ctx, repo, "ls-tree", "-z", "-l", spec)
 	if err != nil {
+		if v.unbornOnFailure(ctx, id) {
+			return TreeResult{}, fmt.Errorf("%w: "+emptyMarker+"tree %s:%s not found (%v)", ErrNotFound, sha, path, err)
+		}
 		return TreeResult{}, fmt.Errorf("%w: tree %s:%s not found (%v)", ErrNotFound, sha, path, err)
 	}
 	entries := parseLsTree(out)
@@ -333,6 +407,9 @@ func (v *walView) Blob(ctx context.Context, id git.RepoId, sha, path string, raw
 	spec := sha + ":" + path
 	sizeOut, err := v.gitCmd(ctx, repo, "cat-file", "-s", spec)
 	if err != nil {
+		if v.unbornOnFailure(ctx, id) {
+			return BlobResult{}, fmt.Errorf("%w: "+emptyMarker+"blob %s not found", ErrNotFound, path)
+		}
 		return BlobResult{}, fmt.Errorf("%w: blob %s not found", ErrNotFound, path)
 	}
 	var size int64
@@ -346,6 +423,9 @@ func (v *walView) Blob(ctx context.Context, id git.RepoId, sha, path string, raw
 	}
 	body, err := v.gitCmd(ctx, repo, "cat-file", "blob", spec)
 	if err != nil {
+		if v.unbornOnFailure(ctx, id) {
+			return BlobResult{}, fmt.Errorf("%w: "+emptyMarker+"blob %s unreadable: %v", ErrNotFound, path, err)
+		}
 		return BlobResult{}, fmt.Errorf("%w: blob %s unreadable: %v", ErrNotFound, path, err)
 	}
 	res.Contents = body
@@ -367,6 +447,9 @@ func (v *walView) Commits(ctx context.Context, id git.RepoId, sha, path string, 
 	}
 	out, err := v.gitCmd(ctx, repo, argv...)
 	if err != nil {
+		if v.unbornOnFailure(ctx, id) {
+			return CommitPage{}, fmt.Errorf("%w: "+emptyMarker+"history of %s: %v", ErrNotFound, sha, err)
+		}
 		return CommitPage{}, fmt.Errorf("%w: history of %s: %v", ErrNotFound, sha, err)
 	}
 	commits := parseLogRecords(out)
@@ -385,10 +468,16 @@ func (v *walView) Commit(ctx context.Context, id git.RepoId, sha string) (Commit
 	}
 	recOut, err := v.gitCmd(ctx, repo, "show", "--no-patch", "--format="+gitFmtShow, sha)
 	if err != nil {
+		if v.unbornOnFailure(ctx, id) {
+			return CommitDetail{}, fmt.Errorf("%w: "+emptyMarker+"commit %s not found", ErrNotFound, sha)
+		}
 		return CommitDetail{}, fmt.Errorf("%w: commit %s not found", ErrNotFound, sha)
 	}
 	commit, ok := parseShowRecord(recOut)
 	if !ok {
+		if v.unbornOnFailure(ctx, id) {
+			return CommitDetail{}, fmt.Errorf("%w: "+emptyMarker+"commit %s malformed", ErrNotFound, sha)
+		}
 		return CommitDetail{}, fmt.Errorf("%w: commit %s malformed", ErrNotFound, sha)
 	}
 	detail := CommitDetail{Commit: commit}
@@ -406,18 +495,10 @@ func (v *walView) Summary(ctx context.Context, id git.RepoId) (SummaryData, erro
 	if err != nil {
 		return SummaryData{}, err
 	}
-	s := SummaryData{Branches: 0, Tags: 0}
-	for _, e := range snap.Refs {
-		switch {
-		case strings.HasPrefix(e.Name, "refs/heads/"):
-			s.Branches++
-			if e.Name == snap.HeadTarget {
-				r := refFromEntry(e)
-				s.Head = &r
-			}
-		case strings.HasPrefix(e.Name, "refs/tags/"):
-			s.Tags++
-		}
+	s := summarizeSnapshot(snap)
+	s.Health = RepoHealthHealthy
+	if v.unbornState(ctx, id, s) {
+		s.Health = RepoHealthEmpty
 	}
 	return s, nil
 }

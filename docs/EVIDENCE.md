@@ -37,6 +37,7 @@ requested or when a review questions a hot path).
 | E10 | 2026-09-04 | Push fast path with the collab layer mounted + full-chain e2e timing (`cmd/walhub`, `internal/e2e`) | Does the push fast path gain any bucket round trips from eight mounted feature packages, and how long is the full org→release→fork chain on a real stack? | Zero: cold push 8 ops, warm push 9 ops, 0 collab-family keys on either; full chain wall 2.2 s (slowest phase: merge+close 0.5 s). Cannot regress: the budget test fails on any collab key touched by a push. |
 | E11 | 2026-09-04 | Repository import (`internal/repoimport`) | What does one URL import cost, and does it grow with repo size? | Flat: 6 GETs+HEADs + 12 control PUTs + 0 LISTs at 50 and 400 commits; wall grows with pack bytes only. Cannot explode: exact-key probes, ref enumeration local + capped, pool-gated git, no lock held across I/O. |
 | E12 | 2026-09-08 | Landing concept GIFs (`internal/devtools/landinggif`) | Do 4 animated diagrams + stills fit the byte budgets with no new deps, and what does the landing page weigh? | Yes: 82,618 bytes total (budgets ≤ 150 KB, each asset ~45% headroom); page is shell + 1 JS + 1 CSS + lazy images, zero API calls. |
+| E13 | 2026-09-08 | Self-heal serving cost (`internal/api`, issue #209) | Do the summary `health`, the 404 marker, and the overview fsck projection add store round trips to any budgeted path? | No change: empty summary +0, non-empty summary +1, overview +1 (all exact-key probes, never LIST); push/sync/checkpoint engine paths untouched; empty Code-tab path removes 1–2 UI fetches. |
 
 ---
 
@@ -899,3 +900,45 @@ frame, numbered captions baked on every frame.
 the landing page adds no API/store cost to the front door. No redesign
 required; the lever if scenes ever grow richer is fewer frames per loop,
 not a new format (APNG/WebP need non-stdlib encoders — out of budget).
+
+---
+
+## E13 — Self-heal serving cost: no change (2026-09-08)
+
+**Area:** summary `health`, `empty repository:` 404 marker, overview `fsck`
+projection (`internal/api/health.go`, `summary.go`, `overview.go`,
+`bind_wal.go`; issue #209).
+
+**Question:** do the new classifiers add store round trips to any budgeted
+path (15_testing.md §4.1: push ≤ 5, warm refs 1, cold refs 2, checkpoint 4)?
+
+**Method.** Harness: `TestSummaryOverviewRoundTrips` in
+`internal/api/health209_test.go` (`go test ./internal/api/ -run
+TestSummaryOverviewRoundTrips -v`) — a per-key counting `ObjectStore`
+decorator over the **memory store** around the real mounted handlers (no
+fakes for the layer under test: the probe runs the production
+`probeFsck` → `store.GetBytes` path). The sim budgets measure *engine* ops
+(push/sync/checkpoint); this entry measures the *handler* layer those
+budgets never call.
+
+**Results** (store GETs per request, memory backend).
+
+| path | GETs | shape |
+|---|---|---|
+| `GET …/api` on an empty repo | **0** | probe skipped — branch on data in hand |
+| `GET …/api` on a non-empty repo (probe miss or hit) | **1** | exact-key `fsck.pb` probe, never LIST |
+| `GET …/overview` (report absent or present) | **1** | exact-key probe, stated (R1 B1) |
+| push / refs-sync / checkpoint engine paths | **0 new** | no handler code on those paths; sim assertions untouched |
+
+The resolve-path marker predicate is in-hand snapshot + in-memory manifest
+snapshot (0 trips); the serve-level recipes snapshot only on the failure
+path (law 6). What the UI *removes* dwarfs what the server adds: the
+suppressed empty-repo resolve + `commits?n=1` probes save 1–2 requests per
+empty-repo Code-tab load (12_web_ui.md §2.4), and the summary itself is
+SWR-cached (`max-age=0, stale-while-revalidate=60`, 5 s data-layer TTL).
+
+**Verdict.** No budget change: the only new trips are single exact-key
+probes on the SWR summary read (non-empty only) and the no-store admin
+overview — both off the law-6 budgeted paths. Cannot regress silently:
+`TestSummaryOverviewRoundTrips` fails on any second probe, any LIST, or any
+probe on the empty path.

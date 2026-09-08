@@ -6,7 +6,7 @@
 
 import { For, Show, createSignal, onCleanup } from "solid-js";
 import { A } from "@solidjs/router";
-import { useDataRefetchable, DEFAULT_TTL, invalidate, reportError } from "../lib/data.js";
+import { useDataRefetchable, DEFAULT_TTL, invalidate, invalidatePrefix, reportError } from "../lib/data.js";
 import { mountStream } from "../lib/sse.js";
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -81,6 +81,83 @@ function Suggestion(props) {
         run {props.s.op}
       </button>
     </div>
+  );
+}
+
+// --- on-demand re-audit (issue #209: the existing KindFsck op, addressed as
+// POST …/ops/fsck — no new endpoint; (repo,kind) single-flight join) ---------
+
+function RerunFsck(props) {
+  const [getBusy, setBusy] = createSignal(false);
+  const run = async () => {
+    setBusy(true);
+    try {
+      await props.repo.ops.run("fsck", {}, () => {});
+      // Healed objects must refetch past the cached degraded sentinels
+      // (useResolved maps them under sha: keys with immutable TTL).
+      invalidatePrefix("sha:");
+      props.refresh();
+    } catch (e) {
+      reportError(e, "op fsck");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" class="pill cursor-pointer" disabled={getBusy()} onClick={() => void run()}>
+      {getBusy() ? "running…" : "run fsck now"}
+    </button>
+  );
+}
+
+// --- object health (issue #209: the overview fsck projection) -----------------
+
+const FSCK_SAMPLE = 20; // rendered oids; the projection carries the full bounded sample
+
+function ObjectHealth(props) {
+  const f = () => props.fsck;
+  const shown = () => (f().missing ?? []).slice(0, FSCK_SAMPLE);
+  const hidden = () => Math.max(0, (f().missing_total ?? (f().missing ?? []).length) - shown().length);
+  return (
+    <Card
+      title="Object health"
+      body={
+        <>
+          <p class="mb-2 text-sm">
+            {f().missing_total ?? 0} missing objects
+            <Show when={f().problems}> · {f().problems} problems</Show>
+            <Show when={f().repaired_seq}> · repaired at seq {f().repaired_seq}</Show>
+            <Show when={f().at}> · last audit <DateTime value={f().at} /></Show>
+          </p>
+          <Show when={(f().missing ?? []).length > 0}>
+            <p class="muted mb-1 text-xs">sample of missing oids:</p>
+            <ul class="mb-2 space-y-0.5">
+              <For each={shown()}>
+                {(oid) => <li><code class="font-mono text-xs">{oid}</code></li>}
+              </For>
+            </ul>
+            <Show when={hidden() > 0}>
+              <p class="muted mb-2 text-xs">…and {hidden()} more</p>
+            </Show>
+          </Show>
+          <p class="text-sm">
+            repair source:{" "}
+            <Show when={f().upstream} fallback={<span class="muted">none — set <code class="font-mono text-xs">upstream.git</code> to enable repair</span>}>
+              <code class="font-mono text-xs">{f().upstream}</code>
+            </Show>
+          </p>
+          <Show when={f().repair_stalled}>
+            <p class="mt-2 rounded border border-amber-500 bg-amber-100 p-2 text-sm text-amber-800 dark:bg-amber-900/60 dark:text-amber-300" role="status">
+              repair stalled: an upstream is configured but no repair has landed for over one audit
+              interval. Re-run the audit, then check recent tasks below for the failure.
+            </p>
+          </Show>
+          <div class="mt-2">
+            <RerunFsck repo={props.repo} refresh={props.refresh} />
+          </div>
+        </>
+      }
+    />
   );
 }
 
@@ -357,6 +434,13 @@ export default function Wal() {
                   </>
                 }
               />
+
+              {/* Object health (issue #209): the overview fsck projection.
+                  Absent when never audited — the card only renders for repos
+                  with a cached report. */}
+              <Show when={o().fsck}>
+                {(fsck) => <ObjectHealth fsck={fsck()} repo={repo} refresh={refresh} />}
+              </Show>
 
               <OpsBox ctx={ctx} onLog={onLog} />
 

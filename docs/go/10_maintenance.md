@@ -290,6 +290,37 @@ Due right after checkpoint (priority 2) when `fsck.pb` lists missing oids, `repa
 Hazard: a repair publish racing a push that references the same (now-restored) objects; two hosts repairing simultaneously.
 Avoidance: publish is the ordinary CAS ladder (duplicate pack create = success; COMPACT entry is serialized by the manifest CAS). Two hosts: the lease is omitted for repair by design (it is cheap and idempotent), but the `repaired_seq == 0` predicate self-disarms: the first host to write the new `fsck.pb` wins, the other's publish is a harmless duplicate (create-if-absent). If the implementer prefers belt-and-braces, a `leases/repair.pb` MAY be added — deviation noted in Decisions. The repair scratch is per-repo and single-flight via the task registry.
 
+### 9.3 Read-side stall derivation + serving projection (issue #209 — no give-up for v1)
+
+There is **no stop-after-N give-up rule** (R1 B3 CUT): a publish failure keeps `repaired_seq == 0`
+so the next pass retries (pinned by `wave4b_test.go`), with no counter, no config key, and no
+protobuf change. What the serving path adds is *visibility*:
+
+- **Derived stall (R1 B2, read-side only):** the overview `fsck` projection reports
+  `repair_stalled: true` when the effective upstream is configured AND `repaired_seq == 0` AND the
+  damaging report is older than one full `maintenance.fsck_interval` — i.e. repair had a whole
+  audit cycle to land and did not. Zero new bucket state (no `fsck.pb` field, no fixture regen);
+  a nil report timestamp never derives stalled (fail-closed).
+- **Effective upstream** for the projection is the per-repo `[upstream]` settings (D24) merged over
+  the host config, falling back to the host value on any parse/merge failure — an unreadable
+  settings doc never hides the host upstream and never fails the overview.
+- **No new periodic task for empty repos:** unborn is not damage; a sweeper would burn LIST/GET
+  budget against human-rate state for zero benefit. On-demand audit is the existing `KindFsck`
+  unit via the already-addressable `POST …/ops/fsck` (`require_write`, `(repo, kind)` join —
+  a second click attaches, never duplicates).
+
+#### Concurrency
+
+Hazard: a request goroutine running `git fsck` (subprocess + full local copy) would wedge serving
+concurrency and violate the per-repo semaphore discipline; a serving projection taking locks or
+leases would serialize reads behind maintenance.
+Avoidance: no request goroutine ever runs `git fsck` — audits happen only in the maintainer loop
+and on-demand through the task table. The serving projection (`internal/api/health.go`) is pure
+per-request work: one conditional exact-key GET of `fsck.pb` (no LIST, no lease, no lock, no
+subprocess), an in-memory manifest read for the effective upstream, and arithmetic for the stall
+flag. The fsck unit keeps its exact `git fsck --connectivity-only --no-dangling` argv and its
+`TryAcquire` per-repo semaphore posture (503 + Retry-After when busy, never a blocking wait).
+
 ## 10. Unit 5 — Rev-index
 
 - Trigger: a live pack with `!has_rev` and `object_count ≥ 250 000`, oldest first. One pack per unit run.
@@ -344,6 +375,15 @@ Operator view of one pass on an ssd host (`walhub serve --config walgit.toml`):
 - **Rev-index is built in-process from the `.idx`** (byte-identical writer in `internal/git`) instead of shelling to git: fewer subprocesses, and the CLI `wal rev-index` shares the code; git's own `--rev-index` path is not invoked.
 - **Repair remains lease-less** (Rust code has no repair lease either); an OPTIONAL `leases/repair.pb` is noted but not required — the `repaired_seq == 0` predicate plus create-if-absent publishes make concurrent repairs idempotent.
 - **Bundle leases keep their historical quirks** (no 2 s skew tolerance, heartbeat epoch = 1) for bucket-format compatibility with the Rust implementation; a written amendment is required to "fix" them.
+- **Self-heal visibility without resurrection (issue #209, R1 + review normative):** `repair_stalled`
+  is derived read-side (report age > `maintenance.fsck_interval` + upstream set + `repaired_seq == 0`)
+  — zero new protobuf state, no fixture regen (R1 B2). The give-up rule (stop-after-N,
+  `maintenance.repair_retries`) is CUT for v1: retry-forever stands, detection + guidance works
+  without it (R1 B3). The overview `fsck` projection costs +1 conditional GET per call (R1 B1:
+  stated, not zero — it is the serving path, not the maintainer snapshot). No new periodic task,
+  no new bucket family, no new endpoint (`POST …/ops/fsck` was already addressable). Rationale:
+  with no upstream copy, missing objects are unrecoverable — the plan is detect → classify →
+  degrade gracefully → guide the admin, never fabricate objects.
 - **Heartbeat writes happen on the pass goroutine only** (ticker handled in the same goroutine's `select`): Go makes a second goroutine tempting, but a single writer eliminates read-modify-write races on the heartbeat object without a lease.
 - **Wrong-host planning uses `statfs`-based free-space checks for the rebuild pre-flight** where Rust likely uses the store's cache accounting; `statfs` on `cache.dir` is the honest measure of "can the scratch copy land here".
 - **The 48-skip stale-slot cap is enforced per repo per pass** as a plain counter (the Rust spec states the cap without an owner; the pass goroutine owns it).
