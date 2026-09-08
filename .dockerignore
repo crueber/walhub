@@ -6,8 +6,8 @@
 Dockerfile
 compose.yaml
 compose.standalone.yml
-design.md
-README.md
+DESIGN.md
+README.MD
 .cover
 .woodpecker
 bin/

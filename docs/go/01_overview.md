@@ -33,7 +33,7 @@ that memory). The additions over the source design — the **remote reader**, th
 ## 2. Feature surface
 
 The complete capability list is identical to the Rust spec §1.3; it is restated here so this doc stands alone.
-Bucket formats, the git wire protocol, and config key names stay byte-compatible (README "Compatibility
+Bucket formats, the git wire protocol, and config key names stay byte-compatible (README.MD "Compatibility
 contract").
 
 | Area | Capabilities |
