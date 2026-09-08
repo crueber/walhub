@@ -497,6 +497,10 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
 - **`RUST_LOG` honored (kept) as an override of `telemetry.log_filter`**, and `WALHUB_LOG` accepted as the new-style spelling: zero-cost compat for existing log-tuning scripts.
 - **Unknown-key env overrides are soft (ignored + reported) rather than fatal**: matches Rust behavior and keeps a stale variable from taking down a fleet; `--strict` makes them fatal for supervisors.
 - **NEW (2026-09-05) — `server.tls.*` removed; TLS terminates at the reverse proxy** (Forgejo #165): the `server.tls.mode/cert/key/hostnames` keys are gone (validation rules renumbered: roles 8, paths 9, ssh 10). A file that still sets them is rejected at load and a `WALHUB__SERVER__TLS__*` env override is fatal — both with a reverse-proxy pointer. The env fatality is a deliberate exception to the "unknown-key env overrides are soft" rule above: a silently ignored TLS setting would leave the operator believing the server terminates TLS. Absolute-URL building honors `X-Forwarded-Proto` (§9.1 of 06_server_http.md); set `server.public_url` to the canonical external origin behind a proxy.
+- **NEW (2026-09-08) — CLI `import` repack tail records bare-hex checksums (#205):** the tier-2
+  base checksum derives via `git.PackChecksumFromIdx` (not `TrimSuffix`-only) and the serving
+  path is built as `pack-<bare>.pack`, so the base lands under `wal/<bare>.pack` like the
+  tier-0 trailer-derived packs. Same-file `AddPack` installs are a no-op (05_wal_engine.md).
 
 ### Divergence (2026-08-31)
 

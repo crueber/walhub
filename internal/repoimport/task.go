@@ -342,11 +342,14 @@ func (s *Service) completeBody(ctx context.Context, n *importNarr, h *wal.RepoHa
 		return &StatusError{Status: 500, Message: fmt.Sprintf("full repack: %v", scrubError(err.Error()))}
 	} else {
 		for _, idxBase := range diff.New {
-			checksum := strings.TrimSuffix(idxBase, ".idx")
-			if imported[checksum] {
+			// Bucket contract (02 §2.2, #205): the checksum is the bare
+			// trailing SHA — diff.New basenames carry git's on-disk
+			// `pack-` infix, which never reaches the manifest.
+			checksum := git.PackChecksumFromIdx(idxBase)
+			if checksum == "" || imported[checksum] {
 				continue
 			}
-			pack := filepath.Join(h.Repo().PackDir(), checksum+".pack")
+			pack := filepath.Join(h.Repo().PackDir(), "pack-"+checksum+".pack")
 			if err := s.publishPack(ctx, n, h, params, pack, checksum, 2, map[string]string{"history": "base"}); err != nil {
 				return err
 			}

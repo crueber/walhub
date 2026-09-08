@@ -13,6 +13,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
+	"git.packden.us/crueber/walhub/internal/store/proto"
 	"git.packden.us/crueber/walhub/internal/wal"
 )
 
@@ -133,6 +134,74 @@ func TestImportFileEndToEnd(t *testing.T) {
 	w3 := doPost(t, h, "/api/v1/repos/imports", `{"source_url":"file:///elsewhere.git","owner":"acme","name":"widget"}`, "")
 	if w3.Code != 409 {
 		t.Fatalf("different-source re-POST = %d, want 409", w3.Code)
+	}
+}
+
+// TestImportPackChecksumsBareHex (#205) runs a full file:// import —
+// tier-0 source packs plus the tier-2 repack base — and pins the bucket
+// contract on the result: every manifest checksum is bare hex, every pack
+// body + idx is durable under its bare key, and no `pack-`-prefixed key
+// is written anywhere under wal/.
+func TestImportPackChecksumsBareHex(t *testing.T) {
+	cfg := testConfig(t)
+	svc, st := testService(t, cfg, nil)
+	svc.roles = realRoles(st, cfg)
+	h := testHandler(svc, auth.Principal{Name: "carol@example.com", Write: true})
+
+	remote := t.TempDir() + "/src205"
+	srcURL := fixtureRepo(t, remote, 3, 0, 0)
+	repackSingle(t, remote)
+
+	w := doPost(t, h, "/api/v1/repos/imports", `{"source_url":`+q(srcURL)+`,"owner":"acme","name":"barehex"}`, "")
+	if w.Code != 202 {
+		t.Fatalf("POST = %d (%q), want 202", w.Code, w.Body.String())
+	}
+	var started struct {
+		Task map[string]any `json:"task"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := started.Task["id"].(string)
+	o := awaitDone(t, svc, id, 120*time.Second)
+	if o.Err != nil {
+		t.Fatalf("outcome error: %v", o.Err)
+	}
+
+	ctx := context.Background()
+	body, _, err := store.GetBytes(ctx, st, "repos/acme/barehex/"+store.Manifest, store.GetOptions{})
+	if err != nil || body == nil {
+		t.Fatalf("manifest read: %v", err)
+	}
+	m, err := proto.UnmarshalManifest(body)
+	if err != nil {
+		t.Fatalf("manifest decode: %v", err)
+	}
+	if len(m.Packs) == 0 {
+		t.Fatal("imported manifest holds no packs")
+	}
+	for _, p := range m.Packs {
+		if strings.HasPrefix(p.Checksum, "pack-") {
+			t.Fatalf("manifest checksum = %q, want bare hex (no pack- infix)", p.Checksum)
+		}
+		if len(p.Checksum) != 40 && len(p.Checksum) != 64 {
+			t.Fatalf("manifest checksum = %q, want 40/64 hex", p.Checksum)
+		}
+		for _, suf := range []string{".pack", ".idx"} {
+			ok, err := store.Exists(ctx, st, "repos/acme/barehex/wal/"+p.Checksum+suf)
+			if err != nil || !ok {
+				t.Fatalf("wal/%s%s missing: %v %v", p.Checksum, suf, ok, err)
+			}
+		}
+	}
+	if err := st.List(ctx, "repos/acme/barehex/wal/", "", func(meta store.ObjectMeta) error {
+		rel := strings.TrimPrefix(meta.Key, "repos/acme/barehex/wal/")
+		if strings.HasPrefix(rel, "pack-") {
+			t.Errorf("prefixed bucket key written: %s", meta.Key)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

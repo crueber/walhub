@@ -436,11 +436,14 @@ func runImport(ctx context.Context, c *cli, args []string) int {
 		return exitErr
 	}
 	for _, idxBase := range diff.New {
-		checksum := strings.TrimSuffix(idxBase, ".idx")
-		if imported[checksum] {
+		// Bucket contract (02 §2.2, #205): the checksum is the bare
+		// trailing SHA — diff.New basenames carry git's on-disk
+		// `pack-` infix, which never reaches the manifest.
+		checksum := git.PackChecksumFromIdx(idxBase)
+		if checksum == "" || imported[checksum] {
 			continue
 		}
-		pack := filepath.Join(h.Repo().PackDir(), checksum+".pack")
+		pack := filepath.Join(h.Repo().PackDir(), "pack-"+checksum+".pack")
 		if _, err := h.AddPack(ctx, pack, checksum, 2, map[string]string{"history": "base"}); err != nil {
 			fmt.Fprintf(os.Stderr, "walhub: publish base %s: %v\n", checksum, err)
 			return exitErr

@@ -174,6 +174,143 @@ func TestPublish_AddPackInstallsLocalFile(t *testing.T) {
 	}
 }
 
+// TestPublish_AddPackSameFileSkipsInstall pins the #205 installPackFile
+// rule: the import/CLI repack tails AddPack packs that already live in
+// the serving copy under the canonical name (read-only git repack
+// output). The install is then a no-op — rewriting would truncate the
+// read-only file (EACCES) instead of publishing it.
+func TestPublish_AddPackSameFileSkipsInstall(t *testing.T) {
+	r, _ := newTestRegistry(t)
+	ctx := context.Background()
+	h, err := r.Create(ctx, "acme/api", git.Sha1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := strings.Repeat("8", 40)
+	serving := filepath.Join(h.Repo().PackDir(), "pack-"+sum+".pack")
+	if err := os.WriteFile(serving, []byte("PACK inplace"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.AddPack(ctx, serving, sum, 2, nil)
+	if err != nil || res.Seq == 0 {
+		t.Fatalf("add pack in place: res=%+v err=%v", res, err)
+	}
+	data, err := os.ReadFile(serving)
+	if err != nil || string(data) != "PACK inplace" {
+		t.Fatalf("serving pack = %q err=%v (install truncated it)", data, err)
+	}
+	if fi, err := os.Stat(serving); err != nil || fi.Mode().Perm() != 0o444 {
+		t.Fatalf("serving pack mode = %v err=%v (install rewrote it)", fi.Mode(), err)
+	}
+	m, _ := h.ManifestSnapshot()
+	found := false
+	for _, p := range m.Packs {
+		if p.Checksum == sum {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("in-place pack missing from manifest: %+v", m.Packs)
+	}
+}
+
+// TestPublish_LegacyPrefixedChecksumReads pins the #205 reader contract:
+// pre-fix producers stored git's on-disk `pack-` infix in PackRef.checksum.
+// Readers derive bucket keys AND local filenames from the stored checksum,
+// so such entries stay fully readable and mixed old/new live sets keep
+// working; only the producers change shape.
+func TestPublish_LegacyPrefixedChecksumReads(t *testing.T) {
+	r, st := newTestRegistry(t)
+	ctx := context.Background()
+	h, err := r.Create(ctx, "acme/legacy", git.Sha1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oid1, oid2 := strings.Repeat("a", 40), strings.Repeat("b", 40)
+
+	// Seed a legacy-shaped PUSH entry straight through the funnel.
+	legacyData := []byte("PACK legacy prefixed payload")
+	legacyHex := fmtSum(legacyData)
+	legacy := "pack-" + legacyHex
+	legacyPack := filepath.Join(t.TempDir(), "pack-"+legacyHex+".pack")
+	legacyIdx := filepath.Join(t.TempDir(), "pack-"+legacyHex+".idx")
+	if err := os.WriteFile(legacyPack, legacyData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyIdx, []byte("idx-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Publish(ctx, PublishRequest{
+		Txn: refTxn("refs/heads/main", git.Sha1.ZeroHex(), oid1),
+		Pack: &PreparedPack{Checksum: legacy, PackPath: legacyPack, IdxPath: legacyIdx,
+			PackSize: uint64(len(legacyData)), IdxSize: 9},
+	}); err != nil {
+		t.Fatalf("legacy publish: %v", err)
+	}
+	// The legacy key shape is self-consistent (readers derive from stored).
+	for _, suf := range []string{".pack", ".idx"} {
+		ok, err := store.Exists(ctx, st, "repos/acme/legacy/wal/"+legacy+suf)
+		if err != nil || !ok {
+			t.Fatalf("wal/%s%s missing: %v %v", legacy, suf, ok, err)
+		}
+	}
+
+	// A fresh instance materializes the legacy entry under the stored
+	// (prefixed) checksum — the read path never assumes bare shape.
+	r2 := NewRegistry(ctx, st, testConfig(t))
+	defer r2.Close()
+	h2, err := r2.Open(ctx, "acme/legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := h2.Sync(ctx, LevelServe)
+	if err != nil {
+		t.Fatalf("sync legacy: %v", err)
+	}
+	g.Release()
+	if _, err := os.Stat(filepath.Join(h2.Repo().PackDir(), "pack-"+legacy+".pack")); err != nil {
+		t.Fatalf("materialized legacy pack missing: %v", err)
+	}
+
+	// Mixed live set: a post-fix bare pack publishes alongside the legacy
+	// entry, and a further sync keeps both readable.
+	bareData := []byte("PACK post-fix bare payload")
+	bare := fmtSum(bareData)
+	barePack := filepath.Join(t.TempDir(), "pack-"+bare+".pack")
+	bareIdx := filepath.Join(t.TempDir(), "pack-"+bare+".idx")
+	if err := os.WriteFile(barePack, bareData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bareIdx, []byte("idx-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h2.Publish(ctx, PublishRequest{
+		Txn: refTxn("refs/heads/main", oid1, oid2),
+		Pack: &PreparedPack{Checksum: bare, PackPath: barePack, IdxPath: bareIdx,
+			PackSize: uint64(len(bareData)), IdxSize: 9},
+	}); err != nil {
+		t.Fatalf("bare publish: %v", err)
+	}
+	m, _ := h2.ManifestSnapshot()
+	if len(m.Packs) != 2 {
+		t.Fatalf("mixed manifest packs = %d, want legacy + bare", len(m.Packs))
+	}
+	g, err = h2.Sync(ctx, LevelServe)
+	if err != nil {
+		t.Fatalf("sync mixed: %v", err)
+	}
+	g.Release()
+	for _, cs := range []string{legacy, bare} {
+		if _, err := os.Stat(filepath.Join(h2.Repo().PackDir(), "pack-"+cs+".pack")); err != nil {
+			t.Fatalf("mixed pack %q missing after sync: %v", cs, err)
+		}
+		ok, err := store.Exists(ctx, st, "repos/acme/legacy/wal/"+cs+".pack")
+		if err != nil || !ok {
+			t.Fatalf("wal/%s.pack missing: %v %v", cs, ok, err)
+		}
+	}
+}
+
 func TestPublish_AnnotatePack(t *testing.T) {
 	r, _ := newTestRegistry(t)
 	ctx := context.Background()
