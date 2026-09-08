@@ -210,6 +210,22 @@ func (v *walView) Resolve(ctx context.Context, id git.RepoId, rest string) (Reso
 	if err != nil {
 		return Resolution{}, err
 	}
+	if sha == "" && revIsFullSHA(segs[0]) {
+		// Cold serving copy (issue #203): rev-parse needs the packs
+		// materialized, but the refs-level sync above never fetches them —
+		// the first sha-addressed visit after a restart/recreate 404s even
+		// though the refs resolve and the objects are in the bucket, and
+		// nothing in the resolve → sha UI flow heals it (only ref-named
+		// requests reach the serve sync). Sync to serve level once — the
+		// failure-path materialize — and retry before calling it missing.
+		// No new locking: engine.Sync owns syncMu/packMu per doc 05 §5.2.
+		if serr := v.engine.Sync(ctx, id, syncLevelToWal(SyncServe)); serr == nil {
+			sha, err = v.revParse(ctx, repo, segs[0])
+			if err != nil {
+				return Resolution{}, err
+			}
+		}
+	}
 	if sha == "" {
 		return Resolution{}, fmt.Errorf("%w: %s", ErrNotFound, segs[0])
 	}

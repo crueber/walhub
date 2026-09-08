@@ -410,6 +410,10 @@ Response `{ref, sha, path, kind:"branch"|"tag"|"commit"}`; SWR + `ETag: "<sha>"`
    never a scan. Longest match wins; **branch beats tag on ties**.
 3. No prefix matched → take the FIRST segment as a revision: local repo — `git rev-parse --verify
    <seg>^{commit}` (§10 recipes argv); remote-served repo — unique-prefix lookup in the oid index + peel.
+   Cold serving copy (issue #203): rev-parse needs the packs materialized, but the refs-level sync above
+   never fetches them — so a rev-parse miss on a FULL-length hex sha (40/64 lowercase) serve-syncs once
+   (the failure-path materialize) and retries before 404ing. Branch/tag lookups never need packs and
+   skip the retry; short shas keep the single attempt.
    On success `kind = "commit"`, `ref = ""` echoed as the revision input, remaining segments = `path`.
 4. Still unresolved → `404` (plain text).
 5. Tags resolve to the **peeled commit**; the response echoes `ref` (full ref name), `sha`, and `path`
@@ -654,4 +658,13 @@ run (e.g. `{op:"compact", params:{force:1}, reason:"16 tier-0 packs", auto:false
   §6.8 makes records instance-local; the Rust behavior of awaiting is only defined for the local table,
   and a cross-host wait has no attachable stream. Local joins keep the bounded-wait + reuse semantics.
 - **SSE writer uses `http.ResponseController` write deadlines** (15 s per packet), and keepalive + packet writes share one mutex per stream — a stalled client must not pin a goroutine and interleaved `: keepalive` comments and packets must not tear (tokio got both for free).
+- **FIXED (issue #203) — sha-addressed resolve retries past a cold serving copy:** `Resolve` on a
+  full-sha miss serve-syncs once and retries `rev-parse` before 404ing (`not found: <sha>`). The UI's
+  resolve → sha flow never issues a ref-named request, so without the retry the first sha-addressed
+  visit after a restart/recreate toasted on every tree/blob/commit fetch even though refs resolved and
+  the objects were in the bucket — and nothing ever healed the copy (only ref-named requests reached
+  the serve sync). Hot path unchanged (retry runs only on rev-parse miss); genuinely-missing shas keep
+  the exact `not found: <seg>` 404 shape. Proven live: `GET …/api/tree/<head-sha>` 404'd from network
+  (fresh browser profile, no `Cache-Control` on the 404, no proxy cache headers) while `…/tree/main`
+  200'd and healed the copy — ruling out the poisoned-immutable-cache suspect.
 - **FIXED (issue #200) — owners/repos listings are manifest-gated:** `GET /api/v1/owners` drops owners with no manifest-backed repo, and `GET /api/v1/owners/{o}/repos` drops prefixes without `manifest.pb` — deleted-repo litter (the filesystem CAS `.lock` sidecars persist by design, invisible to `List` yet keeping the directory behind `ListPrefixes`) and unborn fork-provisioned prefixes (#150, still tolerated row-side as a race). Manifest `Head`s fan out in parallel (limit 8, mirroring `wal.refreshList`); a missing/unreadable manifest drops the name (fail-closed, same as `refreshList`). `Exists`/create/delete were already manifest-gated, so re-create/re-import after a delete sees a clean name (no 409, no sweep change).

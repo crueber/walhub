@@ -33,6 +33,7 @@ var _ WalEngine = (*fakeEngine)(nil)
 type fakeEngine struct {
 	syncCalls []wal.SyncLevel
 	syncErr   error
+	onSync    func(wal.SyncLevel)
 	obj       wal.ObjectAccess
 	objErr    error
 	rev       uint64
@@ -48,6 +49,9 @@ type fakeEngine struct {
 
 func (e *fakeEngine) Sync(_ context.Context, _ git.RepoId, level wal.SyncLevel) error {
 	e.syncCalls = append(e.syncCalls, level)
+	if e.onSync != nil {
+		e.onSync(level)
+	}
 	return e.syncErr
 }
 
@@ -439,6 +443,92 @@ func TestWalResolve(t *testing.T) {
 	// unborn HEAD (empty repo): either "unborn HEAD" or "HEAD" not found
 	if _, err := v.Resolve(ctx, id, ""); err == nil || !strings.Contains(err.Error(), ErrNotFound.Error()) {
 		t.Fatalf("unborn HEAD = %v", err)
+	}
+}
+
+// TestWalResolveColdCopyRetriesServe (issue #203): a full-sha resolve against
+// a serving copy whose packs are not materialized yet (fresh restart: refs
+// synced, objects/pack empty) must serve-sync once and retry instead of 404ing
+// "not found: <sha>". The UI's resolve → sha flow never issues a ref-named
+// request, so without the retry nothing ever heals the copy and every visit
+// toasts on the tree fetch.
+func TestWalResolveColdCopyRetriesServe(t *testing.T) {
+	fix := newGitFix(t)
+	ctx := context.Background()
+	id := repoID()
+
+	// Drain the serving copy: refs stay (packed-refs), all objects go to a
+	// stash — the post-restart cold state (small pushes store objects
+	// loose, so the whole objects/ dir moves, not just objects/pack/).
+	stash := t.TempDir()
+	objectsDir := filepath.Join(fix.bare.Path, "objects")
+	parked := filepath.Join(stash, "objects")
+	drain := func() {
+		_ = os.RemoveAll(parked)
+		if err := os.Rename(objectsDir, parked); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(objectsDir, "pack"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restore := func() {
+		// Idempotent: the serve-sync hook may fire for both the resolve
+		// retry and the render's own sync.
+		if _, err := os.Stat(parked); err != nil {
+			return
+		}
+		_ = os.RemoveAll(objectsDir)
+		if err := os.Rename(parked, objectsDir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	served := func(calls []wal.SyncLevel) bool {
+		for _, l := range calls {
+			if l == wal.LevelServe {
+				return true
+			}
+		}
+		return false
+	}
+	drain()
+
+	// Case 1: nothing restores the packs — the retry still runs (serve sync
+	// requested) and the miss keeps its exact "not found: <sha>" wire shape.
+	eng := &fakeEngine{obj: wal.ObjectAccess{Local: fix.bare}, rev: 7}
+	f := newEngineFixture(t, eng)
+	v := f.view()
+	_, err := v.Resolve(ctx, id, fix.main)
+	if err == nil || err.Error() != "not found: "+fix.main {
+		t.Fatalf("cold resolve miss = %v, want exact not-found shape", err)
+	}
+	if !served(eng.syncCalls) {
+		t.Fatalf("cold resolve must serve-sync before 404ing, calls = %v", eng.syncCalls)
+	}
+	w := f.do("GET", "/demo/walgit/api/resolve/"+fix.main)
+	if w.Code != http.StatusNotFound || w.Body.String() != "not found: "+fix.main {
+		t.Fatalf("cold resolve HTTP = %d %q", w.Code, w.Body.String())
+	}
+
+	// Case 2: the serve sync materializes the packs (the production
+	// materialize) — the same resolve heals and answers commit.
+	eng2 := &fakeEngine{obj: wal.ObjectAccess{Local: fix.bare}, rev: 7, onSync: func(lvl wal.SyncLevel) {
+		if lvl == wal.LevelServe {
+			restore()
+		}
+	}}
+	f2 := newEngineFixture(t, eng2)
+	res, err := f2.view().Resolve(ctx, id, fix.main)
+	if err != nil || res.Kind != "commit" || res.SHA != fix.main || res.Ref != "" {
+		t.Fatalf("healed resolve = %+v, %v", res, err)
+	}
+
+	// Case 3: the reported fetch — GET …/tree/<sha> on the cold copy heals
+	// to 200 instead of toasting 404.
+	drain()
+	w = f2.do("GET", "/demo/walgit/api/tree/"+fix.main)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cold tree/<sha> = %d (%s), want 200", w.Code, w.Body.String())
 	}
 }
 
