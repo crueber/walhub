@@ -1,8 +1,8 @@
 // web/src/pages/Landing.jsx — route "/": the landing page (issue #187).
 // Static marketing, ZERO API calls (no useData, no SDK import, no fetch):
 // the front door spends no store round trips. Works in both themes (dark
-// default); concept GIFs ship in dark-framed cards in both (README
-// screenshot precedent — one asset set, no light variants).
+// default); concept GIFs ship in dark-framed cards in both (one asset set,
+// no light variants).
 
 import { A } from "@solidjs/router";
 import ConceptGif from "../components/ConceptGif.jsx";
