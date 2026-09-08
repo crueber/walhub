@@ -563,7 +563,8 @@ func (s *Server) mapAuthStatus(w http.ResponseWriter, aerr *auth.AuthError) {
 
 // compress is attached ONLY to the three web route groups (JSON API lanes,
 // repo JSON lanes, UI). gzip at the fastest level; NEVER on git smart HTTP,
-// bundles, LFS bytes, or SSE streams (streamed answers are never compressed);
+// bundles, LFS bytes, image bytes (already-compressed GIFs pass through —
+// issue #187), or SSE streams (streamed answers are never compressed);
 // precompressed assets pass through untouched.
 // Deviation: brotli is not in the stdlib and the dependency budget is closed
 // (chi/toml/x.net only) — gzip-only.
@@ -595,8 +596,11 @@ func (cw *compressWriter) Header() http.Header { return cw.w.Header() }
 
 func (cw *compressWriter) WriteHeader(status int) {
 	ct := cw.w.Header().Get("Content-Type")
-	if strings.HasPrefix(ct, "text/event-stream") || cw.w.Header().Get("Content-Encoding") != "" {
-		cw.bypass = true // SSE; or the asset arrived precompressed
+	if strings.HasPrefix(ct, "text/event-stream") || strings.HasPrefix(ct, "image/") ||
+		cw.w.Header().Get("Content-Encoding") != "" {
+		cw.bypass = true // SSE; already-compressed image bytes (issue #187:
+		// gzipping LZW GIFs burns CPU per request for zero gain); or the
+		// asset arrived precompressed
 	} else {
 		h := cw.w.Header()
 		h.Set("Content-Encoding", "gzip")

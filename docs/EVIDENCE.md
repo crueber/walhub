@@ -36,6 +36,7 @@ requested or when a review questions a hot path).
 | E9 | 2026-09-04 | Collab stream fan-out + invalidation coalescing (`internal/notify`, `web/src/lib`) | What does one repo-frame publish cost vs subscriber count, what survives a stalled subscriber, and how many refetches does a 30-check burst cause? | Publish ~0.6 µs (1 sub) → ~10 µs (128 subs), zero store round-trips; stalled pages shed (never stall emission, never grow past 16 + 64 frames); bursts collapse to ~2 refetches per key via the per-tick key-set flush + per-key single-flight; warm revisits transfer nothing. Cannot explode: drop-oldest bus, bounded ring, bounded flush. |
 | E10 | 2026-09-04 | Push fast path with the collab layer mounted + full-chain e2e timing (`cmd/walhub`, `internal/e2e`) | Does the push fast path gain any bucket round trips from eight mounted feature packages, and how long is the full org→release→fork chain on a real stack? | Zero: cold push 8 ops, warm push 9 ops, 0 collab-family keys on either; full chain wall 2.2 s (slowest phase: merge+close 0.5 s). Cannot regress: the budget test fails on any collab key touched by a push. |
 | E11 | 2026-09-04 | Repository import (`internal/repoimport`) | What does one URL import cost, and does it grow with repo size? | Flat: 6 GETs+HEADs + 12 control PUTs + 0 LISTs at 50 and 400 commits; wall grows with pack bytes only. Cannot explode: exact-key probes, ref enumeration local + capped, pool-gated git, no lock held across I/O. |
+| E12 | 2026-09-08 | Landing concept GIFs (`internal/devtools/landinggif`) | Do 4 animated diagrams + stills fit the byte budgets with no new deps, and what does the landing page weigh? | Yes: 82,618 bytes total (budgets ≤ 150 KB, each asset ~45% headroom); page is shell + 1 JS + 1 CSS + lazy images, zero API calls. |
 
 ---
 
@@ -825,3 +826,76 @@ tier-2 base). Bulk `.pack` bytes are reported, not budgeted (plan §7:
 and the push-budget fence stays green with the surface mounted) and its
 own cost is a flat 6 + 12 + 0 LIST range at both populations. No
 redesign required; the levers are the documented `[import]` keys.
+---
+
+## E12 — Landing concept GIFs: byte budgets + page weight (2026-09-08)
+
+**Area:** landing page concept assets (`internal/devtools/landinggif`,
+`web/public/concepts/`, `/_ui/concepts/` static lane). Spec: Forgejo #187
+plan §3.2–§3.3.
+
+**Question:** four animated 640×360 diagrams plus stills must fit the plan
+budgets (≤ 30 KB each, collab ≤ 40 KB, stills ≤ 4 KB each, total ≤ 150 KB)
+without new dependencies — and the landing page itself must stay light
+(static shell + one JS/CSS pair + lazy images, zero API calls).
+
+**Method.** Harness: the generator itself
+(`go run ./internal/devtools/landinggif -out web/public/concepts/`; wall
+time printed per run) plus `TestBudgets` in
+`internal/devtools/landinggif/main_test.go`
+(`go test ./internal/devtools/landinggif/ -run TestBudgets -v` — fails past
+any budget). Real `gif.EncodeAll` output over the stdlib encoder; sizes are
+file bytes on disk. Page shell/bundle sizes from `make web` (vite 8.2.2 +
+esbuild 0.25.0). Backend: filesystem store — irrelevant by construction
+(static bytes served from the embedded `dist/` tree, zero store round
+trips; the landing page makes zero API calls, pinned by
+`web/test/unit/landing.test.js`).
+
+**Results.**
+
+| asset | frames | bytes | budget | headroom |
+|---|---|---|---|---|
+| `push.gif` | 7 | 16,773 | ≤ 30 KB | 45% |
+| `bucket.gif` | 7 | 17,793 | ≤ 30 KB | 42% |
+| `fetch.gif` | 6 | 15,874 | ≤ 30 KB | 48% |
+| `collab.gif` | 7 | 22,912 | ≤ 40 KB | 44% |
+| 4 stills (frame 0 each) | 1 each | 2,227 / 2,569 / 2,493 / 1,977 | ≤ 4 KB each | ~40% |
+| **GIF total** | | **82,618** (~80.7 KiB) | ≤ 150 KB | 46% |
+
+| landing page piece | bytes | transfer note |
+|---|---|---|
+| `dist/index.html` (shell) | 669 | no-cache + ETag |
+| `dist/assets/index-*.js` | 430,372 (124,754 gzip) | immutable, one fetch |
+| `dist/assets/index-*.css` | 71,795 (11,443 gzip) | immutable, one fetch |
+| 4 stills (first paint) | 9,266 | `loading="lazy"`, below the fold |
+| 4 animated (after swap) | 73,352 | lazy; reduced-motion users never fetch |
+| `make landing-gifs` wall | ~55 ms | manual target, never on the build path |
+
+Frame timings (delays in 100ths): push `200 50 50 60 180 180 200`
+(~9.2 s); bucket `200 60 200 60 50 50 220` (~8.4 s); fetch
+`200 60 150 50 200 200` (~8.6 s); collab `200 60 150 150 150 200 200`
+(~11.1 s). Every hold ≥ 150 (key holds ≥ 180/1.8 s), every motion step ≥ 50
+(0.5 s, above browser minimum-delay clamping), ≤ 3 moving elements per
+frame, numbered captions baked on every frame.
+
+**Analysis.**
+
+- **Flat colors are near-optimal for LZW.** The diagrams use 5 palette
+  entries and large solid areas, so per-frame marginal cost is ~1.5–2 KB
+  (measured, not estimated — the planning spike's 3-frame 6.3 KB rate
+  predicted 60–75 KB total; the shipped scenes land at 82.6 KB including
+  stills, inside the 150 KB ceiling with 46% headroom).
+- **The page costs one JS + one CSS fetch.** The 430 KB JS bundle dominates
+  first paint (~125 KB gzip); the GIFs are lazy below the fold and the
+  stills (~9 KB total) paint first. A reduced-motion visit never fetches
+  the animated bytes at all.
+- **Determinism is the review story.** Fixed palette order, fixed frame
+  order, no timestamps, no map iteration in the encode path: two encodes
+  are byte-identical (`TestDeterministic`), and regeneration is
+  byte-equal to the checked-in files (`TestFreshness`) — generator drift
+  fails CI instead of shipping silent pixel changes.
+
+**Verdict.** All four GIFs + stills fit the budgets with ~45% headroom;
+the landing page adds no API/store cost to the front door. No redesign
+required; the lever if scenes ever grow richer is fewer frames per loop,
+not a new format (APNG/WebP need non-stdlib encoders — out of budget).

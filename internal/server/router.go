@@ -118,8 +118,15 @@ func (s *Server) mount(r chi.Router) {
 	// Setup page (§3.4) — a SPA route; the shell loads everywhere.
 	r.Get("/setup", s.setupUI)
 
-	// SPA shell.
+	// SPA shell: / is the landing page, /explore is the owners list (issue
+	// #187). /explore MUST be explicit: otherwise it falls into the /*
+	// wildcard → repoDispatch → treated as owner "explore" (single-segment
+	// shape serves the same shell today, but the ?format=text branch lives
+	// only on explorePage — and the explicit route documents the name
+	// reservation: an owner literally named "explore" loses its /:owner UI
+	// page; its git/API paths are unaffected).
 	r.Get("/", s.gated(s.spaHome))
+	r.Get("/explore", s.gated(s.explorePage))
 
 	r.NotFound(notFound)                 // deliberate 404, plain text
 	r.MethodNotAllowed(methodNotAllowed) // 405 + Allow

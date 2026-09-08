@@ -1,4 +1,4 @@
-// web/src/pages/Owners.jsx — route "/": intro + every owner with their repos.
+// web/src/pages/Owners.jsx — route "/explore": intro + every owner with their repos.
 // Owner/repo names come from the store-backed core listing endpoints
 // (GET /api/v1/owners, GET /api/v1/owners/{owner}/repos — 07 §8); the page
 // adds newest-first ordering, per-section caps (lib/owners.js), and the
@@ -80,10 +80,10 @@ export default function Owners() {
       </div>
       <section class="card mb-6 p-4">
         <p class="text-sm leading-relaxed">
-          <strong>walhub</strong> is a git host whose only database is an object store: every
-          repository's refs, packs, config, and policy live as objects in a bucket (filesystem,
-          S3, or GCS). Push over smart HTTP, browse code and manage everything from this UI —
-          instances are disposable; wipe one and you lose nothing but warmth.
+          <strong>walhub</strong> is a git host whose only database is an object store.{" "}
+          <A class="text-emerald-700 hover:underline dark:text-emerald-400" href="/">
+            What is walhub? →
+          </A>
         </p>
       </section>
       <Show when={getOwners()} fallback={<p class="muted">loading…</p>}>

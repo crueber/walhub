@@ -143,9 +143,19 @@ func (s *Server) eventsNotify(w http.ResponseWriter, r *http.Request) {
 	plainStatus(w, http.StatusAccepted, "accepted")
 }
 
-// spaHome answers GET / (SPA shell; ?format=text or text Accept → plain
-// one-per-line repo list) — gated (§3.3).
+// spaHome answers GET / (the landing page shell — static marketing, zero
+// API calls). The machine-readable owner list moved to /explore (issue #187);
+// / answers the shell unconditionally (no ?format=text branch here).
 func (s *Server) spaHome(w http.ResponseWriter, r *http.Request) {
+	s.serveSPA(w, r)
+}
+
+// explorePage answers GET /explore (the owners-list page shell; ?format=text
+// or text Accept → plain one-per-line owner list) — gated (§3.3). The text
+// branch is the machine twin of the owners page, so it lives here at the
+// page's canonical home (issue #187 moves it from /; pre-1.0 no-alias law:
+// one home, not two).
+func (s *Server) explorePage(w http.ResponseWriter, r *http.Request) {
 	owners, err := s.api.Owners(r)
 	if err != nil {
 		plainStatus(w, http.StatusServiceUnavailable, err.Error())
@@ -281,6 +291,8 @@ func (s *Server) serveUIAssets(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		case hasSuffixFold(name, ".html"):
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		case hasSuffixFold(name, ".gif"):
+			w.Header().Set("Content-Type", "image/gif")
 		default:
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
@@ -342,10 +354,15 @@ func webAsset(name string) ([]byte, bool) {
 }
 
 // uiAsset maps /_ui/<name> to the built UI tree (D-WEB-6: vite output — the
-// shell at dist/index.html and content-hashed bundles under dist/assets/).
+// shell at dist/index.html, content-hashed bundles under dist/assets/, and
+// the checked-in landing-page concept GIFs under dist/concepts/ copied from
+// web/public/concepts/ by vite — issue #187; stable filenames so they stay
+// no-cache + ETag, never immutable).
 func uiAsset(name string) ([]byte, bool) {
 	switch {
 	case name == "index.html" || strings.HasPrefix(name, "assets/"):
+		return webAsset("dist/" + name)
+	case strings.HasPrefix(name, "concepts/") && hasSuffixFold(name, ".gif"):
 		return webAsset("dist/" + name)
 	}
 	return nil, false
