@@ -6,7 +6,7 @@
 import repos from "../../sdk/src/index.js";
 import { createContext, useContext, createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
-import { useData, reportError, REPO_TTL, tolerateMissing } from "../lib/data.js";
+import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } from "../lib/data.js";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, cloneCommand, copyText } from "../lib/clone.js";
 import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
@@ -477,6 +477,10 @@ export default function Repo(props) {
     get sha() { return params.sha ?? ""; },
     repoClient,
     params,
+    // The shared summary signal (issue #209): tab pages read the shell's
+    // entry through the context — no second subscription, no extra fetch.
+    // undefined = loading, null = missing/deleted (tolerateMissing, #200).
+    summary: getSummary,
   };
 
   return (
@@ -528,6 +532,23 @@ export default function Repo(props) {
             )}
           </For>
         </nav>
+
+        {/* Degraded banner (issue #209): amber, never a toast, never blocks
+            navigation. Pushes of new refs still work; reads of missing
+            objects 404 inline on their pages. */}
+        <Show when={isDegradedSummary(getSummary())}>
+          <div
+            class="degraded-banner mb-4 rounded border border-amber-500 bg-amber-100 p-3 text-sm text-amber-800 dark:bg-amber-900/60 dark:text-amber-300"
+            role="status"
+          >
+            Some objects are missing (fsck: {getSummary()?.missing_total ?? "?"} missing). Reads may fail;
+            pushes of new refs still work. Details in{" "}
+            <A class="hover:underline" href={`/${full()}/settings#wal`}>
+              Settings → WAL
+            </A>
+            .
+          </div>
+        </Show>
 
         <div class="repo-content">{props.children}</div>
       </div>

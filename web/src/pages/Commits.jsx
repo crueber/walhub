@@ -11,6 +11,7 @@ import { CopySha, shortSha } from "../lib/sha.jsx";
 import { shortRef, useRepo } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import { CheckPill } from "./Checks.jsx";
+import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
 function ParentLinks(props) {
   const parents = () => props.parents ?? [];
@@ -97,6 +98,8 @@ function CommitList(props) {
   const path = () => String(location.query.path ?? "");
 
   // The §9.2 idiom: resolve rest → sha-addressed first window (skip 0).
+  // On a known-empty repo useResolved settles EMPTY_REPO with zero fetches
+  // (issue #209) — the doomed `commits?n=1` probe is suppressed, not trayed.
   const [getFirst] = useResolved(props.owner, props.name, props.rest, "commits");
 
   // Windows beyond the first page (?skip=/?path=): same resolve → sha chain,
@@ -121,6 +124,14 @@ function CommitList(props) {
       <Show when={h()} fallback={<p class="muted animate-pulse">loading history…</p>}>
         {(hist) => (
           <>
+            <Show when={hist().empty}>
+              <EmptyRepoGuide full={props.full} summary={props.summary?.()} />
+            </Show>
+            <Show when={hist().degraded}>
+              <DegradedNotice full={props.full} cacheKey={`sha:${hist().sha}:commits:${hist().path ?? ""}`} />
+            </Show>
+            <Show when={!hist().empty && !hist().degraded}>
+            <>
             <nav class="crumbs mb-2 flex flex-wrap items-baseline gap-x-1.5 text-sm">
               <A
                 class="text-emerald-700 hover:underline dark:text-emerald-400"
@@ -157,6 +168,8 @@ function CommitList(props) {
                 </span>
               </div>
             </Show>
+            </>
+            </Show>
           </>
         )}
       </Show>
@@ -182,6 +195,7 @@ export default function Commits() {
           name={ctx.name}
           rest={ctx.rest || location.query.ref || ""}
           repoClient={ctx.repoClient}
+          summary={ctx.summary}
         />
       )}
     </Show>

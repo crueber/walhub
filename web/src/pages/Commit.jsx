@@ -4,12 +4,13 @@
 
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
-import { useData, SHA_TTL } from "../lib/data.js";
+import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf } from "../lib/data.js";
 import { parsePatchFiles, splitRows, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
 import { CopySha, shortSha } from "../lib/sha.jsx";
 import { useRepo } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import { CheckPill, ContextRows } from "./Checks.jsx";
+import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
 const fileAnchor = (path) => `f-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 const lineClass = (t) => (t === "+" ? "diff-add" : t === "-" ? "diff-del" : "");
@@ -194,12 +195,21 @@ function CommitDetail(props) {
   // freeze the view on the first sha (#38).
   const [getCommit] = useData(
     () => `commit:${props.full}:${props.sha}`,
-    () => props.repoClient.commit(props.sha),
+    () => {
+      // Known-empty suppression (issue #209): no doomed fetch, no toast.
+      if (isEmptySummary(summaryOf(props.full))) return Promise.resolve(EMPTY_REPO);
+      return props.repoClient.commit(props.sha).catch((err) => {
+        if (isEmptyError(err)) return EMPTY_REPO;
+        if (err?.notFound && isDegradedSummary(summaryOf(props.full))) return { degraded: true };
+        throw err;
+      });
+    },
     SHA_TTL,
   );
   const parsed = () => {
     const data = getCommit();
     if (!data) return undefined;
+    if (data.empty || data.degraded) return data; // sentinels render guide/notice below
     const c = data.commit ?? {};
     return {
       c,
@@ -212,7 +222,16 @@ function CommitDetail(props) {
   return (
     <div class="commit-page">
       <Show when={parsed()} fallback={<p class="muted animate-pulse">loading commit…</p>}>
-        {(d) => {
+        {(d) => (
+          <>
+            <Show when={d().empty}>
+              <EmptyRepoGuide full={props.full} summary={props.summary?.()} />
+            </Show>
+            <Show when={d().degraded}>
+              <DegradedNotice full={props.full} cacheKey={`commit:${props.full}:${props.sha}`} />
+            </Show>
+            <Show when={!d().empty && !d().degraded}>
+              {(() => {
           const c = () => d().c;
           const parents = () => c().parents ?? [];
           const full = () => String(c().sha ?? props.sha);
@@ -302,7 +321,10 @@ function CommitDetail(props) {
               </div>
             </>
           );
-        }}
+              })()}
+            </Show>
+          </>
+        )}
       </Show>
     </div>
   );
@@ -318,7 +340,7 @@ export default function Commit() {
   // and the page sticks on the first sha (#38).
   return (
     <Show when={`${ctx.full}:${ctx.sha}`} keyed>
-      {(_key) => <CommitDetail full={ctx.full} sha={ctx.sha} repoClient={ctx.repoClient} />}
+      {(_key) => <CommitDetail full={ctx.full} sha={ctx.sha} repoClient={ctx.repoClient} summary={ctx.summary} />}
     </Show>
   );
 }

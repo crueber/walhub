@@ -81,6 +81,80 @@ export function tolerateMissing(promise, missing) {
   });
 }
 
+// --- empty / degraded repo states (issue #209) --------------------------------
+// An empty repo (manifest present, zero refs) is a legitimate state, not
+// damage: the Code tab guides instead of fetching, and the shell never
+// toasts. A degraded repo (refs present, cached fsck.pb lists missing
+// objects) renders inline notices + an amber banner, never toasts.
+
+/** Server 404 prefix for unborn-repo reads (07_api.md §9.9). */
+export const EMPTY_MARKER = "empty repository: ";
+
+/** Sentinel: the repo is known-empty — render the guide, fetch nothing. */
+export const EMPTY_REPO = { empty: true };
+
+/** Sentinel: the object is missing on a known-degraded repo — inline notice. */
+export const DEGRADED_MISSING = { degraded: true };
+
+/**
+ * isEmptySummary(s) — the EmptyRepoGuide predicate: the server's
+ * `health:"empty"` when present, else the unborn shape (`!head` + zero
+ * branches/tags) so old servers still guide. Never true for null (deleted
+ * repos keep the "not found" shell, never the guide).
+ */
+export function isEmptySummary(s) {
+  if (!s) return false;
+  if (s.health === "empty") return true;
+  if (s.health === "healthy" || s.health === "degraded") return false;
+  return !s.head && !s.branches && !s.tags;
+}
+
+/** isDegradedSummary(s) — the amber-banner / inline-notice predicate. */
+export function isDegradedSummary(s) {
+  return !!s && s.health === "degraded";
+}
+
+/**
+ * peekCached(key) → the settled value or undefined (review S3: the named
+ * mechanism for reading the shared `repo:{full}` summary entry without a
+ * fetch). Non-reactive by design — call it inside effects/fetchers at
+ * fetch time, never as a render source (render sources subscribe via
+ * useData on the same key or via the repo context).
+ */
+export function peekCached(key) {
+  return cache.get(key)?.value;
+}
+
+/** summaryOf(full) — peek the shell's shared summary entry for a repo. */
+export function summaryOf(full) {
+  return peekCached(`repo:${full}`);
+}
+
+/**
+ * isEmptyError(err) — the self-describing fallback: a 404 carrying the
+ * server's empty marker maps to silent + guide even when the summary is not
+ * yet loaded. Damage-404s carry no marker by design (frozen wire), so they
+ * never match — degraded-as-empty misclassification is impossible here.
+ */
+export function isEmptyError(err) {
+  return !!err?.notFound && String(err?.message ?? "").includes(EMPTY_MARKER);
+}
+
+/**
+ * tolerateDegraded(promise, full, missing) → resolves `missing` when the
+ * fetch 404s AND the shell already knows the repo is degraded (read via
+ * peek — no fetch); rethrows everything else untouched. The tolerateMissing
+ * discipline extended: expected control flow ≠ reportError. Never mutes 404s
+ * globally — without a known-degraded summary every 404 still throws into
+ * the tray path as before.
+ */
+export function tolerateDegraded(promise, full, missing) {
+  return Promise.resolve(promise).catch((err) => {
+    if (err?.notFound && isDegradedSummary(summaryOf(full))) return missing;
+    throw err;
+  });
+}
+
 // --- the promise cache --------------------------------------------------------
 
 const cache = new Map(); // key → {signal, promise, value, at, error}
@@ -322,6 +396,16 @@ function shaFetcher(owner, name, kind, r) {
  * useResolved(owner, name, rest, kind) → [get]: the two-step §9.2 idiom.
  * Step 1 resolve:{rest} (ref-dependent, 5s SWR); step 2 sha:{sha}:{kind}:{path}
  * with ttl = Infinity (immutable). The chain IS the idiom.
+ *
+ * Issue #209 short-circuits: when the shell's shared summary entry already
+ * knows the repo is empty, both steps are suppressed (the selArgs-null
+ * pattern — a suppressed fetch, not a filtered error) and the hook settles
+ * the EMPTY_REPO sentinel so pages render the guide with zero doomed
+ * requests and zero toasts. Fallback: an empty-prefixed resolve 404 maps to
+ * the same sentinel when the summary is not yet loaded. Degraded repos map
+ * sha-step 404s to DEGRADED_MISSING for inline notices (healed objects need
+ * an invalidate to clear the cached sentinel — pages offer a retry that
+ * does exactly that).
  */
 export function useResolved(owner, name, rest, kind) {
   const v = (x) => (typeof x === "function" ? x() : x);
@@ -329,17 +413,32 @@ export function useResolved(owner, name, rest, kind) {
   createEffect(() => {
     const o = v(owner), n = v(name), rv = v(rest) ?? "";
     const repo = `${o}/${n}`;
+    // Step 0: known-empty suppression — no entry touched, no fetch started.
+    if (isEmptySummary(summaryOf(repo))) return setOut(EMPTY_REPO);
     // Step 1: resolve (ref-dependent, 5s SWR).
     const rKey = `resolve:${repo}/${rv}`;
     const rEntry = ensureEntry(rKey);
-    startIfStale(rKey, rEntry, () => repos.repo(repo).resolve(rv), RESOLVE_TTL);
+    startIfStale(rKey, rEntry, () => repos.repo(repo).resolve(rv).catch((err) => {
+      if (isEmptyError(err)) return { empty: true };
+      throw err;
+    }), RESOLVE_TTL);
     const r = rEntry.signal[0]();
-    if (!r || !r.sha) return setOut(undefined);
+    if (!r || !r.sha) {
+      if (r?.empty) return setOut(EMPTY_REPO);
+      return setOut(undefined);
+    }
     // Step 2: sha-addressed payload (immutable).
     const sKey = `sha:${r.sha}:${kind}:${r.path ?? ""}`;
     const sEntry = ensureEntry(sKey);
-    startIfStale(sKey, sEntry, shaFetcher(o, n, kind, r), SHA_TTL);
+    startIfStale(sKey, sEntry, () => shaFetcher(o, n, kind, r)().catch((err) => {
+      if (err?.notFound && isDegradedSummary(summaryOf(repo))) {
+        return { ...DEGRADED_MISSING, ref: r.ref, sha: r.sha, path: r.path ?? "" };
+      }
+      throw err;
+    }), SHA_TTL);
     const out = sEntry.signal[0]();
+    if (!out) return setOut(undefined);
+    if (out.empty || out.degraded) return setOut(out);
     // Sha-addressed payloads are ref-free by design (§2.4); the UI builds
     // URLs from the ref the user resolved, so attach it here.
     setOut(out && !out.ref ? { ...out, ref: r.ref } : out);

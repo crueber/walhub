@@ -8,6 +8,7 @@ import { renderBody } from "../lib/render-md.js";
 import { docCandidates, defaultDocFile, docFetchArgs, docSlug, docFromHash } from "../lib/doctabs.js";
 import { fmtSize, fmtMode } from "../lib/format.js";
 import { useRepo, shortRef } from "./Repo.jsx";
+import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
 function Breadcrumb(props) {
   const parts = () => (props.path ? props.path.split("/") : []);
@@ -188,43 +189,57 @@ export default function Tree() {
         {(t) => {
           const treeRest = () => (t().ref ? `${shortRef(t().ref)}` : "") + (t().path ? `/${t().path}` : "");
           return (
-            <>
-              <Breadcrumb full={ctx.full} path={t().path ?? ""} rev={t().ref} />
-              <table class="data-table tree-table">
-                <thead>
-                  <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24 text-right">size</th></tr>
-                </thead>
-                <tbody>
-                  <For each={t().entries ?? []}>
-                    {(e) => (
-                      <tr>
-                        <td class="entry-icon">{e.type === "tree" ? "📁" : e.type === "commit" ? "↗" : "📄"}</td>
-                        <td class="entry-name">
-                          <Show
-                            when={e.type === "blob"}
-                            fallback={<A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${ctx.full}/tree/${treeRest()}/${e.name}`}>{e.name}</A>}
-                          >
-                            <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${ctx.full}/blob/${treeRest()}/${e.name}`}>{e.name}</A>
-                          </Show>
-                        </td>
-                        <td class="entry-mode muted font-mono text-xs" title={e.mode ?? undefined}>{fmtMode(e.mode)}</td>
-                        <td class="entry-size muted tabular text-right text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{e.type === "blob" ? (e.size == null ? "-" : fmtSize(e.size)) : ""}</td>
-                      </tr>
-                    )}
-                  </For>
-                </tbody>
-              </table>
-              <DocTabs
-                entries={t().entries}
-                readme={t().readme}
-                dirPath={t().path ?? ""}
-                rev={t().sha}
-                repoClient={ctx.repoClient}
-                owner={ctx.owner}
-                repo={ctx.name}
-                docRef={shortRef(t().ref) || t().sha}
-              />
-            </>
+          <>
+            {/* Empty repo: the guided state, not an error (issue #209). The
+                resolve + tree fetches never issued — zero toasts by
+                construction. Any tree/* path lands on the same guide. */}
+            <Show when={t().empty}>
+              <EmptyRepoGuide full={ctx.full} summary={ctx.summary?.()} />
+            </Show>
+            {/* Degraded repo, object missing: inline notice, never a toast. */}
+            <Show when={t().degraded}>
+              <DegradedNotice full={ctx.full} cacheKey={`sha:${t().sha}:tree:${t().path ?? ""}`} />
+            </Show>
+            <Show when={!t().empty && !t().degraded}>
+              <>
+                <Breadcrumb full={ctx.full} path={t().path ?? ""} rev={t().ref} />
+                <table class="data-table tree-table">
+                  <thead>
+                    <tr><th class="w-8" /><th>name</th><th class="w-24">mode</th><th class="w-24 text-right">size</th></tr>
+                  </thead>
+                  <tbody>
+                    <For each={t().entries ?? []}>
+                      {(e) => (
+                        <tr>
+                          <td class="entry-icon">{e.type === "tree" ? "📁" : e.type === "commit" ? "↗" : "📄"}</td>
+                          <td class="entry-name">
+                            <Show
+                              when={e.type === "blob"}
+                              fallback={<A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${ctx.full}/tree/${treeRest()}/${e.name}`}>{e.name}</A>}
+                            >
+                              <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${ctx.full}/blob/${treeRest()}/${e.name}`}>{e.name}</A>
+                            </Show>
+                          </td>
+                          <td class="entry-mode muted font-mono text-xs" title={e.mode ?? undefined}>{fmtMode(e.mode)}</td>
+                          <td class="entry-size muted tabular text-right text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{e.type === "blob" ? (e.size == null ? "-" : fmtSize(e.size)) : ""}</td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+                <DocTabs
+                  entries={t().entries}
+                  readme={t().readme}
+                  dirPath={t().path ?? ""}
+                  rev={t().sha}
+                  repoClient={ctx.repoClient}
+                  owner={ctx.owner}
+                  repo={ctx.name}
+                  docRef={shortRef(t().ref) || t().sha}
+                />
+              </>
+            </Show>
+          </>
           );
         }}
       </Show>

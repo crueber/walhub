@@ -279,6 +279,7 @@ type OverviewData struct {
 	CloneURL    string           `json:"clone_url"`
 	Hostname    string           `json:"hostname"`
 	Health      Health           `json:"health"`
+	Fsck        *FsckInfo        `json:"fsck,omitempty"` // nil when never audited (issue #209)
 	Manifest    ManifestInfo     `json:"manifest"`
 	Local       LocalInfo        `json:"local"`
 	Packs       PacksInfo        `json:"packs"`
@@ -384,6 +385,38 @@ type SummaryData struct {
 	Head     *Ref `json:"head"` // the one sanctioned null
 	Branches int  `json:"branches"`
 	Tags     int  `json:"tags"`
+	// Health is the repo-state vocabulary (07_api.md §9.1; issue #209):
+	// "empty" (unborn: no resolvable head, zero branches/tags),
+	// "healthy", or "degraded" (refs present, cached fsck.pb lists missing
+	// objects). Scoped to repo state — distinct from OverviewData.Health,
+	// the WAL-dashboard vocabulary ("ok"|"degraded"|"error").
+	Health string `json:"health"`
+	// MissingTotal rides the degraded state only (0 otherwise): the
+	// authoritative missing-object count from the cached fsck.pb report.
+	MissingTotal uint64 `json:"missing_total,omitempty"`
+}
+
+// Repo health states: the summary vocabulary (issue #209). Old clients
+// ignore the field (14 §14.12 additive rule).
+const (
+	RepoHealthEmpty    = "empty"
+	RepoHealthHealthy  = "healthy"
+	RepoHealthDegraded = "degraded"
+)
+
+// FsckInfo is the read-only fsck.pb projection on overview (07_api.md §12.1;
+// issue #209): what the last audit found, plus the derived stall flag and
+// the configured repair source. Nil when no audit report exists. Missing is
+// the report's bounded sample ([] never null); MissingTotal is authoritative.
+type FsckInfo struct {
+	MissingTotal  uint64     `json:"missing_total"`
+	Missing       []string   `json:"missing"`
+	Problems      uint64     `json:"problems"`
+	RepairedSeq   uint64     `json:"repaired_seq"`
+	At            *time.Time `json:"at,omitempty"`
+	Host          string     `json:"host,omitempty"`
+	RepairStalled bool       `json:"repair_stalled"`
+	Upstream      string     `json:"upstream,omitempty"` // fetch source; "" = none configured
 }
 
 // PushRef is one ref update inside a push record.

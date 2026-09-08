@@ -50,7 +50,9 @@ GET /api/v1/me                 → {principal, write, anonymous} | 401 (no-store
 GET /api/v1/owners             → ["demo","jane"] (sorted; from the STORE, not disk)
 GET /api/v1/owners/{o}/repos   → ["hello","walgit"] (short names; 200 [] for unknown owner)
 GET /{o}/{r}/api               → {owner, name, full_name, head:{name,sha}|null, branches, tags,
-                                  clone_url, html_url, api_url}   (SWR + ETag "<head sha>")
+                                  health:"empty"|"healthy"|"degraded", missing_total? (degraded only),
+                                  clone_url, html_url, api_url}   (SWR + ETag "<head sha>" + "~degraded"
+                                  suffix when degraded; "" when unborn — §9.1)
 PUT/DELETE /{o}/{r}/api        → create (write) / delete (admin)
 GET …/refs                     → {head:{name,sha}|null} — O(1), default branch only (SWR + ETag)
 GET …/refs/{branches|tags}?prefix=&q=&after=&n=
@@ -87,6 +89,9 @@ POST …/settings/validate       → same shape for the WOULD-BE effective confi
 GET …/overview                 → walhub-specific WAL health (no-store): {repo, clone_url, hostname,
                                   health:{status:"ok"|"degraded"|"error", issues[], deep,
                                   suggestions:[{op, params?, reason, auto?}]},
+                                  fsck?:{missing_total, missing[] (bounded sample, [] never null),
+                                  problems, repaired_seq, at?, host?, repair_stalled,
+                                  upstream? ("" absent = none configured)} — §12.1,
                                   manifest:{version, next_seq, min_seq, segments[], tail_entries,
                                   entries, checkpoint?, packset?, advertised_bundle_uri?, last_push?},
                                   local:{version, next_seq, bootstrap, reconciled, size_bytes},
@@ -382,11 +387,24 @@ adding a route without updating this list is a bug. The doc never lists admin-on
 
 ### 9.1 Repo summary — `GET /{o}/{r}/api` (and `{lane}` root)
 
-After a refs-level sync: `{owner, name, full_name, head:{name,sha}|null, branches, tags, clone_url,
-html_url, api_url}`. `head` = default branch (`null` → JSON `null` — the one sanctioned null, it is not an
+After a refs-level sync: `{owner, name, full_name, head:{name,sha}|null, branches, tags,
+health, missing_total?, clone_url, html_url, api_url}`. `head` = default branch (`null` → JSON `null` — the one sanctioned null, it is not an
 array). `branches`/`tags` are **counts** (integers). `clone_url` from `server.public_url` (or request
 Host); `api_url` = the `/api` lane URL; SWR + `ETag: "<head sha>"`. `PUT` here creates (require_write,
 `?object_format=sha1|sha256`, `201`/`409` exists); `DELETE` (require_admin) → `204`.
+
+`health` is the **repo-state vocabulary** (issue #209 — scoped: this field describes the repo,
+while `overview.health.status ∈ ok|degraded|error` below describes the WAL dashboard; the two
+names do not mix): `empty` (unborn — no resolvable head, zero branches/tags; derived from the
+manifest + ref counts the summary already holds, **zero new store round trips**), `healthy`, or
+`degraded` (refs present and the cached `fsck.pb` report lists missing objects). `missing_total`
+rides `degraded` only (the authoritative count from the report; absent otherwise). The degraded
+override costs **one conditional GET** (`fsck.pb` exact-key probe) on non-empty summaries only —
+empty repos skip the probe (branch on data in hand); the law-6 budgeted paths (push ≤ 5, warm
+refs 1, checkpoint 4) never call here, so their sim budgets hold unchanged. `ETag` covers the
+health field: `"<head sha>"` (`""` when unborn, as before), suffixed `~degraded` when degraded —
+without the suffix a revalidating client would 304 on the same head sha and keep showing
+`healthy` after damage lands.
 
 ### 9.2 Refs
 
@@ -525,6 +543,27 @@ curl -s $H/acme/monorepo/api/commit/cb38da1… | jq '{commit: .commit.sha, stats
 curl -sI $H/acme/monorepo/api/tree/cb38da1…/src | grep -i cache-control   # private, max-age=31536000, immutable
 ```
 
+### 9.10 Empty-repo reads — the `empty repository:` 404 marker (issue #209)
+
+`resolve` / `tree` / `blob` / `commits` / `commit` on an **unborn** repo stay `404` (frozen wire
+behavior — API clients see the same status as before), but the plain-text body carries the stable
+machine-readable prefix `empty repository: ` (e.g. `not found: empty repository: unborn HEAD`),
+so the UI can guide instead of traying without parsing prose.
+
+- **Predicate (exact, review S2):** manifest `HeadSeq == 0` with no resolvable head and zero
+  branches/tags, evaluated at handler time from the in-hand ref snapshot + the open handle's
+  manifest snapshot (**zero new hot-path round trips** on the resolve path). The serve-level
+  recipes (tree/blob/commits/commit) take one refs snapshot, but only on the failure path (law 6:
+  verification goes on the failure path).
+- **Fail-closed:** any manifest/snapshot error → no prefix. Damage-404s (refs present, objects
+  missing) **never** carry the prefix — a degraded repo can never misclassify as empty.
+- **Sites (all 9, `internal/api/bind_wal.go`):** resolve unborn-`HEAD` × 2, resolve rev-parse miss,
+  tree, blob size, blob body, commits history, commit show, commit parse. Non-empty failures keep
+  their exact frozen messages byte-for-byte.
+- **No new endpoints:** the on-demand audit is the already-addressable `POST …/ops/fsck`
+  (`require_write`, `(repo, kind)` single-flight join — §12.2); the `repair-check` option was
+  considered and closed (Decisions).
+
 ## 10. Policy endpoints (§14 semantics)
 
 - `GET …/policy` → the policy JSON document (§14.1 envelope); missing file = allow-all: emit
@@ -573,6 +612,16 @@ including `upcoming` from maintainer heartbeats and `maintainers` from placement
 COMPACT entries), `node{counters}` (this instance's counters). `health.status` ∈ `ok|degraded|error` with
 `issues[]` (plain strings) and `suggestions:[{op, params?, reason, auto?}]` — the ops the UI can offer to
 run (e.g. `{op:"compact", params:{force:1}, reason:"16 tier-0 packs", auto:false}`).
+
+`fsck?` is the read-only `fsck.pb` projection (issue #209 — the admin's machine interface for object
+health): `missing_total` (authoritative; falls back to the sample length), `missing[]` (the report's
+bounded sample, `[]` never null), `problems`, `repaired_seq` (nonzero = repair landed and disarmed),
+`at?` (last audit, RFC 3339), `host?`, `upstream?` (effective repair source — per-repo `[upstream]`
+settings over host config; absent = none configured, and the UI renders the "set `upstream.git` to
+enable repair" guidance), and `repair_stalled` — derived read-side (R1 B2): upstream configured +
+`repaired_seq == 0` + missing signal + the report older than one full `maintenance.fsck_interval`.
+Absent when never audited. Cost: **+1 conditional GET** per overview call (R1 B1: stated, not zero —
+no-store admin page, off the law-6 hot paths; the fsck unit itself never runs inline on a request).
 
 ### 12.2 Ops — `GET …/ops` and `POST …/ops/{op}`
 
@@ -668,3 +717,13 @@ run (e.g. `{op:"compact", params:{force:1}, reason:"16 tier-0 packs", auto:false
   (fresh browser profile, no `Cache-Control` on the 404, no proxy cache headers) while `…/tree/main`
   200'd and healed the copy — ruling out the poisoned-immutable-cache suspect.
 - **FIXED (issue #200) — owners/repos listings are manifest-gated:** `GET /api/v1/owners` drops owners with no manifest-backed repo, and `GET /api/v1/owners/{o}/repos` drops prefixes without `manifest.pb` — deleted-repo litter (the filesystem CAS `.lock` sidecars persist by design, invisible to `List` yet keeping the directory behind `ListPrefixes`) and unborn fork-provisioned prefixes (#150, still tolerated row-side as a race). Manifest `Head`s fan out in parallel (limit 8, mirroring `wal.refreshList`); a missing/unreadable manifest drops the name (fail-closed, same as `refreshList`). `Exists`/create/delete were already manifest-gated, so re-create/re-import after a delete sees a clean name (no 409, no sweep change).
+- **Self-heal API surface (issue #209, R1 + review normative):** additive `health` on summary
+  (`empty|healthy|degraded` — repo-state vocabulary, scoped apart from `overview.health.status ∈
+  ok|degraded|error`, the dashboard vocabulary) with `missing_total?` on degraded; `ETag` covers
+  health (`"<head sha>"`, `""` when unborn as before, `~degraded` suffix so the flip busts SWR);
+  `empty repository: ` 404-marker prefix on unborn-repo resolve/tree/blob/commits/commit 404s
+  (exact `HeadSeq == 0` + no-refs predicate, fail-closed, damage-404s never prefixed, frozen wire
+  otherwise); read-only `fsck?` projection on overview (+1 conditional GET, stated). `POST
+  …/ops/fsck` was verified already addressable, so no new endpoint was added and the `repair-check`
+  option is closed. Rationale: detection + guidance is the gap (repair already exists); the UI must
+  distinguish "empty, guide me" from "broken, toast me" without parsing prose.

@@ -28,12 +28,17 @@
  * @typedef {{head: {name: string, sha: string}|null}} Refs
  *
  * @typedef {{owner: string, name: string, full_name: string, head: {name: string, sha: string}|null,
- *   branches: Ref[], tags: Ref[], clone_url: string, html_url: string, api_url: string}} RepoInfo
+ *   branches: number, tags: number, health: "empty"|"healthy"|"degraded", missing_total?: number,
+ *   clone_url: string, html_url: string, api_url: string}} RepoInfo
+ *
+ * @typedef {{missing_total: number, missing: string[], problems: number, repaired_seq: number,
+ *   at?: string, host?: string, repair_stalled: boolean, upstream?: string}} FsckInfo
  *
  * @typedef {{status: "ok"|"degraded"|"error", issues: string[], deep: boolean,
  *   suggestions: {op: string, params?: Object, reason: string, auto?: boolean}[]}} WalHealth
  *
  * @typedef {{repo: string, clone_url: string, hostname: string, health: WalHealth,
+ *   fsck?: FsckInfo,
  *   manifest: Object, local: Object, packs: Object,
  *   bundles: Object[], bundle_plan: Object, compactions: Object[], node: Object}} Overview
  *
