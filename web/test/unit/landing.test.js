@@ -19,6 +19,7 @@ const CONCEPT = srcOf("../../src/components/ConceptGif.jsx");
 const INDEX = srcOf("../../src/index.jsx");
 const APP = srcOf("../../src/App.jsx");
 const OWNERS = srcOf("../../src/pages/Owners.jsx");
+const HOW = srcOf("../../src/pages/HowItWorks.jsx");
 
 test("routes: / is Landing, /explore is Owners, * falls back to Landing", () => {
   assert.match(INDEX, /<Route path="\/" component=\{Landing\} \/>/);
@@ -34,12 +35,21 @@ test("nav points at /explore; brand stays /", () => {
   assert.ok(APP.includes('href="/"'), "brand link stays /");
 });
 
-test("landing CTAs: /explore, #quickstart, /setup", () => {
-  for (const href of ['href="/explore"', 'href="#quickstart"', 'href="/setup"']) {
-    assert.ok(LANDING.includes(href), `Landing must link ${href}`);
-  }
+test("landing hero: title + sub + two CTAs only (issue #229)", () => {
   assert.ok(LANDING.includes("Browse repositories"), "primary CTA label");
   assert.ok(LANDING.includes("Push in 30 seconds"), "secondary CTA label");
+  assert.ok(LANDING.includes('href="/explore"'), "Landing must link /explore");
+  assert.ok(LANDING.includes('href="#quickstart"'), "Landing must link #quickstart");
+  // Hero carries no Configure link (setup lives in the top nav + quickstart
+  // auth line), no compliance paragraph (lives on /how-it-works per #191),
+  // and no hero How-it-works button (moved to the page bottom).
+  assert.ok(!LANDING.includes("Configure"), "hero Configure link must be gone");
+  assert.ok(
+    !LANDING.includes("Object-protocol compliant with walgit"),
+    "hero compliance paragraph must be gone",
+  );
+  // The only /setup reference left is the quickstart auth line, not a hero CTA.
+  assert.ok(LANDING.includes('href="/setup"'), "quickstart auth line still links /setup");
 });
 
 test("concept alt texts name all four scenes", () => {
@@ -77,18 +87,31 @@ test("Landing makes zero API calls (static front door)", () => {
   assert.ok(!LANDING.includes("from \"../../sdk/"), "Landing must not import the SDK");
 });
 
-test("deep-dive links read as CTAs: secondary .btn treatment, both themes + focus", () => {
-  // Issue #199: bare hover-underline spans didn't read as clickable. Both
-  // deep-dive links (hero + quickstart bottom) are secondary .btn buttons
-  // complementing the adjacent primary Browse CTA — .btn carries both themes
-  // in ui.css; keyboard focus comes from the global :focus-visible rule.
+test("deep-dive link reads as CTA at the page bottom (issues #199, #229)", () => {
+  // Issue #229: the hero How-it-works button moved to the page bottom (below
+  // the concepts, in the quickstart card). Exactly one deep-dive link remains
+  // — secondary .btn treatment complementing the adjacent primary Browse CTA;
+  // .btn carries both themes in ui.css; keyboard focus comes from the global
+  // :focus-visible rule.
   const btnLinks = [...LANDING.matchAll(/<A class="([^"]*)" href="\/how-it-works">/g)];
-  assert.equal(btnLinks.length, 2, "hero + bottom deep-dive links must both exist");
-  for (const [, cls] of btnLinks) {
-    assert.ok(cls.includes("btn"), `deep-dive link must carry .btn (got "${cls}")`);
-    assert.ok(!cls.includes("primary"), "deep-dive stays secondary next to the primary Browse CTA");
-  }
+  assert.equal(btnLinks.length, 1, "only the bottom deep-dive link must exist");
+  const [, cls] = btnLinks[0];
+  assert.ok(cls.includes("btn"), `deep-dive link must carry .btn (got "${cls}")`);
+  assert.ok(!cls.includes("primary"), "deep-dive stays secondary next to the primary Browse CTA");
   assert.ok(!LANDING.includes('class="hover:underline" href="/how-it-works"'), "no bare deep-dive span remains");
+  // The survivor sits after the concept sections (bottom quickstart card).
+  const conceptsEnd = LANDING.indexOf('id="quickstart"');
+  assert.ok(conceptsEnd > 0 && LANDING.indexOf('href="/how-it-works"', conceptsEnd) > 0,
+    "deep-dive link must live in the bottom quickstart section");
+});
+
+test("compliance message lives on /how-it-works, not the hero (issue #229)", () => {
+  // Per #191 the deep-dive page carries the wire-compat wording; the hero
+  // must not duplicate it.
+  assert.ok(
+    HOW.includes("Object-protocol compliant with walgit"),
+    "/how-it-works must keep the compliance paragraph",
+  );
 });
 
 test("Owners page moved: route comment + slimmed intro linking /", () => {
