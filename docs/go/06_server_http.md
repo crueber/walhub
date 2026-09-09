@@ -652,3 +652,9 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
 - **D5 — Zero-config first run.** Missing config boots with built-in defaults (`0.0.0.0:8080`, filesystem store under `<data-dir>/store`, auth `none`, `auto_create_on_push`) instead of fatal exit 2 — the old step-2 "missing config file is a fatal exit 2" of the startup order is superseded by the bootstrap leg (§10.4, §3.4).
 - **D6 — Setup UI + API first-class.** `/setup` + `/api/v1/setup{,/test}` with the open-while-unsecured access rule and the SETUP-ONLY MODE for invalid configs (§3.4, new `internal/setup` package).
 - **Supersession (deliberate, fail-closed):** the Rust rule that auth `mode = "none"` is refused unless the listen address is loopback is REPLACED — auth-none is allowed on any bind with loud warnings (logs, setup UI, `readyz`) and zero refused requests (§3.4, §8.1, §10.4 step 7).
+- **Mirror discovery refusal (Forgejo #240, R1 (c)).** `gitInfoRefs` answers
+  receive-pack discovery on a pull-only mirror with 403 plain text (every
+  principal, admins included); upload-pack discovery is unaffected, and SSH
+  refuses before writing its v0 advertisement (client stderr, else the client
+  hangs). In-pipeline refusal stays git-wire (per-ref `ng`), since the HTTP
+  body is a git stream by then — the plan's "403" covers discovery only.

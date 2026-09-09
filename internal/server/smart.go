@@ -127,6 +127,14 @@ func (s *Server) gitInfoRefs(w http.ResponseWriter, r *http.Request, id git.Repo
 		s.gitAuthFailure(w, r, svc, aerr)
 		return
 	}
+	// Mirror refusal at discovery (Forgejo #240, R1 (c)): a pull-only
+	// mirror answers receive-pack info/refs with 403 plain text — for
+	// every principal, admins included. Upload-pack (fetch/clone) is
+	// unaffected.
+	if svc == git.ServiceReceivePack && s.isMirrorRepo(r.Context(), id) {
+		plainStatus(w, http.StatusForbidden, MirrorRefusal)
+		return
+	}
 	// Placement gate (not_served_here → 503 + pkt ERR per §4.2/§4.3).
 	if !s.placementOK(w, r, id, svc) {
 		return

@@ -772,3 +772,10 @@ if errors.Is(err, store.ErrRetriesExhausted) { /* treat as contention/failure */
   old entries are self-consistent, and compaction folds legacy tier-0 packs into bare
   tier-1 packs (supersedes by stored checksum; `gcSuperseded` deletes the old keys after
   the retention window), so live sets converge on bare shape without a dedicated migration.
+- **Mirror sidecar key (Forgejo #240, R1 (b)).** `repos/<o>/<r>/meta/mirror.json`
+  (Create-once-then-CAS'd; frozen-list amendment in `14_extensibility.md` in
+  the same change) joins the `fork.json`/`import.json` sidecar family:
+  pull-only flag + canonical upstream URL (immutable) + schedule preset +
+  last outcome. The sync lease `leases/mirror-<owner>-<name>.pb` is a
+  protobuf lease in the existing `leases/` family (CAS+TTL, skew 0).
+  `next_sync_at` is never stored anywhere (computed at read).

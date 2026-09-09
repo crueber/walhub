@@ -158,6 +158,9 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		Log:       log,
 		Notifier:  wake,
 		ReadGate:  readGateOf(ident),
+		// Forgejo #240: the pull-only refusal predicate over the same
+		// store (nil in setup-only — no push paths exist there).
+		MirrorGuard: mirrorGuardOf(st),
 		// #210 adoption hints: the same instance apiEnv carries above
 		// (nil in setup-only — no create or push paths exist there).
 		PlaceholderHints: placeholderHintsOf(apiEnv),
@@ -187,6 +190,15 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 				defer close(maintainerDone)
 				m.Run(drainCtx) // maintenance stops at phase-1 drain (§12)
 			}()
+			if collab != nil && collab.mirrorSvc != nil {
+				// Forgejo #240 scheduled-sync loop (the follow.go
+				// shape: its own cadence, never a maintenance unit,
+				// never blocking maintenance). The bucket lease (R1
+				// (d)) arbitrates across maintain hosts, so the loop
+				// runs on every maintain host; enumeration is the
+				// in-memory registry + mirror.json probes (no LIST).
+				go collab.mirrorSvc.RunLoop(drainCtx, mirrorLoopInterval, nil)
+			}
 		}
 		prewarmAsync(ctx, engine, cfg.Cache.Prewarm, cfg.Cache.PrewarmParallelism, log)
 		go watchdog(ctx, log)

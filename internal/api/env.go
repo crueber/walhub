@@ -508,6 +508,15 @@ type Env struct {
 	// composition when internal/identity is compiled in.
 	GroupExpander policy.Expander
 
+	// MirrorSummary is the pull-only mirror projection (Forgejo #240):
+	// non-nil + true → the summary carries the mirror view (upstream
+	// URL, schedule, computed next fire, last outcome). Nil → no
+	// mirror field (instances without the mirror surface wired). The
+	// next fire is COMPUTED at read by the feature; core never stores
+	// it. Wired by composition (cmd/walhub) so this package never
+	// imports the feature (law 8).
+	MirrorSummary func(ctx context.Context, owner, repo string) (MirrorView, bool)
+
 	// RenderCacheBytes is the rendered-immutable LRU budget
 	// (cache.render_cache_bytes; default 256 MiB — see 07_api.md §14).
 	RenderCacheBytes int64
@@ -555,6 +564,21 @@ func mapAccessErr(w http.ResponseWriter, aerr *auth.AuthError) {
 	default:
 		writePlain(w, http.StatusUnauthorized, aerr.Why)
 	}
+}
+
+// MirrorView is the pull-only mirror projection on the repo summary
+// (Forgejo #240): the stored sidecar fields plus the feature-computed
+// next_sync_at ("" when due now) and the due flag. Absent (nil) on
+// non-mirrors — never null-vs-missing ambiguity: the field is
+// omitempty.
+type MirrorView struct {
+	UpstreamURL         string `json:"upstream_url"`
+	Schedule            string `json:"schedule"`
+	NextSyncAt          string `json:"next_sync_at,omitempty"`
+	LastSyncedAt        string `json:"last_synced_at,omitempty"`
+	LastResult          string `json:"last_result,omitempty"`
+	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
+	Due                 bool   `json:"due"`
 }
 
 // --- request context ---------------------------------------------------------

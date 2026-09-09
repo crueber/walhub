@@ -818,3 +818,15 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
     flag-driven grants); the access-bootstrap race is Create-wins, adopt-don't-overwrite.
   - *Expiry:* `expires_at` always null in this change (TTL off by default, no sweep, no
     `placeholders_per_principal` counter — rate-limit + docs only, per S5/`§8` cuts).
+- **Mirror surface (Forgejo #240).** Repo lanes `/{o}/{r}/api/mirror`
+  (GET open read, PUT/DELETE admin, `POST …/mirror/sync` admin → 202 with a
+  service-level async id, `GET …/mirror/sync[?id=]`) plus the top-level
+  create-from-URL twin `POST /api/v1/repos/mirrors` (write-gated, import
+  dangerous-authority rule for off-allowlist hosts). Discovery lists ONLY the
+  top-level twin (`api.RegisterExposed`, the import precedent). The summary
+  gains `mirror: {upstream_url, schedule, next_sync_at, last_synced_at,
+  last_result, consecutive_failures, due}` behind an `api.Env.MirrorSummary`
+  hook (the ReadGate/OrgGate shape — this package never imports the feature);
+  the ETag covers it (`~m` suffix, the #235 `~d` precedent) so outcome-only
+  changes never 304. Strict JSON (unknown fields 400); tokens ride the POST
+  bodies memory-only (`secret_set` presence-only in task params).

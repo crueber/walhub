@@ -8,6 +8,7 @@ import { createContext, useContext, createSignal, createEffect, onCleanup, For, 
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } from "../lib/data.js";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText } from "../lib/clone.js";
+import { formatNextSync } from "../lib/mirror.js";
 import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 
@@ -523,6 +524,23 @@ export default function Repo(props) {
                       omitted entirely when unset. Text is escaped by Solid. */}
                   <Show when={s().description}>
                     <span class="repo-description muted text-sm">{s().description}</span>
+                  </Show>
+                  {/* Forgejo #240: pull-only mirror badge + next sync. The
+                      summary `mirror` view is the single source (same shape
+                      the settings Mirror tab polls); nothing here fetches. */}
+                  <Show when={s().mirror}>
+                    <span
+                      class="pill mirror-badge"
+                      title={`${s().mirror.upstream_url ?? ""} · ${formatNextSync(s().mirror)}`}
+                    >
+                      mirror · pull-only
+                    </span>
+                    <Show when={s().mirror.next_sync_at && !s().mirror.due}>
+                      <span class="muted text-xs">next sync {formatNextSync(s().mirror).replace(/^next sync /, "")}</span>
+                    </Show>
+                    <Show when={s().mirror.due}>
+                      <span class="muted text-xs">sync due</span>
+                    </Show>
                   </Show>
                 </div>
                 <div class="repo-meta mt-1 flex items-center gap-2 text-xs">

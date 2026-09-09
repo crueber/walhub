@@ -79,3 +79,20 @@ func MaintainerKey(host string) string { return "maintain/" + host + ".pb" }
 
 // PolicyKey returns the repo-relative policy document key.
 func PolicyKey(owner, name string) string { return fmt.Sprintf("repos/%s/%s/policy.json", owner, name) }
+
+// MirrorKeySuffix is the repo-relative mirror sidecar (Forgejo #240):
+// Create-once-then-CAS'd, in the frozen overwritable family
+// (14_extensibility.md §14.11 rule 2 — amended in the same change that
+// adopts it). It carries the pull-only flag, the upstream pointer, the
+// schedule preset, and the sync outcome; next_sync_at is DERIVED at read
+// time, never stored.
+const MirrorKeySuffix = "meta/mirror.json"
+
+// MirrorKey returns "repos/<owner>/<name>/meta/mirror.json".
+func MirrorKey(owner, name string) string { return RepoPrefix(owner, name) + MirrorKeySuffix }
+
+// MirrorLeaseName returns the bucket-lease name serializing scheduled
+// syncs of one mirror across instances ("mirror-<owner>-<name>"; the key
+// is leases/<name>.pb via LeaseKey). Owner/name never contain slashes
+// (ParseRepoId charset), so the name is one path segment.
+func MirrorLeaseName(owner, name string) string { return "mirror-" + owner + "-" + name }

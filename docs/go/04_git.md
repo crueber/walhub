@@ -685,3 +685,13 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   all call it now, so the on-disk infix can never reach the manifest again; single-strip (not
   strip-all) keeps doubled legacy names mapping to their stored legacy checksums instead of
   colliding with bare ones.
+- **Pull-only mirror refusal at the push funnel (Forgejo #240, R1 (c)).**
+  `pushPipeline` (the ONE function HTTP `receivePackLocal` and SSH both land
+  in) checks the injected mirror predicate first: mirrors get per-ref `ng`
+  lines with `this repository is a read-only mirror; pushes are rejected` and
+  never reach ingest/connectivity/publish — the `IsManagedRef` shape, one
+  funnel instead of three gates. The sync engine publishes via
+  `Publish`/`PublishRefs` directly and never enters the pipeline, so it cannot
+  refuse itself. Sync clones use the pinned `clone --mirror` argv (§12); the
+  only fetch variant is the same argv with a host-pinned credential helper
+  for token-bearing first/manual syncs (memory-only, never stored).

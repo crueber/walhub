@@ -5,10 +5,11 @@
 // inline (expected control flow ≠ reportError — the Ticket-1
 // tolerateMissing discipline extended).
 
-import { createSignal, Show, onCleanup } from "solid-js";
+import { createSignal, Show, For, onCleanup } from "solid-js";
 import { A, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { validateRepoName, isUiRouteCollision } from "../../sdk/src/create.js";
+import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
 import { invalidate } from "../lib/data.js";
 
 function winnerUrl(msg) {
@@ -23,6 +24,11 @@ export default function New() {
   const [getName, setName] = createSignal("");
   const [getFormat, setFormat] = createSignal("sha1");
   const [getVisibility, setVisibility] = createSignal("public");
+  // Forgejo #240: mirror-from-URL mode (same owner/name fields, plus the
+  // upstream source + schedule preset → POST /api/v1/repos/mirrors).
+  const [getMode, setMode] = createSignal("empty"); // empty | mirror
+  const [getSource, setSource] = createSignal("");
+  const [getSchedule, setSchedule] = createSignal(DEFAULT_MIRROR_PRESET);
   const [getErr, setErr] = createSignal("");
   const [getWinner, setWinner] = createSignal("");
   const [getBusy, setBusy] = createSignal(false);
@@ -44,6 +50,12 @@ export default function New() {
 
   const fieldError = () => validateRepoName(getOwner(), getName()).error ?? "";
 
+  // Mirror-mode validation rides the shared lib rule (server re-validates).
+  const mirrorError = () =>
+    getMode() === "mirror"
+      ? validateMirrorCreate({ sourceUrl: getSource(), owner: getOwner(), name: getName(), schedule: getSchedule() }).error ?? ""
+      : "";
+
   const submit = async (e) => {
     e.preventDefault();
     if (getBusy()) return;
@@ -53,6 +65,14 @@ export default function New() {
       setWinner("");
       return;
     }
+    if (getMode() === "mirror") {
+      const mv = validateMirrorCreate({ sourceUrl: getSource(), owner: getOwner(), name: getName(), schedule: getSchedule() });
+      if (mv.error) {
+        setErr(mv.error);
+        setWinner("");
+        return;
+      }
+    }
     setBusy(true);
     setErr("");
     setWinner("");
@@ -60,6 +80,23 @@ export default function New() {
     ctrl = new AbortController();
     const signal = ctrl.signal;
     try {
+      if (getMode() === "mirror") {
+        // Pull-only mirror: the first sync fires async server-side.
+        const res = await repos.mirrors.create(
+          {
+            source_url: getSource().trim(),
+            owner: v.owner,
+            name: v.name,
+            schedule: getSchedule(),
+          },
+          { signal },
+        );
+        const full = res?.target ?? `${v.owner}/${v.name}`;
+        invalidate("owners");
+        invalidate(`repos:${v.owner}`);
+        navigate(`/${full}`);
+        return;
+      }
       const res = await repos.repos.create(
         {
           owner: v.owner,
@@ -106,6 +143,16 @@ export default function New() {
         placeholder — nothing to approve, never a conflict.
       </p>
       <form class="card grid gap-3 p-4" onSubmit={submit} aria-label="New repository">
+        <div class="flex flex-wrap gap-4" role="radiogroup" aria-label="Repository kind">
+          <label class="flex items-center gap-1 text-sm">
+            <input type="radio" name="kind" checked={getMode() === "empty"} onChange={() => setMode("empty")} />
+            empty repository
+          </label>
+          <label class="flex items-center gap-1 text-sm">
+            <input type="radio" name="kind" checked={getMode() === "mirror"} onChange={() => setMode("mirror")} />
+            mirror from URL <span class="muted">(pull-only, scheduled syncs)</span>
+          </label>
+        </div>
         <div class="grid grid-cols-2 gap-3">
           <label class="grid gap-1">
             <span class="text-sm font-medium">Owner</span>
@@ -132,30 +179,59 @@ export default function New() {
             />
           </label>
         </div>
+        <Show when={getMode() === "mirror"}>
+          <label class="grid gap-1">
+            <span class="text-sm font-medium">Source URL</span>
+            <input
+              class="input font-mono"
+              value={getSource()}
+              onInput={(e) => setSource(e.currentTarget.value)}
+              placeholder="https://github.com/acme/upstream.git"
+              autocomplete="off"
+              spellcheck={false}
+              aria-label="Source URL"
+            />
+          </label>
+          <label class="grid gap-1">
+            <span class="text-sm font-medium">Sync schedule</span>
+            <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Sync schedule">
+              <For each={MIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
+            </select>
+          </label>
+          <p class="muted text-xs">
+            Mirrors are pull-only: pushes are rejected for everyone, and the upstream
+            syncs on the schedule. The first sync starts immediately.
+          </p>
+        </Show>
         <Show when={fieldError() && getName()}>
           <p class="text-xs text-red-700 dark:text-red-400">{fieldError()}</p>
+        </Show>
+        <Show when={getMode() === "mirror" && mirrorError()}>
+          <p class="text-xs text-red-700 dark:text-red-400">{mirrorError()}</p>
         </Show>
         <Show when={!fieldError() && isUiRouteCollision(getOwner()) && getOwner()}>
           <p class="text-xs text-amber-700 dark:text-amber-400">
             warning: owner name collides with a UI route — the /:owner page will misroute (git/API unaffected)
           </p>
         </Show>
-        <div class="flex flex-wrap items-center gap-4">
-          <label class="flex items-center gap-1 text-sm">
-            <span>format</span>
-            <select class="input w-auto" value={getFormat()} onChange={(e) => setFormat(e.currentTarget.value)} aria-label="Object format">
-              <option value="sha1">sha1</option>
-              <option value="sha256">sha256</option>
-            </select>
-          </label>
-          <label class="flex items-center gap-1 text-sm">
-            <span>visibility</span>
-            <select class="input w-auto" value={getVisibility()} onChange={(e) => setVisibility(e.currentTarget.value)} aria-label="Visibility">
-              <option value="public">public</option>
-              <option value="private">private</option>
-            </select>
-          </label>
-        </div>
+        <Show when={getMode() === "empty"}>
+          <div class="flex flex-wrap items-center gap-4">
+            <label class="flex items-center gap-1 text-sm">
+              <span>format</span>
+              <select class="input w-auto" value={getFormat()} onChange={(e) => setFormat(e.currentTarget.value)} aria-label="Object format">
+                <option value="sha1">sha1</option>
+                <option value="sha256">sha256</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-1 text-sm">
+              <span>visibility</span>
+              <select class="input w-auto" value={getVisibility()} onChange={(e) => setVisibility(e.currentTarget.value)} aria-label="Visibility">
+                <option value="public">public</option>
+                <option value="private">private</option>
+              </select>
+            </label>
+          </div>
+        </Show>
         <Show when={anonymous() || noWrite()}>
           <p class="text-xs text-amber-700 dark:text-amber-400">
             You are not signed in as a writer — the server will refuse the create (401/403). Sign in first.
@@ -175,9 +251,9 @@ export default function New() {
           <button
             type="submit"
             class="btn primary px-3 py-1"
-            disabled={getBusy() || !!fieldError() || !getOwner() || !getName()}
+            disabled={getBusy() || !!fieldError() || !!mirrorError() || !getOwner() || !getName() || (getMode() === "mirror" && !getSource().trim())}
           >
-            {getBusy() ? "creating…" : "create repository"}
+            {getBusy() ? "creating…" : getMode() === "mirror" ? "create mirror" : "create repository"}
           </button>
         </div>
       </form>

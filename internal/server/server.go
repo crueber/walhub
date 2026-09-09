@@ -10,6 +10,7 @@
 package server
 
 import (
+	"context"
 	"os"
 
 	"log/slog"
@@ -50,6 +51,14 @@ type Server struct {
 
 	// readGate is the identity require_read hook (01 §4.1); nil → legacy.
 	readGate ReadGate
+
+	// mirrorGuard is the pull-only mirror predicate (Forgejo #240):
+	// non-nil + true → every client push is refused (admins included)
+	// at discovery (403), at the push funnel (per-ref ng), and at the
+	// SSH advertisement. Nil → legacy behavior (no refusals). Wired by
+	// composition over the same store; server never imports the mirror
+	// package (law 8).
+	mirrorGuard func(ctx context.Context, id git.RepoId) bool
 
 	// placeholderHints is the same-process #210 adoption hint set: pushes
 	// consume a hint left by the create path and clear the marker
@@ -99,6 +108,9 @@ type Options struct {
 	// ReadGate is the identity require_read hook (01 §4.1); nil → legacy
 	// flag-only read gating on the git/LFS read paths.
 	ReadGate ReadGate
+	// MirrorGuard is the pull-only mirror predicate (Forgejo #240);
+	// nil → no mirror refusals (legacy behavior).
+	MirrorGuard func(ctx context.Context, id git.RepoId) bool
 	// PlaceholderHints is the shared #210 adoption hint set (api.Env and
 	// the server point at one instance); nil → no push-path marker ops.
 	PlaceholderHints *api.PlaceholderHints
@@ -156,6 +168,7 @@ func New(o Options) *Server {
 	registerInventory(s.metrics)
 	s.authSvc = NewAuthService(&o.Config.Server.Auth, o.Now)
 	s.readGate = o.ReadGate
+	s.mirrorGuard = o.MirrorGuard
 	s.placeholderHints = o.PlaceholderHints
 	return s
 }

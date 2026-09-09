@@ -31,6 +31,10 @@ func TestKeyLayout(t *testing.T) {
 		{SharedRenderCacheKey("cafe"), "cache/api/v1/cafe.json"},
 		{MaintainerKey("github.com"), "maintain/github.com.pb"},
 		{PolicyKey("o", "r"), "repos/o/r/policy.json"},
+		{MirrorKey("o", "r"), "repos/o/r/meta/mirror.json"},
+		{MirrorKeySuffix, "meta/mirror.json"},
+		{MirrorLeaseName("o", "r"), "mirror-o-r"},
+		{LeaseKey(MirrorLeaseName("o", "r")), "leases/mirror-o-r.pb"},
 		{EventsCursorKey, "events/cursor.json"},
 	}
 	for _, c := range cases {

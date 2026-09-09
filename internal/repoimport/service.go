@@ -208,6 +208,17 @@ func (s *Service) Begin(ctx context.Context, p auth.Principal, params Params, to
 	target := params.target()
 	want := params.scrubbedMap()
 
+	// Mirror exclusion (Forgejo #240 R1 (e)): an import onto a live
+	// mirror.json target is a 409 — the sync writer owns the refs.
+	// (repoimport must not import the mirror package — the claim
+	// protocol would cycle — so the sidecar is probed by key, the
+	// same probe the sync's own claim check uses.)
+	if mirrored, merr := s.mirroredTarget(ctx, params.Owner, params.Name); merr != nil {
+		return nil, nil, merr
+	} else if mirrored {
+		return nil, nil, &StatusError{Status: 409, Message: fmt.Sprintf("target %s is a read-only mirror (scheduled sync owns its refs); delete the mirror to import here, or pick another name", target)}
+	}
+
 	s.mu.Lock()
 	if res, rec, err := s.joinOrConflictLocked(target, want); err != nil || res != nil {
 		s.mu.Unlock()
@@ -290,6 +301,24 @@ func (s *Service) probe(ctx context.Context, params Params) (bool, *ImportDoc, e
 		return true, doc, nil
 	}
 	return true, nil, nil
+}
+
+// mirroredTarget probes the mirror sidecar by key (Forgejo #240 R1
+// (e)): true iff a live meta/mirror.json exists. A corrupt-but-
+// present sidecar counts as mirrored (fail closed — the server funnel
+// refuses pushes on the same rule, so Begin must agree with it).
+func (s *Service) mirroredTarget(ctx context.Context, owner, name string) (bool, error) {
+	if s.store == nil {
+		return false, &StatusError{Status: 503, Message: "import store not configured"}
+	}
+	meta, err := s.store.Head(ctx, store.MirrorKey(owner, name))
+	if err != nil {
+		if store.IsNotFound(err) {
+			return false, nil
+		}
+		return false, &StatusError{Status: 500, Message: fmt.Sprintf("probe mirror: %v", scrubError(err.Error()))}
+	}
+	return meta != nil, nil
 }
 
 // drive runs the import body on the core table (B6: opsTasks-style —
