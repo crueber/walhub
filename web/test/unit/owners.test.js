@@ -86,6 +86,20 @@ test("orderByActivity treats non-array input as empty, missing times as names", 
   );
 });
 
+test("orderByActivity breaks time ties on (owner, name) like the server", () => {
+  const t = "2026-09-10T12:00:00Z";
+  const rows = [
+    { owner: "b", name: "a", last_commit_time: t },
+    { owner: "a", name: "b", last_commit_time: t },
+    { owner: "a", name: "a", last_commit_time: t },
+  ];
+  const out = orderByActivity(rows);
+  assert.deepEqual(
+    out.map((r) => `${r.owner}/${r.name}`),
+    ["a/a", "a/b", "b/a"],
+  );
+});
+
 test("orderByActivity composes with pageSlice (slice-after-server-sort)", () => {
   const rows = Array.from({ length: 12 }, (_, i) => ({
     name: `r${i}`,

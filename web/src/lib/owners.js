@@ -32,10 +32,11 @@ export function newestFirst(names) {
 /**
  * orderByActivity(rows) → a sorted copy, newest commit first (Forgejo #247).
  *
- * Total order over detailed listing rows (`{name, last_commit_time?...}`):
+ * Total order over detailed listing rows (`{owner?, name, last_commit_time?...}`):
  * known `last_commit_time` (RFC 3339 — lexicographic order IS chronological
  * order) descending, unknown (null/missing) always last, ties broken
- * deterministically on `(name, owner)`. The server already sorts
+ * deterministically on `(owner, name)` — the same key order as the server's
+ * FilterSort, so mixed-owner lists agree with the catalog order. The server
  * (`sort=activity&order=desc`); this stabilizes mixed shapes (rows without
  * times fall back to name order instead of server order) so every caller
  * renders deterministically. Non-array input behaves as an empty list.
@@ -54,12 +55,12 @@ export function orderByActivity(rows) {
       if (tb === null) return -1;
       return ta < tb ? 1 : -1; // newest first
     }
-    const na = nameOf(a);
-    const nb = nameOf(b);
-    if (na !== nb) return na < nb ? -1 : 1;
     const oa = ownerOf(a);
     const ob = ownerOf(b);
     if (oa !== ob) return oa < ob ? -1 : 1;
+    const na = nameOf(a);
+    const nb = nameOf(b);
+    if (na !== nb) return na < nb ? -1 : 1;
     return 0;
   });
   return list;
