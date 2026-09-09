@@ -17,8 +17,13 @@ export function chronological(events) {
   return [...(events ?? [])]
     .map((ev, i) => [ev, i])
     .sort(([a, ai], [b, bi]) => {
-      const d = (a?.seq ?? Number.NEGATIVE_INFINITY) - (b?.seq ?? Number.NEGATIVE_INFINITY);
-      return d !== 0 ? d : ai - bi;
+      const sa = a?.seq ?? Number.NEGATIVE_INFINITY;
+      const sb = b?.seq ?? Number.NEGATIVE_INFINITY;
+      // NaN-safe: missing-vs-missing (both -Inf) falls to the index
+      // tiebreak instead of returning NaN (which sort coerces to 0 —
+      // same result, but implicit). Numeric subtraction, never
+      // lexicographic; kind-agnostic (system rows are seq-ordered).
+      return sa === sb ? ai - bi : sa - sb;
     })
     .map(([ev]) => ev);
 }
