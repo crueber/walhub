@@ -34,7 +34,7 @@ export function attachIssues(repo) {
     /** Comment: `POST …/issues/{num}/comments` → `201 {event}`. */
     comment: (num, body, opts) =>
       client._call(p(`/issues/${num}/comments`), { method: "POST", ...json({ body }), ...opts }),
-    /** Seq-window: `GET …/issues/{num}/events?after_seq=&n=` (newest-last). */
+    /** Seq-window: `GET …/issues/{num}/events?after_seq=&n=` (newest-first arrays; after_seq pages toward older). */
     events: (num, query = {}, opts) =>
       client._call(p(`/issues/${num}/events${qs(query)}`), { method: "GET", ...opts }),
     reactions: {

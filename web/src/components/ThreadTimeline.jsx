@@ -12,6 +12,18 @@
 // job (they pass seq-keyed lists); rows carry DOM ids so deep links work
 // with keyboard nav.
 //
+// Chronological render (issue #225): the wire serves event windows
+// newest-first (02 §7 Decisions — `after_seq` pages toward older), and
+// EVERY caller passes that wire order through; the sort to oldest →
+// newest (stable, by seq — system rows are seq-ordered already, so they
+// stay in place) happens HERE, once, so issue threads and PR
+// conversations can never disagree. Pagination composes above (older
+// windows prepend), SSE refetches append below (newest lands last).
+// Scroll policy: this component NEVER moves the viewport — no
+// autoscroll on append (a reading user is never yanked; newcomers
+// appear at the bottom), and prepend-anchoring is the caller's job
+// (Issue.jsx `loadOlder` pins the viewport with `anchorScrollTop`).
+//
 // props: { events, textFor(ev) → string|null (null = comment body),
 //   actionsFor?(ev) → JSX (per-comment extras, e.g. reaction buttons),
 //   summaryFor?(ev) → JSX|null (per-comment summary row under the body,
@@ -24,13 +36,17 @@
 
 import { For, Show } from "solid-js";
 import { renderBody } from "../lib/render-md.js";
+import { chronological } from "../lib/thread-order.js";
 import DateTime from "./DateTime.jsx";
 
 export default function ThreadTimeline(props) {
   const textFor = (ev) => props.textFor(ev);
+  // The ONE chronological sort (#225): callers pass wire order
+  // (newest-first); the rendered `<ol>` is oldest → newest.
+  const ordered = () => chronological(props.events ?? []);
   return (
     <ol class="timeline" aria-live="polite" aria-label="Discussion timeline">
-      <For each={props.events ?? []} fallback={<li class="py-3 text-sm text-zinc-500 dark:text-zinc-400">No events yet.</li>}>
+      <For each={ordered()} fallback={<li class="py-3 text-sm text-zinc-500 dark:text-zinc-400">No events yet.</li>}>
         {(ev) => {
           const text = textFor(ev);
           return (

@@ -56,7 +56,7 @@ the repo header (07, optimistic update + rollback), "New issue"/"New pull reques
 
 | Component | Purpose | Contract |
 |---|---|---|
-| `ThreadTimeline` | Renders a P3 event log (issue thread, PR conversation, review thread). Comment kinds (opened/commented, i.e. `textFor` → null) render as divider-separated entries — author/date header, markdown body, reaction rows — with NO per-comment boxes; every other kind renders as a single-line centered muted system row ("{actor} {text}") | Input: header + seq window of events (`{after_seq, n}`); compensating events render as normal rows (never rewrite history); comment bodies via markdown-lite + sanitizer; `aria-live="polite"` region so SSE-appended rows announce; dedup key `(num, event_seq)`; rows carry `event-{seq}` DOM ids |
+| `ThreadTimeline` | Renders a P3 event log (issue thread, PR conversation, review thread) oldest → newest (chronological, issue #225 — callers pass the newest-first wire order through; the stable by-seq sort happens here, once). Comment kinds (opened/commented, i.e. `textFor` → null) render as divider-separated entries — author/date header, markdown body, reaction rows — with NO per-comment boxes; every other kind renders as a single-line centered muted system row ("{actor} {text}") | Input: header + seq window of events (`{after_seq, n}`); compensating events render as normal rows (never rewrite history); comment bodies via markdown-lite + sanitizer; `aria-live="polite"` region so SSE-appended rows announce; dedup key `(num, event_seq)`; rows carry `event-{seq}` DOM ids |
 | `CommentComposer` | New-comment editor | markdown-lite preview (`lib/markdown.js` + `lib/sanitize.js`); **mentions autocomplete**: `@` opens a popup fed by `useData("assignables:{o}/{r}")` (repo collaborators ∪ org members, endpoint per 01); submits via the feature's comment endpoint → `{event_seq}`; optional close controls (`closeLabel`+`onClose`, `onCommentAndClose`+`commentAndCloseLabel`) share one right-aligned action row — the issue thread uses them for Close/Reopen + Comment-and-Close, the PR page omits them. On an open issue the close controls are reason choosers (`closeChooser`): "Close as completed" / "Close as not planned" menus whose choice is passed as `onClose(reason)` / `onCommentAndClose(body, reason)`; reopen stays a plain button |
 | `LabelPicker` | Apply/remove labels on an issue/PR | Source: `labels:{o}/{r}` cache; each toggle = one PATCH (one event per 02); triage+ only |
 | `AssigneePicker` | Same, for assignees | Source: `assignables:{o}/{r}`; triage+ only |
@@ -370,6 +370,14 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   instead of building a reason-less body), and the closed header reads "Closed as …" from the recorded
   `state_reason` ("Closed" alone when none is recorded). Applies to the shared ThreadTimeline, so PR
   conversations get the same treatment.
+- **Chronological ThreadTimeline (2026-09-09, issue #225).** The component renders oldest → newest
+  (stable by-seq sort inside, over the newest-first wire order — the wire is unchanged, 02 §7
+  Decisions). Both surfaces inherit it with no per-page code: the issue thread passes its
+  newest-first assembly (view page + older windows), the PR conversation passes its events as-is.
+  "Older events" sits atop the issue thread (older windows prepend above); SSE refetches append
+  below (newest lands last). Scroll policy, documented in the component header: never autoscroll
+  (a reading user is never yanked), prepends pin the viewport (`anchorScrollTop` in
+  `web/src/lib/thread-order.js`, headless-tested in `web/test/unit/thread-order.test.js`).
 - **English-only v1, no i18n scaffolding** — additive later, zero cost now.
 - **Releases/stars SDK per 07's submodule plan** (`releases.js`, `social.js`) — absorbed verbatim to avoid conflicting paths.
 - **Settings Danger Zone with typed-confirm (2026-09-04, issue #39).** `DangerConfirm` is the single confirm pattern for all future entries; Delete Repository reuses the existing `repo.delete()` (`DELETE …/api` → 204) and navigates to `/` on success because the repo page is gone. No new endpoint, no new SDK method, no new deps.
