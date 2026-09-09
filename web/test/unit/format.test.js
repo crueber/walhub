@@ -1,10 +1,11 @@
 // web/test/unit/format.test.js — fmtSize helper (issues #27, #29): b/k/MB/GB
 // boundaries, 0/undefined handling; fmtMode helper (issues #29, #211): git
-// modes as ls-style rows (leading type char + rwx triplets); fmtSizeParts +
-// entryKind (issue #211: split size columns, [file type] column).
+// modes as ls-style rows (leading type char + rwx triplets); fmtSizeParts
+// (issue #211 split size columns). The #223 type-column drop removed the kind
+// label (mode lead char + icons already carry it).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fmtSize, fmtSizeParts, fmtMode, entryKind } from "../../src/lib/format.js";
+import { fmtSize, fmtSizeParts, fmtMode } from "../../src/lib/format.js";
 
 test("bytes under 1 KiB render with no space, lowercase b", () => {
   assert.equal(fmtSize(0), "0b");
@@ -96,15 +97,3 @@ test("fmtMode blanks stay blank (no bare type char)", () => {
   assert.equal(fmtMode("not-a-mode", "tree"), "");
 });
 
-test("entryKind labels the #211 type column (mode decides symlink/submodule)", () => {
-  assert.equal(entryKind("tree", "040000"), "dir");
-  assert.equal(entryKind("tree", undefined), "dir");
-  assert.equal(entryKind("blob", "100644"), "file");
-  assert.equal(entryKind("blob", "100755"), "file");
-  assert.equal(entryKind("blob", "120000"), "symlink");
-  assert.equal(entryKind("commit", "160000"), "submodule");
-  assert.equal(entryKind("commit", undefined), "submodule");
-  assert.equal(entryKind(undefined, "160000"), "submodule");
-  assert.equal(entryKind("blob", undefined), "file");
-  assert.equal(entryKind(undefined, undefined), "file");
-});

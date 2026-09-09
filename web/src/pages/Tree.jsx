@@ -6,7 +6,7 @@ import { A } from "@solidjs/router";
 import { useResolved, useData } from "../lib/data.js";
 import { renderBody } from "../lib/render-md.js";
 import { docCandidates, defaultDocFile, docFetchArgs, docSlug, docFromHash } from "../lib/doctabs.js";
-import { fmtSize, fmtMode, fmtSizeParts, entryKind } from "../lib/format.js";
+import { fmtSize, fmtMode, fmtSizeParts } from "../lib/format.js";
 import { latestActivity } from "../lib/activity.js";
 import DateTime from "../components/DateTime.jsx";
 import { useRepo, shortRef } from "./Repo.jsx";
@@ -229,10 +229,12 @@ export default function Tree() {
             <Show when={!t().empty && !t().degraded}>
               <>
                 <Breadcrumb full={ctx.full} path={t().path ?? ""} rev={t().ref} />
+                {/* Issue #223: no header row — the columns (mode, size,
+                    icon + name, last-modified) are self-evident. No type
+                    column either (mode lead char + icons carry it). The
+                    right-side columns hug their content (see .tree-table in
+                    src/ui.css); only the name column takes spare width. */}
                 <table class="data-table tree-table">
-                  <thead>
-                    <tr><th class="w-28">mode</th><th class="w-16 text-right" colspan="2">size</th><th class="w-20">type</th><th class="w-8" /><th>name</th><th class="w-48 text-right">last modified</th></tr>
-                  </thead>
                   <tbody>
                     <For each={t().entries ?? []}>
                       {(e) => {
@@ -246,7 +248,6 @@ export default function Tree() {
                           <td class="entry-mode muted font-mono text-xs" title={e.mode ?? undefined}>{fmtMode(e.mode, e.type)}</td>
                           <td class="entry-size-num muted tabular text-right text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{parts() ? parts().num : e.type === "blob" ? "-" : ""}</td>
                           <td class="entry-size-unit muted text-xs">{parts()?.unit ?? ""}</td>
-                          <td class="entry-type muted text-xs">{entryKind(e.type, e.mode)}</td>
                           <td class="entry-icon">{e.type === "tree" ? "📁" : e.type === "commit" ? "↗" : "📄"}</td>
                           <td class="entry-name">
                             <Show

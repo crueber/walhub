@@ -89,6 +89,18 @@
   .overflow-x-auto .data-table th, .overflow-x-auto .data-table td { @apply whitespace-nowrap; }
   .data-table th { @apply border-b border-zinc-200 px-3 py-2 text-left font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400; }
   .data-table td { @apply border-b border-zinc-100 px-3 py-1.5 dark:border-zinc-800/60; }
+  /* File tree (issue #223): no header row, no type column — the mode lead
+     char + icons carry the kind. Every column but the name hugs its content
+     (w-px + nowrap collapses each column to its widest cell); the name
+     column absorbs the spare width. The size number/unit pair reads as one
+     column, so their shared edge keeps only a sliver of padding. */
+  .tree-table .entry-icon { @apply w-6 whitespace-nowrap; }
+  .tree-table .entry-mode,
+  .tree-table .entry-size-num,
+  .tree-table .entry-size-unit,
+  .tree-table .entry-date { @apply w-px whitespace-nowrap; }
+  .tree-table .entry-size-num { @apply pr-0.5; }
+  .tree-table .entry-size-unit { @apply pl-0; }
 
   /* Text helpers */
   .muted { @apply text-zinc-500 dark:text-zinc-400; }
