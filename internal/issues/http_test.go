@@ -218,9 +218,9 @@ func TestGetIssueHTTP(t *testing.T) {
 	if len(view.Events) != 2 || view.EventsMore {
 		t.Fatalf("events = %d more=%v", len(view.Events), view.EventsMore)
 	}
-	// Newest-last order.
+	// Newest-first wire order (chronological render is client-side, #225).
 	if view.Events[0].Seq < view.Events[1].Seq {
-		t.Fatalf("not newest-last: %+v", view.Events)
+		t.Fatalf("not newest-first: %+v", view.Events)
 	}
 	// If-None-Match → 304.
 	r := httptest.NewRequest("GET", "/acme/repo/api/issues/1", nil)

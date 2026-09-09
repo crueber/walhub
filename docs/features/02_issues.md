@@ -302,7 +302,7 @@ Pages (SolidJS SPA per `12_web_ui.md`, D-WEB-6; `.jsx` route components, `useDat
 |---|---|---|
 | `/:o/:r/issues` | list: filter bar (state/labels/assignee/milestone/since), paged cards from the index | SSE `issue` upserts/patches cards in place |
 | `/:o/:r/issues/new` | create form (title, markdown-lite body, preview toggle) | — |
-| `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone with a linked title to the filtered issue list; triage sees the `+` dropdown when unset and a direct `−` clear button when set — issue #148) | `issue_event` appends timeline frames; `issue` updates the header |
+| `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand; renders oldest → newest, #225), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone with a linked title to the filtered issue list; triage sees the `+` dropdown when unset and a direct `−` clear button when set — issue #148) | `issue_event` appends timeline frames; `issue` updates the header |
 | `/:o/:r/labels` | label CRUD (triage-gated UI) | on save, refetch |
 | `/:o/:r/milestones` | milestone CRUD + progress bars + per-milestone linked issues (each milestone lists/links its issues via the server-side `milestone=` list filter; the title links to the filtered issue list) | on save, refetch |
 
@@ -502,6 +502,17 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   0; `after_seq=` pages strictly below toward older). The §2/P3 phrase
   "newest-last" names the pagination direction (older on demand), not the
   array order — code, tests, and the thread page all agree on newest-first.
+- **Threads render chronologically, oldest → newest (issue #225,
+  2026-09-09).** The wire is UNCHANGED (newest-first windows above); the
+  shared ThreadTimeline sorts stable-by-seq at render, so the opened event
+  is first and the newest comment lands last by the composer, with system
+  rows staying seq-ordered in place. Pagination composes above ("Older
+  events" sits atop the thread; the cursor reads the unfiltered assembly
+  tail, so no overlap and no visible duplication), SSE refetches append
+  below, and the UI never autoscrolls (a reading user is never yanked;
+  older-window prepends pin the viewport via `anchorScrollTop`). PR
+  conversations inherit the same convention through the shared component
+  (03 Decisions).
 - **Duplicate-reaction dedup is best-effort under true concurrency.** The
   (actor, target, content) check reads the log before the reserving CAS, so
   sequential double-submits (the real double-click case) are no-ops while

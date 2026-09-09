@@ -321,7 +321,9 @@ every call goes through the SDK).
 - **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §9 page sketches read in the shipped idiom: `.jsx` route components, `useData` two-step on Solid primitives, SSE via the SDK readers. Routes, notes, and wire shapes are unchanged.
 
 - PR threads reuse the issue thread pattern and numbering wholesale (P2/P3) — one conversation
-  implementation, `kind` is the only difference.
+  implementation, `kind` is the only difference. The conversation renders oldest → newest through
+  the shared ThreadTimeline (issue #225; 02/08 Decisions own the convention) — no PR-side order
+  code exists to drift.
 - PR list state lives in the shared `issues/index.json` (kind-filtered per 02's contract) — one index,
   one compaction story; `pulls/` holds only PR-sidecar state.
 - `refs/pull/<num>/head` is published server-side ONLY for already-reachable heads; the PR is a

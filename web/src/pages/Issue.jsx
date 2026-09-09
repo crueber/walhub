@@ -1,5 +1,6 @@
 // web/src/pages/Issue.jsx — route "/:owner/:name/issues/:num" (02 §11):
-// the thread page (header with the state badge, timeline with seq-window older-on-demand,
+// the thread page (header with the state badge, chronological timeline
+// oldest → newest with seq-window older-on-demand above (#225),
 // comment composer with close / comment-and-close controls, one sidebar metadata
 // card with labels/assignees/milestone sections). `issue_event` frames refresh the header, `issue` frames the
 // header too — both ride the ONE repo collaboration stream (08 §4), one
@@ -21,6 +22,7 @@ import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { reactionEmoji, summaryEntries, addableReactions, adjustSummary } from "../lib/reactions.js";
+import { appendOlderWindow, olderCursor, anchorScrollTop } from "../lib/thread-order.js";
 import ReactionMenu from "../components/ReactionMenu.jsx";
 import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-events.js";
 
@@ -55,7 +57,8 @@ export default function Issue() {
   const allMilestones = () => getMilestoneSet()?.milestones ?? [];
   const [getOlder, setOlder] = createSignal(false);
   // Older event windows accumulate here (the view holds the newest page;
-  // both are newest-first, so concatenation stays ordered).
+  // both are newest-first, so concatenation stays ordered — ThreadTimeline
+  // renders the assembly oldest → newest, issue #225).
   const [getExtra, setExtra] = createSignal([]);
   const [getExtraMore, setExtraMore] = createSignal(undefined);
   // Sidebar mutation guards are per-issue state (see the navigation reset
@@ -95,12 +98,16 @@ export default function Issue() {
 
   const thread = () => getView()?.thread;
   const summary = () => thread()?.reaction_summary ?? {};
-  // Reaction activity folds into the per-comment summary chips
-  // (GitHub-style, #42b): reaction_changed events never render as
-  // timeline rows — the summary counts are the whole surface. The cursor
-  // stays valid: after_seq is a seq cursor, not a count, so filtering
-  // interleaved rows cannot skip older events.
-  const events = () => [...(getView()?.events ?? []), ...getExtra()].filter((ev) => ev.type !== "reaction_changed");
+  // Wire-order assembly (newest-first at every layer: the view holds
+  // the newest page, each older window appends after it in seq space).
+  // The cursor reads the UNFILTERED tail (02 §7: after_seq is a seq
+  // cursor, not a count — no overlap, no visible duplication), while
+  // the render filters + sorts: reaction_changed folds into the
+  // per-comment summary chips (GitHub-style, #42b — the summary counts
+  // are the whole surface) and ThreadTimeline renders oldest → newest
+  // (issue #225).
+  const newestFirst = () => appendOlderWindow(getView()?.events, getExtra());
+  const events = () => newestFirst().filter((ev) => ev.type !== "reaction_changed");
   const more = () => (getExtraMore() === undefined ? getView()?.events_more : getExtraMore());
 
   // Comment/close tails are pinned to their issue (#146): same-route
@@ -300,19 +307,31 @@ export default function Issue() {
     setMilestoneBusy(false);
   };
 
+  // Older windows prepend ABOVE the chronological thread (#225): the
+  // assembly stays newest-first (cursor = unfiltered tail, so an empty
+  // or single-opened thread never refetches the newest page), the
+  // render sorts. The viewport is pinned across the prepend
+  // (anchorScrollTop) so the row under the reader does not jump; live
+  // SSE refetches never move the viewport at all (ThreadTimeline's
+  // scroll policy: no autoscroll, newcomers land at the bottom).
   const loadOlder = async () => {
-    const all = events();
-    if (!all.length || getOlder()) return;
+    const oldest = olderCursor(newestFirst());
+    if (oldest <= 0 || getOlder()) return;
     setOlder(true);
+    const root = typeof document === "undefined" ? null : document.scrollingElement;
+    const top = root ? root.scrollTop : 0;
+    const height = root ? root.scrollHeight : 0;
     try {
-      const oldest = all[all.length - 1].seq;
       const page = await ctx.repoClient.issues.events(num(), { after_seq: oldest });
-      setExtra([...getExtra(), ...(page.events ?? [])]);
+      setExtra(appendOlderWindow(getExtra(), page.events));
       setExtraMore(page.more);
     } catch (err) {
       reportError(err, "issue-events");
     } finally {
       setOlder(false);
+      if (root && root.scrollHeight !== height) {
+        root.scrollTop = anchorScrollTop(top, height, root.scrollHeight);
+      }
     }
   };
 
@@ -347,6 +366,14 @@ export default function Issue() {
                   {t().author} opened <DateTime value={t().created_at} /> · {t().comment_count} comments
                 </p>
               </header>
+              {/* Older windows load ABOVE the chronological thread (#225):
+                  the button sits at the top; newest lands at the bottom
+                  by the composer. */}
+              <Show when={more()}>
+                <button type="button" class="btn mb-2" disabled={getOlder()} onClick={loadOlder}>
+                  {getOlder() ? "Loading…" : "Older events"}
+                </button>
+              </Show>
               <ThreadTimeline
                 events={events()}
                 textFor={(ev) => eventText(ev, allMilestones())}
@@ -388,11 +415,6 @@ export default function Issue() {
                   );
                 }}
               />
-              <Show when={more()}>
-                <button type="button" class="btn mt-2" disabled={getOlder()} onClick={loadOlder}>
-                  {getOlder() ? "Loading…" : "Older events"}
-                </button>
-              </Show>
               <Show when={canComment()}>
                 <CommentComposer
                   onSubmit={comment}
