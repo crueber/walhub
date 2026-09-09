@@ -58,8 +58,8 @@ export default function Issues() {
 
   return (
     <div class="issues-page">
-      <div class="mb-3 flex flex-wrap items-center gap-2">
-        <h2 class="text-lg font-semibold">Issues</h2>
+      <div class="mb-2 flex flex-wrap items-center gap-2">
+        <h2 class="text-xl font-semibold tracking-tight">Issues</h2>
         <div class="ml-auto flex gap-2">
           <A class="btn" href={`/${ctx.full}/labels`}>
             Labels
@@ -73,45 +73,59 @@ export default function Issues() {
         </div>
       </div>
 
+      {/* Full-width filter grid (#232): labelled fields share the row via
+          flexible columns (2-up on phones, 4+action on wide screens) so the
+          controls fill the card instead of drifting in whitespace. Same
+          params, same endpoints — layout only. */}
       <form
-        class="card mb-3 flex flex-wrap gap-2 p-3"
+        class="card mb-3 grid grid-cols-2 gap-x-3 gap-y-2 p-3 sm:grid-cols-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
         onSubmit={(e) => e.preventDefault()}
         aria-label="issue filters"
       >
-        <select
-          class="input w-auto"
-          value={search.state || ""}
-          onChange={(e) => setFilter("state", e.target.value)}
-          aria-label="state"
-        >
-          <option value="">open + closed</option>
-          <option value="open">open</option>
-          <option value="closed">closed</option>
-        </select>
-        <input
-          class="input w-36"
-          placeholder="labels (a,b)"
-          value={search.labels || ""}
-          onChange={(e) => setFilter("labels", e.target.value)}
-          aria-label="labels"
-        />
-        <input
-          class="input w-44"
-          placeholder="assignee or *none"
-          value={search.assignee || ""}
-          onChange={(e) => setFilter("assignee", e.target.value)}
-          aria-label="assignee"
-        />
-        <input
-          class="input w-32"
-          placeholder="milestone or none"
-          value={search.milestone || ""}
-          onChange={(e) => setFilter("milestone", e.target.value)}
-          aria-label="milestone"
-        />
-        <button type="button" class="btn" onClick={reload}>
-          Refresh
-        </button>
+        <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          State
+          <select
+            class="input"
+            value={search.state || ""}
+            onChange={(e) => setFilter("state", e.target.value)}
+          >
+            <option value="">open + closed</option>
+            <option value="open">open</option>
+            <option value="closed">closed</option>
+          </select>
+        </label>
+        <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          Labels
+          <input
+            class="input"
+            placeholder="labels (a,b)"
+            value={search.labels || ""}
+            onChange={(e) => setFilter("labels", e.target.value)}
+          />
+        </label>
+        <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          Assignee
+          <input
+            class="input"
+            placeholder="assignee or *none"
+            value={search.assignee || ""}
+            onChange={(e) => setFilter("assignee", e.target.value)}
+          />
+        </label>
+        <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          Milestone
+          <input
+            class="input"
+            placeholder="milestone or none"
+            value={search.milestone || ""}
+            onChange={(e) => setFilter("milestone", e.target.value)}
+          />
+        </label>
+        <div class="col-span-2 flex items-end sm:col-span-4 lg:col-span-1">
+          <button type="button" class="btn w-full lg:w-auto" onClick={reload}>
+            Refresh
+          </button>
+        </div>
       </form>
 
       <Show when={getPage()} fallback={<p class="muted">loading…</p>}>
