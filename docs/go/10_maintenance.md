@@ -83,6 +83,15 @@ Each pass, per assigned repo, in registration order:
 5. Repeat 2–4 until `Select()` returns idle, **with one re-plan exception**: after a bundle unit that built nothing (no slot settled, retention no-op), re-plan once so a pending BaseRebuild or compaction triggered by the same pass is not starved by bundle bookkeeping. Cap: at most 48 skip-outcomes through stale slots per repo per pass (guard against pathological bundle planning); hitting it ends the repo's turn.
 6. Record `walgit_maintain_pass_seconds{host}` and `walgit_maintain_units_total{host,kind,outcome}` (outcome ∈ `ok|error|timeout|wrong-host|held|idle`), `walgit_maintain_unit_seconds{kind}`.
 
+After the per-repo loop, the pass runs the size-catalog fold (Forgejo #248 —
+NOT a §4 unit, never selected, never leased): `sizecatalog.Sweep` over the
+engine's repo list (bounded 256 repos/pass, cursor resumed in memory),
+refreshing per-repo `meta/stats.json` sidecars (PUT only when changed) and
+CAS-folding the bucket-root `meta/repos.pb` aggregate (one CAS per pass).
+Best-effort: fold errors are logged, never fail the pass; the catalog stays
+optional/rebuildable. No hot-path LIST — the fold probes manifests by exact
+key (the sweep's store-enumeration fallback is maintainer-only).
+
 The pass NEVER blocks on bulk store I/O for unselected repos: selection reads only manifest/checkpoint refs already synced at refs level (cheap), plus local disk state (pack directory sizes, rev/bitmap presence via `stat`).
 
 ### 3.3 Lease discipline (every unit)
@@ -403,3 +412,11 @@ Operator view of one pass on an ssd host (`walhub serve --config walgit.toml`):
   24h cap, attempt-anchored) and never move next fire; rewind is refused +
   narrated (counter untouched) with a manual `force` resync escape. No new
   config section: `[import]` owns SSRF/timeouts/caps for both flows.
+- **Size-catalog fold (Forgejo #248, R1 B1 — shared sweep #247 reuses).**
+  The pass-end `foldSizeCatalog` (not a §4 unit: no selection, no lease,
+  no task kind) folds `internal/sizecatalog.Sweep`: per-repo manifest probe
+  → pure-arithmetic size → sidecar PUT-if-changed → one aggregate CAS.
+  Bounded (256/pass) and resumable (in-memory cursor; the catalog itself is
+  the durable cursor, so loss only repeats work). Rationale: push-path
+  bucket-root writes are a contention funnel (law 6); folding off-hot-path
+  keeps push at +0 trips while the listing still reads ONE object per query.

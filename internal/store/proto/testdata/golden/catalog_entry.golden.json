@@ -1,0 +1,13 @@
+{
+  "type": "RepoCatalogEntry",
+  "value": {
+    "head_seq": 66,
+    "object_count": 12,
+    "repo": "alice/widget",
+    "size_bytes": 3296,
+    "updated_at": {
+      "nanos": 500000000,
+      "seconds": 1700000000
+    }
+  }
+}

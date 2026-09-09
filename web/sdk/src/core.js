@@ -266,7 +266,30 @@ export class ReposClient {
     return {
       list: () => self.ownersList(),
       repos: (owner) => self.ownerRepos(owner),
+      detailed: (owner, query) => self.ownerReposDetailed(owner, query),
     };
+  }
+
+  /**
+   * Object-row listing with size state (Forgejo #248):
+   * `GET /api/v1/owners/{owner}/repos/detailed?sort=&order=&min_bytes=&max_bytes=`
+   * → `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?}]}`.
+   * `size_bytes: null` = unknown/unbackfilled (UI hides); `0` = verified-empty.
+   * Same no-store rationale as ownerRepos (issue #200).
+   *
+   * @param {string} owner
+   * @param {{sort?: "name"|"size", order?: "asc"|"desc", min_bytes?: number, max_bytes?: number}} [query]
+   */
+  ownerReposDetailed(owner, query = {}) {
+    const qs = Object.entries(query)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .join("&");
+    const suffix = qs ? `?${qs}` : "";
+    return this._call(`/api/v1/owners/${encodeURIComponent(owner)}/repos/detailed${suffix}`, {
+      method: "GET",
+      cache: "no-store",
+    });
   }
 
   // ── internals ───────────────────────────────────────────────────────────
