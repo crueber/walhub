@@ -1,8 +1,8 @@
 // web/test/unit/format.test.js — fmtSize helper (issues #27, #29): b/k/MB/GB
 // boundaries, 0/undefined handling; fmtMode helper (issues #29, #211): git
 // modes as ls-style rows (leading type char + rwx triplets); fmtSizeParts
-// (issue #211 split size columns). entryKind left with the #223 type-column
-// drop (mode lead char + icons already carry the kind).
+// (issue #211 split size columns). The #223 type-column drop removed the kind
+// label (mode lead char + icons already carry it).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fmtSize, fmtSizeParts, fmtMode } from "../../src/lib/format.js";
