@@ -51,11 +51,11 @@ export default function App(props) {
           <nav class="site-nav flex items-center gap-4">
             <A href="/explore">explore</A>
             <A href="/import">import</A>
-            <A href="/api">API</A>
             <A href="/keys">keys</A>
             <A href="/setup">setup</A>
           </nav>
           <div class="ml-auto flex items-center gap-2">
+            <A href="/api" class="nav-link">API</A>
             <NotificationTray />
             <button
               type="button"
