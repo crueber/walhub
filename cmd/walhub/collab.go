@@ -16,6 +16,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/issues"
+	"git.packden.us/crueber/walhub/internal/mirror"
 	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/releases"
@@ -50,6 +51,8 @@ type collabWiring struct {
 	notifyHandler   *notify.Handler
 	importSvc       *repoimport.Service
 	importHandler   *repoimport.Handler
+	mirrorSvc       *mirror.Service
+	mirrorHandler   *mirror.Handler
 }
 
 // buildCollab assembles every collaboration service + handler over the
@@ -146,6 +149,11 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// owned by identity; the repo-import task runs on the core wal
 	// task table (Seam 5) via the Service (B6 opsTasks-style wiring).
 	c.importSvc, c.importHandler = newImportService(st, c.ident, reg, cfg)
+	// Feature 11 mirrors (docs/features/11_mirror.md): the pull-only
+	// sidecar + scheduled sync surface (Seam 1, repo lanes + the
+	// create-from-URL top-level twin) over the same store/registry;
+	// the mirror-sync task runs on the core wal task table (Seam 5).
+	c.mirrorSvc, c.mirrorHandler = newMirrorService(st, reg, cfg, apiEnv)
 	// Feature 08 §4: access.json CAS commits publish the "access"
 	// collab frame (nil-safe seam on the identity service; the doc
 	// stays the backfill truth).
@@ -208,6 +216,9 @@ func chainCollab(srv *server.Server, c *collabWiring) {
 	}
 	if c.importHandler != nil {
 		chainImport(srv, c.importHandler)
+	}
+	if c.mirrorHandler != nil {
+		chainMirror(srv, c.mirrorHandler)
 	}
 	if c.createHandler != nil {
 		// #210 create twin: authentication resolves through the server

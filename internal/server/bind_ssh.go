@@ -116,6 +116,14 @@ func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal st
 	// advertisement produces is the classic mistake). v2 does not cover push,
 	// so the advertisement is always v0. Auto-created repos advertise an
 	// empty ref list, which is what makes the push create them.
+	//
+	// Mirror refusal precedes the advertisement (Forgejo #240, R1 (c)):
+	// the error surfaces on client stderr as "walhub: <msg>". Refusing
+	// after the write would hang the client; the funnel check below is
+	// the backstop for clients that skip discovery.
+	if s.isMirrorRepo(ctx, id) {
+		return errors.New(MirrorRefusal)
+	}
 	advert, aerr := s.layer.Advertisement(repo, git.ServiceReceivePack, false, s.Version())
 	if aerr != nil {
 		return fmt.Errorf("%w: %v", errPushUnavailable, aerr)
@@ -212,6 +220,19 @@ func (s *Server) uploadPackPrepare(ctx context.Context, id git.RepoId) (*git.Loc
 // PR merge/open task publishes those refs, server-side through the WAL
 // funnel (which never enters this pipeline).
 func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Principal, repo *git.LocalRepo, req *git.PushRequest, pack io.Reader, packMax int64, out io.Writer) error {
+	// Mirror refusal at the funnel (Forgejo #240, R1 (c)): every
+	// client write traverses this function (HTTP receivePackLocal +
+	// SSH), so ONE check here covers both transports' pack flow — no
+	// ingest, no connectivity, no publish. Per-ref ng lines (the
+	// managed-ref shape), since the body is a git stream by then.
+	if s.isMirrorRepo(ctx, id) {
+		report := git.Report{UnpackOK: true, Sideband: req.Has("side-band-64k")}
+		for _, c := range req.Commands {
+			report.Refs = append(report.Refs, git.RefReport{Ref: c.Ref, OK: false, Reason: MirrorRefusal})
+		}
+		_, _ = out.Write(report.EncodeReport())
+		return nil
+	}
 	managed := make([]git.PushCommand, 0, len(req.Commands))
 	allowed := make([]git.PushCommand, 0, len(req.Commands))
 	for _, c := range req.Commands {

@@ -389,3 +389,17 @@ Operator view of one pass on an ssd host (`walhub serve --config walgit.toml`):
 - **The 48-skip stale-slot cap is enforced per repo per pass** as a plain counter (the Rust spec states the cap without an owner; the pass goroutine owns it).
 - **Follow-loop status (`upstream.last_round`) is instance-memory only**, matching §13.4's "status kept per instance"; a host restart clears it, and `settings/describe` simply omits it until the next round completes.
 - **Purge of stale heartbeats is a prefix list at pass start** rather than a dedicated timer goroutine: one fewer goroutine, and a 60 s cadence is plenty for a 24 h horizon.
+- **Mirror scheduled-sync loop (Forgejo #240, R1 (d)(e)(f)).** `RunLoop` is
+  its own 1-minute goroutine on maintain-role hosts (the follow.go shape:
+  never a unit, never blocking maintenance): registry enumeration +
+  `mirror.json` probes (no LIST), due = preset-cron next fire reached and
+  outside the failure backoff; overdue-after-restart fires once; deleting
+  the sidecar stops the loop. Cross-instance exclusion is the bucket lease
+  `leases/mirror-<owner>-<name>.pb` (CAS+TTL 10m, skew 0) before cloning.
+  Converge is followOnce-shaped (compare + ff-only `merge-base
+  --is-ancestor` + atomic `PublishRefs`), reusing the import
+  clone/enumerate/refmap/scrub/SSRF layers but never `completeBody`.
+  Failures record `consecutive_failures` + capped backoff (`15m × 2^(n-1)`,
+  24h cap, attempt-anchored) and never move next fire; rewind is refused +
+  narrated (counter untouched) with a manual `force` resync escape. No new
+  config section: `[import]` owns SSRF/timeouts/caps for both flows.

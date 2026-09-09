@@ -24,10 +24,13 @@ type summaryBody struct {
 	Health       string           `json:"health"` // empty|healthy|degraded (§9.1; issue #209)
 	MissingTotal uint64           `json:"missing_total,omitempty"`
 	Placeholder  *PlaceholderInfo `json:"placeholder,omitempty"` // #210 R1 B1: sidecar projection, empty repos only
-	CloneURL     string           `json:"clone_url"`
-	SSHCloneURL  string           `json:"ssh_clone_url,omitempty"`
-	HTMLURL      string           `json:"html_url"`
-	APIURL       string           `json:"api_url"`
+	// Mirror is the pull-only mirror projection (Forgejo #240): nil on
+	// non-mirrors (omitempty — never null).
+	Mirror      *MirrorView `json:"mirror,omitempty"`
+	CloneURL    string      `json:"clone_url"`
+	SSHCloneURL string      `json:"ssh_clone_url,omitempty"`
+	HTMLURL     string      `json:"html_url"`
+	APIURL      string      `json:"api_url"`
 }
 
 func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +69,16 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 			placeholder = &PlaceholderInfo{CreatedBy: doc.CreatedBy, CreatedAt: doc.CreatedAt, ExpiresAt: doc.ExpiresAt}
 		}
 	}
+	// The mirror projection (Forgejo #240): one exact-key probe behind
+	// the Env hook (nil → no probe, +0 round trips — the hook IS the
+	// feature; 404s are free per law 4).
+	var mirrorView *MirrorView
+	if h.env.MirrorSummary != nil {
+		if v, ok := h.env.MirrorSummary(r.Context(), id.Owner, id.Name); ok {
+			v := v
+			mirrorView = &v
+		}
+	}
 	body := summaryBody{
 		Owner:        id.Owner,
 		Name:         id.Name,
@@ -77,6 +90,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		Health:       health,
 		MissingTotal: missingTotal,
 		Placeholder:  placeholder,
+		Mirror:       mirrorView,
 		CloneURL:     base + "/" + id.Owner + "/" + id.Name + ".git",
 		SSHCloneURL:  h.env.sshCloneURL(r, id.Owner, id.Name),
 		HTMLURL:      base + "/" + id.Owner + "/" + id.Name,
@@ -100,6 +114,13 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// description drops the suffix, which busts the cache too.
 		etag += "~d" + descriptionHash(s.Description)
 	}
+	if mirrorView != nil {
+		// Same trap once more (Forgejo #240): a sync outcome changes
+		// neither the head sha nor the description, so the ETag covers
+		// the mirror projection or the badge/next-sync display goes
+		// stale behind a 304.
+		etag += "~m" + mirrorHash(*mirrorView)
+	}
 	writeCached(w, r, ccSWR, etag, http.StatusOK, body)
 }
 
@@ -109,6 +130,14 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 func descriptionHash(d string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(d))
+	return strconv.FormatUint(uint64(h.Sum32()), 16)
+}
+
+// mirrorHash is the short ETag suffix covering the mirror projection
+// (Forgejo #240): same FNV-1a discipline as descriptionHash.
+func mirrorHash(v MirrorView) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" + v.LastSyncedAt + "\x00" + v.LastResult))
 	return strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 

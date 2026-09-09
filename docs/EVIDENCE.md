@@ -39,6 +39,7 @@ requested or when a review questions a hot path).
 | E12 | 2026-09-08 | Landing concept GIFs (`internal/devtools/landinggif`) | Do 4 animated diagrams + stills fit the byte budgets with no new deps, and what does the landing page weigh? | Yes: 82,618 bytes total (budgets ≤ 150 KB, each asset ~45% headroom); page is shell + 1 JS + 1 CSS + lazy images, zero API calls. |
 | E13 | 2026-09-08 | Self-heal serving cost (`internal/api`, issue #209) | Do the summary `health`, the 404 marker, and the overview fsck projection add store round trips to any budgeted path? | No change: empty summary +0, non-empty summary +1, overview +1 (all exact-key probes, never LIST); push/sync/checkpoint engine paths untouched; empty Code-tab path removes 1–2 UI fetches. |
 | E14 | 2026-09-08 | Explicit create-repo placeholder (`internal/api`, `internal/server`, `internal/identity`, issue #210) | Do placeholder create, first-push adoption, and the summary projection add round trips to any budgeted path? | Create = 1 window (manifest + sidecar + access Creates parallel); first push +0 on-response (hint-gated off-response delete, 0 ops unhinted); empty summary ≤1 (sidecar only), real summary +0; sim budgets unchanged. |
+| E15 | 2026-09-09 | Pull-only mirrors (`internal/mirror`, Forgejo #240) | What does a sync fire cost, and what do the refusal revalidation + summary projection add to the push/summary paths? | First sync flat (22 ops, 0 LIST at S and M); no-op fire 11 ops, zero pack/manifest/log writes; push +2 exact-key probes (cold 10 / warm 9 ops, other collab families zero); summary +1 probe only when the mirror hook is set. Cannot explode: no LIST anywhere, converge-only no-ops, lease bounds duplicate work. |
 
 ---
 
@@ -1000,3 +1001,92 @@ projection is empty-only. Cannot regress silently: the round-trip test fails
 on any second probe or any fsck probe on the empty path, the push-budget
 test fails on any collab key touched by a push, and the adopt tests fail on
 any unhinted marker op.
+
+---
+
+## E15 — Mirror sync cost: flat control plane + bounded refusal/summary probes (2026-09-09)
+
+**Area:** pull-only mirrors with scheduled upstream syncs
+(`internal/mirror`, `internal/server` funnel, `internal/api` summary).
+Spec: `docs/features/11_mirror.md` §7.
+
+**Question:** what does one sync fire cost in store round trips, does it
+grow with repo size, and what do the push-refusal revalidation and the
+summary projection add to the budgeted push/summary paths?
+
+**Method.** Harness: `internal/mirror` `TestSyncRoundTrips`
+(`go test ./internal/mirror/ -run 'TestSyncRoundTrips' -v`) — the REAL
+`Service.SyncNow` path (lease → clone → ingest → converge → outcome)
+over the **memory store** wrapped in a family-counting decorator, with
+the **real git binary** and `file://` fixture upstreams at two
+populations — S: 3 commits + 1 branch; M: 31 commits + 3 branches.
+Memory store isolates the algorithmic shape from network RTT (the E11
+gating); absolute numbers are environment-bound — the *shape* (flat
+control plane, converge-only no-ops, zero LIST) is the durable claim.
+Push numbers come from the updated push-budget test
+(`cmd/walhub` `TestPushFastPathZeroCollabRoundTrips` — the shipped
+composition WITH the mirror guard wired, real git over smart HTTP).
+
+**Results.**
+
+| fire | GETs | HEADs | PUTs | DELETEs | LISTs | total |
+|---|---|---|---|---|---|---|
+| first sync S (3c/1b) | 8 (mirror 3, lease 2, manifest 2, import-claim 1) | 1 (pack probe) | 10 (wal packs 2, manifest 3, log 2, lease 1, sidecar 2) | 1 (lease) | 0 | 22 |
+| first sync M (31c/3b) | 8 | 1 | 10 | 1 | 0 | 22 |
+| no-op fire (either) | — | — | 0 pack/manifest/log | — | 0 | +11 (lease 4, sidecar 4, claim 1, pack probes 2) |
+| push, cold (auto-create) | — | — | — | — | 0 | 10 bucket ops (was 8: +1 discovery probe +1 funnel probe) |
+| push, warm (existing) | — | — | — | — | 0 | 9 bucket ops (+2 probes); every other collab family 0 |
+| summary | +1 exact-key sidecar GET **only when the mirror hook is set** (SWR-cached + `~m` ETag'd) | — | — | — | 0 | — |
+
+Pack bytes are bulk (reported, not budgeted — the E11 rule); wall time
+is git-clone dominated and environment-bound.
+
+**Analysis.**
+
+- **Flat because everything scales with packs and refs, never with
+  commits.** Ref enumeration is local (`for-each-ref` on scratch); the
+  converge is ONE atomic `PublishRefs` regardless of moved-ref count;
+  pack traffic is one PUT per pack (single-pack fixtures ⇒ 1 pack, 1
+  idx). S and M differ only in pack bytes.
+- **No-op fires are converge-only.** Nothing moved ⇒ no `AddPack`, no
+  manifest/log PUTs, no outcome-shape change beyond the success stamp;
+  the 11 ops are lease (4) + sidecar (4) + claim probe (1) + pack
+  presence probes (2).
+- **The refusal revalidation is exactly 2 probes per push** (discovery +
+  funnel), both exact-key, both 404-free on non-mirrors. Law 4
+  probe-don't-list class; "every read revalidates" — a repo that just
+  became a mirror refuses the next push with no cache to poison. The
+  push-budget test pins the bound (≤ 6 probe ops for 2 pushes, every
+  other collab family zero).
+- **The loop never LISTs.** Enumeration is the in-memory registry + one
+  sidecar probe per repo per minute; the lease (CAS+TTL) bounds
+  duplicate work across maintain hosts to one winner + narrated skips.
+
+**Verdict.** Sync cost is flat and LIST-free at both populations;
+steady-state (no-op) fires write nothing but the outcome stamp; push
+and summary each gain exactly the stated probes, all pinned by failing
+tests. Cannot regress silently: the round-trip test fails on any LIST,
+the push-budget test fails on any non-mirror collab touch or probe
+overrun, and the summary ETag test fails on any unstamped outcome
+change.
+
+**Live proof (2026-09-09, filesystem backend, zero-config `auth:none`,
+real `git` binary — no mocks).** Upstream fixture (local `file://`
+repo, 2 commits) → `POST /api/v1/repos/mirrors` (hourly) → 202 with a
+`mirror-sync` task id → `GET …/mirror/sync?id=` shows `done:true`,
+`ok:true`, narration `cloning … / published 1 ref(s)`; summary carries
+`mirror:{upstream_url, schedule, next_sync_at, last_synced_at,
+last_result, due:false}` with the next hourly fire computed; real `git
+clone` of the mirror lands both commits; `GET …/info/refs?service=
+git-receive-pack` → 403 `this repository is a read-only mirror; pushes
+are rejected`; a direct POST to `git-receive-pack` (discovery-skipping
+client) → `unpack ok` + `ng refs/heads/main <same message>`; a real
+`git push` fails with the message; advancing the upstream then
+backdating the sidecar anchor → the 1-minute loop fires the sync
+unprompted (`last_synced_at` moves, outcome `ok`, next fire
+recomputed). In-browser render (badge/tab, both themes, console) is
+recorded OPEN: the shared Chrome daemon's network guard refuses all
+private/loopback destinations and workspace rules forbid a private
+daemon — the built bundle is verified to carry the badge/tab/preset
+strings, every UI route serves 200, and `node --test` (471 tests)
+covers the lib + SDK surface.

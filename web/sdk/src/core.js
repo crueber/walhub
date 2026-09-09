@@ -28,6 +28,7 @@ import { attachSocial, attachSocialTop } from "./social.js";
 import { attachOrgs } from "./orgs.js";
 import { attachUsers } from "./users.js";
 import { attachImports } from "./import.js";
+import { attachMirrors, attachMirror } from "./mirror.js";
 import { attachCreate } from "./create.js";
 import { openAuthPopup, canAuthenticate } from "./auth.js";
 
@@ -168,6 +169,7 @@ export class ReposClient {
     attachNotifications(this);
     attachSocialTop(this);
     attachImports(this);
+    attachMirrors(this);
     attachCreate(this);
   }
 
@@ -212,6 +214,7 @@ export class ReposClient {
     attachNotifyRepo(r);
     attachReleases(r);
     attachSocial(r);
+    attachMirror(r);
     return r;
   }
 

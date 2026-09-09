@@ -19,6 +19,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/issues"
+	"git.packden.us/crueber/walhub/internal/mirror"
 	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/releases"
@@ -54,6 +55,7 @@ func TestChainCollabHonorsForwardedIdentity(t *testing.T) {
 		socialHandler:   &social.Handler{},
 		notifyHandler:   &notify.Handler{},
 		importHandler:   &repoimport.Handler{},
+		mirrorHandler:   &mirror.Handler{},
 	}
 	chainCollab(srv, c)
 
@@ -67,9 +69,10 @@ func TestChainCollabHonorsForwardedIdentity(t *testing.T) {
 		"releases":   func(r *http.Request) (auth.Principal, *auth.AuthError) { return c.releasesHandler.Auth(r) },
 		"social":     func(r *http.Request) (auth.Principal, *auth.AuthError) { return c.socialHandler.Auth(r) },
 		"repoimport": func(r *http.Request) (auth.Principal, *auth.AuthError) { return c.importHandler.Auth(r) },
+		"mirror":     func(r *http.Request) (auth.Principal, *auth.AuthError) { return c.mirrorHandler.Auth(r) },
 	}
-	if len(families) != 9 {
-		t.Fatalf("families = %d, want 9 (every collab route family covered)", len(families))
+	if len(families) != 10 {
+		t.Fatalf("families = %d, want 10 (every collab route family covered)", len(families))
 	}
 
 	mkreq := func(token, forwarded string) *http.Request {

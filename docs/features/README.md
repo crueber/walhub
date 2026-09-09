@@ -35,6 +35,8 @@ commits are ordinary git objects; a PR's *head* is an ordinary ref published thr
 | [`07_releases_stars.md`](07_releases_stars.md) | Releases + assets, stars, watches | 01 |
 | [`08_ui_sdk.md`](08_ui_sdk.md) | Frontend surfaces + SDK surface for ALL of the above | 01–07 (shapes only) |
 | [`09_rollout.md`](09_rollout.md) | Implementation phasing, agent dispatch plan, API versioning, invariants | all |
+| [`10_git_import.md`](10_git_import.md) | One-shot git import (clone-and-land + provenance) | — |
+| [`11_mirror.md`](11_mirror.md) | Pull-only mirrors with scheduled upstream syncs | 10 (clone/enumerate/refmap/scrub/SSRF reuse) |
 
 ## Shared primitives (normative for every feature doc)
 

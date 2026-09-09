@@ -1,11 +1,17 @@
 // push_budget_test.go — Feature 09 (docs/features/09_rollout.md §5 invariant
 // 3): the push fast path gains ZERO bucket round trips from the
-// collaboration layer. It boots the SHIPPED composition (buildCollab — the
-// same wiring serveHTTP uses, all eight feature packages mounted plus the
-// identity require_read gate) over a prefix-counting store, pushes twice
-// through the real smart-HTTP receive-pack path with the real git binary,
-// and asserts no store op touched a collaboration key family. The totals
-// are logged for the EVIDENCE.md E10 entry.
+// collaboration layer — with the ONE Forgejo #240 exception: the
+// pull-only refusal revalidates every push with exactly one exact-key
+// mirror.json probe (404-free class, law 4 probe-don't-list; "every
+// read revalidates" — a push to a repo that just became a mirror must
+// be refused). The probe is bounded below (one per discovery + one per
+// funnel call); every other collaboration family stays at zero. It
+// boots the SHIPPED composition (buildCollab — the same wiring
+// serveHTTP uses, all feature packages mounted plus the identity
+// require_read gate and the mirror guard) over a prefix-counting
+// store, pushes twice through the real smart-HTTP receive-pack path
+// with the real git binary, and asserts the bound. The totals are
+// logged for the EVIDENCE.md entries (E10 + the #240 entry).
 package main
 
 import (
@@ -174,7 +180,7 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 	env := api.NewEnv(cs, &repoRegistry{reg: reg, st: cs}, cfg, engine, "test", "test")
 
 	// The shipped composition: every feature package mounted, require_read
-	// gate wired — the push below runs through all of it.
+	// gate wired, mirror guard wired — the push below runs through all of it.
 	collab := buildCollab(cs, cfg, reg, env)
 	srv := server.New(server.Options{
 		Config:    cfg,
@@ -185,6 +191,10 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 		CacheRoot: cfg.Cache.Dir,
 		Boot:      server.BootState{Mode: "defaults"},
 		ReadGate:  readGateOf(collab.ident),
+		// Forgejo #240: the production refusal predicate (same store).
+		// Each push revalidates it (probe, don't cache — a repo that
+		// just became a mirror must refuse the next push).
+		MirrorGuard: mirrorGuardOf(cs),
 	})
 	chainCollab(srv, collab)
 	ts := httptest.NewServer(srv.Handler())
@@ -223,12 +233,37 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 		t.Logf("store op %-12s %d", op, n)
 	}
 	t.Logf("total bucket round trips for 2 pushes: %d", warmOps)
-	if len(cs.coll) != 0 {
-		for k, n := range cs.coll {
-			t.Errorf("collab key touched on push fast path: %s x%d", k, n)
+	// Forgejo #240 bound: the ONLY collab touches allowed are the
+	// mirror-refusal probes (exact-key get/head on meta/mirror.json —
+	// one per discovery + one per funnel call). Everything else stays
+	// at zero; the probe count itself is bounded (2 pushes × 2 + slack
+	// for protocol revalidation — never a LIST, never a write).
+	mirrorProbes := 0
+	for k, n := range cs.coll {
+		if isMirrorProbe(k) {
+			mirrorProbes += n
+			continue
 		}
+		t.Errorf("collab key touched on push fast path: %s x%d", k, n)
+	}
+	if mirrorProbes > 6 {
+		t.Errorf("mirror refusal probes = %d, want ≤ 6 (1 discovery + 1 funnel per push + slack)", mirrorProbes)
 	}
 	if warmOps == 0 {
 		t.Fatal("no store ops counted — the decorator is bypassed, measurement void")
 	}
+}
+
+// isMirrorProbe reports the Forgejo #240 refusal probe (the one
+// sanctioned collab touch on the push path): an exact-key read of the
+// mirror sidecar. Writes to it (or any other op shape) are NOT covered.
+func isMirrorProbe(opKey string) bool {
+	op, key, ok := strings.Cut(opKey, " ")
+	if !ok {
+		return false
+	}
+	if op != "get" && op != "head" {
+		return false
+	}
+	return strings.HasSuffix(key, "/meta/mirror.json")
 }

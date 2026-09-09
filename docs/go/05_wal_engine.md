@@ -459,3 +459,10 @@ Background prefetch (from §6.2): after a refs-only sync, if `wal.prefetch_packs
   by accident (the prefixed checksum built a doubled `pack-pack-<hex>.pack` copy); with bare
   checksums the copy targets itself, and `WriteFile`-truncate on a `0444` file is EACCES. Same
   inode (`os.SameFile`) → no-op; every other shape copies exactly as before.
+- **Mirror-sync task kind (Forgejo #240, Seam 5).** `mirror-sync` runs on the
+  `TaskTable` under `(repo, kind)` single-flight (join, never overlap) —
+  registered once from composition (`mirror.RegisterKind`, panics on
+  duplicate, the `maintain.RegisterKind` contract in code terms). No WAL kind
+  was added (closed enum); syncs ride the ordinary publish path, and no core
+  file names mirrors (law 8: the guard/hook injection points live in
+  `internal/server` and `internal/api`).

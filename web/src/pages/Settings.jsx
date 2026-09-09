@@ -8,7 +8,7 @@
 
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { useData, reportError, asList, invalidate } from "../lib/data.js";
+import { useData, reportError, asList, invalidate, tolerateMissing } from "../lib/data.js";
 import { dangerMatches } from "../lib/danger.js";
 import {
   SETTINGS_GROUP,
@@ -23,6 +23,12 @@ import {
   withDescription,
   validateDescription,
 } from "../lib/repoDescription.js";
+import {
+  MIRROR_PRESETS,
+  DEFAULT_MIRROR_PRESET,
+  formatNextSync,
+  formatLastResult,
+} from "../lib/mirror.js";
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import AccessTab from "./Access.jsx";
@@ -214,6 +220,230 @@ function ScheduledTab(props) {
           </section>
         </>
       )}
+    </Show>
+  );
+}
+
+// --- mirror tab (Forgejo #240) ---------------------------------------------------
+// Pull-only mirror config: status (upstream, computed next fire, last
+// outcome), schedule preset picker (no freeform cron — the server
+// rejects anything outside the preset list), manual Sync-now with an
+// optional memory-only token + the force rewind escape hatch, and
+// mirror removal (stops the loop). Every mutation is admin-gated
+// server-side; 403s render inline. Non-mirrors get the create form
+// (upstream + preset → PUT spawns the first sync async).
+function MirrorTab(props) {
+  const full = props.ctx.full;
+  const repo = props.repo;
+  const [getDoc] = useData(`mirror:${full}`, () => tolerateMissing(repo.mirror.get(), null), 5000);
+  const [getSchedule, setSchedule] = createSignal(DEFAULT_MIRROR_PRESET);
+  const [getUpstream, setUpstream] = createSignal("");
+  const [getToken, setToken] = createSignal("");
+  const [getForce, setForce] = createSignal(false);
+  const [getSyncId, setSyncId] = createSignal("");
+  const [getSyncState, setSyncState] = createSignal(""); // "" | running | done | error
+  const [getNote, setNote] = createSignal("");
+  const [getBusy, setBusy] = createSignal(false);
+  let poller = 0;
+  onCleanup(() => clearInterval(poller));
+
+  const refresh = () => {
+    invalidate(`mirror:${full}`);
+    invalidate(`repo:${full}`);
+  };
+
+  const pollSync = (id) => {
+    clearInterval(poller);
+    setSyncState("running");
+    poller = setInterval(async () => {
+      try {
+        const st = await repo.mirror.syncStatus(id);
+        if (st?.done) {
+          clearInterval(poller);
+          if (st.error) {
+            setSyncState("error");
+            setNote(String(st.error));
+          } else {
+            setSyncState("done");
+            setNote("sync finished");
+          }
+          refresh();
+        }
+      } catch (e) {
+        clearInterval(poller);
+        setSyncState("error");
+        setNote(String(e.message ?? e));
+      }
+    }, 2000);
+  };
+
+  const save = async (e) => {
+    e?.preventDefault?.();
+    if (getBusy()) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const mirror = getDoc();
+      if (mirror) {
+        await repo.mirror.put({ schedule: getSchedule() });
+        setNote("schedule saved — takes effect on the next fire");
+      } else {
+        const res = await repo.mirror.put({ upstream_url: getUpstream().trim(), schedule: getSchedule() });
+        const id = res?.task?.id;
+        if (id) {
+          setSyncId(id);
+          pollSync(id);
+        }
+        setNote("mirror created — first sync running");
+      }
+      refresh();
+    } catch (err) {
+      setNote(String(err?.message ?? err ?? "save failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncNow = async () => {
+    if (getBusy()) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const res = await repo.mirror.syncNow({ token: getToken() || undefined, force: getForce() });
+      const id = res?.task?.id;
+      if (!id) throw new Error("sync did not return a task");
+      setSyncId(id);
+      pollSync(id);
+      setToken(""); // memory-only: drop it from the field once sent
+    } catch (err) {
+      setNote(String(err?.message ?? err ?? "sync failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (getBusy()) return;
+    setBusy(true);
+    setNote("");
+    try {
+      await repo.mirror.remove();
+      setNote("mirror removed — scheduled syncs stopped");
+      refresh();
+    } catch (err) {
+      setNote(String(err?.message ?? err ?? "remove failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Prefill the picker from the loaded doc (once per doc).
+  createEffect(() => {
+    const doc = getDoc();
+    if (doc?.schedule) setSchedule(doc.schedule);
+  });
+
+  return (
+    <Show when={getDoc() !== undefined} fallback={<p class="muted">loading…</p>}>
+      <section class="card p-4">
+        <h3 class="mb-2 font-semibold">Mirror</h3>
+        <Show when={getDoc()} fallback={
+          <form class="grid gap-3" onSubmit={save} aria-label="Create mirror">
+            <p class="muted text-sm">
+              This repository is not a mirror. Point it at a public upstream to make it
+              pull-only with scheduled syncs — pushes will be rejected for everyone,
+              including admins.
+            </p>
+            <label class="grid gap-1">
+              <span class="text-sm font-medium">Upstream URL</span>
+              <input
+                class="input font-mono"
+                value={getUpstream()}
+                onInput={(e) => setUpstream(e.currentTarget.value)}
+                placeholder="https://github.com/acme/upstream.git"
+                autocomplete="off"
+                spellcheck={false}
+              />
+            </label>
+            <label class="grid gap-1">
+              <span class="text-sm font-medium">Schedule</span>
+              <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Schedule">
+                <For each={MIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
+              </select>
+            </label>
+            <div>
+              <button type="submit" class="btn primary px-3 py-1" disabled={getBusy() || !getUpstream().trim()}>
+                {getBusy() ? "creating…" : "create mirror"}
+              </button>
+            </div>
+          </form>
+        }>
+          {(mirror) => (
+            <div class="grid gap-3">
+              <table class="data-table kv">
+                <tbody>
+                  <tr><th class="w-48 align-top">upstream</th><td class="break-all font-mono text-xs">{mirror().upstream_url}</td></tr>
+                  <tr><th class="w-48 align-top">status</th><td><span class="chip">mirror · pull-only</span></td></tr>
+                  <tr><th class="w-48 align-top">next sync</th><td>{formatNextSync(mirror())}{mirror().next_sync_at ? ` (${mirror().next_sync_at})` : ""}</td></tr>
+                  <tr><th class="w-48 align-top">last synced</th><td>{mirror().last_synced_at ? <DateTime value={mirror().last_synced_at} /> : "never"}</td></tr>
+                  <tr><th class="w-48 align-top">last result</th><td class="break-words">{formatLastResult(mirror())}</td></tr>
+                  <Show when={mirror().consecutive_failures}>
+                    <tr><th class="w-48 align-top">consecutive failures</th><td>{mirror().consecutive_failures} (backing off)</td></tr>
+                  </Show>
+                </tbody>
+              </table>
+              <form class="flex flex-wrap items-end gap-3" onSubmit={save} aria-label="Mirror schedule">
+                <label class="grid gap-1">
+                  <span class="text-sm font-medium">Schedule</span>
+                  <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Schedule">
+                    <For each={MIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
+                  </select>
+                </label>
+                <button type="submit" class="btn px-3 py-1" disabled={getBusy()}>
+                  {getBusy() ? "saving…" : "save schedule"}
+                </button>
+              </form>
+              <div class="grid gap-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                <div class="text-sm font-medium">Sync now</div>
+                <label class="grid gap-1">
+                  <span class="text-sm">Token <span class="muted">(optional, memory-only — never stored)</span></span>
+                  <input
+                    class="input font-mono"
+                    type="password"
+                    value={getToken()}
+                    onInput={(e) => setToken(e.currentTarget.value)}
+                    placeholder="first-contact token for a token-requiring upstream"
+                    autocomplete="off"
+                  />
+                </label>
+                <label class="flex items-center gap-1 text-sm">
+                  <input type="checkbox" checked={getForce()} onChange={(e) => setForce(e.currentTarget.checked)} />
+                  force resync (override the fast-forward-only refusal)
+                </label>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button type="button" class="btn px-3 py-1" onClick={syncNow} disabled={getBusy() || getSyncState() === "running"}>
+                    {getSyncState() === "running" ? "syncing…" : "sync now"}
+                  </button>
+                  <Show when={getSyncId()}>
+                    <span class="muted font-mono text-xs">
+                      {getSyncId()} · {getSyncState() || "started"}
+                    </span>
+                  </Show>
+                </div>
+              </div>
+              <div>
+                <button type="button" class="btn danger px-3 py-1" onClick={remove} disabled={getBusy()}>
+                  remove mirror
+                </button>
+                <p class="muted mt-1 text-xs">Removing stops scheduled syncs. Pushes stay possible only for non-mirror repos.</p>
+              </div>
+            </div>
+          )}
+        </Show>
+        <Show when={getNote()}>
+          <p class="mt-2 text-sm">{getNote()}</p>
+        </Show>
+      </section>
     </Show>
   );
 }
@@ -922,6 +1152,7 @@ export default function Settings() {
         <div class="min-w-0 flex-1">
           <Show when={getTab() === "general"}><GeneralTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "scheduled"}><ScheduledTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "mirror"}><MirrorTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "config"}><ConfigTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "access"}><AccessTab ctx={ctx} repo={repo} /></Show>
