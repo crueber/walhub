@@ -3097,7 +3097,7 @@ func UnmarshalManifest(b []byte) (*Manifest, error) {
 	return v, nil
 }
 
-// UnmarshalRepoCatalog decodes a meta/repos.pb body (doc 02 §2.7).
+// UnmarshalRepoCatalog decodes a meta/repos.pb body (doc 02 §2.2).
 func UnmarshalRepoCatalog(b []byte) (*RepoCatalog, error) {
 	v := &RepoCatalog{}
 	if err := v.Unmarshal(b); err != nil {

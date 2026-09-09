@@ -506,7 +506,6 @@ func FilterSort(rows []Row, sortKey, order string, minBytes, maxBytes *uint64) [
 		}
 		return a.Name < b.Name
 	})
-	_ = asc
 	return out
 }
 

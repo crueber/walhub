@@ -76,7 +76,9 @@ func TestSweepRoundTrips(t *testing.T) {
 		ctx := context.Background()
 		base := store.NewMemory()
 		cs := &countingStore{ObjectStore: base}
-		ids := seedRepos(t, ctx, cs, "o", n)
+		// Seed through the UNWRAPPED store: the snapshot below must measure
+		// the sweep only (seed PUTs are setup, not fold cost).
+		ids := seedRepos(t, ctx, base, "o", n)
 		fixed := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 		res, err := Sweep(ctx, cs, SweepOptions{
 			Now: func() time.Time { return fixed },
@@ -89,6 +91,40 @@ func TestSweepRoundTrips(t *testing.T) {
 		}
 		g, p, h, l, d := cs.snapshot()
 		t.Logf("E16 sweep n=%d: folded=%d gets=%d puts=%d heads=%d lists=%d deletes=%d", n, res.Folded, g, p, h, l, d)
+		// Exact fold cost (cold sidecars): 2 GETs (manifest probe + sidecar
+		// probe) per repo + 1 catalog GET; n sidecar PUTs + 1 catalog CAS.
+		if res.Folded != n {
+			t.Fatalf("cold sweep must fold all %d repos, folded=%d", n, res.Folded)
+		}
+		if wantG := 2*n + 1; g != wantG {
+			t.Fatalf("sweep GETs = %d, want %d (2/repo + 1 catalog)", g, wantG)
+		}
+		if wantP := n + 1; p != wantP {
+			t.Fatalf("sweep PUTs = %d, want %d (%d sidecars + 1 catalog CAS)", p, wantP, n)
+		}
+		if h != 0 {
+			t.Fatalf("sweep must probe (GET), never HEAD, got %d heads", h)
+		}
+		// Steady state: a second pass finds every sidecar current
+		// (PUT-if-changed) — only the 1 catalog CAS remains.
+		cs3 := &countingStore{ObjectStore: base}
+		res2, err := Sweep(ctx, cs3, SweepOptions{
+			Now: func() time.Time { return fixed },
+			ListRepos: func(context.Context) ([]string, error) {
+				return append([]string{}, ids...), nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		g3, p3, _, l3, d3 := cs3.snapshot()
+		t.Logf("E16 sweep steady n=%d: folded=%d unchanged=%d gets=%d puts=%d", n, res2.Folded, res2.Unchanged, g3, p3)
+		if res2.Folded != 0 || res2.Unchanged != n {
+			t.Fatalf("steady sweep: folded=%d unchanged=%d, want 0/%d", res2.Folded, res2.Unchanged, n)
+		}
+		if g3 != 2*n+1 || p3 != 1 {
+			t.Fatalf("steady sweep: gets=%d puts=%d, want %d/1", g3, p3, 2*n+1)
+		}
 		// Listing query: exactly ONE catalog GET regardless of repo count.
 		cs2 := &countingStore{ObjectStore: base}
 		if _, err := ReadCatalog(ctx, cs2); err != nil {
@@ -99,8 +135,8 @@ func TestSweepRoundTrips(t *testing.T) {
 		if g2 != 1 {
 			t.Fatalf("listing must cost exactly 1 catalog GET, got %d", g2)
 		}
-		if l != 0 || d != 0 {
-			t.Fatalf("sweep must issue zero LIST/DELETE, got lists=%d deletes=%d", l, d)
+		if l != 0 || d != 0 || l3 != 0 || d3 != 0 {
+			t.Fatalf("sweep must issue zero LIST/DELETE, got lists=%d/%d deletes=%d/%d", l, l3, d, d3)
 		}
 	}
 }
