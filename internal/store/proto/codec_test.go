@@ -163,6 +163,8 @@ func newInstance(name string) interface{} {
 		return &FsckReport{}
 	case "RepoCatalog":
 		return &RepoCatalog{}
+	case "RepoCatalogEntry":
+		return &RepoCatalogEntry{}
 	case "MaintainerHeartbeat":
 		return &MaintainerHeartbeat{}
 	case "Timestamp":

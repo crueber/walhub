@@ -166,7 +166,15 @@ message FsckReport {              // fsck.pb; overwritten, never replayed
   uint64 repaired_seq = 8;
 }
 
-message RepoCatalog { repeated string repos = 1; google.protobuf.Timestamp updated_at = 2; }
+message RepoCatalogEntry {
+  string repo = 1;                // "<owner>/<repo>"
+  uint64 size_bytes = 2;          // canonical stored-object size (Forgejo #248)
+  uint64 object_count = 3;
+  uint64 head_seq = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message RepoCatalog { repeated string repos = 1; google.protobuf.Timestamp updated_at = 2; repeated RepoCatalogEntry entries = 3; }
 
 message MaintainerHeartbeat {     // bucket root maintain/<host>.pb
   string host = 1;

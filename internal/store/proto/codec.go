@@ -2612,6 +2612,121 @@ func (m *FsckReport) unmarshal(b []byte) error {
 // Size returns the exact encoded byte length (equals len(Marshal(m))).
 func (m *FsckReport) Size() int { return m.size() }
 
+// ---- RepoCatalogEntry (Forgejo #248) ----
+
+func (m *RepoCatalogEntry) size() int {
+	if m == nil {
+		return 0
+	}
+	n := 0
+	if m.Repo != "" {
+		n += sizeTag(1) + sizeLen(len(m.Repo)) + len(m.Repo)
+	}
+	if m.SizeBytes != 0 {
+		n += sizeTag(2) + uvarintLen(m.SizeBytes)
+	}
+	if m.ObjectCount != 0 {
+		n += sizeTag(3) + uvarintLen(m.ObjectCount)
+	}
+	if m.HeadSeq != 0 {
+		n += sizeTag(4) + uvarintLen(m.HeadSeq)
+	}
+	if m.UpdatedAt != nil && (m.UpdatedAt.Seconds != 0 || m.UpdatedAt.Nanos != 0) {
+		n += sizeSub(m.UpdatedAt)
+	}
+	return n
+}
+
+func (m *RepoCatalogEntry) Marshal() []byte {
+	buf := make([]byte, 0, m.size())
+	return m.AppendTo(buf)
+}
+
+func (m *RepoCatalogEntry) AppendTo(buf []byte) []byte {
+	if m == nil {
+		return buf
+	}
+	if m.Repo != "" {
+		buf = appendString(buf, 1, m.Repo)
+	}
+	if m.SizeBytes != 0 {
+		buf = binary.AppendUvarint(buf, 2<<3|0)
+		buf = binary.AppendUvarint(buf, m.SizeBytes)
+	}
+	if m.ObjectCount != 0 {
+		buf = binary.AppendUvarint(buf, 3<<3|0)
+		buf = binary.AppendUvarint(buf, m.ObjectCount)
+	}
+	if m.HeadSeq != 0 {
+		buf = binary.AppendUvarint(buf, 4<<3|0)
+		buf = binary.AppendUvarint(buf, m.HeadSeq)
+	}
+	if m.UpdatedAt != nil && (m.UpdatedAt.Seconds != 0 || m.UpdatedAt.Nanos != 0) {
+		buf = appendSub(buf, 5, m.UpdatedAt)
+	}
+	return buf
+}
+
+func (m *RepoCatalogEntry) Unmarshal(b []byte) error {
+	*m = RepoCatalogEntry{}
+	return m.unmarshal(b)
+}
+
+func (m *RepoCatalogEntry) unmarshal(b []byte) error {
+	d := &dec{b: b}
+	for d.more() {
+		f, wt, err := d.tag()
+		if err != nil {
+			return err
+		}
+		switch {
+		case f == 1 && wt == 2:
+			s, err := d.str()
+			if err != nil {
+				return err
+			}
+			m.Repo = s
+		case f == 2 && wt == 0:
+			v, err := d.uvarint()
+			if err != nil {
+				return err
+			}
+			m.SizeBytes = v
+		case f == 3 && wt == 0:
+			v, err := d.uvarint()
+			if err != nil {
+				return err
+			}
+			m.ObjectCount = v
+		case f == 4 && wt == 0:
+			v, err := d.uvarint()
+			if err != nil {
+				return err
+			}
+			m.HeadSeq = v
+		case f == 5 && wt == 2:
+			sub, err := d.raw()
+			if err != nil {
+				return err
+			}
+			if m.UpdatedAt == nil {
+				m.UpdatedAt = &Timestamp{}
+			}
+			if err := m.UpdatedAt.unmarshal(sub); err != nil {
+				return err
+			}
+		default:
+			if err := d.skip(wt); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Size returns the exact encoded byte length (equals len(Marshal(m))).
+func (m *RepoCatalogEntry) Size() int { return m.size() }
+
 // ---- RepoCatalog ----
 
 func (m *RepoCatalog) size() int {
@@ -2624,6 +2739,9 @@ func (m *RepoCatalog) size() int {
 	}
 	if m.UpdatedAt != nil && (m.UpdatedAt.Seconds != 0 || m.UpdatedAt.Nanos != 0) {
 		n += sizeSub(m.UpdatedAt)
+	}
+	for _, e := range m.Entries {
+		n += sizeTag(3) + sizeLen(e.size()) + e.size()
 	}
 	return n
 }
@@ -2642,6 +2760,9 @@ func (m *RepoCatalog) AppendTo(buf []byte) []byte {
 	}
 	if m.UpdatedAt != nil && (m.UpdatedAt.Seconds != 0 || m.UpdatedAt.Nanos != 0) {
 		buf = appendSub(buf, 2, m.UpdatedAt)
+	}
+	for _, e := range m.Entries {
+		buf = appendSub(buf, 3, e)
 	}
 	return buf
 }
@@ -2678,6 +2799,16 @@ func (m *RepoCatalog) unmarshal(b []byte) error {
 			if err := m.UpdatedAt.unmarshal(sub); err != nil {
 				return err
 			}
+		case f == 3 && wt == 2:
+			sub, err := d.raw()
+			if err != nil {
+				return err
+			}
+			e := &RepoCatalogEntry{}
+			if err := e.unmarshal(sub); err != nil {
+				return err
+			}
+			m.Entries = append(m.Entries, e)
 		default:
 			if err := d.skip(wt); err != nil {
 				return err
@@ -2960,6 +3091,15 @@ func UnmarshalBundleList(b []byte) (*BundleList, error) {
 // UnmarshalManifest decodes a manifest.pb body.
 func UnmarshalManifest(b []byte) (*Manifest, error) {
 	v := &Manifest{}
+	if err := v.Unmarshal(b); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// UnmarshalRepoCatalog decodes a meta/repos.pb body (doc 02 §2.2).
+func UnmarshalRepoCatalog(b []byte) (*RepoCatalog, error) {
+	v := &RepoCatalog{}
 	if err := v.Unmarshal(b); err != nil {
 		return nil, err
 	}

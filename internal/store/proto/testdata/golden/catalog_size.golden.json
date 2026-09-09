@@ -1,0 +1,31 @@
+{
+  "type": "RepoCatalog",
+  "value": {
+    "entries": [
+      {
+        "head_seq": 66,
+        "object_count": 12,
+        "repo": "alice/widget",
+        "size_bytes": 3296,
+        "updated_at": {
+          "nanos": 500000000,
+          "seconds": 1700000000
+        }
+      },
+      {
+        "head_seq": 0,
+        "object_count": 0,
+        "repo": "bob/tool",
+        "size_bytes": 0
+      }
+    ],
+    "repos": [
+      "alice/widget",
+      "bob/tool"
+    ],
+    "updated_at": {
+      "nanos": 0,
+      "seconds": 1700000000
+    }
+  }
+}

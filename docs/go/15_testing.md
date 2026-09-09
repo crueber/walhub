@@ -198,7 +198,7 @@ All sim tests skip in `-short` mode (`if testing.Short() { t.Skip }`) so `make t
 
 | Operation | Assertion | Budget source (§4.8) |
 |---|---|---|
-| push (per batch, already synced) | `ops ≤ 5` (4 if already synced) | freshness GET → (pack PUTs ∥ log PUT) → manifest CAS |
+| push (per batch, already synced) | `ops ≤ 6` (5 if already synced; ref-only/settings batches carry no packs and write no sidecar) | freshness GET → (pack PUTs ∥ log PUT ∥ size-sidecar PUT) → manifest CAS; the sidecar PUT adds total ops only, zero sequential trips (R1 B1, Forgejo #248) |
 | warm refs sync | `ops ≤ 1` | 1 conditional GET (0 within freshness TTL) |
 | cold refs sync (one tail) | `ops ≤ 2` | manifest GET → (checkpoint refs ∥ tail) |
 | checkpoint | `ops ≤ 4` | freshness GET → (refs PUT ∥ checkpoint PUT) → manifest CAS; provenance times come from what the writer already applied, **never a log GET** (the 2026-08-22 regression was 6 requests — this assertion is the regression fence) |

@@ -124,6 +124,7 @@ func TestDiscoveryShape(t *testing.T) {
 		"/api/v1/ssh-keys",
 		"/api/v1/owners",
 		"/api/v1/owners/{owner}/repos",
+		"/api/v1/owners/{owner}/repos/detailed",
 		"/{owner}/{repo}/api",
 		"/{owner}/{repo}/api/refs",
 		"/{owner}/{repo}/api/refs/{branches|tags}",

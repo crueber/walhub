@@ -246,9 +246,32 @@ type FsckReport struct {
 }
 
 // RepoCatalog — optional meta/repos.pb (bucket root; not required for correctness).
+// Field 3 (entries, Forgejo #248) is the size-catalog aggregate: one row per
+// repo with stored-object size (Σ live-pack PackSize+IdxSize) + object count.
+// `repos` (field 1) is retained verbatim for Rust-compat readers; writers keep
+// both in agreement (entries[].repo ⊇ repos). Readers MUST tolerate either
+// being absent (nil entries = unknown sizes, never zero).
 type RepoCatalog struct {
-	Repos     []string   `json:"repos"`
-	UpdatedAt *Timestamp `json:"updated_at,omitempty"`
+	Repos     []string            `json:"repos"`
+	UpdatedAt *Timestamp          `json:"updated_at,omitempty"`
+	Entries   []*RepoCatalogEntry `json:"entries,omitempty"`
+}
+
+// RepoCatalogEntry — one aggregate row (Forgejo #248, walgit.v1 field 3+).
+// Size semantic (canonical): stored-object size = Σ PackSize + Σ IdxSize over
+// the manifest's live pack set; object_count = Σ ObjectCount. Excludes
+// .rev/.bitmap/.commit-graph side files, bundles/ advertisement state, and LFS
+// objects (separate key family; a future LFS accounting would sum
+// lfs/objects/ off-hot-path in the sweep, never on publish). Zero means
+// verified-empty; absent row (or absent entries) means unknown/unbackfilled.
+// Reserved field numbers 6+ leave room for #247 activity derivation on this
+// same row family (append-only, never renumbered).
+type RepoCatalogEntry struct {
+	Repo        string     `json:"repo"` // "<owner>/<repo>"
+	SizeBytes   uint64     `json:"size_bytes"`
+	ObjectCount uint64     `json:"object_count"`
+	HeadSeq     uint64     `json:"head_seq"`
+	UpdatedAt   *Timestamp `json:"updated_at,omitempty"`
 }
 
 // MaintainerHeartbeat — bucket root maintain/<host>.pb.

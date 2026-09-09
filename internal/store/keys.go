@@ -80,6 +80,20 @@ func MaintainerKey(host string) string { return "maintain/" + host + ".pb" }
 // PolicyKey returns the repo-relative policy document key.
 func PolicyKey(owner, name string) string { return fmt.Sprintf("repos/%s/%s/policy.json", owner, name) }
 
+// StatsKeySuffix is the per-repo size sidecar (Forgejo #248, shared rails
+// for #247): repos/<o>/<r>/meta/stats.json, overwrite JSON
+// {"version":1,"size_bytes":N,"object_count":M,"head_seq":H,"updated_at":RFC3339}.
+// Primary writer is the publish path (parallel sidecar PUT on every
+// pack-changing PUSH/COMPACT, best-effort — the manifest CAS stays the commit
+// point); the maintainer sweep backfills/repairs (PUT-if-changed converges).
+// The shape is forward-compatible: #247 activity derivation adds optional
+// fields on this same file (one PUT, both concerns — never two sidecars).
+// Size semantic: stored-object size (packs+idx), never checkout/LFS/bundles.
+const StatsKeySuffix = "meta/stats.json"
+
+// StatsKey returns "repos/<owner>/<name>/meta/stats.json".
+func StatsKey(owner, name string) string { return RepoPrefix(owner, name) + StatsKeySuffix }
+
 // MirrorKeySuffix is the repo-relative mirror sidecar (Forgejo #240):
 // Create-once-then-CAS'd, in the frozen overwritable family
 // (14_extensibility.md §14.11 rule 2 — amended in the same change that

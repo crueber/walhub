@@ -6,6 +6,7 @@ package wal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -357,9 +358,42 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 			seqOf[entryJob[e]] = e.Seq
 		}
 
-		// 6+7. Build the manifest update and CAS it.
+		// 6+7. Build the manifest update and CAS it, with the Forgejo #248 size
+		// sidecar PUT running in parallel with the manifest CAS (+1 total op,
+		// +0 sequential trips — R1 B1; the bucket-root catalog is never
+		// touched on push, only the repo-scoped sidecar).
 		next := buildNextManifest(base, entries, firstSeq, segFirst, segBody, p.h.reg.instance)
+		var statsBody []byte
+		if batchChangesLiveSet(entries) {
+			size, objs := statsSizeOf(next.Packs)
+			statsBody = encodeStatsSidecar(size, objs, next.HeadSeq, time.Now().UTC())
+		}
+		// The sidecar PUT joins the CAS: parallel, never sequential-after.
+		//
+		// ### Concurrency
+		// Hazard: the sidecar goroutine outliving the attempt (leak) or racing
+		// the retry ladder's next attempt.
+		// Avoidance: buffered channel (the send never blocks); the attempt
+		// joins it before branching on casErr, so no sidecar goroutine
+		// survives its attempt and at most one sidecar PUT is in flight per
+		// attempt. On a 412-restart the attempt's sidecar may have landed
+		// ahead of the manifest (head_seq one batch ahead of truth); the
+		// retry's own success write overwrites it, and the maintainer sweep
+		// (PUT-if-changed against the manifest) converges anything left
+		// behind — the sidecar is a rebuildable hint, never the commit point.
+		statsCh := make(chan error, 1)
+		if statsBody != nil {
+			go func() {
+				_, err := p.h.reg.st.Put(ctx, p.h.repoKey(store.StatsKeySuffix),
+					store.PutBody{Bytes: statsBody},
+					store.PutOptions{Mode: store.PutOverwrite, ContentType: "application/json"})
+				statsCh <- err
+			}()
+		} else {
+			statsCh <- nil
+		}
 		newVersion, committed, casErr := p.casManifest(ctx, version, segKey, segVersion, next)
+		statsErr := <-statsCh
 		if casErr != nil {
 			if errors.Is(casErr, errRestartLadder) {
 				p.h.syncMu.Lock()
@@ -372,6 +406,13 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 		}
 		if committed {
 			p.commitLocal(ctx, next, newVersion, entries, burned)
+			if statsErr != nil {
+				// Best-effort: the manifest CAS is the commit point (law 4);
+				// a lost sidecar write converges via the next pack-changing
+				// publish or the maintainer sweep backfill. The push still
+				// answers ok — the sidecar is optional/rebuildable.
+				logWarnf("publish %s: size sidecar write failed: %v (sweep backfills)", p.h.ID, statsErr)
+			}
 		}
 		// 8. Answer every waiter: valid → {Seq, per-ref ok}; invalid → errors.
 		for i, j := range batch {
@@ -400,6 +441,75 @@ func packRefOf(p *PreparedPack, seq uint64, tier uint32) *proto.PackRef {
 		Seq:         seq,
 		Kind:        proto.PackKindObjects,
 	}
+}
+
+// ---- Forgejo #248: publish-path size sidecar (R1 B1) -------------------------
+
+// batchChangesLiveSet reports whether the batch can change the manifest's
+// live pack set. PUSH and COMPACT entries carry packs/supersedes;
+// REF_UPDATE and SETTINGS entries never touch packs (annotate_pack bypasses
+// runBatch entirely — manifest-only CAS, no log entry — so it skips by
+// construction).
+func batchChangesLiveSet(entries []*proto.LogEntry) bool {
+	for _, e := range entries {
+		if e == nil {
+			continue
+		}
+		if e.Kind == proto.EntryKindPush || e.Kind == proto.EntryKindCompact {
+			return true
+		}
+	}
+	return false
+}
+
+// statsSizeOf derives (size_bytes, object_count) = (Σ PackSize+Σ IdxSize,
+// Σ ObjectCount) over the live pack set. Pure arithmetic on data the publish
+// path already holds: no I/O, saturating on overflow (never wraps). It
+// mirrors sizecatalog.SizeOf without importing it — internal/wal must not
+// import feature packages in production code (law 8); size248_durable_test.go
+// cross-checks that the two agree.
+func statsSizeOf(packs []*proto.PackRef) (uint64, uint64) {
+	var size, objs uint64
+	for _, pr := range packs {
+		if pr == nil {
+			continue
+		}
+		size = statsSatAdd(size, statsSatAdd(pr.PackSize, pr.IdxSize))
+		objs = statsSatAdd(objs, pr.ObjectCount)
+	}
+	return size, objs
+}
+
+func statsSatAdd(a, b uint64) uint64 {
+	if ^uint64(0)-a < b {
+		return ^uint64(0)
+	}
+	return a + b
+}
+
+// statsSidecar is the meta/stats.json v1 body shape (field-for-field the
+// sizecatalog.Stats shape; cf. store.StatsKeySuffix).
+type statsSidecar struct {
+	Version     int    `json:"version"`
+	SizeBytes   uint64 `json:"size_bytes"`
+	ObjectCount uint64 `json:"object_count"`
+	HeadSeq     uint64 `json:"head_seq"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// encodeStatsSidecar renders the sidecar body (updated_at = now UTC RFC 3339).
+// The shape is owned by internal/sizecatalog (version 1); this mirror must
+// stay shape-compatible — the durable publish test decodes our bytes with
+// sizecatalog.DecodeStats.
+func encodeStatsSidecar(size, objs, headSeq uint64, now time.Time) []byte {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	body, _ := json.Marshal(statsSidecar{
+		Version: 1, SizeBytes: size, ObjectCount: objs, HeadSeq: headSeq,
+		UpdatedAt: now.UTC().Format(time.RFC3339),
+	})
+	return body
 }
 
 // reply sends exactly one result and closes the reply channel (double-reply

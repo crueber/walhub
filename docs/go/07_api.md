@@ -349,6 +349,7 @@ The discovery document:
     "/api/v1/me",
     "/api/v1/owners",
     "/api/v1/owners/{owner}/repos",
+    "/api/v1/owners/{owner}/repos/detailed",
     "/{owner}/{repo}/api",
     "/{owner}/{repo}/api/refs",
     "/{owner}/{repo}/api/refs/branches",
@@ -379,6 +380,16 @@ adding a route without updating this list is a bug. The doc never lists admin-on
 - `GET /api/v1/owners` → sorted owner names **from the STORE** (object-store listing / registry), never
   from a local disk directory; SWR class. `GET /api/v1/owners/{o}/repos` → short repo names, `200 []` for
   an unknown owner (never 404).
+- `GET /api/v1/owners/{o}/repos/detailed` (Forgejo #248 — NEW alongside v1, triple twins
+  `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.detailed`) →
+  `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?}]}` (`[]` never null;
+  `size_bytes: null` = unknown/unbackfilled, `0` = verified-empty). Query: `sort=name|size`
+  (default name), `order=asc|desc` (default asc), `min_bytes=`/`max_bytes=` (uint64; unknown
+  rows never match a bound; `min>max` → 400). Served from the aggregate catalog in ONE
+  object read regardless of repo count; absent catalog degrades to null rows (never 404/500
+  for a missing optional object). Ties break on `(owner, name)` (shared with #247 ordering).
+  SWR class. Size semantic: stored-object size (packs+idx — see 02 §2.1; overview
+  `LiveBytes` stays Σ PackSize-only and is documented as differing by IdxSize).
 - `GET /services/api/instance` → `{kind, name, revision, instance, version, roles[], disk, shape, cpus,
   memory_bytes}` (`no-store`) — "this machine" for UI footers: hostname, declared roles, disk mode, CPU
   count, `runtime.NumCPU()` / total memory.
@@ -830,3 +841,12 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   the ETag covers it (`~m` suffix, the #235 `~d` precedent) so outcome-only
   changes never 304. Strict JSON (unknown fields 400); tokens ride the POST
   bodies memory-only (`secret_set` presence-only in task params).
+- **Size-detailed listing (Forgejo #248, R1 B2 — new alongside v1).**
+  `GET /api/v1/owners/{owner}/repos/detailed` (+ `/api-browser/v1` +
+  `/services/api` twins, discovery `endpoints[]`, SDK `owners.detailed`) is
+  the object-row surface the v1 string list can never become in place
+  (14 §14.12: row-shape change forces a new endpoint; query params alone are
+  additive). String lists stay byte-identical. Rationale: queryable
+  size state (sort/filter) without per-repo manifest scans at query time —
+  one catalog read per query, null-vs-0 preserved so unbackfilled repos hide
+  instead of lying.

@@ -86,6 +86,12 @@ type Maintainer struct {
 
 	roundMu sync.Mutex
 	rounds  map[string]*FollowRound // §8.5: per-instance status, NOT the WAL
+
+	// sizeCursor resumes the bounded size-catalog fold across passes
+	// (Forgejo #248 §4: MaxRepos per pass; "" = start/complete). Memory
+	// only (cache — the catalog itself is durable, loss repeats work).
+	sizeMu     sync.Mutex
+	sizeCursor string
 }
 
 // New builds a Maintainer. The engine binding (bind_wal.go) supplies the
@@ -202,6 +208,14 @@ func (m *Maintainer) RunPass(ctx context.Context) {
 		nAssigned++
 		m.processRepo(ctx, repo, cfg)
 	}
+
+	// Size-catalog fold (Forgejo #248 §4): per-repo meta/stats.json sidecars
+	// + the bucket-root meta/repos.pb aggregate, bounded/resumable
+	// (MaxRepos per pass, cursor in memory). Best-effort: fold errors are
+	// logged, never fail the pass; the catalog stays optional/rebuildable.
+	// Runs on the pass goroutine (no new goroutine, no lock held across
+	// store I/O — Sweep owns its bounded worker pool).
+	m.foldSizeCatalog(ctx)
 
 	// Heartbeat post-write (§4.2): last_unit = "<repo> <kind> <detail>".
 	hb.LastUnit = m.getLastUnit()
