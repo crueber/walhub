@@ -447,6 +447,35 @@ func TestVariantGateParityHTTP237(t *testing.T) {
 	}
 }
 
+// TestPortRefusedDespiteAllowlistMatch237 pins fail-closed precedence at
+// the handler level: a non-default port is refused even when the host IS
+// allowlisted (the port rule runs inside NormalizeSource, before the gate
+// ever sees the host), and embedded userinfo never reaches the gate even
+// on an allowlisted host.
+func TestPortRefusedDespiteAllowlistMatch237(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Import.URLAllowlist = []string{"localhost"}
+	cfg.Import.AllowPrivateNetworks = true
+	svc, _ := testService(t, cfg, &FakeRoles{})
+	h := testHandler(svc, adminPrincipal())
+	for _, v := range []string{
+		"https://localhost:8080/x/y.git",
+		"https://localhost:8443/x/y.git",
+		"http://localhost:8080/x/y.git",
+	} {
+		w := doPost(t, h, "/api/v1/repos/imports",
+			fmt.Sprintf(`{"source_url":%q,"owner":"acme","name":"w"}`, v), "")
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "explicit port") {
+			t.Fatalf("POST %q status = %d body = %q, want 400 explicit-port refusal despite allowlist match", v, w.Code, w.Body.String())
+		}
+	}
+	w := doPost(t, h, "/api/v1/repos/imports",
+		`{"source_url":"https://user:token@localhost/x/y.git","owner":"acme","name":"w"}`, "")
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "credentials") {
+		t.Fatalf("userinfo status = %d body = %q, want 400 credentials refusal", w.Code, w.Body.String())
+	}
+}
+
 // TestLegitimateCanonicalAllowlisted237 guards the "do NOT break
 // legitimate imports" constraint: the plain canonical form against a
 // matching allowlist starts normally (202). Clone output is captured so
