@@ -117,12 +117,13 @@ function CodeLines(props) {
   const onNumClick = (n, ev) => {
     ev.preventDefault();
     // Keyboard Enter/Space arrives as a click with detail 0 and no drag
-    // before it — build from the anchor. A mouse click lands after the
-    // mousedown-drag previewed the range, so push that range as-is.
-    const r = ev.detail === 0 ? dragRange(anchor ?? n, n) : getSel();
+    // before it — plain Enter jumps to the focused line, Shift+Enter extends
+    // from the anchor. A mouse click lands after the mousedown-drag
+    // previewed the range, so push that range as-is.
+    const r = ev.detail === 0 ? dragRange(ev.shiftKey ? anchor ?? n : n, n) : getSel();
     if (r) {
       if (ev.detail === 0) {
-        anchor = anchor ?? n;
+        anchor = ev.shiftKey ? anchor ?? n : n;
         setSel(r);
       }
       window.location.hash = lineHash(r.start, r.end);
@@ -131,9 +132,11 @@ function CodeLines(props) {
 
   window.addEventListener("hashchange", readHash);
   window.addEventListener("mouseup", endDrag);
+  window.addEventListener("blur", endDrag);
   onCleanup(() => {
     window.removeEventListener("hashchange", readHash);
     window.removeEventListener("mouseup", endDrag);
+    window.removeEventListener("blur", endDrag);
   });
 
   return (

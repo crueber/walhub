@@ -106,6 +106,7 @@ test("Blob.jsx renders the per-line selection table, not the two-<pre> layout", 
   assert.match(src, /onMouseDown.*onNumMouseDown/, "mousedown starts the drag anchor");
   assert.match(src, /onMouseOver.*onNumMouseOver/, "mouseover extends the drag");
   assert.match(src, /onClick.*onNumClick/, "click/keyboard pushes the hash");
+  assert.match(src, /ev\.shiftKey \? anchor/, "keyboard: plain Enter jumps, Shift+Enter extends");
   assert.match(src, /hashchange/, "back/forward + pasted URLs re-highlight");
   assert.match(src, /scrollIntoView/, "shared URLs scroll to the target");
   assert.match(src, /replaceState/, "drag frames replace, not push");
