@@ -359,7 +359,10 @@ func (s *Service) runSync(ctx context.Context, task *wal.Task, owner, name, toke
 			}
 			if !anc {
 				refused = append(refused, r.Name)
-				task.Notice(fmt.Sprintf("mirror sync %s: upstream rewound %s %s→%s; refusing (ff-only — use force resync to override)", target, r.Name, shortOid(old), shortOid(r.Oid)))
+				// r.Name is upstream-controlled (import S2 scrub
+				// discipline — a hostile upstream must not smuggle
+				// credential-shaped text into task logs).
+				task.Notice(fmt.Sprintf("mirror sync %s: upstream rewound %s %s→%s; refusing (ff-only — use force resync to override)", target, scrubText(r.Name), shortOid(old), shortOid(r.Oid)))
 				continue
 			}
 		}
@@ -443,7 +446,9 @@ func (s *Service) recordRefused(ctx context.Context, owner, name string, now tim
 			return
 		}
 		doc.LastAttemptAt = now.UTC().Format(time.RFC3339)
-		doc.LastResult = "refused: upstream rewound " + shortList(refs) + " (ff-only; force resync to override)"
+		// Ref names are upstream-controlled: scrub before they reach
+		// the sidecar (same S2 rule as the task notice above).
+		doc.LastResult = "refused: upstream rewound " + scrubText(shortList(refs)) + " (ff-only; force resync to override)"
 		if uerr := UpdateCAS(ctx, s.store, owner, name, doc, ver); uerr != nil {
 			if store.IsPreconditionFailed(uerr) {
 				continue

@@ -184,6 +184,25 @@ func TestPutCreateAndUpdate(t *testing.T) {
 	// Covered via Create directly: covered in mirror_test.
 }
 
+func TestPutCreateUnbornRepo404(t *testing.T) {
+	ctx := context.Background()
+	reg, st := testRegistry(t)
+	svc := testService(t, st, reg)
+	h := testHandler(t, svc, reg, adminP)
+	up := initUpstream(t)
+	n := mustNormalize(t, "file://"+up)
+	// PUT-create on a repo that was never created → 404 (PUT is config
+	// on a repo; only the create twin creates repos). No sidecar may
+	// be left behind to 403 the name's future pushes.
+	rec := doHandle(h, http.MethodPut, "/acme/ghost/api/mirror", `{"upstream_url":`+quote(n)+`,"schedule":"daily"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unborn put = %d: %s", rec.Code, rec.Body.String())
+	}
+	if doc, _, _ := Load(ctx, st, "acme", "ghost"); doc != nil {
+		t.Fatalf("orphan sidecar: %+v", doc)
+	}
+}
+
 func TestDeleteMirror(t *testing.T) {
 	ctx := context.Background()
 	reg, st := testRegistry(t)

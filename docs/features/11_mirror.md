@@ -118,7 +118,7 @@ Repo lanes (both lanes, `/{o}/{r}/api/...` + `/api-browser/...`):
 
 ```
 GET    /{o}/{r}/api/mirror        → the view (open read — no secrets in it; 404 when not a mirror)
-PUT    /{o}/{r}/api/mirror        → {upstream_url?, schedule?}: create (+ anonymous first sync, 202 {task, target, mirror}) or reschedule (200 view); upstream change → 409 (admin)
+PUT    /{o}/{r}/api/mirror        → {upstream_url?, schedule?}: create (+ anonymous first sync, 202 {task, target, mirror}) or reschedule (200 view); unborn repo → 404 (PUT never creates repos); upstream change → 409 (admin)
 DELETE /{o}/{r}/api/mirror        → 204 (stops the loop; admin)
 POST   /{o}/{r}/api/mirror/sync   → {token?, force?} → 202 {task: {id}, target} (admin)
 GET    /{o}/{r}/api/mirror/sync[?id=] → {done, task?, error?} | {active, recent} (open read)

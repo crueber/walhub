@@ -184,7 +184,9 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, owner, repo string
 // Admin-only. No sidecar yet → create (upstream_url required,
 // schedule defaults to daily) + anonymous first sync spawned (public
 // upstream; a token-requiring upstream's first sync fails narrated —
-// use Sync-now with a memory-only token). Sidecar present → schedule
+// use Sync-now with a memory-only token). The repo must already exist
+// (404 otherwise — PUT never creates repos, only the create twin
+// does). Sidecar present → schedule
 // update only (an upstream_url change is 409 delete-and-recreate —
 // the anchor must not silently switch sources).
 func (h *Handler) put(w http.ResponseWriter, r *http.Request, owner, repo string) {
@@ -260,6 +262,18 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request, owner, repo string
 	}
 	if serr := h.checkSSRF(n, false); serr != nil {
 		writeStatusErr(w, serr)
+		return
+	}
+	// PUT is config on a repo, never repo creation (the create twin
+	// owns that). A sidecar on an unborn repo would 403 every future
+	// push to the name — the guard probes the sidecar, not the
+	// manifest — while every sync fails at Open. Fail fast with 404
+	// instead of stranding the name.
+	if meta, herr := h.Svc.store.Head(ctx, store.RepoPrefix(owner, repo)+store.Manifest); herr != nil && !store.IsNotFound(herr) {
+		writePlain(w, http.StatusInternalServerError, "mirror: "+scrubText(herr.Error()))
+		return
+	} else if herr != nil || meta == nil {
+		writePlain(w, http.StatusNotFound, "repository not found")
 		return
 	}
 	if _, cerr := Create(ctx, h.Svc.store, owner, repo, n.URL, schedule); cerr != nil {

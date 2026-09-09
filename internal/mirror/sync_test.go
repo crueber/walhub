@@ -173,6 +173,53 @@ func TestSyncRewindRefusedAndForced(t *testing.T) {
 	}
 }
 
+func TestSyncRewindRefusalScrubbed(t *testing.T) {
+	ctx := context.Background()
+	reg, st := testRegistry(t)
+	svc := testService(t, st, reg)
+	up := initUpstream(t)
+	// A hostile upstream branch name carrying credential-shaped text
+	// ("=" is legal in a refname): the rewind-refusal paths must scrub
+	// it (import S2) before it reaches task logs or the sidecar.
+	gitOut(t, up, "branch", "leak-token=hunter2")
+	anchor := strings.TrimSpace(gitOut(t, up, "rev-parse", "HEAD"))
+	commitFile(t, up, "g.txt", "b\n", "b")
+	setupMirror(t, ctx, reg, st, "acme", "scr", up)
+	if _, err := svc.SyncNow(ctx, "acme", "scr", "", false); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	// Advance the hostile branch (ff lands), then rewind it.
+	gitOut(t, up, "checkout", "-q", "leak-token=hunter2")
+	commitFile(t, up, "h.txt", "c\n", "c")
+	gitOut(t, up, "checkout", "-q", "main")
+	if _, err := svc.SyncNow(ctx, "acme", "scr", "", false); err != nil {
+		t.Fatalf("ff: %v", err)
+	}
+	gitOut(t, up, "branch", "-f", "leak-token=hunter2", anchor)
+	rec, err := svc.SyncNow(ctx, "acme", "scr", "", false)
+	if err != nil {
+		t.Fatalf("rewind sync errored (must refuse + narrate, not fail): %v", err)
+	}
+	if rec == nil || rec.OK == nil || !*rec.OK {
+		t.Fatalf("rec = %+v", rec)
+	}
+	doc, _, _ := Load(ctx, st, "acme", "scr")
+	if !strings.HasPrefix(doc.LastResult, "refused:") {
+		t.Fatalf("result = %q, want refused:", doc.LastResult)
+	}
+	if strings.Contains(doc.LastResult, "hunter2") {
+		t.Fatalf("secret leaked into sidecar: %q", doc.LastResult)
+	}
+	if !strings.Contains(doc.LastResult, "[redacted]") {
+		t.Fatalf("refusal not scrubbed: %q", doc.LastResult)
+	}
+	for _, line := range rec.LogTail {
+		if strings.Contains(line, "hunter2") {
+			t.Fatalf("secret leaked into task log: %q", line)
+		}
+	}
+}
+
 func TestSyncSkipsLiveImportClaim(t *testing.T) {
 	ctx := context.Background()
 	reg, st := testRegistry(t)
