@@ -500,7 +500,25 @@ func (v *walView) Summary(ctx context.Context, id git.RepoId) (SummaryData, erro
 	if v.unbornState(ctx, id, s) {
 		s.Health = RepoHealthEmpty
 	}
+	s.Description = v.repoDescription(ctx, id)
 	return s, nil
+}
+
+// repoDescription reads the issue-#235 description from the manifest-inline
+// settings TOML. Costs zero new store round trips: Manifest is served from
+// the open handle's in-memory snapshot (the refs sync above already fetched
+// it — the same guarantee unbornState relies on). Fail-open to "": display
+// metadata must never fail the summary, and a missing/unparseable doc
+// renders as unset.
+func (v *walView) repoDescription(ctx context.Context, id git.RepoId) string {
+	if v.engine == nil {
+		return ""
+	}
+	m, err := v.engine.Manifest(ctx, id)
+	if err != nil || m == nil || m.Settings == nil {
+		return ""
+	}
+	return config.DescriptionOf([]byte(m.Settings.Toml))
 }
 
 func (v *walView) Overview(ctx context.Context, id git.RepoId) (OverviewData, error) {

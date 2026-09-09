@@ -2,7 +2,9 @@ package api
 
 import (
 	"errors"
+	"hash/fnv"
 	"net/http"
+	"strconv"
 
 	"git.packden.us/crueber/walhub/internal/git"
 )
@@ -10,8 +12,11 @@ import (
 // --- GET/PUT/DELETE {lane} — repo summary, create, delete (§9.1) ----------------------
 
 type summaryBody struct {
-	Owner        string           `json:"owner"`
-	Name         string           `json:"name"`
+	Owner string `json:"owner"`
+	Name  string `json:"name"`
+	// Description is the per-repo short display string (issue #235): "" when
+	// unset, rendered by the repo header and set via the General settings tab.
+	Description  string           `json:"description"`
 	FullName     string           `json:"full_name"`
 	Head         *Ref             `json:"head"` // null = unborn (the one sanctioned null)
 	Branches     int              `json:"branches"`
@@ -64,6 +69,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 	body := summaryBody{
 		Owner:        id.Owner,
 		Name:         id.Name,
+		Description:  s.Description,
 		FullName:     id.Owner + "/" + id.Name,
 		Head:         s.Head,
 		Branches:     s.Branches,
@@ -86,7 +92,24 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// keep showing healthy (review S1: ETag covers the health field).
 		etag += "~degraded"
 	}
+	if s.Description != "" {
+		// Same trap as the ~degraded suffix (issue #235): a
+		// description-only change keeps the head sha, so the ETag must
+		// cover the field or a revalidating client 304s and keeps showing
+		// the stale text. FNV-1a keeps the suffix short; clearing the
+		// description drops the suffix, which busts the cache too.
+		etag += "~d" + descriptionHash(s.Description)
+	}
 	writeCached(w, r, ccSWR, etag, http.StatusOK, body)
+}
+
+// descriptionHash is the short ETag suffix covering the summary description
+// (issue #235): FNV-1a/32 hex of the text, so a description-only change busts
+// the SWR cache without growing the ETag by the full text.
+func descriptionHash(d string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(d))
+	return strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 
 // repoPut creates a repo (?object_format=sha1|sha256, ?placeholder=true);

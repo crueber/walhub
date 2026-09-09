@@ -359,6 +359,75 @@ func TestParseRepoSettingsRejects(t *testing.T) {
 	}
 }
 
+func TestParseRepoSettingsDescription(t *testing.T) {
+	rs, err := ParseRepoSettings([]byte("description = \"A short repo line\"\n[bundles]\nmin_commits = 5\n"))
+	if err != nil {
+		t.Fatalf("ParseRepoSettings: %v", err)
+	}
+	if rs.Description != "A short repo line" {
+		t.Fatalf("description = %q", rs.Description)
+	}
+	// Absent key decodes to "" (unset), never nil-trouble.
+	rs, err = ParseRepoSettings([]byte("[bundles]\nmin_commits = 5\n"))
+	if err != nil {
+		t.Fatalf("ParseRepoSettings: %v", err)
+	}
+	if rs.Description != "" {
+		t.Fatalf("description = %q, want unset", rs.Description)
+	}
+	// Description never merges into the host config.
+	merged, err := rs.Merge(Defaults())
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	_ = merged
+	rs2, err := ParseRepoSettings([]byte("description = \"meta only\"\n"))
+	if err != nil {
+		t.Fatalf("ParseRepoSettings: %v", err)
+	}
+	if _, err := rs2.Merge(Defaults()); err != nil {
+		t.Fatalf("Merge with description: %v", err)
+	}
+	if err := rs2.ValidateAgainst(Defaults()); err != nil {
+		t.Fatalf("ValidateAgainst with description: %v", err)
+	}
+}
+
+func TestParseRepoSettingsDescriptionRejects(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "too long", payload: "description = \"" + strings.Repeat("x", MaxRepoDescriptionRunes+1) + "\"\n"},
+		{name: "newline", payload: "description = \"line one\\nline two\"\n"},
+		{name: "carriage return", payload: "description = \"a\rb\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseRepoSettings([]byte(tt.payload)); err == nil {
+				t.Fatalf("payload accepted, want rejection: %q", tt.payload)
+			}
+		})
+	}
+	// Exactly the limit parses.
+	if _, err := ParseRepoSettings([]byte("description = \"" + strings.Repeat("y", MaxRepoDescriptionRunes) + "\"\n")); err != nil {
+		t.Fatalf("limit-length description rejected: %v", err)
+	}
+}
+
+func TestDescriptionOf(t *testing.T) {
+	if got := DescriptionOf(nil); got != "" {
+		t.Fatalf("empty = %q", got)
+	}
+	if got := DescriptionOf([]byte("description = \"hi\"\n")); got != "hi" {
+		t.Fatalf("got %q", got)
+	}
+	// Unparseable bodies fail open to "" (read paths never break).
+	if got := DescriptionOf([]byte("[broken\n")); got != "" {
+		t.Fatalf("corrupt = %q", got)
+	}
+}
+
 func TestRepoSettingsMerge(t *testing.T) {
 	base := Defaults()
 	base.Upstream.TokenEnv = "HOST_TOKEN"

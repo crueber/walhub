@@ -302,6 +302,7 @@ func (r *RepoSettings) Merge(base *Config) (*Config, error)  // "with_settings":
 ### 4.2 Rules (normative, unchanged from Rust spec §15.2)
 
 - Allowed sections: `[bundles]`, `[maintenance]`, `[compaction]`, `[upstream]`; `[integrations]` accepted (stored verbatim, forward-compat). Anything else → 400 at publish.
+- Top-level `description` key (issue #235): the per-repo short display string shown in the repo header. Single line (no CR/LF/NUL), at most 512 characters (`MaxRepoDescriptionRunes`); violations → 400 like any other invalid key. Display metadata only — never merged into the host config (`Merge` ignores it), never in `settings/effective`. Rides the same WAL-published document, so revision/author/admin-writes come free.
 - Size: the serialized settings payload MUST be ≤ 16 KiB; larger → 400.
 - `[integrations]` contents are stored verbatim and never interpreted; the 16 KiB budget includes them.
 - NOT settable via settings: auth, store, server, wal, cache, `upstream.token_env` (host-only). A `[server]`, `[store]`, `[wal]`, `[cache]`, or `upstream.token_env` key inside repo settings → 400.
@@ -503,6 +504,7 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
   base checksum derives via `git.PackChecksumFromIdx` (not `TrimSuffix`-only) and the serving
   path is built as `pack-<bare>.pack`, so the base lands under `wal/<bare>.pack` like the
   tier-0 trailer-derived packs. Same-file `AddPack` installs are a no-op (05_wal_engine.md).
+- **NEW (2026-09-09) — top-level `description` key in per-repo settings (#235):** a single-line ≤512-char display string riding the WAL-published settings TOML (persistence/revision/authorship/admin-writes free); never merged into the host config, never in `settings/effective`. Rationale: 14 §14.12 — additive key, existing keys never change meaning; the 16 KiB payload budget is unchanged and still covers it.
 
 ### Divergence (2026-08-31)
 

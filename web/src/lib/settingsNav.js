@@ -7,8 +7,10 @@
 
 /** Standard settings entries, in sidebar order. WAL moved here from the
  *  main repo tab bar (issue #123): it renders inline as a settings section
- *  and the top-level WAL tab is gone. */
+ *  and the top-level WAL tab is gone. General (issue #235: the repo
+ *  description editor) is first and is the default landing tab. */
 export const SETTINGS_GROUP = [
+  { id: "general", label: "General" },
   { id: "scheduled", label: "Scheduled tasks" },
   { id: "policy", label: "Push policy" },
   { id: "config", label: "Effective config & history" },
@@ -26,7 +28,7 @@ export const DANGER_GROUP = [{ id: "danger", label: "Danger Zone" }];
 export const SETTINGS_TABS = [...SETTINGS_GROUP, ...DANGER_GROUP];
 
 /** First tab shown on a bare /settings visit (no hash). */
-export const DEFAULT_SETTINGS_TAB = "scheduled";
+export const DEFAULT_SETTINGS_TAB = "general";
 
 /**
  * Map a tab id to itself when it names a sidebar entry, else null.
