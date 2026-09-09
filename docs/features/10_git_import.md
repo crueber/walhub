@@ -260,7 +260,16 @@ link-local, multicast, unspecified, reserved, incl. mapped-v6; loopback
 is denied here even though the egress table allows it for dev webhooks),
 `url_allowlist` (empty = GitHub
 always reachable; other hosts need the list or the explicit
-`dangerous:true` confirm), `allow_file_urls=false`. Residuals named:
+`dangerous:true` confirm from an authenticated admin — the Begin gate,
+never the bare body flag), `allow_file_urls=false`. The allowlist compares
+the CANONICAL host (fix #237: lowercase, default-port-stripped,
+non-default ports refused, trailing-slash/`.git` folded — one logical
+source has exactly one canonical string, and the clone URL equals the
+gated string). Scheme rule (fix #237): `http://` without a token stays
+allowed (§1 scope); a token still requires `https`; the allowlist is
+host-only and the scheme is part of the canonical identity (an http twin
+and its https twin are distinct sources with distinct provenance).
+Residuals named:
 DNS TOCTOU (check-time vs clone-time resolution can differ) and redirect
 following (git follows; the allowlist gates the initial URL while the
 token helper's host-pin keeps redirects from harvesting it).
@@ -419,6 +428,32 @@ clean.
   tier-0 trailer-derived packs — and the `imported` dedupe map finally
   spans both tiers in one shape. Same-file `AddPack` installs are a
   no-op (05_wal_engine.md).
+- **Canonical source URLs + port/scheme rules (fix #237):** `NormalizeSource`
+  rebuilds every non-GitHub URL as `scheme://host/path` with the host
+  lowercased, any default port stripped (`:443`/`:80`/`:22`/`:9418`),
+  trailing slashes trimmed, and one trailing `.git` removed — so `:443`,
+  uppercase-host, trailing-`/`, and `.git/` variants of one source share
+  exactly one canonical string (one gate decision, one `import.json`
+  provenance match, one B3 join/no-op). An explicit NON-default port is
+  refused 400 (allowlist entries are plain hosts per config validation, so
+  a ported URL can never legitimately match — fail closed, never
+  strip-and-rewrite, never gate-one-string-and-clone-another).
+  `CloneMirror` receives the canonical URL verbatim. Scheme decision:
+  `http://` without a token stays allowed (the §1 scope stands — rejected
+  alternative: an https-only knob, deferred); token-over-http stays
+  refused; the allowlist is host-only by design and the scheme is part of
+  the canonical identity. `### Concurrency`: no new goroutines, locks, or
+  channels — pure string predicates on the request path.
+- **`dangerous:true` requires an authenticated admin (fix #237):** the
+  `Begin` gate honors the body flag only when the principal is an
+  authenticated admin under `server.auth.mode` token/oidc (403 otherwise,
+  naming `walhub import --dangerous`). The auth-none principal carries
+  `Admin` for zero-config friendliness but is unauthenticated, so it never
+  qualifies over HTTP — the operator path there is CLI-only. Anonymous
+  still 401s first via the unchanged S6 order (authenticate → authorize →
+  dangerous-gate → join-or-start). Unknown auth modes fail closed
+  (only token/oidc qualify). `### Concurrency`: no shared state — a pure
+  predicate on the principal + cfg, evaluated under no lock.
 - **Non-wedging imports (fix #79):** the manifest used to commit
   BEFORE ingest/refs/admin/doc, so any later failure left a refless,
   admin-less repo whose retry 409'd "delete and retry" to a caller
