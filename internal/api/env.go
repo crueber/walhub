@@ -383,9 +383,13 @@ type CommitDetail struct {
 
 // SummaryData backs GET …/api (§9.1).
 type SummaryData struct {
-	Head     *Ref `json:"head"` // the one sanctioned null
-	Branches int  `json:"branches"`
-	Tags     int  `json:"tags"`
+	Head *Ref `json:"head"` // the one sanctioned null
+	// Description is the per-repo short display string (issue #235), sourced
+	// from the `description` key of the WAL-published settings TOML. Always
+	// present on the wire ("" = unset); old clients ignore it (14 §14.12).
+	Description string `json:"description"`
+	Branches    int    `json:"branches"`
+	Tags        int    `json:"tags"`
 	// Health is the repo-state vocabulary (07_api.md §9.1; issue #209):
 	// "empty" (unborn: no resolvable head, zero branches/tags),
 	// "healthy", or "degraded" (refs present, cached fsck.pb lists missing

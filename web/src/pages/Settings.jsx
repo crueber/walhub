@@ -1,7 +1,7 @@
 // web/src/pages/Settings.jsx — repo settings, left-sidebar layout (issue #123,
-// §2.9 + 05 §9): the sidebar holds the standard listing (scheduled tasks,
-// push policy, effective config & history, access, CI tokens, webhooks, WAL)
-// plus the Danger Zone in its own danger-styled section. WAL moved here from
+// §2.9 + 05 §9): the sidebar holds the standard listing (general, scheduled
+// tasks, push policy, effective config & history, access, CI tokens, webhooks,
+// WAL) plus the Danger Zone in its own danger-styled section. WAL moved here from
 // the main repo tab bar and renders inline; the /wal route is kept for old
 // links. Narrow content column: every tab's form is grid/flex-wrap based and
 // every data table scrolls horizontally — nothing assumes full-page width.
@@ -17,6 +17,12 @@ import {
   resolveSettingsTab,
   settingsTabIdFromHash,
 } from "../lib/settingsNav.js";
+import {
+  MAX_DESCRIPTION_LENGTH,
+  extractDescription,
+  withDescription,
+  validateDescription,
+} from "../lib/repoDescription.js";
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import AccessTab from "./Access.jsx";
@@ -56,6 +62,70 @@ function debounce(fn, ms) {
 
 // Tab ids live in lib/settingsNav.js (SETTINGS_GROUP + DANGER_GROUP) — the
 // single source the sidebar and the content switch below both read.
+
+// --- tab 0: general (issue #235: repo description) ------------------------------
+// The description rides the WAL-published settings TOML (`description` key):
+// this tab presents a single input and serializes it into the doc instead of
+// exposing raw TOML. PUT stays admin-gated server-side, like every other
+// settings write — a non-admin save surfaces the 403 in the note, the same
+// read-mostly behavior the other admin-only tabs have.
+function GeneralTab(props) {
+  const [getText, setText] = createSignal(null); // null = not yet prefilled
+  const [getNote, setNote] = createSignal("");
+
+  const [getDoc] = useData(`settings:${props.ctx.full}`, () => props.repo.settings.get(), 5000);
+
+  // Prefill once the settings doc arrives and the editor is still untouched.
+  createEffect(() => {
+    const doc = getDoc();
+    if (doc !== undefined && getText() === null) {
+      setText(extractDescription(typeof doc === "string" ? doc : String(doc?.toml ?? "")));
+    }
+  });
+
+  async function save() {
+    const desc = String(getText() ?? "");
+    const why = validateDescription(desc);
+    if (why) {
+      setNote(why);
+      return;
+    }
+    try {
+      const doc = getDoc();
+      const current = typeof doc === "string" ? doc : String(doc?.toml ?? "");
+      await props.repo.settings.put(withDescription(current, desc), "");
+      setNote("saved");
+      // Reflect without a full reload: the header reads the shared summary.
+      invalidate(`repo:${props.ctx.full}`);
+      invalidate(`settings:${props.ctx.full}`);
+      invalidate(`settings-effective:${props.ctx.full}`);
+      invalidate(`settings-history:${props.ctx.full}`);
+    } catch (e) { setNote(String(e.message ?? e)); }
+  }
+
+  return (
+    <section class="card p-4">
+      <h3 class="mb-2 font-semibold">General</h3>
+      <label class="mb-1 block text-sm" for="repo-description">Description</label>
+      <input
+        id="repo-description"
+        class="input w-full"
+        type="text"
+        maxLength={MAX_DESCRIPTION_LENGTH}
+        placeholder="A short description of this repository"
+        value={getText() ?? ""}
+        onInput={(e) => setText(e.currentTarget.value)}
+      />
+      <p class="muted mt-1 text-xs">Shown in the repo header next to the name. Empty hides it. Saving requires admin.</p>
+      <div class="mt-2 flex flex-wrap items-center gap-2">
+        <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={save}>Save</button>
+      </div>
+      <Show when={getNote()}>
+        <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getNote()}</p>
+      </Show>
+    </section>
+  );
+}
 
 // --- tab 1: scheduled tasks ------------------------------------------------------
 
@@ -850,6 +920,7 @@ export default function Settings() {
           </div>
         </nav>
         <div class="min-w-0 flex-1">
+          <Show when={getTab() === "general"}><GeneralTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "scheduled"}><ScheduledTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "config"}><ConfigTab ctx={ctx} repo={repo} /></Show>

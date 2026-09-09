@@ -14,7 +14,11 @@ import { useData } from "../lib/data.js";
 import StarCount from "../components/StarCount.jsx";
 import ActivityStamp from "../components/ActivityStamp.jsx";
 
-/** One repo row: link + star count + last-active stamp. Shared with `/`. */
+/** One repo row: link + star count + last-active stamp. Shared with `/`.
+ *  Issue #235, explicitly descoped: rows ride the names-only owners listing,
+ *  so there is no per-repo summary in hand — showing descriptions here would
+ *  cost one summary fetch per row (N round trips for N repos). The repo
+ *  header remains the description surface. */
 export function RepoRow(props) {
   const full = () => `${props.owner}/${props.name}`;
   return (

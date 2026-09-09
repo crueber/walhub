@@ -513,11 +513,18 @@ export default function Repo(props) {
             <Show when={getSummary()} fallback={<span class="muted">repository not found — it may have been deleted</span>}>
             {(s) => (
               <div class="repo-title">
-                <h1 class="text-xl font-semibold">
-                  <A class="hover:underline" href={`/${params.owner}`}>{params.owner}</A>
-                  {" / "}
-                  <A class="hover:underline" href={`/${full()}`}>{params.name}</A>
-                </h1>
+                <div class="flex flex-wrap items-baseline gap-x-3">
+                  <h1 class="text-xl font-semibold">
+                    <A class="hover:underline" href={`/${params.owner}`}>{params.owner}</A>
+                    {" / "}
+                    <A class="hover:underline" href={`/${full()}`}>{params.name}</A>
+                  </h1>
+                  {/* Issue #235: short description right of the title, muted;
+                      omitted entirely when unset. Text is escaped by Solid. */}
+                  <Show when={s().description}>
+                    <span class="repo-description muted text-sm">{s().description}</span>
+                  </Show>
+                </div>
                 <div class="repo-meta mt-1 flex items-center gap-2 text-xs">
                   <Show when={s().head} fallback={<span class="pill">empty</span>}>
                     <RefPicker full={full()} repo={repoClient} head={() => s().head} />

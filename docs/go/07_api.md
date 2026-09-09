@@ -387,9 +387,16 @@ adding a route without updating this list is a bug. The doc never lists admin-on
 
 ### 9.1 Repo summary — `GET /{o}/{r}/api` (and `{lane}` root)
 
-After a refs-level sync: `{owner, name, full_name, head:{name,sha}|null, branches, tags,
+After a refs-level sync: `{owner, name, full_name, description, head:{name,sha}|null, branches, tags,
 health, missing_total?, clone_url, ssh_clone_url?, html_url, api_url}`. `head` = default branch (`null` → JSON `null` — the one sanctioned null, it is not an
-array). `branches`/`tags` are **counts** (integers). `clone_url` from `server.public_url` (or request
+array). `description` is the per-repo short display string (issue #235, `""` when unset — always
+present; old clients ignore it per 14 §14.12): sourced from the `description` key of the
+WAL-published settings TOML, folded in `walView.Summary` from the manifest-inline copy the refs
+sync already holds (**zero new store round trips** — the same in-memory guarantee as the `empty`
+predicate below; unparseable docs fail open to `""`). `ETag` covers the description alongside
+health: `"<head sha>"` (`""` when unborn, as before) suffixed `~d<fnv1a32hex>` when set — without
+the suffix a description-only change (same head sha) would 304 and keep showing the stale text;
+clearing the description drops the suffix, which busts the cache too. `branches`/`tags` are **counts** (integers). `clone_url` from `server.public_url` (or request
 Host); `ssh_clone_url` (17_ssh.md §3 — the SSH transport advertisement, `external_port` else the
 listen port on the same public host, `:22` omitted; absent while SSH is disabled with no external
 override); `api_url` = the `/api` lane URL; SWR + `ETag: "<head sha>"`. `PUT` here creates (require_write,
@@ -771,6 +778,12 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   …/ops/fsck` was verified already addressable, so no new endpoint was added and the `repair-check`
   option is closed. Rationale: detection + guidance is the gap (repair already exists); the UI must
   distinguish "empty, guide me" from "broken, toast me" without parsing prose.
+- **Repo description (issue #235):** additive `description` on the summary wire (`""` when
+  unset), folded from the manifest-inline settings TOML at zero new store round trips; `ETag`
+  gains the `~d<fnv1a32hex>` suffix so description-only changes bust SWR (same trap as
+  `~degraded`). The General settings tab + header rendering are a 12_web_ui.md concern; the
+  owner-list rows explicitly do NOT carry descriptions (names-only listing — per-row summary
+  fetches would be N round trips).
 - **Explicit create-repo placeholder (issue #210, R1 + review normative):**
   - *Sidecar classification:* `repos/<o>/<r>/meta/placeholder.json` is Create-once
     (`PutCreate`; 412 = already a placeholder — idempotent) + Delete-on-transition (cleared

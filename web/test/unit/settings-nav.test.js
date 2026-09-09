@@ -53,10 +53,17 @@ test("resolveSettingsTab accepts every entry, rejects everything else", () => {
   }
 });
 
+test("General tab is first and is the default landing tab (issue #235)", () => {
+  assert.equal(SETTINGS_GROUP[0].id, "general");
+  assert.equal(SETTINGS_GROUP[0].label, "General");
+  assert.equal(DEFAULT_SETTINGS_TAB, "general");
+});
+
 test("hash helper reads #id entries and ignores the rest", () => {
   assert.equal(settingsTabIdFromHash("#wal"), "wal");
   assert.equal(settingsTabIdFromHash("#danger"), "danger");
   assert.equal(settingsTabIdFromHash("#scheduled"), "scheduled");
+  assert.equal(settingsTabIdFromHash("#general"), "general");
   for (const bad of ["", "#", "#nope", "#WAL", "wal", "#wal/extra", undefined, null, 0]) {
     assert.equal(settingsTabIdFromHash(bad), null, `ignored: ${String(bad)}`);
   }
