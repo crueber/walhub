@@ -187,6 +187,13 @@ export default function Blob() {
   // static args would freeze the view on the first path (same class as #38;
   // Tree.jsx already passes getters).
   const [getBlob] = useResolved(() => ctx.owner, () => ctx.name, () => ctx.rest ?? "", "blob");
+  // Issue #252: same viewed-ref publication as Tree.jsx (resolve reuse, sha
+  // views publish an empty name → the pill shows the short sha).
+  createEffect(() => {
+    const b = getBlob();
+    if (b && b.sha && !b.empty && !b.degraded) ctx.setViewed({ name: b.ref ?? "", sha: b.sha });
+  });
+  onCleanup(() => ctx.setViewed(null));
   const [getView, setView] = createSignal("preview");
 
   return (

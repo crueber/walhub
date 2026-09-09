@@ -21,11 +21,15 @@ test("RefPicker trigger is the head pill, not a standalone refs button", () => {
   const s = src();
   assert.ok(!s.includes("refs ▾"), "no standalone `refs ▾` trigger text remains");
   assert.match(s, /\{label\(\)\} ▾/, "trigger renders the pill label");
-  assert.match(
-    s,
-    /const label = \(\) => \(head\(\) \? `\$\{shortRef\(head\(\)\.name\)\} @ \$\{String\(head\(\)\.sha\)\.slice\(0, 10\)\}` : "refs"\)/,
-    "pill label shows current ref + short sha (refs fallback without head)",
-  );
+  // Issue #252: the label delegates to lib/ref-pill.js pillLabel (branch @
+  // sha, short-sha for sha-addressed views, refs fallback without head).
+  assert.match(s, /const label = \(\) => pillLabel\(head\(\)\)/, "pill label derives via pillLabel");
+});
+
+test("pillLabel contract lives in lib/ref-pill.js (headless-tested)", () => {
+  const lib = srcOf("../../src/lib/ref-pill.js");
+  assert.match(lib, /export function pillLabel\(head\)/, "pillLabel exported from the headless lib");
+  assert.ok(lib.includes("refs"), "refs fallback kept");
 });
 
 test("single RefPicker call site: inside repo-meta, fed by the summary head", () => {
@@ -36,7 +40,7 @@ test("single RefPicker call site: inside repo-meta, fed by the summary head", ()
   const picker = s.indexOf("<RefPicker ");
   const counts = s.indexOf("branches ·");
   assert.ok(meta !== -1 && picker > meta && counts > picker, "picker sits in repo-meta next to the branch/tag counts");
-  assert.ok(s.includes("head={() => s().head}"), "pill head stays reactive via a getter over the summary");
+  assert.ok(s.includes("head={() => pillHead(getViewed(), s().head)}"), "pill head is context-first (viewed ref) with the summary head as fallback (issue #252)");
   assert.ok(s.includes('fallback={<span class="pill">empty</span>}'), "empty repos keep the static empty pill");
 });
 

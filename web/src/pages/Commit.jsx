@@ -2,7 +2,7 @@
 // fetch, hand-rolled unified-diff parser (lib/diff.js), per-file unified/split
 // toggle, per-file anchors, linkified body, grouped trailers, parent links.
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf } from "../lib/data.js";
 import { parsePatchFiles, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
@@ -130,6 +130,13 @@ function CheckDetails(props) {
 }
 
 function CommitDetail(props) {
+  // Issue #252: sha-addressed view — publish the sha with an empty name so
+  // the header pill shows the short sha honestly (remounts per sha via the
+  // keyed parent, so the effect below always carries the current sha).
+  createEffect(() => {
+    if (props.sha) props.setViewed({ name: "", sha: props.sha });
+  });
+  onCleanup(() => props.setViewed?.(null));
   // Reactive key: @solidjs/router reuses this route component when only
   // :sha changes, so the key must be a getter — a setup-time string would
   // freeze the view on the first sha (#38).
@@ -280,7 +287,7 @@ export default function Commit() {
   // and the page sticks on the first sha (#38).
   return (
     <Show when={`${ctx.full}:${ctx.sha}`} keyed>
-      {(_key) => <CommitDetail full={ctx.full} sha={ctx.sha} repoClient={ctx.repoClient} summary={ctx.summary} />}
+      {(_key) => <CommitDetail full={ctx.full} sha={ctx.sha} repoClient={ctx.repoClient} summary={ctx.summary} setViewed={ctx.setViewed} />}
     </Show>
   );
 }
