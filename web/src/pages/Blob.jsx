@@ -4,12 +4,13 @@
 // line-numbered <pre> tinted by the mini tokenizer. Raw deep link comes from
 // the SDK's urls builder (§1.1) — no hand-built API URLs.
 
-import { createSignal, For, Show, Switch, Match } from "solid-js";
+import { createSignal, createEffect, onCleanup, untrack, For, Show, Switch, Match } from "solid-js";
 import { A } from "@solidjs/router";
 import { useResolved } from "../lib/data.js";
 import { renderBody } from "../lib/render-md.js";
 import { fmtSize } from "../lib/format.js";
 import { languageFor, highlight } from "../lib/highlight.js";
+import { splitLines, parseLineHash, lineHash, dragRange, sameSelection } from "../lib/blob-lines.js";
 import { useRepo, shortRef } from "./Repo.jsx";
 import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
@@ -42,6 +43,140 @@ function Breadcrumb(props) {
   );
 }
 
+// Per-line code table with GitHub-style #L selection (issue #243). One
+// <table> keeps each gutter number + code line in the same <tr> so the
+// columns can never desync; the scroll container wraps the whole table so a
+// long line scrolls both columns together. Code is tokenized PER LINE
+// because the mini tokenizer's block-comment spans can cross newlines
+// (verified: highlight("/* foo\nbar */") wraps the newline inside one
+// <span>) — splitting highlighted HTML mid-span would break tags, and an
+// unclosed /* fragment simply renders plain on its line.
+// Selection model (Solid signals, no library): mousedown on a gutter number
+// sets the anchor, mouseover extends the focus (drag), mouseup ends the
+// drag; the click then pushes ONE history entry. During the drag each frame
+// uses replaceState (no history spam, URL still shareable mid-drag).
+// Shift-click extends from the existing anchor. Code cells carry no
+// handlers, so normal text selection in the code area is untouched.
+function CodeLines(props) {
+  const lines = () => splitLines(props.text);
+  const [getSel, setSel] = createSignal(parseLineHash(window.location.hash));
+  let anchor = getSel()?.start ?? null;
+  let dragging = false;
+
+  const readHash = () => {
+    const next = parseLineHash(window.location.hash);
+    if (!sameSelection(next, getSel())) {
+      setSel(next);
+      anchor = next?.start ?? null;
+    }
+  };
+
+  // Re-highlight + scroll once this file's rows exist. Tracks lines() only:
+  // the sel read + scroll MUST stay untracked, or every drag frame would
+  // yank the scroll back to the anchor instead of following the pointer.
+  // Blob→blob navigations change lines(), so the new file re-reads the hash
+  // after its rows render; a hash pointing past EOF matches no row and
+  // scrolls nowhere.
+  createEffect(() => {
+    const ls = lines();
+    const next = parseLineHash(window.location.hash);
+    untrack(() => {
+      if (!sameSelection(next, getSel())) {
+        setSel(next);
+        anchor = next?.start ?? null;
+      }
+      if (next && ls.length >= next.start) {
+        document.getElementById(`L${next.start}`)?.scrollIntoView({ block: "center" });
+      }
+    });
+  });
+
+  const preview = (a, f) => {
+    const r = dragRange(a, f);
+    if (!r) return;
+    setSel(r);
+    window.history.replaceState(null, "", lineHash(r.start, r.end));
+  };
+
+  const onNumMouseDown = (n, ev) => {
+    if (ev.button !== 0) return;
+    anchor = ev.shiftKey && anchor != null ? anchor : n;
+    dragging = true;
+    preview(anchor, n);
+    ev.preventDefault();
+  };
+
+  const onNumMouseOver = (n) => {
+    if (dragging) preview(anchor, n);
+  };
+
+  const endDrag = () => {
+    dragging = false;
+  };
+
+  const onNumClick = (n, ev) => {
+    ev.preventDefault();
+    // Keyboard Enter/Space arrives as a click with detail 0 and no drag
+    // before it — build from the anchor. A mouse click lands after the
+    // mousedown-drag previewed the range, so push that range as-is.
+    const r = ev.detail === 0 ? dragRange(anchor ?? n, n) : getSel();
+    if (r) {
+      if (ev.detail === 0) {
+        anchor = anchor ?? n;
+        setSel(r);
+      }
+      window.location.hash = lineHash(r.start, r.end);
+    }
+  };
+
+  window.addEventListener("hashchange", readHash);
+  window.addEventListener("mouseup", endDrag);
+  onCleanup(() => {
+    window.removeEventListener("hashchange", readHash);
+    window.removeEventListener("mouseup", endDrag);
+  });
+
+  return (
+    <div class="blob-cols flex overflow-x-auto">
+      <table class="blob-table" aria-label="File content by line">
+        <tbody>
+          <For each={lines()}>
+            {(line, i) => {
+              const n = i() + 1;
+              // Self-contained per line (see note above); empty lines get a
+              // <br> so the row keeps its height without a selectable char.
+              const html = highlight(line, props.lang) || "<br />";
+              const inSel = () => {
+                const s = getSel();
+                return !!s && n >= Math.min(s.start, s.end) && n <= Math.max(s.start, s.end);
+              };
+              return (
+                <tr id={`L${n}`} class="blob-row" classList={{ "line-hl": inSel() }}>
+                  <td class="blob-num">
+                    <a
+                      href={`#L${n}`}
+                      data-line={n}
+                      aria-label={`Line ${n}`}
+                      onMouseDown={(ev) => onNumMouseDown(n, ev)}
+                      onMouseOver={() => onNumMouseOver(n)}
+                      onClick={(ev) => onNumClick(n, ev)}
+                    >
+                      {n}
+                    </a>
+                  </td>
+                  <td class="blob-code">
+                    <code innerHTML={html} />
+                  </td>
+                </tr>
+              );
+            }}
+          </For>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function Blob() {
   const ctx = useRepo();
   // Getters, not setup-time values: @solidjs/router reuses this component on
@@ -63,12 +198,6 @@ export default function Blob() {
           const isMd = () => /\.(md|markdown)$/i.test(name());
           const rawHref = () =>
             b().ref ? ctx.repoClient.urls.raw(shortRef(b().ref), b().path ?? "") : undefined;
-          const lines = () => {
-            const text = b().contents ?? "";
-            const ls = text.split("\n");
-            if (ls.length > 1 && ls[ls.length - 1] === "") ls.pop();
-            return ls;
-          };
 
           return (
             <>
@@ -136,14 +265,7 @@ export default function Blob() {
                     </Show>
                   </Match>
                   <Match when={true}>
-                    <div class="blob-cols flex overflow-x-auto">
-                      <pre class="blob-gutter tabular select-none border-r border-zinc-200 bg-zinc-100 px-2.5 py-3 text-right font-mono text-xs leading-5 text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500">
-                        {lines().map((_, i) => i + 1).join("\n")}
-                      </pre>
-                      <pre class="code-view m-0 rounded-none border-0 px-3.5 py-3 flex-1 min-w-0">
-                        <code innerHTML={highlight(b().contents ?? "", lang())} />
-                      </pre>
-                    </div>
+                    <CodeLines text={b().contents ?? ""} lang={lang()} />
                   </Match>
                 </Switch>
               </div>

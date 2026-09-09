@@ -192,6 +192,20 @@
      prose container; a soft frame reads as designed, not default. */
   .markdown-body img { @apply my-2 h-auto max-w-full rounded-md border border-zinc-200 dark:border-zinc-800; }
   .code-view { @apply overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 font-mono text-xs leading-5 dark:border-zinc-800 dark:bg-zinc-950; }
+  /* Blob per-line table (issue #243): each gutter number + code line share a
+     <tr> so the columns can never desync; same mono metrics as the old
+     two-<pre> layout (text-xs leading-5, 12px block padding via first/last
+     rows). Light is the base, dark: carries the default dark theme. */
+  .blob-table { @apply w-full border-collapse font-mono text-xs leading-5; }
+  .blob-table > tbody > tr > td { @apply pt-0 pb-0; }
+  .blob-table > tbody > tr:first-child > td { @apply pt-3; }
+  .blob-table > tbody > tr:last-child > td { @apply pb-3; }
+  .blob-num { @apply w-12 border-r border-zinc-200 bg-zinc-100 px-2.5 text-right tabular-nums select-none
+    dark:border-zinc-800 dark:bg-zinc-900; white-space: nowrap; vertical-align: top; }
+  .blob-num a { @apply block cursor-pointer text-zinc-400 hover:text-emerald-600 hover:no-underline
+    dark:text-zinc-500 dark:hover:text-emerald-400; }
+  .blob-code { @apply min-w-0 px-3.5 align-top; }
+  .blob-code code { white-space: pre; }
   /* highlighter tokens (lib/highlight.js spans) */
   .tok-kw { @apply text-violet-700 dark:text-violet-400; }
   .tok-str { @apply text-emerald-700 dark:text-emerald-400; }
@@ -201,3 +215,12 @@
   .diff-del { @apply bg-red-50 text-red-900 dark:bg-red-950/60 dark:text-red-200; }
   .diff-hunk { @apply bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500; }
 }
+
+/* Blob line-selection highlight (issue #243): deliberately UNLAYERED so it
+   wins over the .blob-num utility backgrounds above regardless of
+   cascade-layer order. Amber tint both themes (dark: translucent over the
+   dark surface), emerald inset edge on the gutter cell so the row reads as
+   one unit. */
+.blob-row.line-hl > td { background-color: #fef3c7; }
+.blob-row.line-hl > .blob-num { box-shadow: inset 2px 0 0 #10b981; }
+.dark .blob-row.line-hl > td { background-color: rgba(245, 158, 11, 0.16); }
