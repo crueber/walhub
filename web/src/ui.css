@@ -214,6 +214,14 @@
   .diff-add { @apply bg-emerald-50 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200; }
   .diff-del { @apply bg-red-50 text-red-900 dark:bg-red-950/60 dark:text-red-200; }
   .diff-hunk { @apply bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500; }
+  /* Diff line-number gutters (issue #244): same role as .blob-num, one
+     column in unified, two (old left, new right) in split. Narrower than
+     the blob gutter — diff numbers are short — same mono metrics
+     (text-xs leading-5) as the diff table so rows never desync. */
+  .diff-num { @apply w-10 shrink-0 border-r border-zinc-200 bg-zinc-100 px-1.5 text-right tabular-nums select-none
+    dark:border-zinc-800 dark:bg-zinc-900; white-space: nowrap; vertical-align: top; }
+  .diff-num a { @apply block cursor-pointer text-zinc-400 hover:text-emerald-600 hover:no-underline
+    dark:text-zinc-500 dark:hover:text-emerald-400; }
 }
 
 /* Blob line-selection highlight (issue #243): deliberately UNLAYERED so it
@@ -224,3 +232,11 @@
 .blob-row.line-hl > td { background-color: #fef3c7; }
 .blob-row.line-hl > .blob-num { box-shadow: inset 2px 0 0 #10b981; }
 .dark .blob-row.line-hl > td { background-color: rgba(245, 158, 11, 0.16); }
+
+/* Diff line-selection highlight (issue #244): same amber tint + emerald
+   gutter edge as the blob rule above, deliberately UNLAYERED for the same
+   cascade reason. Applies to the whole row (number cell + content cells)
+   in both unified and split modes, both themes. */
+.diff-row.line-hl > td { background-color: #fef3c7; }
+.diff-row.line-hl > .diff-num { box-shadow: inset 2px 0 0 #10b981; }
+.dark .diff-row.line-hl > td { background-color: rgba(245, 158, 11, 0.16); }

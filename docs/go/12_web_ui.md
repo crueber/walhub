@@ -385,7 +385,7 @@ body       := ( " " line | "-" line | "+" line | LF )*
 
 Parse into `{path, oldPath?, added?, deleted?, isBinary?, hunks: [{oldStart, oldLines, newStart, newLines, lines: [{t: " "|"-"|"+", text}]}]}`. File boundaries: the next `diff --git` line; binary files appear as `Binary files … differ` / `GIT binary patch` — mark `isBinary` and skip. Renames come from `rename from/to` (use the NEW path as the display key, matching the server's `stats[]` convention). Diffstat totals = Σ additions/deletions from `stats[]` (authoritative) — the parser's counts are for per-file badges only.
 
-Rendering: per-file unified/split toggle (unified default; split = two columns built by pairing `-`/`+` runs via a 20-line LCS window — hand-rolled, ~60 lines); file anchors by `stats[].path`; commit bodies linkified (sha → `commit/:sha` links, bare URLs → anchors); trailers grouped (People / merge-queue keys / Other) with sha → commit links and `mailto:` rendering.
+Rendering: per-file unified/split toggle (unified default; split = two columns built by pairing `-`/`+` runs via a 20-line LCS window — hand-rolled, ~60 lines); file anchors by `stats[].path`; commit bodies linkified (sha → `commit/:sha` links, bare URLs → anchors); trailers grouped (People / merge-queue keys / Other) with sha → commit links and `mailto:` rendering. Both modes render line-number gutters derived from the `@@` headers at display time (unified: one column — new-side numbers, old-side for deletions; split: old left, new right) with click/drag/shift-click selection and shareable file-scoped hashes — issue #244 (shared `DiffBody`, same hash in both modes).
 
 ### 2.9 WAL page, tasks overlay, settings page
 
@@ -599,3 +599,38 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
   share/load, both themes, zero console errors) is open (shared-daemon
   network guard blocks private/loopback targets — no private daemon per
   workspace rules).
+- **NEW (issue #244) — diff line selection with shareable #L links:** the
+  commit page and the PR files page render the same shared `<DiffBody>`
+  (`web/src/components/DiffTable.jsx`): per-hunk tables with line-number
+  gutters computed from the `@@` headers at display time
+  (`web/src/lib/diff-lines.js`: `annotateHunkLines` — new-side numbers for
+  context/additions, old-side for deletions; `annotateSplitRows` — the same
+  `splitRows()` pairing with the numbers zipped back on, so split rows
+  never diverge from unified). Unified shows one gutter column, split two
+  (old left, new right); split renders per-hunk header rows (previously
+  dropped) so chunk boundaries are visible and drags can clamp to them.
+  Clicking a gutter pushes `#<encodeURIComponent(path)>L<n>` (old-side:
+  `O` prefix — `#<path>OL<n>`, ranges `#<path>L<a>-L<b>` /
+  `#<path>OL<a>-OL<b>`); drags (either direction, normalized ascending via
+  the shared `dragRange` from `blob-lines.js` — the anchor/focus→hash logic
+  is reused, not duplicated) and shift-click extend the range; drag frames
+  use `history.replaceState`, one push on click. Mouseover in another hunk
+  or on the other side is ignored, so cross-chunk drags stop at the chunk
+  edge (GitHub's behavior). On load (and on `hashchange`) a matching hash
+  re-highlights the whole rows and scrolls the first line into view; an
+  unknown path or out-of-range line highlights nothing silently (no crash,
+  no scroll) and `#f-` file anchors keep working (native scroll untouched;
+  blob `#L` hashes explicitly parse to null here). Gutter anchors are
+  native `<a>` (keyboard: Tab + Enter, shift included) with
+  `aria-label="Diff line <n>…"`; the `.diff-row.line-hl` background +
+  emerald gutter edge ship in both themes (dark default). Numbering is
+  display-only — parser output gains no fields and the
+  `anchorContextSha`/DriftHash inputs are byte-identical (the pinned vector
+  test is the tripwire). No backend, SDK, or API change; no new deps.
+  Headless cover: `web/test/unit/diff-lines.test.js` (@@ math incl. 0-start
+  files, split parity incl. duplicates + 20-line windows, hash codec +
+  round-trip + collision tolerance, chunk clamp, drift tripwire, Commit +
+  PullFiles + DiffTable + ui.css source pins); browser proof
+  (unified + split, both themes, zero console errors) is open
+  (shared-daemon network guard blocks private/loopback targets — no private
+  daemon per workspace rules).
