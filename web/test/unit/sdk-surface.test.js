@@ -25,6 +25,7 @@ const SURFACE = [
   { name: "owners.repos", run: (c) => c.owners.repos("demo"), method: "GET", path: "/api/v1/owners/demo/repos" },
   { name: "owners.detailed", run: (c) => c.owners.detailed("demo"), method: "GET", path: "/api/v1/owners/demo/repos/detailed" },
   { name: "owners.detailed query", run: (c) => c.owners.detailed("demo", { sort: "size", order: "desc", min_bytes: 10, max_bytes: 99 }), method: "GET", path: "/api/v1/owners/demo/repos/detailed?sort=size&order=desc&min_bytes=10&max_bytes=99" },
+  { name: "owners.detailed activity", run: (c) => c.owners.detailed("demo", { sort: "activity", order: "desc" }), method: "GET", path: "/api/v1/owners/demo/repos/detailed?sort=activity&order=desc" },
   { name: "repo.get", run: (c) => c.repo("o/r").get(), method: "GET", path: "/o/r/api" },
   { name: "repo.create", run: (c) => c.repo("o/r").create(), method: "PUT", path: "/o/r/api" },
   { name: "repo.createPlaceholder", run: (c) => c.repo("o/r").createPlaceholder({ object_format: "sha1" }), method: "PUT", path: "/o/r/api?placeholder=true&object_format=sha1" },

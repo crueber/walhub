@@ -173,6 +173,14 @@ func errAsWalNotFound(err error, target **wal.WalError) bool {
 // The pack was ingested into the local serving copy by the git layer; the new
 // pack is the one on disk that the manifest does not know yet (receive-pack
 // is serialized per repo by the server's per-repo semaphore).
+//
+// Forgejo #247 (R1 B3): before publishing, best-effort derive the HEAD-tip
+// activity (tip sha + commit date via one light `git log -1` in the serving
+// copy, 04_git.md §9.10) and hand it to the WAL as a PublishRequest hint.
+// Derivation failure NEVER fails the push — the hint stays nil (sidecar
+// records nulls) and the maintainer sweep heals it. Only a command that
+// moves HEAD (non-delete update of the symbolic target) derives; tag-only
+// and branch-delete pushes stamp last_push_at with null commit fields.
 func (e *WalEngine) Publish(ctx context.Context, id git.RepoId, req *git.PushRequest, principal string, access wal.ObjectAccess) (wal.PublishResult, error) {
 	h, err := e.open(ctx, id)
 	if err != nil {
@@ -184,11 +192,59 @@ func (e *WalEngine) Publish(ctx context.Context, id git.RepoId, req *git.PushReq
 		txn.Updates = append(txn.Updates, &proto.RefUpdate{Name: c.Ref, OldOid: c.Old, NewOid: c.New})
 	}
 	preq.Txn = txn
+	preq.Activity = derivePushActivity(ctx, h, access, req.Commands)
 
 	if pack := e.newLocalPack(h); pack != nil {
 		preq.Pack = pack
 	}
 	return h.Publish(ctx, preq)
+}
+
+// derivePushActivity best-effort derives the HEAD-tip hint for a client
+// push (nil on any failure — the push still commits). Needs the serving
+// copy (objects just ingested): without access.Local there is nothing to
+// read. The tip is the command's new oid for the HEAD symbolic target;
+// the date comes from git with the #142 commit-first/author-fallback rule.
+func derivePushActivity(ctx context.Context, h *wal.RepoHandle, access wal.ObjectAccess, cmds []git.PushCommand) *wal.PublishActivity {
+	local := access.Local
+	if local == nil || len(cmds) == 0 {
+		return nil
+	}
+	snap, err := h.Layer().Snapshot(local)
+	if err != nil || snap.HeadTarget == "" {
+		return nil
+	}
+	var tip string
+	for _, c := range cmds {
+		if c.Ref == snap.HeadTarget && !isZeroOid(c.New) {
+			tip = c.New
+		}
+	}
+	if tip == "" || !git.ValidOid(tip) {
+		return nil
+	}
+	committer, author, err := h.Layer().CommitDates(ctx, local, tip)
+	if err != nil {
+		return nil
+	}
+	ct, ok := git.PickCommitTime(committer, author)
+	if !ok {
+		return nil
+	}
+	return &wal.PublishActivity{TipSHA: tip, CommitTime: ct}
+}
+
+// isZeroOid reports an all-zero oid of either object format (a delete).
+func isZeroOid(s string) bool {
+	if s == "" {
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] != '0' {
+			return false
+		}
+	}
+	return true
 }
 
 // newLocalPack finds the freshly ingested pack: an idx in the local pack dir

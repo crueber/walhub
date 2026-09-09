@@ -382,10 +382,14 @@ adding a route without updating this list is a bug. The doc never lists admin-on
   an unknown owner (never 404).
 - `GET /api/v1/owners/{o}/repos/detailed` (Forgejo #248 — NEW alongside v1, triple twins
   `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.detailed`) →
-  `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?}]}` (`[]` never null;
-  `size_bytes: null` = unknown/unbackfilled, `0` = verified-empty). Query: `sort=name|size`
+  `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?, last_commit_sha|null, last_commit_time|null, last_push_at?}]}` (`[]` never null;
+  `size_bytes: null` = unknown/unbackfilled, `0` = verified-empty; activity nulls (Forgejo #247) =
+  unknown/unbackfilled — HEAD-tip sha + commit date with commit-date semantics, `last_push_at` =
+  push wall-clock). Query: `sort=name|size|activity`
   (default name), `order=asc|desc` (default asc), `min_bytes=`/`max_bytes=` (uint64; unknown
-  rows never match a bound; `min>max` → 400). Served from the aggregate catalog in ONE
+  rows never match a bound; `min>max` → 400). `sort=activity` orders by `last_commit_time`
+  (unknowns always last in either direction; the explore page uses `sort=activity&order=desc`).
+  Served from the aggregate catalog in ONE
   object read regardless of repo count; absent catalog degrades to null rows (never 404/500
   for a missing optional object). Ties break on `(owner, name)` (shared with #247 ordering).
   SWR class. Size semantic: stored-object size (packs+idx — see 02 §2.1; overview
@@ -850,3 +854,12 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   size state (sort/filter) without per-repo manifest scans at query time —
   one catalog read per query, null-vs-0 preserved so unbackfilled repos hide
   instead of lying.
+- **Activity rows extend the detailed surface (Forgejo #247 — additive, no
+  new endpoint).** `sort=activity` (+ `last_commit_sha/time`, `last_push_at`
+  row fields) extends `/detailed` under 14 §14.12's field rule (new OPTIONAL
+  fields on existing JSON objects; a new sort value changes no existing
+  query) — R1 B2's "new endpoint" is the `/detailed` surface itself, which
+  #248 already landed; a second endpoint for the same rows would fork the
+  surface for no isolation gain. v1 string lists stay untouched. Rationale:
+  the explore page orders by most recent commit from the same ONE catalog
+  read, and stamps render from the rows with zero per-row fetches.

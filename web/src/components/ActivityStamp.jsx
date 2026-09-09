@@ -31,6 +31,17 @@
 // deleted/private/fork-provisioned rows (issue #150). No new endpoint, no
 // new SDK method (`repo.commits()`,
 // 07 §9.6).
+//
+// Forgejo #247 listing shortcut: repo rows on the explore (`/explore`) and
+// `/:owner` pages arrive with the server's `last_commit_time` in hand (the
+// detailed listing, `sort=activity`), so the stamp renders from the listing
+// with NO per-row fetch — the ~500-GET cold-cache worst case above drops to
+// zero on those pages. `at` carries the row's `last_commit_time` (a string),
+// null when the listing reports unknown, undefined when the caller has no
+// listing data (legacy fetch path, e.g. the repo header). `empty` marks a
+// listing-verified empty repo (`size_bytes: 0`): "no commits yet" with no
+// fetch. A null `at` on a non-empty repo falls back to the per-row fetch
+// (today's behavior until the sweep backfills that repo).
 
 import repos from "../../sdk/src/index.js";
 import { Show } from "solid-js";
@@ -38,19 +49,47 @@ import { useData, tolerateMissing } from "../lib/data.js";
 import { ACTIVITY_TTL, latestActivity } from "../lib/activity.js";
 import DateTime from "./DateTime.jsx";
 
-/** <ActivityStamp full="owner/name" /> — quiet muted stamp beside a repo link. */
+/**
+ * <ActivityStamp full="owner/name" /> — quiet muted stamp beside a repo link.
+ * <ActivityStamp full="owner/name" at={row.last_commit_time} empty={row.size_bytes === 0} />
+ * renders from the listing (no fetch); other callers fetch as before.
+ */
 export default function ActivityStamp(props) {
   const full = () => props.full;
-  const [getPage] = useData(
-    () => `activity:${full()}`,
-    // Empty repo: unborn HEAD answers 404 — that IS the empty state
-    // ("no commits yet"), not a failure, so it must not reach the error
-    // tray. (A repo deleted between listing and fetch, or a
-    // fork-provisioned prefix without a manifest yet, 404s the same way —
-    // issue #150 — and renders the same empty state.)
-    () => tolerateMissing(repos.repo(full()).commits({ n: 1 }), { commits: [] }),
-    ACTIVITY_TTL,
-  );
+  // Listing shortcut applies when no fetch is needed: a known stamp renders
+  // directly; a listing-verified empty repo is "no commits yet". Anything
+  // else (no listing data, or unknown stamp on a non-empty repo) takes the
+  // legacy per-row fetch. Decided once at setup: rows mount with their
+  // listing data already resolved, so the branch never flips mid-life.
+  const shortcut = () => {
+    if (typeof props.at === "string") return { at: props.at };
+    if (props.at === null && props.empty === true) return { empty: true };
+    return null;
+  };
+  const cut = shortcut();
+  const [getPage] = cut
+    ? [() => null] // no fetch: the stamp below never reads the page
+    : useData(
+        () => `activity:${full()}`,
+        // Empty repo: unborn HEAD answers 404 — that IS the empty state
+        // ("no commits yet"), not a failure, so it must not reach the error
+        // tray. (A repo deleted between listing and fetch, or a
+        // fork-provisioned prefix without a manifest yet, 404s the same way —
+        // issue #150 — and renders the same empty state.)
+        () => tolerateMissing(repos.repo(full()).commits({ n: 1 }), { commits: [] }),
+        ACTIVITY_TTL,
+      );
+  if (cut?.at) {
+    const at = cut.at;
+    return (
+      <span class="muted whitespace-nowrap text-xs">
+        active <DateTime value={at} />
+      </span>
+    );
+  }
+  if (cut?.empty) {
+    return <span class="muted text-xs">no commits yet</span>;
+  }
   return (
     <Show when={getPage()} fallback={<span class="muted text-xs" aria-hidden="true">(…)</span>}>
       {(page) => {

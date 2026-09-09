@@ -502,3 +502,21 @@ curl -N -H "Authorization: Bearer $WALHUB_TOKEN" \
   disabled loop) with unbounded absence (null rows forever), not bounded
   staleness. (Corrected 2026-09-09 per review #258: the original entry claimed
   R1 B1 authority for sweep-only writes — the opposite of what R1 ordered.)
+- **Activity amendment (Forgejo #247, R1 B1/B2/B3/B4 — same families, no new
+  bucket keys).** The frozen overwritable families gain NO new keys: the
+  activity state rides the #248 shapes as additive optional fields —
+  `meta/stats.json` (`last_commit_sha/time`, `last_push_at`; absent = unknown)
+  and `meta/repos.pb` `RepoCatalogEntry` fields 6-8 (same names; proto
+  append-only, never renumbered). Two writers share one shape under a stated
+  merge contract: the publish path blind-overwrites the FULL body on every
+  committed PUSH/COMPACT/REF_UPDATE batch (never reads — law 6; nil hint
+  records nulls) while the sweep read-modify-writes (PUT-if-changed, never
+  regresses activity it cannot refresh, carries `PushAt` across tip/time-only
+  refreshes). The object-row surface is EXTENDED, not forked: `sort=activity`
+  + the three row fields on the existing `/detailed` triple twins (14 §14.12
+  field rule — the B2 "new endpoint" is `/detailed` itself, landed by #248).
+  No new task kind (cold derivation is hook code inside the existing fold,
+  not a §4 unit), no new Go modules, no new npm deps. Rationale: field-scoped
+  merge on one shared shape beats two sidecars (double the push-path cost)
+  and beats a push-path read (a sequential store round trip + a budget-test
+  "never a sidecar read" violation); null + sweep-heal keeps every R1 bound.

@@ -271,14 +271,18 @@ export class ReposClient {
   }
 
   /**
-   * Object-row listing with size state (Forgejo #248):
+   * Object-row listing with size + activity state (Forgejo #248, extended
+   * #247):
    * `GET /api/v1/owners/{owner}/repos/detailed?sort=&order=&min_bytes=&max_bytes=`
-   * → `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?}]}`.
+   * → `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?, last_commit_sha|null, last_commit_time|null, last_push_at|null}]}`.
    * `size_bytes: null` = unknown/unbackfilled (UI hides); `0` = verified-empty.
+   * Activity nulls = unknown (stamps fall back to the per-row fetch), except
+   * verified-empty repos which render "no commits yet" without a fetch.
+   * `sort=activity&order=desc` orders by most recent commit (explore page).
    * Same no-store rationale as ownerRepos (issue #200).
    *
    * @param {string} owner
-   * @param {{sort?: "name"|"size", order?: "asc"|"desc", min_bytes?: number, max_bytes?: number}} [query]
+   * @param {{sort?: "name"|"size"|"activity", order?: "asc"|"desc", min_bytes?: number, max_bytes?: number}} [query]
    */
   ownerReposDetailed(owner, query = {}) {
     const qs = Object.entries(query)

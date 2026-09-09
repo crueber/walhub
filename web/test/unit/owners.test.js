@@ -6,6 +6,7 @@ import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
   newestFirst,
+  orderByActivity,
   pageSlice,
 } from "../../src/lib/owners.js";
 
@@ -60,4 +61,38 @@ test("pageSlice non-positive or non-finite limits show none, count all as extra"
     assert.equal(extra, 2);
   }
   assert.equal(pageSlice(["a", "b", "c"], 1.9).shown.length, 1); // floors
+});
+
+// Forgejo #247: server-provided most-recent-commit order, stabilized client-side.
+test("orderByActivity sorts newest commit first, unknowns last", () => {
+  const rows = [
+    { name: "b", last_commit_time: "2026-09-09T12:00:00Z" },
+    { name: "a", last_commit_time: "2026-09-10T12:00:00Z" },
+    { name: "c" }, // unknown: always last
+    { name: "d", last_commit_time: "2026-09-10T12:00:00Z" }, // tie with a
+    { name: "e", last_commit_time: null }, // explicit null: unknown too
+  ];
+  const out = orderByActivity(rows);
+  assert.deepEqual(out.map((r) => r.name), ["a", "d", "b", "c", "e"]);
+  assert.deepEqual(rows.map((r) => r.name), ["b", "a", "c", "d", "e"]); // input untouched
+});
+
+test("orderByActivity treats non-array input as empty, missing times as names", () => {
+  assert.deepEqual(orderByActivity(undefined), []);
+  assert.deepEqual(orderByActivity(null), []);
+  assert.deepEqual(
+    orderByActivity([{ name: "b" }, { name: "a" }]).map((r) => r.name),
+    ["a", "b"],
+  );
+});
+
+test("orderByActivity composes with pageSlice (slice-after-server-sort)", () => {
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    name: `r${i}`,
+    last_commit_time: `2026-09-${String(i + 1).padStart(2, "0")}T12:00:00Z`,
+  }));
+  const { shown, extra } = pageSlice(orderByActivity(rows), MAX_REPOS_PER_OWNER);
+  assert.equal(shown.length, 10);
+  assert.equal(extra, 2);
+  assert.equal(shown[0].name, "r11"); // newest commit survives the cap
 });

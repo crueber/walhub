@@ -1,8 +1,14 @@
-// sizecatalog.go — the size-catalog fold wiring (Forgejo #248 §4).
+// sizecatalog.go — the size-catalog fold wiring (Forgejo #248 §4, Forgejo
+// #247 activity backfill).
 //
 // The sweep lives in internal/sizecatalog (pure derivation + store fold);
 // this file is the maintainer-loop seam: one bounded fold per pass,
-// best-effort, cursor-resumed across passes.
+// best-effort, cursor-resumed across passes. The #247 Activity hook is the
+// cold-derivation resolver (activity.go: refs view + git read per repo
+// needing it, budgeted in 10_maintenance.md §4).
+//
+// Enumeration: the engine's local repo list (zero idle cost — no bucket
+// LIST; see activity.go for the source statement and its limits).
 //
 // ### Concurrency
 // Hazard: the pass goroutine folding while a previous fold still runs
@@ -14,6 +20,7 @@ package maintain
 
 import (
 	"context"
+	"time"
 
 	"git.packden.us/crueber/walhub/internal/sizecatalog"
 )
@@ -42,6 +49,14 @@ func (m *Maintainer) foldSizeCatalog(ctx context.Context) {
 		Cursor:   cursor,
 		ListRepos: func(context.Context) ([]string, error) {
 			return append([]string{}, repos...), nil
+		},
+		// Forgejo #247 cold derivation (R1 B5): repos whose sidecar
+		// activity is missing/stale/unhealed resolve tip+date via the
+		// refs view + serving copy; failures isolate per repo (the
+		// sweep preserves and continues).
+		Activity: func(actx context.Context, id string) (string, time.Time, bool, error) {
+			sha, ct, found := resolveActivity(actx, m.eng, id)
+			return sha, ct, found, nil
 		},
 	})
 	if err != nil {

@@ -42,10 +42,27 @@ type PublishRequest struct {
 	Synced    bool              // receive-pack reuses its own freshness check
 	CreatedAt *time.Time        // explicit entry time (monotonic guard applies)
 
+	// Activity is the best-effort HEAD-tip derivation (Forgejo #247, R1 B3),
+	// set by callers that hold the commit objects locally (WalEngine after
+	// ingest). Nil = unknown (tag-only/branch-delete pushes that leave HEAD
+	// alone, compact, mirror, import, follow): the sidecar records nulls
+	// and the maintainer sweep heals them. Derivation failure NEVER fails
+	// the push — the caller passes nil and the push still commits.
+	Activity *PublishActivity
+
 	Compact    bool                // COMPACT entry instead of PUSH/REF_UPDATE
 	Supersedes []string            // COMPACT: checksums this pack replaces
 	Settings   *proto.RepoSettings // SETTINGS entry (publishSettings)
 	Tier       uint32              // add-pack tier
+}
+
+// PublishActivity is one batch's HEAD-tip derivation: the new tip oid plus
+// its commit date (commit-date semantics per #142 — the deriver applies the
+// commit_date-first/author_date-fallback rule). Zero TipSHA/CommitTime means
+// "no derivation" and encodes as nulls.
+type PublishActivity struct {
+	TipSHA     string
+	CommitTime time.Time
 }
 
 // publishJob carries a request through the publisher with its own reply.
@@ -361,12 +378,28 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 		// 6+7. Build the manifest update and CAS it, with the Forgejo #248 size
 		// sidecar PUT running in parallel with the manifest CAS (+1 total op,
 		// +0 sequential trips — R1 B1; the bucket-root catalog is never
-		// touched on push, only the repo-scoped sidecar).
+		// touched on push, only the repo-scoped sidecar). Forgejo #247
+		// extends the same PUT with activity fields (one PUT, both concerns):
+		// every committed PUSH/COMPACT/REF_UPDATE batch writes (REF_UPDATE-only
+		// batches carry the unchanged live set — size re-derives arithmetically
+		// from data already held, no store read; the push path NEVER reads the
+		// sidecar, so a hint-less batch records null activity and the sweep
+		// heals it). SETTINGS-only batches skip (annotate_pack bypasses the
+		// ladder entirely; settings are not pushes).
 		next := buildNextManifest(base, entries, firstSeq, segFirst, segBody, p.h.reg.instance)
 		var statsBody []byte
-		if batchChangesLiveSet(entries) {
+		if batchWritesSidecar(entries) {
+			// Group-commit batches carry each job's hint; last non-nil wins
+			// (later job = later push; deterministic in batch order).
+			var act *PublishActivity
+			for _, j := range valid {
+				if j.req.Activity != nil {
+					hint := *j.req.Activity
+					act = &hint
+				}
+			}
 			size, objs := statsSizeOf(next.Packs)
-			statsBody = encodeStatsSidecar(size, objs, next.HeadSeq, time.Now().UTC())
+			statsBody = encodeStatsSidecar(size, objs, next.HeadSeq, now, act)
 		}
 		// The sidecar PUT joins the CAS: parallel, never sequential-after.
 		//
@@ -408,10 +441,10 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 			p.commitLocal(ctx, next, newVersion, entries, burned)
 			if statsErr != nil {
 				// Best-effort: the manifest CAS is the commit point (law 4);
-				// a lost sidecar write converges via the next pack-changing
+				// a lost sidecar write converges via the next committed
 				// publish or the maintainer sweep backfill. The push still
 				// answers ok — the sidecar is optional/rebuildable.
-				logWarnf("publish %s: size sidecar write failed: %v (sweep backfills)", p.h.ID, statsErr)
+				logWarnf("publish %s: stats sidecar write failed: %v (sweep backfills)", p.h.ID, statsErr)
 			}
 		}
 		// 8. Answer every waiter: valid → {Seq, per-ref ok}; invalid → errors.
@@ -443,19 +476,22 @@ func packRefOf(p *PreparedPack, seq uint64, tier uint32) *proto.PackRef {
 	}
 }
 
-// ---- Forgejo #248: publish-path size sidecar (R1 B1) -------------------------
+// ---- Forgejo #248/#247: publish-path sidecar (R1 B1/B3) ----------------------
 
-// batchChangesLiveSet reports whether the batch can change the manifest's
-// live pack set. PUSH and COMPACT entries carry packs/supersedes;
-// REF_UPDATE and SETTINGS entries never touch packs (annotate_pack bypasses
-// runBatch entirely — manifest-only CAS, no log entry — so it skips by
-// construction).
-func batchChangesLiveSet(entries []*proto.LogEntry) bool {
+// batchWritesSidecar reports whether the batch writes meta/stats.json.
+// PUSH, COMPACT, and REF_UPDATE entries all write: a ref-only batch that
+// leaves the live set alone still stamps last_push_at (Forgejo #247 —
+// tag-only/branch-delete pushes move the push clock, not the commit
+// fields), with size re-derived arithmetically from the held manifest.
+// SETTINGS-only batches skip (settings are not pushes; annotate_pack
+// bypasses the ladder entirely).
+func batchWritesSidecar(entries []*proto.LogEntry) bool {
 	for _, e := range entries {
 		if e == nil {
 			continue
 		}
-		if e.Kind == proto.EntryKindPush || e.Kind == proto.EntryKindCompact {
+		switch e.Kind {
+		case proto.EntryKindPush, proto.EntryKindCompact, proto.EntryKindRefUpdate:
 			return true
 		}
 	}
@@ -488,27 +524,48 @@ func statsSatAdd(a, b uint64) uint64 {
 }
 
 // statsSidecar is the meta/stats.json v1 body shape (field-for-field the
-// sizecatalog.Stats shape; cf. store.StatsKeySuffix).
+// sizecatalog.Stats shape; cf. store.StatsKeySuffix). Activity pointers are
+// nil for hint-less batches (null on the wire — the sweep heals them).
 type statsSidecar struct {
-	Version     int    `json:"version"`
-	SizeBytes   uint64 `json:"size_bytes"`
-	ObjectCount uint64 `json:"object_count"`
-	HeadSeq     uint64 `json:"head_seq"`
-	UpdatedAt   string `json:"updated_at"`
+	Version        int     `json:"version"`
+	SizeBytes      uint64  `json:"size_bytes"`
+	ObjectCount    uint64  `json:"object_count"`
+	HeadSeq        uint64  `json:"head_seq"`
+	UpdatedAt      string  `json:"updated_at"`
+	LastCommitSHA  *string `json:"last_commit_sha,omitempty"`
+	LastCommitTime *string `json:"last_commit_time,omitempty"`
+	LastPushAt     *string `json:"last_push_at,omitempty"`
 }
 
-// encodeStatsSidecar renders the sidecar body (updated_at = now UTC RFC 3339).
+// encodeStatsSidecar renders the sidecar body (updated_at = now UTC RFC
+// 3339). last_push_at stamps every write with the same now (every committed
+// batch is a push — including tag-only/branch-delete); the commit fields
+// ride the hint (nil = unknown → nulls, healed by the sweep).
 // The shape is owned by internal/sizecatalog (version 1); this mirror must
 // stay shape-compatible — the durable publish test decodes our bytes with
 // sizecatalog.DecodeStats.
-func encodeStatsSidecar(size, objs, headSeq uint64, now time.Time) []byte {
+func encodeStatsSidecar(size, objs, headSeq uint64, now time.Time, act *PublishActivity) []byte {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	body, _ := json.Marshal(statsSidecar{
+	now = now.UTC()
+	sc := statsSidecar{
 		Version: 1, SizeBytes: size, ObjectCount: objs, HeadSeq: headSeq,
-		UpdatedAt: now.UTC().Format(time.RFC3339),
-	})
+		UpdatedAt: now.Format(time.RFC3339),
+	}
+	pushAt := now.Format(time.RFC3339)
+	sc.LastPushAt = &pushAt
+	if act != nil {
+		if act.TipSHA != "" {
+			sha := act.TipSHA
+			sc.LastCommitSHA = &sha
+		}
+		if !act.CommitTime.IsZero() {
+			ct := act.CommitTime.UTC().Format(time.RFC3339)
+			sc.LastCommitTime = &ct
+		}
+	}
+	body, _ := json.Marshal(sc)
 	return body
 }
 

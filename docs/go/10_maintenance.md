@@ -88,11 +88,29 @@ NOT a §4 unit, never selected, never leased): `sizecatalog.Sweep` over the
 engine's repo list (bounded 256 repos/pass, cursor resumed in memory),
 backfilling per-repo `meta/stats.json` sidecars (PUT only when changed — the
 publish path owns primary writes, in parallel with the manifest CAS on every
-pack-changing PUSH/COMPACT) and CAS-folding the bucket-root `meta/repos.pb`
+committed PUSH/COMPACT/REF_UPDATE batch) and CAS-folding the bucket-root `meta/repos.pb`
 aggregate (one CAS per pass).
 Best-effort: fold errors are logged, never fail the pass; the catalog stays
 optional/rebuildable. No hot-path LIST — the fold probes manifests by exact
 key (the sweep's store-enumeration fallback is maintainer-only).
+Forgejo #247 extends the same fold with activity backfill (R1 B5): repos
+whose sidecar activity is missing, stale (head moved), or null-at-current-head
+resolve tip+date through `resolveActivity` — refs view at the manifest head
+(log-segment/checkpoint reads, no packs) for the HEAD-tip oid (head target
+from the view when a checkpoint or HEAD move recorded it, else the serving
+copy's HEAD symref — the WAL log only tracks symbolic moves, the file is
+the seed), then one
+`git log -1` (04_git.md §4.5) against the serving copy, with ONE serve-sync
+retry when the objects are not local yet. Budget per repo needing derivation:
+refs-view reads + ≤1 serve-sync (incremental — one-time per host) + 1 git
+subprocess; derivations run under their own ActivityParallel=2 semaphore
+(serve-syncs are heavy). Fresh sidecars cost zero git (the sweep skips the
+hook); every derivation failure isolates to its repo (preserve + continue —
+the sweep never nulls activity it cannot refresh). Enumeration is the
+engine's local repo list (zero idle cost; single-host converges fully —
+serve opens repos on demand and pushes write activity directly; multi-role
+fleets converge per host as repos are served; fleet-wide bucket-LIST
+enumeration is an explicit V1 non-goal).
 
 The pass NEVER blocks on bulk store I/O for unselected repos: selection reads only manifest/checkpoint refs already synced at refs level (cheap), plus local disk state (pack directory sizes, rev/bitmap presence via `stat`).
 

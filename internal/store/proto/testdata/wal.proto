@@ -172,6 +172,9 @@ message RepoCatalogEntry {
   uint64 object_count = 3;
   uint64 head_seq = 4;
   google.protobuf.Timestamp updated_at = 5;
+  string last_commit_sha = 6;     // HEAD-tip oid, "" = unknown (Forgejo #247)
+  google.protobuf.Timestamp last_commit_time = 7;  // HEAD-tip commit date
+  google.protobuf.Timestamp last_push_at = 8;      // last push wall-clock
 }
 
 message RepoCatalog { repeated string repos = 1; google.protobuf.Timestamp updated_at = 2; repeated RepoCatalogEntry entries = 3; }

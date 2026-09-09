@@ -247,7 +247,9 @@ type FsckReport struct {
 
 // RepoCatalog — optional meta/repos.pb (bucket root; not required for correctness).
 // Field 3 (entries, Forgejo #248) is the size-catalog aggregate: one row per
-// repo with stored-object size (Σ live-pack PackSize+IdxSize) + object count.
+// repo with stored-object size (Σ live-pack PackSize+IdxSize) + object count;
+// fields 6-8 on each entry (Forgejo #247) carry the last-commit activity
+// (HEAD-tip sha + commit date + last push time).
 // `repos` (field 1) is retained verbatim for Rust-compat readers; writers keep
 // both in agreement (entries[].repo ⊇ repos). Readers MUST tolerate either
 // being absent (nil entries = unknown sizes, never zero).
@@ -257,21 +259,32 @@ type RepoCatalog struct {
 	Entries   []*RepoCatalogEntry `json:"entries,omitempty"`
 }
 
-// RepoCatalogEntry — one aggregate row (Forgejo #248, walgit.v1 field 3+).
+// RepoCatalogEntry — one aggregate row (Forgejo #248, walgit.v1 field 3+;
+// Forgejo #247 activity derivation on fields 6-8).
 // Size semantic (canonical): stored-object size = Σ PackSize + Σ IdxSize over
 // the manifest's live pack set; object_count = Σ ObjectCount. Excludes
 // .rev/.bitmap/.commit-graph side files, bundles/ advertisement state, and LFS
 // objects (separate key family; a future LFS accounting would sum
 // lfs/objects/ off-hot-path in the sweep, never on publish). Zero means
 // verified-empty; absent row (or absent entries) means unknown/unbackfilled.
-// Reserved field numbers 6+ leave room for #247 activity derivation on this
-// same row family (append-only, never renumbered).
+// Activity semantic (#247): last_commit_sha + last_commit_time describe the
+// tip of HEAD (the default branch — never any ref) with commit-date semantics
+// (commit_date first, author_date fallback); last_push_at is wall-clock push
+// time (moves on tag-only/branch-delete pushes that leave the commit fields
+// alone). Empty values ("" / nil) mean unknown/unbackfilled, never zero —
+// readers fall back to per-repo state or "unknown", never to a fake epoch.
 type RepoCatalogEntry struct {
 	Repo        string     `json:"repo"` // "<owner>/<repo>"
 	SizeBytes   uint64     `json:"size_bytes"`
 	ObjectCount uint64     `json:"object_count"`
 	HeadSeq     uint64     `json:"head_seq"`
 	UpdatedAt   *Timestamp `json:"updated_at,omitempty"`
+	// LastCommitSHA is the HEAD-tip oid ("": unknown/unbackfilled).
+	LastCommitSHA string `json:"last_commit_sha,omitempty"`
+	// LastCommitTime is the HEAD-tip commit date (nil: unknown/unbackfilled).
+	LastCommitTime *Timestamp `json:"last_commit_time,omitempty"`
+	// LastPushAt is the last push wall-clock time (nil: unknown/unbackfilled).
+	LastPushAt *Timestamp `json:"last_push_at,omitempty"`
 }
 
 // MaintainerHeartbeat — bucket root maintain/<host>.pb.

@@ -35,12 +35,13 @@ requested or when a review questions a hot path).
 | E8 | 2026-09-04 | Release latest-pointer, autodraft, asset streaming (`internal/releases`, `internal/social`) | Is the latest badge O(1), what does a publish/list/autodraft cost, is the asset upload memory-bounded, and are star/fork writes constant? | Latest hot read flat (2 GETs at 5 and 200 releases); publish 3 GETs + 2 PUTs; list 1 LIST + 1 GET per release; autodraft 1 probe per candidate (≤100) with zero LIST; 1 MiB upload 2 GETs + 2 PUTs with an empty spool dir and zero-write 413s; star 2 GETs + 1 HEAD + 2 PUTs, fork bump 1+1. Cannot explode: pointer monotonicity skips stale publishers, scans/lists are prefix-bounded and capped, git probes run under the package pool. |
 | E9 | 2026-09-04 | Collab stream fan-out + invalidation coalescing (`internal/notify`, `web/src/lib`) | What does one repo-frame publish cost vs subscriber count, what survives a stalled subscriber, and how many refetches does a 30-check burst cause? | Publish ~0.6 µs (1 sub) → ~10 µs (128 subs), zero store round-trips; stalled pages shed (never stall emission, never grow past 16 + 64 frames); bursts collapse to ~2 refetches per key via the per-tick key-set flush + per-key single-flight; warm revisits transfer nothing. Cannot explode: drop-oldest bus, bounded ring, bounded flush. |
 | E10 | 2026-09-04 | Push fast path with the collab layer mounted + full-chain e2e timing (`cmd/walhub`, `internal/e2e`) | Does the push fast path gain any bucket round trips from eight mounted feature packages, and how long is the full org→release→fork chain on a real stack? | Zero: cold push 8 ops, warm push 9 ops, 0 collab-family keys on either; full chain wall 2.2 s (slowest phase: merge+close 0.5 s). Cannot regress: the budget test fails on any collab key touched by a push. |
-| E11 | 2026-09-04 | Repository import (`internal/repoimport`) | What does one URL import cost, and does it grow with repo size? | Flat: 6 GETs+HEADs + 12 control PUTs + 0 LISTs at 50 and 400 commits; wall grows with pack bytes only. Cannot explode: exact-key probes, ref enumeration local + capped, pool-gated git, no lock held across I/O. |
+| E11 | 2026-09-04 | Repository import (`internal/repoimport`) | What does one URL import cost, and does it grow with repo size? | Flat: 7 GETs+HEADs + 16 control PUTs + 0 LISTs at 50 and 400 commits (E11-era 6+12; +2 sidecar durability PUTs — pack publish #248, ref-txn publish #247 — S==M exactly); wall grows with pack bytes only. Cannot explode: exact-key probes, ref enumeration local + capped, pool-gated git, no lock held across I/O. |
 | E12 | 2026-09-08 | Landing concept GIFs (`internal/devtools/landinggif`) | Do 4 animated diagrams + stills fit the byte budgets with no new deps, and what does the landing page weigh? | Yes: 82,618 bytes total (budgets ≤ 150 KB, each asset ~45% headroom); page is shell + 1 JS + 1 CSS + lazy images, zero API calls. |
 | E13 | 2026-09-08 | Self-heal serving cost (`internal/api`, issue #209) | Do the summary `health`, the 404 marker, and the overview fsck projection add store round trips to any budgeted path? | No change: empty summary +0, non-empty summary +1, overview +1 (all exact-key probes, never LIST); push/sync/checkpoint engine paths untouched; empty Code-tab path removes 1–2 UI fetches. |
 | E14 | 2026-09-08 | Explicit create-repo placeholder (`internal/api`, `internal/server`, `internal/identity`, issue #210) | Do placeholder create, first-push adoption, and the summary projection add round trips to any budgeted path? | Create = 1 window (manifest + sidecar + access Creates parallel); first push +0 on-response (hint-gated off-response delete, 0 ops unhinted); empty summary ≤1 (sidecar only), real summary +0; sim budgets unchanged. |
 | E15 | 2026-09-09 | Pull-only mirrors (`internal/mirror`, Forgejo #240) | What does a sync fire cost, and what do the refusal revalidation + summary projection add to the push/summary paths? | First sync flat (22 ops, 0 LIST at S and M); no-op fire 11 ops, zero pack/manifest/log writes; push +2 exact-key probes (cold 10 / warm 9 ops, other collab families zero); summary +1 probe only when the mirror hook is set. Cannot explode: no LIST anywhere, converge-only no-ops, lease bounds duplicate work. |
-| E16 | 2026-09-09 | Repo size catalog (`internal/sizecatalog`, Forgejo #248) | What does one fold pass cost, what does the detailed listing cost, and what does the push path pay for durable size state? | Fold linear in repo count (2 GETs + ≤1 PUT per repo + 1 catalog CAS, 0 LIST at 3 and 12 repos); listing flat (exactly 1 catalog GET at any population); push +1 PUT per pack-changing publish (repo-scoped sidecar, parallel with the manifest CAS, +0 sequential trips; ref-only/settings write nothing). Cannot explode: bounded/resumable passes, PUT-if-changed sidecars, probe-only reads. |
+| E16 | 2026-09-09 | Repo size catalog (`internal/sizecatalog`, Forgejo #248) | What does one fold pass cost, what does the detailed listing cost, and what does the push path pay for durable size state? | Fold linear in repo count (2 GETs + ≤1 PUT per repo + 1 catalog CAS, 0 LIST at 3 and 12 repos); listing flat (exactly 1 catalog GET at any population); push +1 PUT per pack-changing publish (repo-scoped sidecar, parallel with the manifest CAS, +0 sequential trips; ref-only/settings write nothing — E17 amends ref-only to write the push clock). Cannot explode: bounded/resumable passes, PUT-if-changed sidecars, probe-only reads. |
+| E17 | 2026-09-09 | Last-commit activity (`internal/git`, `internal/sizecatalog`, Forgejo #247) | What does the push hint cost, what does a sweep heal cost, does the listing stay flat, and does explore order by commit time? | Push +0 (derivation is git-local, hint rides the existing sidecar PUT; cold 11 / warm 10 ops unchanged); sweep heals once per stale repo (refs view + ≤1 serve-sync + 1 git read, then quiet); listing flat (exactly 1 catalog GET); explore newest-commit-first from `sort=activity&order=desc` (commit dates, not push times). Cannot explode: no LIST, per-repo isolation, bounded parallelism (8/2), field-scoped merge never regresses. |
 
 ---
 
@@ -1160,3 +1161,71 @@ numbers are environment-bound — the *shape* (linear fold, flat listing,
 - Cannot explode: no LIST anywhere, per-repo error isolation (one bad
   manifest fails one row, never the pass), bounded parallelism (8),
   bounded passes (256), no lock held across I/O.
+
+## E17 — Last-commit activity: push hint cost, sweep heal cost, explore ordering (2026-09-09)
+
+**Area:** server-side last-commit tracking (`internal/git` derivation,
+server `WalEngine` hint, `internal/wal` shared sidecar write,
+`internal/sizecatalog` Activity fold, `internal/maintain` resolver,
+`/detailed` `sort=activity`, explore ordering). Spec: Forgejo #247 R1.
+
+**Question:** what does the push path pay for the activity hint, what does
+a sweep pass cost when sidecars need cold derivation, does the listing stay
+flat, and does explore order by commit (not push) time?
+
+**Method.** Unit harnesses over the **memory store** + one production run
+over the **filesystem store** (this entry's numbers): `internal/git`
+`TestCommitDatesHappyPath` (REAL `git log -1` — distinct author/committer
+dates pin the #142 preference); `internal/server`
+`TestWalEnginePublishDerivesActivity` (REAL funnel: scratch commit fetched
+into the serving copy, published, sidecar bytes asserted); `cmd/walhub`
+`TestPushFastPathZeroCollabRoundTrips` (two REAL git pushes, shipped
+composition — the push-budget gate); `internal/sizecatalog`
+`TestSweepFoldsActivityIntoCatalog` + `TestFoldOneSkipsGitWhenFresh` (hook
+call counts asserted); production e2e (scratch server, filesystem store):
+two pushed repos (commits dated 2024-01-01 and 2026-09-01) + one tag-only
+push, observing sidecars, `/detailed?sort=activity&order=desc`, and two
+maintainer passes. Absolute numbers are environment-bound — the *shapes*
+(+0 push ops, heal-once-then-quiet sweep, flat listing, commit-date order)
+are the durable claims.
+
+**Results.**
+
+| path | measured | shape |
+|---|---|---|
+| push path (2 real git pushes, shipped composition) | cold 11 / warm 10 bucket ops, 3 sanctioned collab touches/push | IDENTICAL to E16: the derivation is git-local (one `log -1` in the serving copy, zero store ops) and the hint rides the EXISTING sidecar PUT — +0 total ops, +0 sequential trips, still never a sidecar read |
+| push path (hint-less batches: tag-only/branch-delete/compact) | 1 sidecar PUT (blind overwrite: fresh size + stamped push clock + null commits) | +1 total op vs #248 (which wrote nothing for ref-only), +0 sequential; the sweep heals the nulls |
+| sidecar after client push (production) | `last_commit_sha`=tip, `last_commit_time`=commit date (2024/2026, NOT push time), `last_push_at`=push time | commit-date semantics proven: identical push times, distinct commit times |
+| sweep pass healing one tag-nulled repo (production) | `folded=1 unchanged=1 failed=0` | heal-once: refs-view reads + 1 git `log -1` (objects already local — zero serve-sync); the fresh repo cost zero git (hook skipped) |
+| sweep steady state (all sidecars fresh) | 0 sidecar PUTs, 0 hook calls | converge-only writes extend to activity (PUT-if-changed covers size+head+activity); catalog CAS stays the 1 fixed PUT |
+| detailed listing (`sort=activity&order=desc`) | exactly 1 catalog GET; `newrepo` (2026 commit) before `oldrepo` (2024 commit) | flat (unchanged read path); unknowns sort last either direction; ties on `(owner, name)` |
+| import (E11 harness) | S+M: 7 GETs+HEADs, 16 control PUTs, 0 LISTs (S==M exactly) | flat preserved; constant 12→15 (#248 sidecar) →16 (#247 ref-txn push clock), each documented |
+| explore page fetches | 1 owners + 1 detailed/owner (server-sorted); 0 `commits?n=1` per-row GETs when listed | the ~500-GET cold-cache worst case drops to zero on explore/`/:owner`; unbackfilled rows fall back to one cached fetch each |
+
+**Analysis.**
+
+- **Push pays +0.** E16's push row is amended in exactly one cell:
+  ref-only batches now write (the #247 acceptance: tag-only moves the push
+  clock) — still one parallel PUT, still zero reads, still zero bucket-root
+  writes. The budget test (`TestPushFastPathZeroCollabRoundTrips`) is
+  unchanged and green with identical totals (cold 11 / warm 10): the
+  "never a sidecar read" rule is what keeps the merge honest — hint-less
+  batches record nulls instead of preserving, and preservation is the
+  sweep's job (it already reads).
+- **Sweep heals once, then goes quiet.** A nulled/stale sidecar costs one
+  cold derivation (refs view + at most one serve-sync + one git read,
+  ActivityParallel=2); thereafter the sidecar is fresh and the hook is
+  skipped (asserted: `TestFoldOneSkipsGitWhenFresh` fails the test if the
+  hook runs). Derivation failure never nulls known activity (field-scoped
+  merge — size refreshes, activity preserves) and never fails the pass.
+- **Ordering is commit time, total and deterministic.** RFC 3339 strings
+  compare chronologically without parsing; unknowns always last (they are
+  not "old"); ties break on `(owner, name)` in Go and in the JS stabilizer
+  alike (both headless-tested).
+- Cannot explode: no LIST on any path (enumeration stays the engine's local
+  list), per-repo isolation everywhere, bounded parallelism (8 manifest /
+  2 derivation), bounded passes (256, resumable), no lock held across I/O.
+  The one behavioral wart is documented, not hidden: a tag-only push
+  transiently nulls the commit fields until the next sweep heals them
+  (bounded by the pass interval; the catalog's monotonicity rule keeps the
+  last-known row when the head did not move).

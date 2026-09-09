@@ -117,6 +117,10 @@ type Repo interface {
 	Manifest() (*proto.Manifest, string)
 	// SyncRefs refreshes the refs-level view (cheap; no pack materialization).
 	SyncRefs(ctx context.Context) error
+	// SyncServe materializes the serving pack set locally (Forgejo #247
+	// activity backfill: the cold-derivation git read needs the tip's
+	// commit object on disk; best-effort, error only isolates one repo).
+	SyncServe(ctx context.Context) error
 	// RefValues returns the current local ref tips (name → oid).
 	RefValues(ctx context.Context) (map[string]string, error)
 	ReadLog(ctx context.Context, from, to uint64) ([]*proto.LogEntry, error)
@@ -162,6 +166,10 @@ type GitOps interface {
 	FetchObjectsAsPack(ctx context.Context, repo *git.LocalRepo, u git.UpstreamSpec, oids []string) (string, error)
 	// Snapshot parses the repo's ref state (name-sorted).
 	Snapshot(repo *git.LocalRepo) (*git.RefSnapshot, error)
+	// CommitDates runs `git log -1 --format=%cI%x00%aI <sha>` in repo
+	// (Forgejo #247 activity derivation, 04_git.md §9.10 — bound onto
+	// *git.Layer; best-effort, errors isolate one repo's backfill).
+	CommitDates(ctx context.Context, repo *git.LocalRepo, sha string) (committer, author time.Time, err error)
 }
 
 // Engine is the WAL surface the maintainer drives (bound onto wal.Registry).
