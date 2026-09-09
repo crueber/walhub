@@ -55,6 +55,54 @@ export function olderCursor(newestFirst) {
 }
 
 /**
+ * reconcilePinnedWindow(prevView, nextView, extras) → the extras array
+ * reconciled against a slid newest-first view (issue #227): a remote
+ * SSE event refetches only the newest-50 page, so the view slides
+ * forward while pinned older windows stay put — the evicted boundary
+ * row(s) would fall in the gap between the two (rendered 0..64
+ * missing seq 14; `more()` then reads false so the hole persists
+ * until reload). Own mutations take `reload()` (drop extras); the
+ * live path instead carries the evicted tail — rows of the previous
+ * view older than the new view's floor and absent from both — onto
+ * the extras head. Zero round trips (the rows are already in hand);
+ * the assembly stays contiguous with no duplication, and the
+ * extras-tail `more` flag keeps its meaning (the tail does not move,
+ * so the `more()` predicate cannot lie afterward). Same-reference
+ * no-op when nothing is pinned or nothing was evicted. Never mutates
+ * input.
+ */
+export function reconcilePinnedWindow(prevView, nextView, extras) {
+  if (!extras || extras.length === 0) return extras ?? [];
+  if (!prevView || prevView.length === 0 || !nextView || nextView.length === 0) return extras;
+  let floor = Infinity;
+  const nextSeqs = new Set();
+  for (const ev of nextView) {
+    const s = ev?.seq;
+    if (typeof s !== "number" || !Number.isFinite(s)) continue;
+    nextSeqs.add(s);
+    if (s < floor) floor = s;
+  }
+  if (nextSeqs.size === 0) return extras;
+  const extraSeqs = new Set();
+  for (const ev of extras) {
+    const s = ev?.seq;
+    if (typeof s === "number" && Number.isFinite(s)) extraSeqs.add(s);
+  }
+  // prevView is newest-first, so the filter preserves newest-first
+  // order for the carried head.
+  const carry = [];
+  for (const ev of prevView) {
+    const s = ev?.seq;
+    if (typeof s !== "number" || !Number.isFinite(s)) continue;
+    if (s >= floor || nextSeqs.has(s) || extraSeqs.has(s)) continue;
+    extraSeqs.add(s);
+    carry.push(ev);
+  }
+  if (carry.length === 0) return extras;
+  return [...carry, ...extras];
+}
+
+/**
  * anchorScrollTop(top, oldHeight, newHeight) → the scrollTop that
  * keeps the content under the viewport fixed when older rows prepend
  * ABOVE it: the height delta joins the previous offset. Pure math —

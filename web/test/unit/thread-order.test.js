@@ -6,9 +6,18 @@ import {
   appendOlderWindow,
   olderCursor,
   anchorScrollTop,
+  reconcilePinnedWindow,
 } from "../../src/lib/thread-order.js";
 
 const seqs = (rows) => rows.map((e) => e.seq);
+
+// Newest-first wire window over [lo..hi] (like GetThread's last-50
+// page and the after_seq older windows).
+const desc = (lo, hi) => {
+  const rows = [];
+  for (let s = hi; s >= lo; s--) rows.push({ seq: s });
+  return rows;
+};
 
 // Wire windows arrive newest-first (02 §7 Decisions); the thread reads
 // oldest → newest (issue #225).
@@ -81,4 +90,67 @@ test("anchorScrollTop pins the viewport across a prepend above", () => {
   assert.equal(anchorScrollTop(500, 2000, 2000), 500);
   // At the very top: the reader stays at the new top edge.
   assert.equal(anchorScrollTop(0, 2000, 2300), 300);
+});
+
+// Issue #227: pinned extras + a slid newest-50 view must reconcile to
+// a contiguous assembly (no gap, no duplication), so the extras-tail
+// `more` flag — which the reconcile never moves — stays honest.
+
+test("reconcilePinnedWindow carries the evicted boundary onto pinned extras (one remote event)", () => {
+  // Thread seqs 0..64: newest-50 view 64..15 + pinned older 14..0.
+  const prevView = desc(15, 64);
+  const extras = desc(0, 14);
+  // One remote event slides the refetched view to 65..16: seq 15 is
+  // in neither — the exact one-seq hole from the issue.
+  const nextView = desc(16, 65);
+  const reconciled = reconcilePinnedWindow(prevView, nextView, extras);
+  assert.deepEqual(seqs(reconciled), [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]);
+  const assembly = appendOlderWindow(nextView, reconciled);
+  assert.deepEqual(
+    seqs(chronological(assembly)),
+    Array.from({ length: 66 }, (_, i) => i),
+  );
+  // No event appears twice: assembly length equals distinct seq count.
+  assert.equal(assembly.length, new Set(seqs(assembly)).size);
+});
+
+test("reconcilePinnedWindow carries multi-event slides without duplicating overlap", () => {
+  const prevView = desc(15, 64);
+  const extras = desc(0, 14);
+  // Three remote events at once: the view jumps to 67..18.
+  const nextView = desc(18, 67);
+  const reconciled = reconcilePinnedWindow(prevView, nextView, extras);
+  assert.deepEqual(seqs(reconciled).slice(0, 4), [17, 16, 15, 14]);
+  const assembly = appendOlderWindow(nextView, reconciled);
+  assert.deepEqual(
+    seqs(chronological(assembly)),
+    Array.from({ length: 68 }, (_, i) => i),
+  );
+  assert.equal(assembly.length, new Set(seqs(assembly)).size);
+});
+
+test("reconcilePinnedWindow is a same-reference no-op without pinned extras or without a slide", () => {
+  const prevView = desc(15, 64);
+  const nextView = desc(16, 65);
+  // Nothing pinned: the SSE refetch alone is already contiguous, and
+  // `more()` reads the view flag — return the input untouched.
+  const empty = [];
+  assert.equal(reconcilePinnedWindow(prevView, nextView, empty), empty);
+  assert.deepEqual(reconcilePinnedWindow(prevView, nextView, undefined), []);
+  // No slide (same newest page refetched): nothing evicted, extras kept as-is.
+  const extras = desc(0, 14);
+  assert.equal(reconcilePinnedWindow(prevView, desc(15, 64), extras), extras);
+  // Missing generations (first load, failed refetch): never invent rows.
+  assert.equal(reconcilePinnedWindow(undefined, nextView, extras), extras);
+  assert.equal(reconcilePinnedWindow(prevView, undefined, extras), extras);
+});
+
+test("reconcilePinnedWindow never mutates its inputs", () => {
+  const prevView = desc(15, 64);
+  const nextView = desc(16, 65);
+  const extras = desc(0, 14);
+  reconcilePinnedWindow(prevView, nextView, extras);
+  assert.deepEqual(seqs(prevView), seqs(desc(15, 64)));
+  assert.deepEqual(seqs(nextView), seqs(desc(16, 65)));
+  assert.deepEqual(seqs(extras), seqs(desc(0, 14)));
 });
