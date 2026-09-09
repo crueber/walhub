@@ -127,21 +127,6 @@ function fmtModeBody(s) {
   return out;
 }
 
-// --- [file type] column (issue #211) ------------------------------------------
-// entryKind(type, mode) → "dir" | "symlink" | "submodule" | "file": the text
-// label for the type column. ls-tree reports symlinks as type "blob" (mode
-// 120000) and submodules as type "commit" (mode 160000), so the mode decides
-// those two; "tree" is always a dir; everything else is a file. The existing
-// leading 📁/📄/↗ icon cell in Tree.jsx is kept as-is (scan aid, zero cost) —
-// this label is the issue's explicit [file type] column, not a replacement.
-export function entryKind(type, mode) {
-  const m = mode === undefined || mode === null ? "" : String(mode).trim();
-  if (type === "tree" || m === "040000" || m === "40000") return "dir";
-  if (type === "commit" || m === "160000") return "submodule";
-  if (m === "120000") return "symlink";
-  return "file";
-}
-
 // --- app-wide date display (issue #133) --------------------------------------
 // Every date in the UI renders through `fmtDate` (text) inside `<DateTime>`
 // (a `<time>` element whose `title` is `fmtDateTitle`). Three tiers:
