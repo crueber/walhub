@@ -436,7 +436,7 @@ prefixes). Thin wrapper over the one writer implementation (Seam 7: no second wr
 precedent — no core-table edit, law 8).
 
 Responses (all added fields enumerated here — additive per 14 §14.12): `201
-{owner, name, full_name, placeholder:true, clone_url, html_url}` (+ `Location:` the repo URL,
+{owner, name, full_name, placeholder:true, clone_url, ssh_clone_url?, html_url}` (+ `Location:` the repo URL,
 + non-blocking `warning:"owner name collides with a UI route"` when the owner hits a reserved
 single-segment UI name — creation allowed, only the `/:owner` page misroutes); idempotent
 `200 {…, placeholder:true, already:true}` for a same-principal re-create of a still-unborn
