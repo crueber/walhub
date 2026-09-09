@@ -162,9 +162,15 @@ func TestEvidenceImportBudget(t *testing.T) {
 			// RANGE assertions (S10: never exact N — CAS retries,
 			// checkpoint pairing, and size-class splits add variance):
 			// control-plane PUTs: manifest Create + log segment(s) +
-			// checkpoint/refs pair + access + import.json + idx ∈ [5,14].
-			if controlPuts < 5 || controlPuts > 14 {
-				t.Fatalf("%s: control PUTs = %d, want in [5,14]", tc.name, controlPuts)
+			// checkpoint/refs pair + access + import.json + idx + the two
+			// stats-sidecar durability PUTs (pack publish, #248; ref-txn
+			// publish, #247 push clock — one blind overwrite each, never a
+			// read) ∈ [5,16]. The constant moved twice with documented
+			// rationale (E11-era 12, #248-era 15, #247-era 16); the
+			// load-bearing property is flatness across populations
+			// (TestEvidenceImportFlat), which both increments preserve.
+			if controlPuts < 5 || controlPuts > 16 {
+				t.Fatalf("%s: control PUTs = %d, want in [5,16]", tc.name, controlPuts)
 			}
 			// Reads: manifest probe + import.json probe + ref/policy
 			// reads + repack reads, all exact-key, ∈ [2,20].

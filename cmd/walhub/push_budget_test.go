@@ -4,12 +4,13 @@
 // pull-only refusal revalidates every push with exactly one exact-key
 // mirror.json probe (404-free class, law 4 probe-don't-list; "every
 // read revalidates" — a push to a repo that just became a mirror must
-// be refused), and the Forgejo #248 publish path PUTs the repo-scoped
-// size sidecar in parallel with the manifest CAS (R1 B1: +1 total op per
-// pack-changing publish, +0 sequential trips — never the bucket-root
-// catalog). The probe/write are bounded below (mirror: one per discovery +
-// one per funnel call; stats: one PUT per pack-changing publish); every
-// other collaboration family stays at zero. It
+// be refused), and the Forgejo #248/#247 publish path PUTs the repo-scoped
+// stats sidecar in parallel with the manifest CAS (R1 B1: +1 total op per
+// committed PUSH/COMPACT/REF_UPDATE batch, +0 sequential trips — never the
+// bucket-root catalog, and NEVER a sidecar read: hint-less batches record
+// null activity, the sweep heals). The probe/write are bounded below
+// (mirror: one per discovery + one per funnel call; stats: one PUT per
+// committed publish); every other collaboration family stays at zero. It
 // boots the SHIPPED composition (buildCollab — the same wiring
 // serveHTTP uses, all feature packages mounted plus the identity
 // require_read gate and the mirror guard) over a prefix-counting
@@ -239,9 +240,9 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 	t.Logf("total bucket round trips for 2 pushes: %d", warmOps)
 	// Forgejo #240 bound: the ONLY collab touches allowed are the
 	// mirror-refusal probes (exact-key get/head on meta/mirror.json —
-	// one per discovery + one per funnel call) and the Forgejo #248
-	// size-sidecar writes (blind overwrite put on meta/stats.json —
-	// one per pack-changing publish, in parallel with the manifest
+	// one per discovery + one per funnel call) and the Forgejo #248/#247
+	// stats-sidecar writes (blind overwrite put on meta/stats.json —
+	// one per committed publish, in parallel with the manifest
 	// CAS). Everything else stays at zero; both counts are bounded
 	// (never a LIST, never a sidecar read).
 	mirrorProbes := 0
@@ -261,7 +262,7 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 		t.Errorf("mirror refusal probes = %d, want ≤ 6 (1 discovery + 1 funnel per push + slack)", mirrorProbes)
 	}
 	if statsPuts > 4 {
-		t.Errorf("size sidecar writes = %d, want ≤ 4 (1 per pack-changing publish + slack)", statsPuts)
+		t.Errorf("size sidecar writes = %d, want ≤ 4 (1 per committed publish + slack)", statsPuts)
 	}
 	if warmOps == 0 {
 		t.Fatal("no store ops counted — the decorator is bypassed, measurement void")
@@ -282,10 +283,11 @@ func isMirrorProbe(opKey string) bool {
 	return strings.HasSuffix(key, "/meta/mirror.json")
 }
 
-// isSizeSidecarWrite reports the Forgejo #248 publish-path write (the
+// isSizeSidecarWrite reports the Forgejo #248/#247 publish-path write (the
 // second sanctioned collab touch on the push path): a blind overwrite PUT
-// of the per-repo size sidecar. Reads on it (or any other op shape) are
-// NOT covered — the push path never reads the sidecar back.
+// of the per-repo stats sidecar (size + activity, one PUT for both
+// concerns). Reads on it (or any other op shape) are NOT covered — the push
+// path never reads the sidecar back.
 func isSizeSidecarWrite(opKey string) bool {
 	op, key, ok := strings.Cut(opKey, " ")
 	if !ok {

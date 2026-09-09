@@ -298,6 +298,27 @@ continuation lines after annotated tags; then remove the loose `refs/` tree and 
 is the same merge performed purely in memory (works when objects are absent) and is what snapshot/replay
 apply (doc 05). `pack_refs` is `git pack-refs --all --prune` (run in the repo git-dir, 60 s timeout).
 
+### 4.5 Commit-date derivation (Forgejo #247)
+
+One fact git knows and the bucket does not: a commit's dates. Both the
+push-path hint (server `WalEngine`, objects just ingested) and the sweep
+backfill (maintainer resolver, objects serve-synced) read it with one light
+recipe — `Layer.CommitDates`, exact argv (run in the repo git-dir, 30 s
+timeout, pool-accounted like every other Layer exec):
+
+`git log -1 --format=%cI%x00%aI <sha>`
+
+(`%x00` is ASCII text in argv — argv can never contain a NUL byte; git
+expands it. Same discipline as the §9.6 log recipe in `internal/api`.)
+Output is `<committer-date>\x00<author-date>`; either date parses via strict
+RFC 3339 (garbage → zero, not an error). Input validation first (no
+subprocess on garbage): nil/empty repo, non-`ValidOid` sha, and all-zero
+oids (a delete tip has no commit) are `errInvalidInput`. Subprocess
+failure, missing objects, and malformed field counts are hard errors —
+the CALLER degrades to null activity and never fails its own operation
+(R1 B3). `PickCommitTime` is the pure #142 semantic (commit_date first,
+author_date fallback; both zero → !ok, record nulls).
+
 ## 5. Pkt-line codec
 
 Hand-rolled in this package (`pktline.go`), used by advertisements, receive-pack parsing, and
@@ -674,6 +695,13 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   subprocess per tag while staying stdlib; bounded by `cache.ref_advert_entries`.
 - **Blocking pool is a semaphore-bounded goroutine pool (`git.max_git_procs`)** replacing tokio's 4-worker
   bulk runtime + spawn_blocking: one pool for all git execs; per-repo caps live in the HTTP layer.
+- **Commit-date derivation is one light `log -1` (§4.5, Forgejo #247):** the
+  bucket never carries commit dates, so the push-path hint and the sweep
+  backfill both read them from the commit object via
+  `git log -1 --format=%cI%x00%aI <sha>` (30 s, pool-accounted). Rationale:
+  a single local object read — no history walk, no new config, no new pool —
+  and every failure degrades to null activity (R1 B3: derivation never fails
+  the push; the sweep heals).
 - **New Go-only config keys** `git.ingest_timeout`, `git.connectivity_timeout`, `git.max_git_procs`:
   Rust hard-codes tokio timeouts/worker counts; Go makes them explicit for operators (documented in doc 11).
 - **`git.binary` is plumbed everywhere** (unlike Rust, which hardcodes `"git"` — §20 item 5): one field on

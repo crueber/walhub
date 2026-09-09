@@ -17,8 +17,13 @@ func putTestCatalog(t *testing.T, f *fixture) {
 		Repos:     []string{"demo/hello", "demo/walgit"},
 		UpdatedAt: &proto.Timestamp{Seconds: 1700000000},
 		Entries: []*proto.RepoCatalogEntry{
-			{Repo: "demo/hello", SizeBytes: 300, ObjectCount: 3, HeadSeq: 2},
-			{Repo: "demo/walgit", SizeBytes: 100, ObjectCount: 1, HeadSeq: 1},
+			{Repo: "demo/hello", SizeBytes: 300, ObjectCount: 3, HeadSeq: 2,
+				LastCommitSHA:  "aaa",
+				LastCommitTime: &proto.Timestamp{Seconds: 1700000100},
+				LastPushAt:     &proto.Timestamp{Seconds: 1700000200}},
+			{Repo: "demo/walgit", SizeBytes: 100, ObjectCount: 1, HeadSeq: 1,
+				LastCommitSHA:  "bbb",
+				LastCommitTime: &proto.Timestamp{Seconds: 1700000300}},
 		},
 	}
 	if _, err := f.env.Store.Put(ctx, sizecatalog.CatalogKey, store.PutBody{Bytes: cat.Marshal()}, store.PutOptions{Mode: store.PutCreate}); err != nil {
@@ -69,6 +74,27 @@ func TestOwnerReposDetailedSortFilter(t *testing.T) {
 	if rows[0].Name != "walgit" || rows[1].Name != "hello" {
 		t.Fatalf("size asc: %+v", rows)
 	}
+	// sort=activity desc → walgit (newer commit) first; activity fields ride.
+	w = f.req("GET", "/api/v1/owners/demo/repos/detailed?sort=activity&order=desc")
+	rows = decodeDetailed(t, w.Body.Bytes())
+	if rows[0].Name != "walgit" || rows[1].Name != "hello" {
+		t.Fatalf("activity desc: %+v", rows)
+	}
+	if rows[0].LastCommitSHA == nil || *rows[0].LastCommitSHA != "bbb" {
+		t.Fatalf("walgit sha: %+v", rows[0])
+	}
+	if rows[0].LastCommitTime == nil || *rows[0].LastCommitTime == "" {
+		t.Fatalf("walgit time: %+v", rows[0])
+	}
+	if rows[1].LastPushAt == nil || *rows[1].LastPushAt == "" {
+		t.Fatalf("hello push clock: %+v", rows[1])
+	}
+	// sort=activity asc → hello first (unknowns would still sort last).
+	w = f.req("GET", "/api/v1/owners/demo/repos/detailed?sort=activity&order=asc")
+	rows = decodeDetailed(t, w.Body.Bytes())
+	if rows[0].Name != "hello" || rows[1].Name != "walgit" {
+		t.Fatalf("activity asc: %+v", rows)
+	}
 	// min_bytes filters small repos (large/small findability).
 	w = f.req("GET", "/api/v1/owners/demo/repos/detailed?sort=size&min_bytes=200")
 	rows = decodeDetailed(t, w.Body.Bytes())
@@ -112,6 +138,9 @@ func TestOwnerReposDetailedDegradesWithoutCatalog(t *testing.T) {
 	for _, r := range rows {
 		if r.SizeBytes != nil {
 			t.Fatalf("absent catalog must be null, got %+v", r)
+		}
+		if r.LastCommitSHA != nil || r.LastCommitTime != nil || r.LastPushAt != nil {
+			t.Fatalf("absent catalog must be activity-null, got %+v", r)
 		}
 	}
 	// v1 string list is untouched by the new endpoint.

@@ -2612,7 +2612,7 @@ func (m *FsckReport) unmarshal(b []byte) error {
 // Size returns the exact encoded byte length (equals len(Marshal(m))).
 func (m *FsckReport) Size() int { return m.size() }
 
-// ---- RepoCatalogEntry (Forgejo #248) ----
+// ---- RepoCatalogEntry (Forgejo #248 size fields 1-5; #247 activity 6-8) ----
 
 func (m *RepoCatalogEntry) size() int {
 	if m == nil {
@@ -2633,6 +2633,15 @@ func (m *RepoCatalogEntry) size() int {
 	}
 	if m.UpdatedAt != nil && (m.UpdatedAt.Seconds != 0 || m.UpdatedAt.Nanos != 0) {
 		n += sizeSub(m.UpdatedAt)
+	}
+	if m.LastCommitSHA != "" {
+		n += sizeTag(6) + sizeLen(len(m.LastCommitSHA)) + len(m.LastCommitSHA)
+	}
+	if m.LastCommitTime != nil && (m.LastCommitTime.Seconds != 0 || m.LastCommitTime.Nanos != 0) {
+		n += sizeSub(m.LastCommitTime)
+	}
+	if m.LastPushAt != nil && (m.LastPushAt.Seconds != 0 || m.LastPushAt.Nanos != 0) {
+		n += sizeSub(m.LastPushAt)
 	}
 	return n
 }
@@ -2663,6 +2672,15 @@ func (m *RepoCatalogEntry) AppendTo(buf []byte) []byte {
 	}
 	if m.UpdatedAt != nil && (m.UpdatedAt.Seconds != 0 || m.UpdatedAt.Nanos != 0) {
 		buf = appendSub(buf, 5, m.UpdatedAt)
+	}
+	if m.LastCommitSHA != "" {
+		buf = appendString(buf, 6, m.LastCommitSHA)
+	}
+	if m.LastCommitTime != nil && (m.LastCommitTime.Seconds != 0 || m.LastCommitTime.Nanos != 0) {
+		buf = appendSub(buf, 7, m.LastCommitTime)
+	}
+	if m.LastPushAt != nil && (m.LastPushAt.Seconds != 0 || m.LastPushAt.Nanos != 0) {
+		buf = appendSub(buf, 8, m.LastPushAt)
 	}
 	return buf
 }
@@ -2713,6 +2731,34 @@ func (m *RepoCatalogEntry) unmarshal(b []byte) error {
 				m.UpdatedAt = &Timestamp{}
 			}
 			if err := m.UpdatedAt.unmarshal(sub); err != nil {
+				return err
+			}
+		case f == 6 && wt == 2:
+			s, err := d.str()
+			if err != nil {
+				return err
+			}
+			m.LastCommitSHA = s
+		case f == 7 && wt == 2:
+			sub, err := d.raw()
+			if err != nil {
+				return err
+			}
+			if m.LastCommitTime == nil {
+				m.LastCommitTime = &Timestamp{}
+			}
+			if err := m.LastCommitTime.unmarshal(sub); err != nil {
+				return err
+			}
+		case f == 8 && wt == 2:
+			sub, err := d.raw()
+			if err != nil {
+				return err
+			}
+			if m.LastPushAt == nil {
+				m.LastPushAt = &Timestamp{}
+			}
+			if err := m.LastPushAt.unmarshal(sub); err != nil {
 				return err
 			}
 		default:

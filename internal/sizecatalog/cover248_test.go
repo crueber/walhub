@@ -18,7 +18,7 @@ func TestRowFullNameAndZeroClock(t *testing.T) {
 	if r.FullName() != "o/r" {
 		t.Fatalf("fullname: %s", r.FullName())
 	}
-	b := EncodeStats(1, 2, 3, time.Time{})
+	b := EncodeStats(1, 2, 3, time.Time{}, nil)
 	s, ok, err := DecodeStats(b)
 	if err != nil || !ok || s.SizeBytes != 1 {
 		t.Fatalf("zero-clock encode: %+v %v %v", s, ok, err)
@@ -87,19 +87,19 @@ func TestFoldOneBadInputs(t *testing.T) {
 	st := store.NewMemory()
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	for _, id := range []string{"", "noslash", "/x", "x/", "a/b/c"} {
-		if _, _, _, _, ok := foldOne(ctx, st, id, now); ok {
+		if _, _, _, _, _, ok := foldOne(ctx, st, id, now, nil, nil); ok {
 			t.Fatalf("%q must fail", id)
 		}
 	}
 	// Missing manifest → unknown.
-	if _, _, _, _, ok := foldOne(ctx, st, "o/ghost", now); ok {
+	if _, _, _, _, _, ok := foldOne(ctx, st, "o/ghost", now, nil, nil); ok {
 		t.Fatal("missing manifest must fail")
 	}
 	// Corrupt manifest → unknown.
 	if _, err := st.Put(ctx, "repos/o/bad/manifest.pb", store.PutBody{Bytes: []byte{0xff}}, store.PutOptions{Mode: store.PutCreate}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, ok := foldOne(ctx, st, "o/bad", now); ok {
+	if _, _, _, _, _, ok := foldOne(ctx, st, "o/bad", now, nil, nil); ok {
 		t.Fatal("corrupt manifest must fail")
 	}
 	// Corrupt sidecar is tolerated (treated as changed, rewritten).
@@ -110,7 +110,7 @@ func TestFoldOneBadInputs(t *testing.T) {
 	if _, err := st.Put(ctx, store.StatsKey("o", "c"), store.PutBody{Bytes: []byte("{bad")}, store.PutOptions{Mode: store.PutCreate}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, changed, ok := foldOne(ctx, st, "o/c", now); !ok || !changed {
+	if _, _, _, _, changed, ok := foldOne(ctx, st, "o/c", now, nil, nil); !ok || !changed {
 		t.Fatalf("corrupt sidecar must rewrite: %v %v", changed, ok)
 	}
 }

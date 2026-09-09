@@ -1,11 +1,14 @@
-// size248_durable_test.go — Forgejo #248 durability (review #258 unblock):
-// the publish path must durably write the per-repo sidecar on PUSH/COMPACT
-// (parallel PUT, +0 sequential trips) — sweep-only is insufficient because
-// maintain-less deployments would have unbounded absence. These tests assert
-// the durable sidecar bytes after publish, never running the sweep:
+// size248_durable_test.go — Forgejo #248 durability (review #258 unblock)
+// plus Forgejo #247 activity (shared sidecar, one PUT for both concerns):
+// the publish path must durably write the per-repo sidecar on every
+// committed PUSH/COMPACT/REF_UPDATE batch (parallel PUT, +0 sequential
+// trips) — sweep-only is insufficient because maintain-less deployments
+// would have unbounded absence. These tests assert the durable sidecar
+// bytes after publish, never running the sweep:
 // push → sidecar present; compact (supersede) → sidecar reflects the live
-// set; ref-only/settings publishes skip; a failed sidecar PUT stays
-// best-effort (push still commits — the manifest CAS is the commit point).
+// set; ref-only publishes stamp last_push_at (commit fields null without a
+// hint); settings publishes skip; a failed sidecar PUT stays best-effort
+// (push still commits — the manifest CAS is the commit point).
 package wal
 
 import (
@@ -75,6 +78,14 @@ func TestPublishSidecarDurablePushThenCompact(t *testing.T) {
 	if s.SizeBytes != wantSize1 || s.ObjectCount != 10 || s.HeadSeq != res.Seq {
 		t.Fatalf("sidecar after push = %+v, want size=%d objs=10 head=%d", s, wantSize1, res.Seq)
 	}
+	// Hint-less push: last_push_at stamps (every committed batch is a push),
+	// commit fields stay null (the sweep heals them — R1 B3).
+	if s.LastPushAt == nil || *s.LastPushAt == "" {
+		t.Fatalf("hint-less push must stamp last_push_at: %+v", s)
+	}
+	if s.LastCommitSHA != nil || s.LastCommitTime != nil {
+		t.Fatalf("hint-less push must record null commit fields: %+v", s)
+	}
 	// The wal mirror agrees with the sizecatalog derivation, and the sidecar
 	// agrees with the committed manifest snapshot.
 	m, _ := h.ManifestSnapshot()
@@ -118,7 +129,7 @@ func TestPublishSidecarDurablePushThenCompact(t *testing.T) {
 	}
 }
 
-func TestPublishSidecarSkippedForRefOnly(t *testing.T) {
+func TestPublishSidecarRefOnlyStampsPushClock(t *testing.T) {
 	r, st := newTestRegistry(t)
 	ctx := context.Background()
 	h, err := r.Create(ctx, "acme/nopack", git.Sha1)
@@ -126,22 +137,69 @@ func TestPublishSidecarSkippedForRefOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	zero := git.Sha1.ZeroHex()
-	// Ref-only push: no pack change → no sidecar write.
+	// Ref-only push (tag-only shape: no pack, HEAD untouched): no hint, so
+	// the commit fields stay null — but last_push_at stamps, because a push
+	// happened (Forgejo #247 acceptance: tag-only moves the push clock).
 	if _, err := h.Publish(ctx, PublishRequest{
 		Txn: refTxn("refs/heads/main", zero, strings.Repeat("b", 40)),
 	}); err != nil {
 		t.Fatalf("ref-only publish: %v", err)
 	}
+	s := readSidecar(t, ctx, st, "acme/nopack")
+	if s.SizeBytes != 0 || s.ObjectCount != 0 {
+		t.Fatalf("ref-only sidecar must carry the (empty) live set: %+v", s)
+	}
+	if s.LastPushAt == nil {
+		t.Fatalf("ref-only push must stamp last_push_at: %+v", s)
+	}
+	if s.LastCommitSHA != nil || s.LastCommitTime != nil {
+		t.Fatalf("hint-less ref-only push must record null commit fields: %+v", s)
+	}
 	// Settings publish: manifest-only settings change → no sidecar write.
+	before, _, err := store.GetBytes(ctx, st, "repos/acme/nopack/"+store.StatsKeySuffix, store.GetOptions{})
+	if err != nil {
+		t.Fatalf("sidecar probe: %v", err)
+	}
 	if err := h.PublishSettings(ctx, "[git]\ndefault_branch = \"main\"\n", "op", "set defaults", nil); err != nil {
 		t.Fatalf("settings publish: %v", err)
 	}
-	body, _, err := store.GetBytes(ctx, st, "repos/acme/nopack/"+store.StatsKeySuffix, store.GetOptions{})
-	if err != nil && !store.IsNotFound(err) {
+	// The settings path must not have disturbed the ref-only sidecar.
+	after, _, err := store.GetBytes(ctx, st, "repos/acme/nopack/"+store.StatsKeySuffix, store.GetOptions{})
+	if err != nil {
 		t.Fatalf("sidecar probe: %v", err)
 	}
-	if len(body) != 0 {
-		t.Fatalf("ref-only/settings publishes must not write the sidecar (got %d bytes)", len(body))
+	if string(after) != string(before) {
+		t.Fatalf("settings must not rewrite the sidecar:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestPublishSidecarActivityHint(t *testing.T) {
+	r, st := newTestRegistry(t)
+	ctx := context.Background()
+	h, err := r.Create(ctx, "acme/hinted", git.Sha1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := git.Sha1.ZeroHex()
+	tip := strings.Repeat("d", 40)
+	commitAt := time.Date(2026, 9, 9, 8, 0, 0, 0, time.UTC)
+	res, err := h.Publish(ctx, PublishRequest{
+		Pack:     &PreparedPack{Checksum: "h1", PackSize: 100, IdxSize: 10, ObjectCount: 3},
+		Txn:      refTxn("refs/heads/main", zero, tip),
+		Activity: &PublishActivity{TipSHA: tip, CommitTime: commitAt},
+	})
+	if err != nil || res.Seq == 0 {
+		t.Fatalf("hinted push: res=%+v err=%v", res, err)
+	}
+	s := readSidecar(t, ctx, st, "acme/hinted")
+	if s.LastCommitSHA == nil || *s.LastCommitSHA != tip {
+		t.Fatalf("hint tip missing: %+v", s)
+	}
+	if s.LastCommitTime == nil || *s.LastCommitTime != "2026-09-09T08:00:00Z" {
+		t.Fatalf("hint time missing: %+v", s)
+	}
+	if s.LastPushAt == nil {
+		t.Fatalf("hinted push must stamp last_push_at: %+v", s)
 	}
 }
 
@@ -203,30 +261,52 @@ func TestStatsHelpersAgreeWithSizecatalog(t *testing.T) {
 	if ws, wo := statsSizeOf(huge); ws != ^uint64(0) || wo != ^uint64(0) {
 		t.Fatalf("saturating statsSizeOf = (%d,%d), want max/max", ws, wo)
 	}
-	// batchChangesLiveSet: push/compact write, ref-only/settings skip.
+	// batchWritesSidecar: push/compact/ref-update write, settings skip.
 	push := &proto.LogEntry{Seq: 1, Kind: proto.EntryKindPush}
 	compact := &proto.LogEntry{Seq: 2, Kind: proto.EntryKindCompact}
 	refupd := &proto.LogEntry{Seq: 3, Kind: proto.EntryKindRefUpdate}
 	settings := &proto.LogEntry{Seq: 4, Kind: proto.EntryKindSettings}
-	if !batchChangesLiveSet([]*proto.LogEntry{refupd, push}) {
+	if !batchWritesSidecar([]*proto.LogEntry{refupd, push}) {
 		t.Fatal("batch with PUSH must write the sidecar")
 	}
-	if !batchChangesLiveSet([]*proto.LogEntry{compact}) {
+	if !batchWritesSidecar([]*proto.LogEntry{compact}) {
 		t.Fatal("batch with COMPACT must write the sidecar")
 	}
-	if batchChangesLiveSet([]*proto.LogEntry{refupd, settings, nil}) {
-		t.Fatal("ref-only/settings batch must skip the sidecar")
+	if !batchWritesSidecar([]*proto.LogEntry{refupd}) {
+		t.Fatal("ref-only batch must write the sidecar (push clock)")
 	}
-	if batchChangesLiveSet(nil) {
+	if batchWritesSidecar([]*proto.LogEntry{settings, nil}) {
+		t.Fatal("settings-only batch must skip the sidecar")
+	}
+	if batchWritesSidecar(nil) {
 		t.Fatal("empty batch must skip the sidecar")
 	}
 	// encodeStatsSidecar decodes through the owned shape (law 8 mirror pin).
-	body := encodeStatsSidecar(3300, 30, 7, time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC))
+	body := encodeStatsSidecar(3300, 30, 7, time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC),
+		&PublishActivity{TipSHA: strings.Repeat("e", 40), CommitTime: time.Date(2026, 9, 9, 8, 0, 0, 0, time.UTC)})
 	s, ok, err := sizecatalog.DecodeStats(body)
 	if err != nil || !ok {
 		t.Fatalf("sidecar round-trip: ok=%v err=%v body=%s", ok, err, body)
 	}
 	if s.SizeBytes != 3300 || s.ObjectCount != 30 || s.HeadSeq != 7 || s.Version != sizecatalog.StatsVersion {
 		t.Fatalf("sidecar round-trip = %+v", s)
+	}
+	if s.LastCommitSHA == nil || *s.LastCommitSHA != strings.Repeat("e", 40) {
+		t.Fatalf("hint sha round-trip = %+v", s)
+	}
+	if s.LastCommitTime == nil || *s.LastCommitTime != "2026-09-09T08:00:00Z" {
+		t.Fatalf("hint time round-trip = %+v", s)
+	}
+	if s.LastPushAt == nil || *s.LastPushAt != "2026-09-09T12:00:00Z" {
+		t.Fatalf("push clock round-trip = %+v", s)
+	}
+	// Nil hint records null commit fields but still stamps the push clock.
+	body = encodeStatsSidecar(3300, 30, 7, time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC), nil)
+	s, ok, err = sizecatalog.DecodeStats(body)
+	if err != nil || !ok {
+		t.Fatalf("null-hint round-trip: ok=%v err=%v", ok, err)
+	}
+	if s.LastCommitSHA != nil || s.LastCommitTime != nil || s.LastPushAt == nil {
+		t.Fatalf("null hint = null commits + stamped push: %+v", s)
 	}
 }

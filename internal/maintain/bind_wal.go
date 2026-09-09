@@ -87,6 +87,15 @@ func (r walRepo) SyncRefs(ctx context.Context) error {
 	return nil
 }
 
+func (r walRepo) SyncServe(ctx context.Context) error {
+	g, err := r.h.Sync(ctx, wal.LevelServe)
+	if err != nil {
+		return err
+	}
+	g.Release()
+	return nil
+}
+
 func (r walRepo) RefValues(ctx context.Context) (map[string]string, error) {
 	if err := r.SyncRefs(ctx); err != nil {
 		return nil, err

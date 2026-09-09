@@ -268,7 +268,7 @@ For the merged batch (each job keeps its own `Txn` and reply):
    - Ok → committed.
    - 412 → **delete our own log segment** (CAS delete of exactly our version — the store delete must carry the version so we never delete a segment a racing writer is reading), then retry from step 1.
    - Other error → **ambiguous**: fresh manifest re-read (`casLanded`); if it lists our segment → committed (recover the version via HEAD); else NOT committed — **leave the segment in place** (do not delete: a lost-response commit the re-read failed to observe must not be destroyed; a later writer burns past it).
-   - In parallel with the CAS, when the batch holds any PUSH/COMPACT entry (ref-only and settings batches skip; `annotate_pack` bypasses the ladder entirely): PUT the Forgejo #248 size sidecar `meta/stats.json` (repo-scoped overwrite of the derived size_bytes/object_count/head_seq — +1 total op, +0 sequential trips; best-effort, WARN-only on failure; the manifest CAS stays the only commit point, the maintainer sweep backfills). Joined before step 8, so a returned push durably carries its sidecar without running the sweep.
+    - In parallel with the CAS, when the batch holds any PUSH/COMPACT/REF_UPDATE entry (SETTINGS-only batches skip — settings are not pushes; `annotate_pack` bypasses the ladder entirely): PUT the per-repo sidecar `meta/stats.json` (repo-scoped blind overwrite — +1 total op, +0 sequential trips; best-effort, WARN-only on failure; the manifest CAS stays the only commit point, the maintainer sweep backfills). Joined before step 8, so a returned push durably carries its sidecar without running the sweep. The body carries BOTH concerns in one PUT (Forgejo #248 size_bytes/object_count/head_seq + Forgejo #247 activity): size re-derives arithmetically from the held manifest (no store read, even for ref-only batches); `last_push_at` stamps every write with the batch time; the commit fields (`last_commit_sha/time`) ride the batch's `PublishRequest.Activity` hint (last non-nil hint in batch order wins) — nil (tag-only/branch-delete pushes, compact, mirror, import, follow) records nulls, which the sweep heals. The push path NEVER reads the sidecar (law 6 + the push budget's "never a sidecar read" rule); derivation failure NEVER fails the push (R1 B3).
 8. **Committed.** Resolve the final version (CAS metadata, else HEAD). Then, **local commit under `syncMu`, refs FIRST, then advertise**: apply each txn (`applyRefTxn`, no old-check) to `packed-refs`; on failure WARN (`walgit_publish_local_apply_failed_total`) and **withdraw** (set `state.ManifestVersion = ""` so the next sync replays; the version is not advertised). Then update state (`manifest_version`, `applied_seq`, `revision`; keep `packs_ready` if it was already true), sweep burned orphans (CAS-delete the burned segments we recorded), note entry times, spawn commit-graph folding for pushed packs **off the critical path** (13), and check the checkpoint trigger (§5.5 → opportunistic background checkpoint). Answer every waiter: valid → `PublishResult{Seq, PerRef: ok}`; invalid → per-ref errors.
 
 **Ordering rule (normative, from §3.2):** local refs are written BEFORE the new manifest version is advertised (held in `state.ManifestVersion`), because advertising first would let a reader cache old refs under the new version. **Withdraw-on-failure rule:** if local application fails, the version is withdrawn so the next sync replays; the push is still answered `ok`.
@@ -467,3 +467,13 @@ Background prefetch (from §6.2): after a refs-only sync, if `wal.prefetch_packs
   was added (closed enum); syncs ride the ordinary publish path, and no core
   file names mirrors (law 8: the guard/hook injection points live in
   `internal/server` and `internal/api`).
+- **Activity hint on the publish funnel (Forgejo #247, R1 B3).** `PublishRequest`
+  gains an optional `Activity{TipSHA, CommitTime}` hint, set by callers that
+  hold the commit objects locally (server `WalEngine` after ingest); every
+  committed PUSH/COMPACT/REF_UPDATE batch writes the shared sidecar with
+  `last_push_at` stamped and the hint's commit fields (nil → nulls, healed by
+  the sweep). Rationale: the push path never reads the bucket for rollups
+  (law 6; the push budget forbids a sidecar read), so hint-less batches
+  honestly record nulls instead of preserving — preservation is the sweep's
+  job (it already reads). Group-commit takes the last non-nil hint in batch
+  order (deterministic, later push wins).

@@ -172,17 +172,20 @@ type fakeRepo struct {
 	entries []*proto.LogEntry
 
 	// knobs / observation
-	packMuBusy  bool
-	compactErr  error
-	annotated   []string
-	compacts    []compactCall
-	adds        []addCall
-	published   []publishCall
-	checkpoints []string
-	git         *fakeGit
-	store       *memStore
-	fsckReport  *proto.FsckReport
-	syncErr     error
+	packMuBusy   bool
+	compactErr   error
+	annotated    []string
+	compacts     []compactCall
+	adds         []addCall
+	published    []publishCall
+	checkpoints  []string
+	git          *fakeGit
+	store        *memStore
+	fsckReport   *proto.FsckReport
+	syncErr      error
+	syncServeErr error
+	serveSyncs   int
+	refsView     *RefsView
 }
 
 type compactCall struct {
@@ -210,6 +213,11 @@ func (r *fakeRepo) Manifest() (*proto.Manifest, string) { return r.m, r.version 
 
 func (r *fakeRepo) SyncRefs(ctx context.Context) error { return r.syncErr }
 
+func (r *fakeRepo) SyncServe(ctx context.Context) error {
+	r.serveSyncs++
+	return r.syncServeErr
+}
+
 func (r *fakeRepo) RefValues(ctx context.Context) (map[string]string, error) {
 	out := map[string]string{}
 	for k, v := range r.refs {
@@ -229,6 +237,9 @@ func (r *fakeRepo) ReadLog(ctx context.Context, from, to uint64) ([]*proto.LogEn
 }
 
 func (r *fakeRepo) RefsAtSeq(ctx context.Context, seq uint64) (*RefsView, error) {
+	if r.refsView != nil {
+		return r.refsView, nil
+	}
 	return &RefsView{}, nil
 }
 
@@ -319,6 +330,12 @@ type fakeGit struct {
 	geoErr          error
 	failHistory     bool
 	failCommitGraph bool
+	// CommitDates script (Forgejo #247 resolver tests).
+	dateCalls   int
+	committerAt time.Time
+	authorAt    time.Time
+	dateErr     error
+	failDatesN  int // fail the first N calls, then succeed (serve-sync retry)
 }
 
 func (g *fakeGit) GeometricRepack(ctx context.Context, repo *git.LocalRepo, factor int, bitmap bool, keepPacks []string) (*git.PackDiff, error) {
@@ -367,6 +384,19 @@ func (g *fakeGit) FetchObjectsAsPack(ctx context.Context, repo *git.LocalRepo, u
 
 func (g *fakeGit) Snapshot(repo *git.LocalRepo) (*git.RefSnapshot, error) {
 	return &git.RefSnapshot{}, nil
+}
+
+func (g *fakeGit) CommitDates(ctx context.Context, repo *git.LocalRepo, sha string) (time.Time, time.Time, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.dateCalls++
+	if g.dateCalls <= g.failDatesN {
+		return time.Time{}, time.Time{}, errors.New("objects not local yet")
+	}
+	if g.dateErr != nil {
+		return time.Time{}, time.Time{}, g.dateErr
+	}
+	return g.committerAt, g.authorAt, nil
 }
 
 // fakeEngine implements Engine over fake repos.

@@ -1,15 +1,17 @@
 // web/src/pages/Owners.jsx — route "/explore": intro + every owner with their repos.
 // Owner/repo names come from the store-backed core listing endpoints
-// (GET /api/v1/owners, GET /api/v1/owners/{owner}/repos — 07 §8); the page
-// adds newest-first ordering, per-section caps (lib/owners.js), and the
-// intro card. Star counts ride the shared `social:{o}/{r}` cache entries
-// (<StarCount>, lib/stars.js) and last-active stamps the shared
-// `activity:{o}/{r}` entries (<ActivityStamp>, lib/activity.js — latest
-// commit date via `GET …/commits?n=1`, one GET per repo, placeholder-first
-// so first paint never blocks; see the component header for the rejected
-// alternatives). Rows share <RepoRow> with `/:owner` (Repos.jsx) in a
-// responsive two-column grid (one column on narrow widths). No new
-// endpoint, no new SDK method (issues #117, #137, #142).
+// (GET /api/v1/owners; per-owner rows from GET
+// /api/v1/owners/{owner}/repos/detailed?sort=activity&order=desc — 07 §8,
+// Forgejo #247: true most-recent-commit order server-side, stabilized
+// client-side by lib/owners.js orderByActivity). Owner sections stay
+// name-proxied (newestFirst — the owners list carries no timestamps).
+// The page adds per-section caps (lib/owners.js) and the intro card. Star
+// counts ride the shared `social:{o}/{r}` cache entries (<StarCount>,
+// lib/stars.js) and last-active stamps render from the listing rows
+// (<ActivityStamp at/empty props> — no per-row commits fetch on this page;
+// see the component header). Rows share <RepoRow> with `/:owner`
+// (Repos.jsx) in a responsive two-column grid (one column on narrow
+// widths). No new endpoint, no new SDK method (issues #117, #137, #142).
 
 import repos from "../../sdk/src/index.js";
 import { For, Show } from "solid-js";
@@ -20,36 +22,39 @@ import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
   newestFirst,
+  orderByActivity,
   pageSlice,
 } from "../lib/owners.js";
 
 /** One owner's section: heading + capped repo list (own `repos:{owner}` cache key, shared with /:owner). */
 function OwnerSection(props) {
-  const [getRepos] = useData(`repos:${props.owner}`, () => repos.owners.repos(props.owner));
+  const [getDoc] = useData(`repos:${props.owner}`, () =>
+    repos.owners.detailed(props.owner, { sort: "activity", order: "desc" }),
+  );
   return (
     <section class="py-3">
       <h3 class="text-base font-bold tracking-tight">
         <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}`}>
           {props.owner}
         </A>
-        <Show when={getRepos()}>
-          {(names) => (
+        <Show when={getDoc()}>
+          {(doc) => (
             <span class="muted ml-2 text-xs font-normal">
-              {names().length} repositor{names().length === 1 ? "y" : "ies"}
+              {doc().repos.length} repositor{doc().repos.length === 1 ? "y" : "ies"}
             </span>
           )}
         </Show>
       </h3>
-      <Show when={getRepos()} fallback={<p class="muted text-sm">loading…</p>}>
-        {(names) => {
-          const ordered = newestFirst(names());
+      <Show when={getDoc()} fallback={<p class="muted text-sm">loading…</p>}>
+        {(doc) => {
+          const ordered = orderByActivity(doc().repos);
           const { shown, extra } = pageSlice(ordered, MAX_REPOS_PER_OWNER);
           return (
             <>
               <Show when={shown.length > 0} fallback={<p class="muted mt-1 text-sm">nothing under {props.owner} yet</p>}>
                 <ul class="mt-1 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
                   <For each={shown}>
-                    {(n) => <RepoRow owner={props.owner} name={n} />}
+                    {(row) => <RepoRow owner={props.owner} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} />}
                   </For>
                 </ul>
               </Show>

@@ -115,7 +115,7 @@ func TestFoldOneSidecarGetError(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	if _, _, _, _, ok := foldOne(ctx, &sidecarGetErrStore{ObjectStore: inner}, "o/a", now); ok {
+	if _, _, _, _, _, ok := foldOne(ctx, &sidecarGetErrStore{ObjectStore: inner}, "o/a", now, nil, nil); ok {
 		t.Fatal("hard sidecar GET error must fail the fold")
 	}
 }

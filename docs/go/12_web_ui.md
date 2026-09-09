@@ -252,16 +252,17 @@ GIF reuse: all four concept scenes reappear with alt text imported verbatim from
   object store), what it does (push over smart HTTP; browse/manage repos here), how (refs, packs,
   config, policy as bucket objects; disposable instances).
 - **Data** (dogfood rule intact): `useData("owners", …owners.list())`, then one `OwnerSection` per
-  shown owner with `useData(`repos:${owner}`, …owners.repos(owner))` — the same cache key the
-  `/:owner` page uses, so the two pages share fetches. No new endpoint, no new SDK method (the core
-  listing endpoints in 07 §8 already list everything).
-- **Order**: owners newest-first, repos newest-first. Ordering key: reverse of server order — the
-  listing path exposes no creation timestamps (endpoints return store-sorted ascending name
-  lists of plain strings; per-repo `first_state_at`/first-entry `created_at` proxies exist
-  deeper in the bucket but cost a manifest/log GET per repo, so true reverse-chronological
-  order wants a server-side shape), so reverse-lexicographic is the closest deterministic
-  newest-first proxy. The single function to replace when the backend carries creation times
-  is `newestFirst` in `web/src/lib/owners.js`.
+  shown owner with `useData(`repos:${owner}`, …owners.detailed(owner, {sort:"activity",order:"desc"}))` — the same cache key the
+  `/:owner` page uses, so the two pages share fetches. No new endpoint, no new SDK method (the
+  detailed listing in 07 §8 already lists everything).
+- **Order**: owners newest-first (name proxy — the owners list carries no
+  timestamps), repos most-recent-commit-first (Forgejo #247). The listing
+  path now carries commit times (`GET /api/v1/owners/{owner}/repos/detailed`
+  rows carry `last_commit_sha/time` + `last_push_at`), so the server sorts
+  (`sort=activity&order=desc`) and the client stabilizes with
+   `orderByActivity` in `web/src/lib/owners.js` (RFC 3339 desc, unknowns last,
+   ties on `(owner, name)` — the server's key order — headless-tested). `newestFirst` stays for owner
+  sections only.
 - **Caps**: `MAX_OWNERS` 50 owners, `MAX_REPOS_PER_OWNER` 10 repos per section (constants in
   `web/src/lib/owners.js`, headless-tested). Overflow folds behind links, never a spinner: per-owner
   `+N more →` to `/:owner` (uncapped there), and a "showing newest 50 of N owners" line. The page
@@ -291,20 +292,28 @@ GIF reuse: all four concept scenes reappear with alt text imported verbatim from
   preserved (grid fills row-wise in source order) and the #117 caps/overflow links are
   unchanged. Each row also carries `active <DateTime>` via `<ActivityStamp>`
   (`web/src/components/ActivityStamp.jsx`, the #133 shared date component — relative text,
-  local-tz hover title). Source decision: the stamp is the latest COMMIT date from
-  `GET …/commits?n=1` (ref defaults to HEAD server-side, 07 §9.6 — one GET per repo, no
-  summary fetch first). The summary (`GET …/api`, §9.1) carries no date field, so it cannot
+  local-tz hover title). Source decision (Forgejo #247 supersedes the
+  per-row fetch on listing pages): the stamp is the latest COMMIT date from
+  the listing row itself (`last_commit_time` — no per-row GET on `/explore`
+  or `/:owner`, dropping the ~500-GET cold-cache worst case to zero);
+  `<ActivityStamp>` takes `at`/`empty` props for this and keeps the legacy
+  `GET …/commits?n=1` fetch (ref defaults to HEAD server-side, 07 §9.6) for
+  callers without listing data and as the fallback when the listing reports
+  unknown (null `at` on a non-empty repo — until the sweep backfills it).
+  The summary (`GET …/api`, §9.1) carries no date field, so it cannot
   source a stamp without a new backend field; the overview's `manifest.last_push` is
   push-time (not commit-time) and the overview is a no-store heavyweight
   (health/bundles/plan recomputed per call) — more cost per row for a less precise signal.
   Honest-proxy note: a push that adds no commits (branch delete, tag-only push) does not
   move the stamp; "last commit" is the documented meaning, hence the `active` label, and
-  empty repos render "no commits yet" (never a fake epoch — the unborn-HEAD 404 maps to
+  empty repos render "no commits yet" (never a fake epoch — listing-verified
+  empty repos skip the fetch via `empty`; otherwise the unborn-HEAD 404 maps to
   `{commits: []}` in the fetch, so it stays out of the error tray). Cost mirrors star counts
-  (shared `activity:{o}/{r}` 30 s `useData` key, placeholder-first, tray-on-error, bound by
+  (shared `activity:{o}/{r}` 30 s `useData` key for fallback fetches, placeholder-first, tray-on-error, bound by
   the #117 caps); extraction/date-choice constants live in headless-testable
-  `web/src/lib/activity.js` (`web/test/unit/activity.test.js`). No new endpoint, no new SDK
-  method (`repo.commits()`, 07 §9.6); no new deps.
+  `web/src/lib/activity.js` (`web/test/unit/activity.test.js`); ordering in
+  `web/src/lib/owners.js` (`web/test/unit/owners.test.js`). No new endpoint, no new SDK
+  method (`owners.detailed()`, 07 §8); no new deps.
 
 ### 2.3.2 Create form (`/new`, issue #210)
 
@@ -634,3 +643,4 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
   (unified + split, both themes, zero console errors) is open
   (shared-daemon network guard blocks private/loopback targets — no private
   daemon per workspace rules).
+- **FIXED (Forgejo #247) — explore orders by most recent commit, stamps render from the listing:** per-owner sections fetch `owners.detailed(owner, {sort:"activity",order:"desc"})` (same `repos:{owner}` cache key, shared with `/:owner` — invalidators untouched); `orderByActivity` stabilizes server order client-side (RFC 3339 desc, unknowns last, ties on `(owner, name)` — the server's key order); `<RepoRow>` passes `at={row.last_commit_time} empty={row.size_bytes === 0}` so `<ActivityStamp>` renders with zero per-row fetches (legacy `commits?n=1` fetch kept for callers without listing data + null-`at` fallback until the sweep backfills). Owner sections keep the `newestFirst` name proxy (the owners list carries no timestamps). Rationale: the ~500-GET cold-cache worst case drops to zero on the two listing pages while unbackfilled rows keep today's behavior (one cached fetch each). Headless cover: `web/test/unit/owners.test.js` (ordering, ties, nulls, slice-after-sort) + `web/test/unit/sdk-surface.test.js` (activity query shape); `vite build` green. Browser proof (ordered explore, both themes, zero console errors) is open (shared-daemon network guard blocks private/loopback targets — no private daemon per workspace rules).

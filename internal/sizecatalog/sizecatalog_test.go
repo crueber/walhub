@@ -40,7 +40,7 @@ func TestSizeOf(t *testing.T) {
 
 func TestStatsRoundTrip(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	b := EncodeStats(330, 12, 4, now)
+	b := EncodeStats(330, 12, 4, now, nil)
 	s, ok, err := DecodeStats(b)
 	if err != nil || !ok {
 		t.Fatalf("decode: %v %v", ok, err)
