@@ -6,7 +6,7 @@
 
 import { createSignal, Show, onCleanup } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
-import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, copyText } from "../lib/clone.js";
+import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, copyText } from "../lib/clone.js";
 import { invalidate } from "../lib/data.js";
 
 function CopyButton(props) {
@@ -129,7 +129,7 @@ export function EmptyRepoGuide(props) {
   // Verbatim server URL first (issue #124: never upgrade http→https for
   // display), origin fallback before the summary lands.
   const https = () => httpsCloneUrl(props.summary, props.full, location.origin);
-  const url = () => (getProto() === "ssh" ? sshCloneUrl(https(), props.full, location.hostname) : https());
+  const url = () => (getProto() === "ssh" ? sshCloneUrlFrom(props.summary, https(), props.full, location.hostname) : https());
   const remoteCmd = () => `git remote add origin ${url()}`;
   const pushCmd = () => `git push -u origin main`;
   return (

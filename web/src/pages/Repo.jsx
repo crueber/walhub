@@ -7,7 +7,7 @@ import repos from "../../sdk/src/index.js";
 import { createContext, useContext, createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } from "../lib/data.js";
-import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, cloneCommand, copyText } from "../lib/clone.js";
+import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText } from "../lib/clone.js";
 import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 
@@ -62,12 +62,12 @@ function CloneMenu(props) {
   // clone_url (origin fallback), shown VERBATIM so the command always works
   // (issue #124: never upgrade http→https for display — a plain-http server
   // terminates no TLS itself; the pill label below derives from this URL's scheme so pill
-  // and text always agree). The SSH URL reuses its host at the default
-  // ssh port (lib/clone.js — the server never advertises its ssh listen
-  // port to the browser, so no port is guessed).
+  // and text always agree). The SSH URL is the server-advertised
+  // ssh_clone_url verbatim when present (external host and port,
+  // lib/clone.js) with the hostname derivation as fallback.
   const https = () => httpsCloneUrl(props.summary, props.full, location.origin);
   const httpLabel = () => httpProtoLabel(https());
-  const url = () => (getProto() === "ssh" ? sshCloneUrl(https(), props.full, location.hostname) : https());
+  const url = () => (getProto() === "ssh" ? sshCloneUrlFrom(props.summary, https(), props.full, location.hostname) : https());
   const cmd = () => cloneCommand(url());
   const flag = (msg) => {
     clearTimeout(timer);

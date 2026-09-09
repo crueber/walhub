@@ -34,3 +34,51 @@ func TestCheckSSHListenFormat(t *testing.T) {
 		t.Fatalf("host key without listen = %v", errs)
 	}
 }
+
+func TestCheckSSHExternalPortRange(t *testing.T) {
+	for _, port := range []int{-1, 65536, 100000} {
+		c := Defaults()
+		c.Server.SSH.Listen = "0.0.0.0:2222"
+		c.Server.SSH.ExternalPort = port
+		_, errs := Validate(c)
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "external_port") {
+			t.Fatalf("external_port=%d = %v, want one external_port error", port, errs)
+		}
+	}
+	for _, port := range []int{0, 1, 22, 2222, 12222, 65535} {
+		c := Defaults()
+		c.Server.SSH.Listen = "0.0.0.0:2222"
+		c.Server.SSH.ExternalPort = port
+		if _, errs := Validate(c); len(errs) != 0 {
+			t.Fatalf("external_port=%d = %v, want clean", port, errs)
+		}
+	}
+}
+
+// TestAdvertisedSSHPort (issue #215): external_port wins when set, else the
+// listen port; 0 when there is nothing to advertise.
+func TestAdvertisedSSHPort(t *testing.T) {
+	cases := []struct {
+		name     string
+		listen   string
+		external int
+		want     int
+	}{
+		{"disabled", "", 0, 0},
+		{"listen only", "0.0.0.0:2222", 0, 2222},
+		{"external wins", "0.0.0.0:2222", 12222, 12222},
+		{"external without listen", "", 12222, 12222},
+		{"unparseable listen", "2222", 0, 0},
+		{"out of range external", "0.0.0.0:2222", 70000, 0},
+		{"ipv6 listen", "[::1]:2222", 0, 2222},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ServerSSH{Listen: tc.listen, ExternalPort: tc.external}
+			if got := s.AdvertisedSSHPort(); got != tc.want {
+				t.Fatalf("AdvertisedSSHPort(%q, %d) = %d, want %d",
+					tc.listen, tc.external, got, tc.want)
+			}
+		})
+	}
+}

@@ -1233,3 +1233,71 @@ func TestSSEContextCancel(t *testing.T) {
 		t.Fatal("packets must stop on client cancellation")
 	}
 }
+
+// Issue #215: the server advertises its SSH transport as ssh_clone_url — the
+// public hostname at the advertised port (server.ssh.external_port, else the
+// listen port). The clone menu shows it verbatim.
+func TestSummarySSHCloneURL(t *testing.T) {
+	f := newFixture(t)
+	seedSummary(f)
+	r := httptest.NewRequest("GET", "http://git.example.com/demo/walgit/api", nil)
+
+	// Disabled by default: no advertisement (omitted from JSON).
+	if got := f.env.sshCloneURL(r, "demo", "walgit"); got != "" {
+		t.Fatalf("disabled sshCloneURL = %q, want empty", got)
+	}
+	w := f.req("GET", "/demo/walgit/api")
+	if strings.Contains(w.Body.String(), "ssh_clone_url") {
+		t.Fatalf("disabled summary must omit ssh_clone_url: %s", w.Body.String())
+	}
+
+	// Listen only: the listen port rides the request host.
+	f.env.Cfg.Server.SSH.Listen = "0.0.0.0:2222"
+	if got, want := f.env.sshCloneURL(r, "demo", "walgit"),
+		"ssh://git@git.example.com:2222/demo/walgit.git"; got != want {
+		t.Fatalf("listen sshCloneURL = %q, want %q", got, want)
+	}
+
+	// External override wins; the public_url host wins over the request host.
+	f.env.Cfg.Server.SSH.ExternalPort = 12222
+	if got, want := f.env.sshCloneURL(r, "demo", "walgit"),
+		"ssh://git@git.example.com:12222/demo/walgit.git"; got != want {
+		t.Fatalf("external sshCloneURL = %q, want %q", got, want)
+	}
+	f.env.Cfg.Server.PublicURL = "https://hub.example.com"
+	if got, want := f.env.sshCloneURL(r, "demo", "walgit"),
+		"ssh://git@hub.example.com:12222/demo/walgit.git"; got != want {
+		t.Fatalf("public-url sshCloneURL = %q, want %q", got, want)
+	}
+
+	// Port 22 (the ssh default) is omitted.
+	f.env.Cfg.Server.SSH.Listen = "0.0.0.0:22"
+	f.env.Cfg.Server.SSH.ExternalPort = 0
+	if got, want := f.env.sshCloneURL(r, "demo", "walgit"),
+		"ssh://git@hub.example.com/demo/walgit.git"; got != want {
+		t.Fatalf("port-22 sshCloneURL = %q, want %q", got, want)
+	}
+
+	// The summary JSON carries the advertisement verbatim for the clone menu.
+	f.env.Cfg.Server.SSH.Listen = "0.0.0.0:2222"
+	f.env.Cfg.Server.SSH.ExternalPort = 12222
+	w = f.req("GET", "/demo/walgit/api")
+	var body struct {
+		SSHCloneURL string `json:"ssh_clone_url"`
+	}
+	decodeJSON(t, w, &body)
+	if want := "ssh://git@hub.example.com:12222/demo/walgit.git"; body.SSHCloneURL != want {
+		t.Fatalf("summary ssh_clone_url = %q, want %q", body.SSHCloneURL, want)
+	}
+
+	// The overview carries the same advertisement.
+	f.view.overviews["demo/walgit"] = OverviewData{}
+	w = f.req("GET", "/demo/walgit/api/overview")
+	if w.Code != 200 {
+		t.Fatalf("overview status = %d body=%s", w.Code, w.Body.String())
+	}
+	decodeJSON(t, w, &body)
+	if want := "ssh://git@hub.example.com:12222/demo/walgit.git"; body.SSHCloneURL != want {
+		t.Fatalf("overview ssh_clone_url = %q, want %q", body.SSHCloneURL, want)
+	}
+}

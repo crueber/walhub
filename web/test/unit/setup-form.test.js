@@ -58,6 +58,7 @@ for (const [key, bad, expected] of enumCases) {
 
 const rangeCases = [
   ["server.max_concurrent_requests", "0", 1],
+  ["server.ssh.external_port", "0", 1],
   ["store.max_retries", "-1", 0],
   ["compaction.factor", "0.5", 1],
   ["compaction.trigger_packs", "1", 2],

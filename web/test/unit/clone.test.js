@@ -1,13 +1,14 @@
-// web/test/unit/clone.test.js — clone-dialog URL builders (issue #37, #124):
+// web/test/unit/clone.test.js — clone-dialog URL builders (issue #37, #124, #215):
 // the HTTP(S) URL keeps the server's clone_url verbatim, the pill label
-// derives from its scheme (HTTP unless https://), the SSH URL reuses
-// its host at the default ssh port (never the HTTP port), and copyText
-// prefers the Clipboard API with an execCommand fallback.
+// derives from its scheme (HTTP unless https://), the SSH URL keeps the
+// server's ssh_clone_url verbatim when advertised (external host+port) and
+// otherwise reuses the https host at the default ssh port (never the HTTP
+// port), and copyText prefers the Clipboard API with an execCommand fallback.
 
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, cloneCommand, copyText } from "../../src/lib/clone.js";
+import { httpsCloneUrl, httpProtoLabel, sshCloneUrl, sshCloneUrlFrom, cloneCommand, copyText } from "../../src/lib/clone.js";
 
 test("httpsCloneUrl prefers the server clone_url, falls back to origin", () => {
   assert.equal(
@@ -47,6 +48,32 @@ test("sshCloneUrl reuses the https host, drops scheme and http port", () => {
 test("sshCloneUrl falls back to the page host, then localhost", () => {
   assert.equal(sshCloneUrl("not a url", "o/r", "page.host"), "ssh://git@page.host/o/r.git");
   assert.equal(sshCloneUrl("not a url", "o/r"), "ssh://git@localhost/o/r.git");
+});
+
+test("sshCloneUrlFrom prefers the server ssh_clone_url verbatim (issue #215)", () => {
+  // The issue case: external 12222 advertised while the server listens on 2222.
+  assert.equal(
+    sshCloneUrlFrom(
+      { ssh_clone_url: "ssh://git@git.packden.us:12222/crueber/walhub.git" },
+      "http://192.168.2.48:8080/crueber/walhub.git",
+      "crueber/walhub",
+      "x",
+    ),
+    "ssh://git@git.packden.us:12222/crueber/walhub.git",
+  );
+  // No advertisement (SSH disabled): the hostname derivation, as before.
+  assert.equal(
+    sshCloneUrlFrom({}, "https://git.packden.us/crueber/walhub.git", "crueber/walhub", "x"),
+    "ssh://git@git.packden.us/crueber/walhub.git",
+  );
+  assert.equal(
+    sshCloneUrlFrom(null, "http://192.168.2.48:8080/crueber/walhub.git", "crueber/walhub", "x"),
+    "ssh://git@192.168.2.48/crueber/walhub.git",
+  );
+  assert.equal(
+    sshCloneUrlFrom({ ssh_clone_url: "  " }, "not a url", "o/r", "page.host"),
+    "ssh://git@page.host/o/r.git",
+  );
 });
 
 test("cloneCommand prefixes git clone", () => {

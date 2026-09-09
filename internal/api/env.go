@@ -277,6 +277,7 @@ type NodeInfo struct {
 type OverviewData struct {
 	Repo        string           `json:"repo"`
 	CloneURL    string           `json:"clone_url"`
+	SSHCloneURL string           `json:"ssh_clone_url,omitempty"`
 	Hostname    string           `json:"hostname"`
 	Health      Health           `json:"health"`
 	Fsck        *FsckInfo        `json:"fsck,omitempty"` // nil when never audited (issue #209)

@@ -13,11 +13,14 @@
 // - SSH:   internal/sshd (docs/go/17_ssh.md) speaking the standard git
 //   transports at ssh://git@host[:port]/owner/repo.git (README, the
 //   bind_ssh_test.go ssh:// bases, the /keys page's ssh:// copy).
-// The server never advertises its SSH listen port to the browser, so the SSH
-// URL reuses the HTTP(S) URL's hostname at the DEFAULT ssh port (no port
-// segment — the HTTP port is never the SSH port, so carrying it over would
-// be wrong). Deployments on a custom port (compose rigs: 2222) adjust the
-// port or use ~/.ssh/config.
+// The server advertises its SSH URL as summary.ssh_clone_url (the public
+// hostname at the advertised SSH port: server.ssh.external_port, else the
+// listen port; absent while SSH is disabled with no external override).
+// sshCloneUrlFrom prefers that advertisement verbatim — same rule as the
+// HTTP(S) URL — and falls back to the hostname derivation (default ssh
+// port, no port segment — the HTTP port is never the SSH port, so carrying
+// it over would be wrong). Deployments on a custom port without the
+// advertisement adjust the port or use ~/.ssh/config.
 
 export function httpsCloneUrl(summary, full, origin) {
   return summary?.clone_url ?? `${origin}/${full}.git`;
@@ -38,6 +41,15 @@ export function sshCloneUrl(httpsUrl, full, host = "") {
     // Unparseable URL (or no URL constructor): fall back to the page host.
   }
   return `ssh://git@${hostname || "localhost"}/${full}.git`;
+}
+
+// sshCloneUrlFrom prefers the server-advertised summary.ssh_clone_url
+// verbatim (it already carries the external host and port); without an
+// advertisement it falls back to the hostname derivation above.
+export function sshCloneUrlFrom(summary, httpsUrl, full, host = "") {
+  const adv = summary?.ssh_clone_url;
+  if (typeof adv === "string" && adv.trim() !== "") return adv;
+  return sshCloneUrl(httpsUrl, full, host);
 }
 
 export function cloneCommand(url) {

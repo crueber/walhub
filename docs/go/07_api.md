@@ -51,7 +51,7 @@ GET /api/v1/owners             → ["demo","jane"] (sorted; from the STORE, not 
 GET /api/v1/owners/{o}/repos   → ["hello","walgit"] (short names; 200 [] for unknown owner)
 GET /{o}/{r}/api               → {owner, name, full_name, head:{name,sha}|null, branches, tags,
                                   health:"empty"|"healthy"|"degraded", missing_total? (degraded only),
-                                  clone_url, html_url, api_url}   (SWR + ETag "<head sha>" + "~degraded"
+                                  clone_url, ssh_clone_url?, html_url, api_url}   (SWR + ETag "<head sha>" + "~degraded"
                                   suffix when degraded; "" when unborn — §9.1)
 PUT/DELETE /{o}/{r}/api        → create (write) / delete (admin)
 GET …/refs                     → {head:{name,sha}|null} — O(1), default branch only (SWR + ETag)
@@ -86,7 +86,7 @@ GET …/settings/describe        → {settings, sections, strategies:[{name, kin
                                   token_env(bool), follow, follow_interval_secs, last_round?}, fields:
                                   [{key, value, host_value, source:"host"|"setting"}], head_seq}
 POST …/settings/validate       → same shape for the WOULD-BE effective config + {ok, errors[]}
-GET …/overview                 → walhub-specific WAL health (no-store): {repo, clone_url, hostname,
+GET …/overview                 → walhub-specific WAL health (no-store): {repo, clone_url, ssh_clone_url?, hostname,
                                   health:{status:"ok"|"degraded"|"error", issues[], deep,
                                   suggestions:[{op, params?, reason, auto?}]},
                                   fsck?:{missing_total, missing[] (bounded sample, [] never null),
@@ -388,9 +388,11 @@ adding a route without updating this list is a bug. The doc never lists admin-on
 ### 9.1 Repo summary — `GET /{o}/{r}/api` (and `{lane}` root)
 
 After a refs-level sync: `{owner, name, full_name, head:{name,sha}|null, branches, tags,
-health, missing_total?, clone_url, html_url, api_url}`. `head` = default branch (`null` → JSON `null` — the one sanctioned null, it is not an
+health, missing_total?, clone_url, ssh_clone_url?, html_url, api_url}`. `head` = default branch (`null` → JSON `null` — the one sanctioned null, it is not an
 array). `branches`/`tags` are **counts** (integers). `clone_url` from `server.public_url` (or request
-Host); `api_url` = the `/api` lane URL; SWR + `ETag: "<head sha>"`. `PUT` here creates (require_write,
+Host); `ssh_clone_url` (17_ssh.md §3 — the SSH transport advertisement, `external_port` else the
+listen port on the same public host, `:22` omitted; absent while SSH is disabled with no external
+override); `api_url` = the `/api` lane URL; SWR + `ETag: "<head sha>"`. `PUT` here creates (require_write,
 `?object_format=sha1|sha256`, `201`/`409` exists); `DELETE` (require_admin) → `204`.
 
 `health` is the **repo-state vocabulary** (issue #209 — scoped: this field describes the repo,
