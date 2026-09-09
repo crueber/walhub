@@ -10,7 +10,6 @@ import ConceptGif from "../components/ConceptGif.jsx";
 export const LANDING_CTAS = [
   { label: "Browse repositories", href: "/explore", primary: true },
   { label: "Push in 30 seconds", href: "#quickstart", primary: false },
-  { label: "Configure", href: "/setup", primary: false },
 ];
 
 export const CONCEPT_ALTS = {
@@ -56,21 +55,6 @@ export default function Landing() {
           <a class="btn px-4 py-2" href="#quickstart">
             Push in 30 seconds
           </a>
-        </p>
-        <p class="muted mt-3 text-sm">
-          <A class="hover:underline" href="/setup">
-            Configure
-          </A>
-        </p>
-        <p class="muted mt-4 text-xs">
-          Object-protocol compliant with walgit — bucket layout, protobuf wire encoding, and git wire
-          behavior follow walgit's formats.
-        </p>
-        <p class="muted mt-4 flex flex-wrap items-center justify-center gap-3 text-sm">
-          <A class="btn px-4 py-2" href="/how-it-works">
-            How it works →
-          </A>
-          <span>the object-store idea and the WAL, in depth.</span>
         </p>
       </section>
 
