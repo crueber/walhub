@@ -22,7 +22,7 @@ import CommentComposer from "../components/CommentComposer.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { reactionEmoji, summaryEntries, addableReactions, adjustSummary } from "../lib/reactions.js";
-import { appendOlderWindow, olderCursor, anchorScrollTop } from "../lib/thread-order.js";
+import { appendOlderWindow, olderCursor, anchorScrollTop, reconcilePinnedWindow } from "../lib/thread-order.js";
 import ReactionMenu from "../components/ReactionMenu.jsx";
 import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-events.js";
 
@@ -334,6 +334,27 @@ export default function Issue() {
       }
     }
   };
+
+  // Live-window reconcile (issue #227): a remote SSE event refetches
+  // only the newest-50 view while pinned older windows stay put, so
+  // the evicted boundary row(s) would hole the assembly (and `more()`
+  // would keep reading the stale tail flag until reload). Own
+  // mutations take `reload()` above (drop extras); this path instead
+  // carries the evicted tail onto the extras head — history
+  // preserved, viewport untouched (SSE refetches never move the
+  // viewport), zero extra round trips. The effect tracks the view
+  // only (extras update via the setter updater, which never
+  // subscribes), so it cannot self-trigger; declared after the
+  // navigation reset so a cross-issue view change always meets
+  // already-cleared extras (a same-reference no-op there).
+  let prevViewEvents;
+  createEffect(() => {
+    const next = getView()?.events;
+    const prev = prevViewEvents;
+    prevViewEvents = next;
+    if (!prev || !next || prev === next) return;
+    setExtra((cur) => reconcilePinnedWindow(prev, next, cur));
+  });
 
   // The ONE repo collaboration stream (08 §4): one connection for this
   // page, capped reconnect; matching issue frames invalidate (coalesced)

@@ -513,6 +513,17 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   older-window prepends pin the viewport via `anchorScrollTop`). PR
   conversations inherit the same convention through the shared component
   (03 Decisions).
+- **SSE refetches reconcile pinned older windows instead of dropping
+  them (issue #227, 2026-09-09).** A remote event refetches only the
+  newest-50 view, which slides forward while pinned extras stay put —
+  the evicted boundary row(s) would hole the assembly (and the
+  extras-tail `more` flag would lie until reload). Own mutations keep
+  taking `reload()` (drop extras); the live path instead carries the
+  evicted tail onto the extras head (`reconcilePinnedWindow` in
+  `web/src/lib/thread-order.js`, wired by a view-tracking effect in
+  `Issue.jsx`): history preserved, viewport untouched, zero extra
+  round trips, assembly contiguous with no duplication. Pinned by
+  `node --test` in `web/test/unit/thread-order.test.js`.
 - **Duplicate-reaction dedup is best-effort under true concurrency.** The
   (actor, target, content) check reads the log before the reserving CAS, so
   sequential double-submits (the real double-click case) are no-ops while
