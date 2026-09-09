@@ -86,8 +86,10 @@ Each pass, per assigned repo, in registration order:
 After the per-repo loop, the pass runs the size-catalog fold (Forgejo #248 —
 NOT a §4 unit, never selected, never leased): `sizecatalog.Sweep` over the
 engine's repo list (bounded 256 repos/pass, cursor resumed in memory),
-refreshing per-repo `meta/stats.json` sidecars (PUT only when changed) and
-CAS-folding the bucket-root `meta/repos.pb` aggregate (one CAS per pass).
+backfilling per-repo `meta/stats.json` sidecars (PUT only when changed — the
+publish path owns primary writes, in parallel with the manifest CAS on every
+pack-changing PUSH/COMPACT) and CAS-folding the bucket-root `meta/repos.pb`
+aggregate (one CAS per pass).
 Best-effort: fold errors are logged, never fail the pass; the catalog stays
 optional/rebuildable. No hot-path LIST — the fold probes manifests by exact
 key (the sweep's store-enumeration fallback is maintainer-only).
@@ -417,6 +419,12 @@ Operator view of one pass on an ssd host (`walhub serve --config walgit.toml`):
   no task kind) folds `internal/sizecatalog.Sweep`: per-repo manifest probe
   → pure-arithmetic size → sidecar PUT-if-changed → one aggregate CAS.
   Bounded (256/pass) and resumable (in-memory cursor; the catalog itself is
-  the durable cursor, so loss only repeats work). Rationale: push-path
-  bucket-root writes are a contention funnel (law 6); folding off-hot-path
-  keeps push at +0 trips while the listing still reads ONE object per query.
+  the durable cursor, so loss only repeats work). The sweep is backfill/repair
+  (pre-existing repos, crashed pushes, maintain-less role splits) — primary
+  writes happen on the publish path (repo-scoped sidecar PUT parallel with the
+  manifest CAS, +1 total op, +0 sequential trips). Rationale: push-path
+  bucket-root writes are a contention funnel (law 6), so the aggregate folds
+  off-hot-path while the listing still reads ONE object per query; sweep-only
+  durability would leave serve-only deployments with unbounded absence.
+  (Corrected 2026-09-09 per review #258: the original entry claimed R1 B1
+  authority for sweep-only writes — the opposite of what R1 ordered.)

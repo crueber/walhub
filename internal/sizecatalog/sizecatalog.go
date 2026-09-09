@@ -3,20 +3,23 @@
 //
 // Size semantic (canonical): stored-object size = Σ live-pack PackSize +
 // Σ live-pack IdxSize over the manifest's denormalized live pack set;
-// object_count = Σ ObjectCount. Pure arithmetic on data the publish path
-// already holds: +0 store round trips, no I/O, no failure mode beyond
-// overflow (uint64 saturates). Explicitly OUT: .rev/.bitmap/.commit-graph
+// object_count = Σ ObjectCount. The derivation is pure arithmetic on data
+// the publish path already holds (no I/O, no failure mode beyond overflow —
+// uint64 saturates); persisting it costs one repo-scoped sidecar PUT issued
+// in parallel with the manifest CAS (+1 total op, +0 sequential trips). Explicitly OUT: .rev/.bitmap/.commit-graph
 // side files, bundles/ advertisement state, LFS objects (separate key
 // family — a future LFS accounting would sum lfs/objects/ in the sweep,
 // never on publish). Overview PacksInfo.LiveBytes (Σ PackSize only) is
 // frozen and intentionally differs by IdxSize; this package documents both.
 //
 // Durable shape (shared rails #247 builds on): per-repo sidecar
-// repos/<o>/<r>/meta/stats.json (CAS'd JSON, version 1) written ONLY by the
-// maintainer sweep — never synchronously on push (law 6: push stays +0) —
-// folded into the bucket-root aggregate meta/repos.pb (proto RepoCatalog +
-// field-3 entries, CAS'd, optional/rebuildable). #247 activity derivation
-// adds optional fields on this same sidecar/row (one PUT, both concerns).
+// repos/<o>/<r>/meta/stats.json (overwrite JSON, version 1) written on every
+// pack-changing publish (PUSH/COMPACT) by the publish path itself, in
+// parallel with the manifest CAS (+1 total op, +0 sequential trips — R1 B1;
+// the bucket-root catalog is never touched on push), with the maintainer
+// sweep as backfill/repair (pre-existing repos, crashed pushes, role
+// splits; PUT-if-changed converges). #247 activity derivation adds optional
+// fields on this same sidecar/row (one PUT, both concerns).
 //
 // Null-vs-0: absent row/sidecar = unknown/unbackfilled (API emits null, UI
 // hides); present row with 0 = verified-empty repo.
@@ -377,8 +380,10 @@ func Sweep(ctx context.Context, st store.ObjectStore, opt SweepOptions) (SweepRe
 }
 
 // foldOne refreshes one per-repo sidecar: GET manifest (probe, never LIST),
-// derive size arithmetically, PUT sidecar only when changed. Returns
-// (size, objs, head, changed, ok).
+// derive size arithmetically, PUT sidecar only when changed. The publish
+// path owns primary writes (parallel sidecar PUT on PUSH/COMPACT); the sweep
+// is backfill/repair for pre-existing repos, crashed pushes, and role
+// splits. Returns (size, objs, head, changed, ok).
 func foldOne(ctx context.Context, st store.ObjectStore, id string, now time.Time) (uint64, uint64, uint64, bool, bool) {
 	owner, name, ok := splitID(id)
 	if !ok {

@@ -45,7 +45,7 @@ prepends the configured `store.prefix` (normalized to end with `/`).
 | `cache/api/v1/<sha1-of-cache-key>.json` | JSON | web API (Create) | Shared render cache of immutable API answers |
 | bucket root `maintain/<host>.pb` | protobuf `MaintainerHeartbeat` | maintainer (Overwrite) | Who maintains what, capacity, liveness |
 | bucket root `meta/repos.pb` | protobuf `RepoCatalog` (+ field-3 `entries`, Forgejo #248) | optional, CAS'd | Size-catalog aggregate (not required for correctness; rebuildable) |
-| `meta/stats.json` | JSON `{"version":1,"size_bytes":N,"object_count":M,"head_seq":H,"updated_at":RFC3339}` (Forgejo #248) | maintainer sweep (CAS'd sidecar) | Per-repo size sidecar; shared rails #247 builds on (activity adds optional fields on this same file) |
+| `meta/stats.json` | JSON `{"version":1,"size_bytes":N,"object_count":M,"head_seq":H,"updated_at":RFC3339}` (Forgejo #248) | publish path on pack-changing PUSH/COMPACT (parallel overwrite PUT) + maintainer sweep backfill (PUT-if-changed) | Per-repo size sidecar; shared rails #247 builds on (activity adds optional fields on this same file) |
 | `<key>.part/{i:04}`, `<key>.part/mid{g:04}` | bytes | striped upload | Temp parts, deleted after compose |
 
 Normative rules carried over from §5.1:
@@ -798,12 +798,20 @@ if errors.Is(err, store.ErrRetriesExhausted) { /* treat as contention/failure */
   activity on the same row family — one amendment, never two). `repos`
   (field 1) is retained verbatim so Rust-era readers keep working; writers
   keep both in agreement. New per-repo sidecar `repos/<o>/<r>/meta/stats.json`
-  (CAS'd JSON version 1, same overwritable family — 14 §14.11 rule 2 amended
-  here) is written ONLY by the maintainer sweep, never synchronously on push
-  (push stays +0 trips; the publish path contributes pure arithmetic on
-  in-hand data only). Size semantic: stored-object size (packs+idx), verified
-  by hand codec + `catalog_entry`/`catalog_size` golden fixtures in the same
-  change. Rationale: no bucket-root CAS on the push hot path (cross-repo
-  contention funnel, law-6 regression); one shared sidecar/row/sweep for #248
+  (overwrite JSON version 1, same overwritable family — 14 §14.11 rule 2 amended
+  here) is written by the publish path on every pack-changing PUSH/COMPACT —
+  a repo-scoped PUT in parallel with the manifest CAS (+1 total op, +0
+  sequential trips; R1 B1's "+0" is sequential, and a repo-scoped PUT is not
+  the cross-repo contention funnel R1 forbids) — with the maintainer sweep as
+  backfill/repair (pre-existing repos, crashed pushes, role splits;
+  PUT-if-changed converges). The publish write is best-effort: the manifest
+  CAS stays the only commit point (law 4); a lost sidecar PUT never fails the
+  push. Size semantic: stored-object size (packs+idx), verified by hand codec
+  + `catalog_entry`/`catalog_size` golden fixtures in the same change.
+  Rationale: no bucket-root CAS on the push hot path (cross-repo contention
+  funnel, law-6 regression) — but sweep-only durability would leave
+  maintain-less deployments (serve-only roles, disabled loop) with unbounded
+  absence instead of bounded staleness; one shared sidecar/row/sweep for #248
   size + #247 activity (two sidecars would double the cost this design
-  removes).
+  removes). (Corrected 2026-09-09 per review #258: the original entry claimed
+  R1 B1 authority for sweep-only writes — the opposite of what R1 ordered.)

@@ -40,7 +40,7 @@ requested or when a review questions a hot path).
 | E13 | 2026-09-08 | Self-heal serving cost (`internal/api`, issue #209) | Do the summary `health`, the 404 marker, and the overview fsck projection add store round trips to any budgeted path? | No change: empty summary +0, non-empty summary +1, overview +1 (all exact-key probes, never LIST); push/sync/checkpoint engine paths untouched; empty Code-tab path removes 1–2 UI fetches. |
 | E14 | 2026-09-08 | Explicit create-repo placeholder (`internal/api`, `internal/server`, `internal/identity`, issue #210) | Do placeholder create, first-push adoption, and the summary projection add round trips to any budgeted path? | Create = 1 window (manifest + sidecar + access Creates parallel); first push +0 on-response (hint-gated off-response delete, 0 ops unhinted); empty summary ≤1 (sidecar only), real summary +0; sim budgets unchanged. |
 | E15 | 2026-09-09 | Pull-only mirrors (`internal/mirror`, Forgejo #240) | What does a sync fire cost, and what do the refusal revalidation + summary projection add to the push/summary paths? | First sync flat (22 ops, 0 LIST at S and M); no-op fire 11 ops, zero pack/manifest/log writes; push +2 exact-key probes (cold 10 / warm 9 ops, other collab families zero); summary +1 probe only when the mirror hook is set. Cannot explode: no LIST anywhere, converge-only no-ops, lease bounds duplicate work. |
-| E16 | 2026-09-09 | Repo size catalog (`internal/sizecatalog`, Forgejo #248) | What does one fold pass cost, what does the detailed listing cost, and does the push path gain any round trips? | Fold linear in repo count (2 GETs + ≤1 PUT per repo + 1 catalog CAS, 0 LIST at 3 and 12 repos); listing flat (exactly 1 catalog GET at any population); push +0 (pure arithmetic, no I/O). Cannot explode: bounded/resumable passes, PUT-if-changed sidecars, probe-only reads. |
+| E16 | 2026-09-09 | Repo size catalog (`internal/sizecatalog`, Forgejo #248) | What does one fold pass cost, what does the detailed listing cost, and what does the push path pay for durable size state? | Fold linear in repo count (2 GETs + ≤1 PUT per repo + 1 catalog CAS, 0 LIST at 3 and 12 repos); listing flat (exactly 1 catalog GET at any population); push +1 PUT per pack-changing publish (repo-scoped sidecar, parallel with the manifest CAS, +0 sequential trips; ref-only/settings write nothing). Cannot explode: bounded/resumable passes, PUT-if-changed sidecars, probe-only reads. |
 
 ---
 
@@ -1035,8 +1035,8 @@ composition WITH the mirror guard wired, real git over smart HTTP).
 | first sync S (3c/1b) | 8 (mirror 3, lease 2, manifest 2, import-claim 1) | 1 (pack probe) | 10 (wal packs 2, manifest 3, log 2, lease 1, sidecar 2) | 1 (lease) | 0 | 22 |
 | first sync M (31c/3b) | 8 | 1 | 10 | 1 | 0 | 22 |
 | no-op fire (either) | — | — | 0 pack/manifest/log | — | 0 | +11 (lease 4, sidecar 4, claim 1, pack probes 2) |
-| push, cold (auto-create) | — | — | — | — | 0 | 10 bucket ops (was 8: +1 discovery probe +1 funnel probe) |
-| push, warm (existing) | — | — | — | — | 0 | 9 bucket ops (+2 probes); every other collab family 0 |
+| push, cold (auto-create) | — | — | — | — | 0 | 11 bucket ops (E15-era 10, +1 #248 sidecar PUT — see E16) |
+| push, warm (existing) | — | — | — | — | 0 | 10 bucket ops (E15-era 9, +1 sidecar PUT); every other collab family 0 |
 | summary | +1 exact-key sidecar GET **only when the mirror hook is set** (SWR-cached + `~m` ETag'd) | — | — | — | 0 | — |
 
 Pack bytes are bulk (reported, not budgeted — the E11 rule); wall time
@@ -1094,27 +1094,32 @@ covers the lib + SDK surface.
 
 ---
 
-## E16 — Size-catalog fold + listing cost; push stays +0 (2026-09-09)
+## E16 — Size-catalog fold + listing cost; push +1 PUT, +0 sequential (2026-09-09; corrected per review #258)
 
 **Area:** server-side repo size tracking (`internal/sizecatalog`,
 `internal/api` detailed listing, `internal/maintain` fold, `internal/wal`
-derivation). Spec: Forgejo #248 R1.
+publish-path sidecar write). Spec: Forgejo #248 R1.
 
 **Question:** what does one maintainer fold pass cost in store round
 trips, what does the detailed listing cost, does either grow with repo
-count, and does the push path gain any round trips?
+count, and what does the push path pay for durable per-repo size state?
 
-**Method.** Harness: `internal/sizecatalog` `TestSweepRoundTrips`
+**Method.** Harnesses (all over the **memory store**, E2/E11 gating):
+`internal/sizecatalog` `TestSweepRoundTrips`
 (`go test ./internal/sizecatalog/ -run 'TestSweepRoundTrips' -v`) — the
-REAL `Sweep` + `ReadCatalog` paths over the **memory store** wrapped in
-an op-counting decorator, manifests seeded at two populations (n=3 and
-n=12 repos, one pack each). Memory store isolates the algorithmic shape
-from network RTT (the E2/E11 gating); absolute numbers are
-environment-bound — the *shape* (linear fold, flat listing, zero LIST)
-is the durable claim. Push-path cost is structural, not measured: the
-derivation (`SizeOf` over the in-hand live pack set) performs no store
-call by construction (pure function — see `size248_test.go`), so push
-stays +0 by inspection + the unchanged sim budgets.
+REAL `Sweep` + `ReadCatalog` paths wrapped in an op-counting decorator,
+manifests seeded at two populations (n=3 and n=12 repos, one pack each);
+`internal/wal` `TestPublishSidecarDurablePushThenCompact`
+(`go test ./internal/wal/ -run 'TestPublishSidecar' -v`) — REAL `Publish` /
+`PublishCompact` through the publisher ladder, asserting the durable
+`meta/stats.json` bytes after each commit without running the sweep
+(push → sidecar present; compact → superseded packs leave the sum;
+ref-only/settings → no write; failed sidecar PUT → push still commits);
+`cmd/walhub` `TestPushFastPathZeroCollabRoundTrips` — two REAL git pushes
+over smart HTTP through the shipped composition, bounding the sanctioned
+sidecar write (≤ 4 PUTs, blind overwrite only, never a read). Absolute
+numbers are environment-bound — the *shape* (linear fold, flat listing,
++1 parallel PUT on push, zero LIST) is the durable claim.
 
 **Results.**
 
@@ -1123,7 +1128,8 @@ stays +0 by inspection + the unchanged sim budgets.
 | fold pass (cold sidecars) | 7 GETs + 4 PUTs | 25 GETs + 13 PUTs | linear: 2 GETs (manifest probe + sidecar probe) + ≤1 PUT (sidecar, PUT-if-changed) per repo + 1 catalog GET + 1 catalog CAS |
 | fold pass (steady state) | sidecar PUTs drop to 0 (unchanged detection) | same | converge-only writes; catalog CAS is the 1 fixed PUT |
 | detailed listing | exactly 1 catalog GET | exactly 1 catalog GET | **flat** — no per-repo manifest scans at query time |
-| push path | +0 trips at any population | +0 | pure arithmetic in `buildNextManifest`'s data, no I/O |
+| push path (pack-changing publish) | +1 PUT (repo-scoped sidecar, parallel with the manifest CAS) | same | +1 total op, **+0 sequential trips**; ref-only/settings batches write nothing |
+| push path (2 real git pushes, shipped composition) | cold 11 / warm 10 bucket ops (E15-era 10/9, +1 sidecar PUT each) | — | 3 sanctioned collab touches per push (2 mirror probes + 1 sidecar PUT); every other collab family 0 |
 | LIST / DELETE on any path above | 0 | 0 | probe-only (exact keys), never list |
 
 **Analysis.**
@@ -1138,11 +1144,19 @@ stays +0 by inspection + the unchanged sim budgets.
   `meta/repos.pb` GET serves every row; sort/filter run in memory with a
   deterministic `(owner, name)` tiebreak. Absent catalog degrades to null
   rows (optional/rebuildable — deleting it breaks nothing).
-- **Push is +0 because derivation rides data already in hand.** The
-  publish ladder walks the live pack set to build the next manifest; the
-  sum is O(packs) arithmetic with no store call, no git argv, no failure
-  mode beyond saturating overflow. No bucket-root write happens on push
-  (that would be a cross-repo contention funnel).
+- **Push pays +1 PUT per pack-changing publish, +0 sequential trips.**
+  The derivation is O(packs) arithmetic over the in-hand live set (no git
+  argv, saturating overflow only); persisting it is one repo-scoped
+  `meta/stats.json` overwrite issued in parallel with the manifest CAS and
+  joined before the reply — so a returned push durably carries its sidecar
+  without running the sweep, and total ops move exactly +1 (measured: cold
+  11 / warm 10 vs E15-era 10/9). No bucket-root write happens on push
+  (that would be a cross-repo contention funnel); the write is best-effort
+  (WARN-only — the manifest CAS stays the only commit point) and
+  ref-only/settings batches skip it entirely. The sweep is backfill/repair:
+  without the push-path write, maintain-less deployments (serve-only roles,
+  disabled loop) would show null rows forever — unbounded absence, not
+  bounded staleness.
 - Cannot explode: no LIST anywhere, per-repo error isolation (one bad
   manifest fails one row, never the pass), bounded parallelism (8),
   bounded passes (256), no lock held across I/O.
