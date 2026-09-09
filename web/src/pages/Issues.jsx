@@ -17,12 +17,10 @@ import DateTime from "../components/DateTime.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 
+// Open is the default — it needs no badge. Only closed gets a pill (#231).
 function statePill(state) {
-  return state === "open" ? (
-    <span class="chip chip-open">open</span>
-  ) : (
-    <span class="chip chip-closed">closed</span>
-  );
+  if (state !== "closed") return null;
+  return <span class="chip chip-closed shrink-0">closed</span>;
 }
 
 export default function Issues() {
@@ -136,28 +134,31 @@ export default function Issues() {
                 {(issue) => (
                   // Divider-separated rows, never boxed (#135, echoing the
                   // ThreadTimeline comment-entry dividers from #109). Title
-                  // first, state pill after it — pill-before-title offset
-                  // the baseline weirdly.
+                  // first (#231: open issues carry no state pill — only
+                  // closed gets one), label chips inline right of the title.
+                  // Truncation safety: the title truncates (min-w-0 +
+                  // max-w-full) and chips wrap, so long titles + many
+                  // labels wrap sanely instead of overflowing.
                   <li class="border-t border-zinc-200 py-3 first:border-t-0 first:pt-0 dark:border-zinc-800">
-                    <div class="flex flex-wrap items-baseline gap-2">
+                    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <A
-                        class="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+                        class="min-w-0 max-w-full truncate font-medium text-emerald-700 hover:underline dark:text-emerald-400"
                         href={`/${ctx.full}/issues/${issue.num}`}
                       >
                         #{issue.num} {issue.title}
                       </A>
                       {statePill(issue.state)}
-                      <span class="ml-auto text-xs text-zinc-500 dark:text-zinc-400">
+                      <Show when={(issue.labels ?? []).length > 0}>
+                        <span class="flex min-w-0 flex-wrap gap-1">
+                          <For each={issue.labels}>
+                            {(l) => <LabelChip name={l} map={colorMap()} />}
+                          </For>
+                        </span>
+                      </Show>
+                      <span class="ml-auto shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
                         {issue.comment_count} comments · <DateTime value={issue.updated_at} />
                       </span>
                     </div>
-                    <Show when={(issue.labels ?? []).length > 0}>
-                      <span class="mt-1 flex flex-wrap gap-1">
-                        <For each={issue.labels}>
-                          {(l) => <LabelChip name={l} map={colorMap()} />}
-                        </For>
-                      </span>
-                    </Show>
                   </li>
                 )}
               </For>
