@@ -74,9 +74,10 @@ type Server struct {
 // through the UI/API, stored in the object store (17_ssh.md §3). The TOML
 // surface is the server only: listener + host key.
 type ServerSSH struct {
-	Listen     string `toml:"listen"`       // e.g. "0.0.0.0:2222"; empty = disabled
-	HostKey    string `toml:"host_key"`     // path to an OpenSSH/PEM private key
-	HostKeyEnv string `toml:"host_key_env"` // env var NAME holding the private key; overrides host_key
+	Listen       string `toml:"listen"`        // e.g. "0.0.0.0:2222"; empty = disabled
+	ExternalPort int    `toml:"external_port"` // advertised in ssh:// clone URLs; 0 = the listen port (17_ssh.md §3)
+	HostKey      string `toml:"host_key"`      // path to an OpenSSH/PEM private key
+	HostKeyEnv   string `toml:"host_key_env"`  // env var NAME holding the private key; overrides host_key
 }
 
 // --- Store ---

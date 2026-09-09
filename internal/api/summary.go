@@ -20,6 +20,7 @@ type summaryBody struct {
 	MissingTotal uint64           `json:"missing_total,omitempty"`
 	Placeholder  *PlaceholderInfo `json:"placeholder,omitempty"` // #210 R1 B1: sidecar projection, empty repos only
 	CloneURL     string           `json:"clone_url"`
+	SSHCloneURL  string           `json:"ssh_clone_url,omitempty"`
 	HTMLURL      string           `json:"html_url"`
 	APIURL       string           `json:"api_url"`
 }
@@ -71,6 +72,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		MissingTotal: missingTotal,
 		Placeholder:  placeholder,
 		CloneURL:     base + "/" + id.Owner + "/" + id.Name + ".git",
+		SSHCloneURL:  h.env.sshCloneURL(r, id.Owner, id.Name),
 		HTMLURL:      base + "/" + id.Owner + "/" + id.Name,
 		APIURL:       base + "/" + id.Owner + "/" + id.Name + "/api",
 	}

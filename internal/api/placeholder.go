@@ -263,7 +263,7 @@ func (h *handlers) conflictBody(r *http.Request, id git.RepoId) string {
 
 // writeCreateJSON renders the 201/200 create body. Added fields (B3 — all
 // enumerated in 07_api.md, additive per 14 §14.12): placeholder, clone_url,
-// html_url, already, warning, expires_at.
+// ssh_clone_url, html_url, already, warning, expires_at.
 func (h *handlers) writeCreateJSON(w http.ResponseWriter, r *http.Request, id git.RepoId, already bool, status int) {
 	base := h.env.baseURL(r)
 	body := map[string]any{
@@ -273,6 +273,9 @@ func (h *handlers) writeCreateJSON(w http.ResponseWriter, r *http.Request, id gi
 		"placeholder": true,
 		"clone_url":   base + "/" + id.Owner + "/" + id.Name + ".git",
 		"html_url":    base + "/" + id.Owner + "/" + id.Name,
+	}
+	if sshURL := h.env.sshCloneURL(r, id.Owner, id.Name); sshURL != "" {
+		body["ssh_clone_url"] = sshURL
 	}
 	if already {
 		body["already"] = true

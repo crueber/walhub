@@ -1,7 +1,9 @@
 package api
 
 import (
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -50,6 +52,37 @@ func (e *Env) baseURL(r *http.Request) string {
 		host = r.Host
 	}
 	return scheme + "://" + host
+}
+
+// sshCloneURL advertises the SSH transport (17_ssh.md §3):
+// ssh://git@host[:port]/owner/repo.git, using the public hostname (the
+// public_url or request Host behind baseURL — the same host the https
+// clone_url uses) and the advertised SSH port (server.ssh.external_port,
+// else the listen port). Port 22 (the ssh default) is omitted; "" means
+// there is no port to advertise (SSH disabled with no external override) —
+// callers fall back to the port-less client derivation.
+func (e *Env) sshCloneURL(r *http.Request, owner, name string) string {
+	port := 0
+	if e.Cfg != nil {
+		port = e.Cfg.Server.SSH.AdvertisedSSHPort()
+	}
+	if port == 0 {
+		return ""
+	}
+	host := ""
+	if u, err := url.Parse(e.baseURL(r)); err == nil {
+		host = u.Hostname()
+	}
+	if host == "" {
+		return ""
+	}
+	hostPort := host
+	if port != 22 {
+		hostPort = net.JoinHostPort(host, strconv.Itoa(port))
+	} else if strings.Contains(host, ":") {
+		hostPort = "[" + host + "]"
+	}
+	return "ssh://git@" + hostPort + "/" + owner + "/" + name + ".git"
 }
 
 // --- GET …/refs (§9.2, O(1) head) --------------------------------------------------

@@ -5,6 +5,7 @@ import (
 	"net"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -30,10 +31,12 @@ func Validate(c *Config) (warnings []string, errs []error) {
 
 // checkSSH (17_ssh.md §3): the transport is disabled unless listen is set;
 // user keys are not config (they live in the object store, managed through
-// the UI/API), so only the listener shape is validated here.
+// the UI/API), so only the listener shape is validated here. external_port
+// is the advertised port for ssh:// clone URLs (0 = the listen port); when
+// set it must be a TCP port.
 func checkSSH(c *Config) []error {
 	sc := c.Server.SSH
-	if sc.Listen == "" && sc.HostKey == "" && sc.HostKeyEnv == "" {
+	if sc.Listen == "" && sc.HostKey == "" && sc.HostKeyEnv == "" && sc.ExternalPort == 0 {
 		return nil
 	}
 	var errs []error
@@ -42,7 +45,33 @@ func checkSSH(c *Config) []error {
 			errs = append(errs, fmt.Errorf("server.ssh.listen %q must be host:port", sc.Listen))
 		}
 	}
+	if sc.ExternalPort < 0 || sc.ExternalPort > 65535 {
+		errs = append(errs, fmt.Errorf("server.ssh.external_port %d must be a TCP port 1-65535 (0 = the listen port)", sc.ExternalPort))
+	}
 	return errs
+}
+
+// AdvertisedSSHPort is the port advertised in ssh:// clone URLs (17_ssh.md
+// §3): server.ssh.external_port when set, else the port parsed from
+// server.ssh.listen. 0 means there is no port to advertise (SSH disabled and
+// no external override, or an unparseable listen address) — callers omit the
+// advertisement and fall back to the port-less derivation.
+func (s ServerSSH) AdvertisedSSHPort() int {
+	if s.ExternalPort < 0 || s.ExternalPort > 65535 {
+		return 0
+	}
+	if s.ExternalPort != 0 {
+		return s.ExternalPort
+	}
+	_, port, err := net.SplitHostPort(s.Listen)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return 0
+	}
+	return n
 }
 
 // 1. none-mode loopback (DIVERGENCE — warn, not fail).

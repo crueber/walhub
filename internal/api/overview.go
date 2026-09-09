@@ -22,6 +22,7 @@ func (h *handlers) overview(w http.ResponseWriter, r *http.Request) {
 	}
 	ov.Repo = id.Owner + "/" + id.Name
 	ov.CloneURL = h.env.baseURL(r) + "/" + id.Owner + "/" + id.Name + ".git"
+	ov.SSHCloneURL = h.env.sshCloneURL(r, id.Owner, id.Name)
 	if ov.Hostname == "" {
 		ov.Hostname = h.env.Hostname
 	}

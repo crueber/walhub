@@ -229,6 +229,7 @@ export const FIELDS = [
   // server ssh (17_ssh.md) — public keys are user-managed data in the object
   // store (/api/v1/ssh-keys, the /keys page), not config
   { key: "server.ssh.listen", type: "listen", ex: "0.0.0.0:2222", note: "empty = the SSH transport is disabled" },
+  { key: "server.ssh.external_port", type: "int", min: 1, max: 65535, ex: "12222", note: "advertised in ssh:// clone URLs; empty = the listen port" },
   { key: "server.ssh.host_key", type: "string", ex: "/var/lib/walhub/ssh/ed25519_host_key", advanced: true, note: "auto-generated there when empty and listen is set" },
   { key: "server.ssh.host_key_env", type: "string", ex: "WALHUB_SSH_HOST_KEY", advanced: true, note: "names the env var holding the key; overrides host_key" },
   // store

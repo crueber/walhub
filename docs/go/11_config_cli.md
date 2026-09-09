@@ -58,6 +58,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.public_url` | — | pins absolute URIs (bundle-uri, LFS, recipes, OAuth callback) behind a proxy |
 | `server.cors_origins` | `[]` | exact or one leading `*.`; empty = no cross-origin lane |
 | `server.ssh.listen` | `""` | SSH git transport bind address; empty = disabled (17_ssh.md) |
+| `server.ssh.external_port` | `0` | port advertised in `ssh://` clone URLs; 0 = the listen port — the external/internal split (issue #215) |
 | `server.ssh.host_key` / `host_key_env` | — | OpenSSH/PEM private key: path / env var NAME; auto-generated ed25519 under `<data-dir>/ssh/` when unset |
 | SSH public keys | — | user-managed in the object store via `GET\|POST\|DELETE /api/v1/ssh-keys` and the `/keys` page — not config (17_ssh.md §3) |
 | `server.auth.mode` | `"none"` | `none` \| `token` \| `oidc` |
@@ -338,8 +339,9 @@ Each rule is a named function in `internal/config/validate.go`; the list is the 
 7. **placement globs** compile: each entry is `*`, `owner/*`, or `owner/name` (one `/` at most).
 8. **roles**: each role ∈ {serve, maintain, events}; duplicates allowed (idempotent), unknown role → error.
 9. **paths**: `cache.dir` is absolute unless backend is `memory`.
-10. **ssh** (17_ssh.md §3): config validation checks `listen` shape only — when `[server.ssh]`
-    is present and `listen` is set, it must be host:port. The host key is a boot-time check in
+10. **ssh** (17_ssh.md §3): config validation checks `listen` shape and `external_port`
+    range — when `[server.ssh]` is present and `listen` is set, it must be host:port;
+    `external_port` must be a TCP port 1-65535 when set (0 = unset = the listen port). The host key is a boot-time check in
     the listener builder, not config validation: `host_key_env` set-but-empty is fatal there
     (a silent substitution would bypass the client's pinned host key; auto-generation covers the
     unset case). SSH public keys are user-managed data in the object store (`/api/v1/ssh-keys`),

@@ -618,3 +618,60 @@ func TestSetupAuthTestDiscovery(t *testing.T) {
 		t.Fatalf("missing-issuer errors = %v", out)
 	}
 }
+
+// Issue #215: server.ssh.external_port (the advertised SSH port) round-trips
+// through the setup surface — accepted by POST /api/v1/setup/test in
+// isolation, persisted by PUT with effect, rejected when out of range.
+func TestSetupSSHExternalPortRoundTrip(t *testing.T) {
+	dataDir := t.TempDir()
+	s, _ := setupMergeServer(t, dataDir)
+	s.boot.Mode = "normal"
+
+	for _, v := range []string{"12222", "2222"} {
+		body, _ := json.Marshal(map[string]any{"overrides": map[string]any{"server.ssh.external_port": v}})
+		req := httptest.NewRequest("POST", "/api/v1/setup/test", strings.NewReader(string(body)))
+		rec := httptest.NewRecorder()
+		s.setupTest(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup/test external_port=%s = %d %s, want 200", v, rec.Code, rec.Body.String())
+		}
+	}
+	for _, v := range []string{"70000", "-1", "many"} {
+		body, _ := json.Marshal(map[string]any{"overrides": map[string]any{"server.ssh.external_port": v}})
+		req := httptest.NewRequest("POST", "/api/v1/setup/test", strings.NewReader(string(body)))
+		rec := httptest.NewRecorder()
+		s.setupTest(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("setup/test external_port=%s = %d %s, want 422", v, rec.Code, rec.Body.String())
+		}
+	}
+
+	// The normalized UI payload (coerced int, like normalizeSetup emits)
+	// saves and persists with effect.
+	code, resp := putSetup(t, s,
+		`{"overrides": {"server.ssh.listen": "0.0.0.0:2222", "server.ssh.external_port": 12222}}`)
+	if code != http.StatusOK {
+		t.Fatalf("put ssh keys = %d %v", code, resp)
+	}
+	after, err := config.LoadSetupBase(dataDir, s.boot.ConfigPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Server.SSH.Listen != "0.0.0.0:2222" || after.Server.SSH.ExternalPort != 12222 {
+		t.Fatalf("ssh keys not persisted: listen=%q external=%d",
+			after.Server.SSH.Listen, after.Server.SSH.ExternalPort)
+	}
+	if got := after.Server.SSH.AdvertisedSSHPort(); got != 12222 {
+		t.Fatalf("advertised port = %d, want 12222", got)
+	}
+	rr, _ := resp["requires_restart"].([]any)
+	found := false
+	for _, k := range rr {
+		if k == "server.ssh.external_port" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("requires_restart = %v, want server.ssh.external_port listed", resp["requires_restart"])
+	}
+}

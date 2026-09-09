@@ -54,13 +54,24 @@ The TOML surface is the server only — keys are user-managed data in the object
 ```toml
 [server.ssh]
 listen = ""            # e.g. "0.0.0.0:2222"; empty = disabled (default)
+external_port = 0      # advertised in ssh:// clone URLs; 0 = the listen port (issue #215)
 host_key = ""          # path to an OpenSSH/PEM private key
 host_key_env = ""      # env var NAME holding the private key; overrides host_key
 ```
 
-- Validation (`11_config_cli.md §5`): `listen` must be host:port when set. `host_key_env`
+- Validation (`11_config_cli.md §5`): `listen` must be host:port when set; `external_port`
+  must be a TCP port 1-65535 when set (0 = unset). `host_key_env`
   resolves at boot — a set-but-unreadable env is fatal (a boot-time substitution would
   silently bypass the client's pinned host key).
+- The advertised SSH URL is `ssh://git@host[:port]/owner/repo.git`: the host is the public
+  hostname (the same `server.public_url`-or-request-Host source the https `clone_url`
+  uses) and the port is `external_port` when set, else the listen port (`:22`, the ssh
+  default, is omitted). The summary, overview, and placeholder-create responses carry it
+  as `ssh_clone_url` (absent while SSH is disabled with no external override); the clone
+  menu and the empty-repo guide show it verbatim, like the https `clone_url`. The
+  external/internal split is the SSH shape of `public_url`-vs-`listen`: the server keeps
+  listening on the internal port while clients clone through the externally reachable one
+  (issue #215: e.g. listen `0.0.0.0:2222` internally, advertise `12222`).
 - Host key resolution: `host_key_env` → `host_key` path → auto-generated ed25519 key persisted
   at `<data-dir>/ssh/ed25519_host_key` (0600, dir 0700). Auto-generation keeps zero-config SSH
   boots whole; clients pin the key on first connect (TOFU), like `ssh-keygen -A`.
@@ -157,6 +168,10 @@ their own). The GHCR image is identical: enable SSH by setting the env var, no r
 - **17.4 (2026-09-02) — SSH pushes do not use the push broker.** The broker is an HTTP-forwarding
   optimization (§4.3); an SSH session is already on the serving host, so the local pipeline runs
   or the placement gate refuses it.
+- **17.5 (2026-09-08) — `server.ssh.external_port` advertises the public SSH port (issue #215).**
+  The operator's external port (e.g. `12222` through a NAT/container mapping) is configured in
+  setup alongside `server.ssh.listen` (the internal bind, e.g. `2222`); the default (0 = the
+  listen port) keeps unset behavior identical. Same shape as `public_url`-vs-`listen` for HTTP.
 
 ### Concurrency
 
