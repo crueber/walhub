@@ -5,7 +5,8 @@
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf } from "../lib/data.js";
-import { parsePatchFiles, splitRows, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
+import { parsePatchFiles, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
+import { DiffBody } from "../components/DiffTable.jsx";
 import { CopySha, shortSha } from "../lib/sha.jsx";
 import { useRepo } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -13,67 +14,6 @@ import { CheckPill, ContextRows } from "./Checks.jsx";
 import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
 const fileAnchor = (path) => `f-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-const lineClass = (t) => (t === "+" ? "diff-add" : t === "-" ? "diff-del" : "");
-
-function DiffBody(props) {
-  return (
-    <Show
-      when={!props.file.isBinary}
-      fallback={
-        <table class="diff w-full font-mono text-xs">
-          <tbody>
-            <tr>
-              <td class="muted p-3" colspan={props.mode === "split" ? 2 : 1}>
-                Binary file not shown
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      }
-    >
-      <table class="diff w-full font-mono text-xs leading-5">
-        <tbody>
-          <Show
-            when={props.mode === "split"}
-            fallback={
-              <For each={props.file.hunks}>
-                {(h) => (
-                  <>
-                    <tr>
-                      <td class="diff-hunk px-3">
-                        {`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@ ${h.context ?? ""}`}
-                      </td>
-                    </tr>
-                    <For each={h.lines}>
-                      {(l) => (
-                        <tr>
-                          <td class={lineClass(l.t)}>{l.text || " "}</td>
-                        </tr>
-                      )}
-                    </For>
-                  </>
-                )}
-              </For>
-            }
-          >
-            <For each={splitRows([].concat(...props.file.hunks.map((h) => h.lines)))}>
-              {(row) => (
-                <tr>
-                  <td class={row.left ? lineClass(row.left.t) : ""}>
-                    {row.left ? row.left.text || " " : " "}
-                  </td>
-                  <td class={row.right ? lineClass(row.right.t) : ""}>
-                    {row.right ? row.right.text || " " : " "}
-                  </td>
-                </tr>
-              )}
-            </For>
-          </Show>
-        </tbody>
-      </table>
-    </Show>
-  );
-}
 
 function DiffFile(props) {
   const [getMode, setMode] = createSignal("unified");
