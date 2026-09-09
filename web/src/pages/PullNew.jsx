@@ -79,13 +79,13 @@ function RefSelect(props) {
         aria-label={props.label}
       />
       <Show when={getOpen() && getOptions().length > 0}>
-        <ul class="ref-list absolute z-10 max-h-48 w-full overflow-y-auto" role="listbox">
+        <ul class="ref-list ref-drop card scroll-slim absolute z-10 mt-1 max-h-48 w-full overflow-y-auto p-1 shadow-lg" role="listbox">
           <For each={getOptions()}>
             {(r) => (
               <li>
                 <button
                   type="button"
-                  class="ref-item w-full text-left font-mono text-xs"
+                  class="ref-item flex w-full items-center rounded px-2 py-1 text-left font-mono text-xs text-zinc-800 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     props.onPick(r.name);

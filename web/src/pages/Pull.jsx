@@ -215,11 +215,11 @@ function ReviewersPanel(props) {
           aria-expanded={getOpen()}
         />
         <Show when={getOpen() && getOptions().length > 0}>
-          <ul class="ref-list absolute z-10 max-h-48 w-full overflow-y-auto">
+          <ul class="ref-list ref-drop card scroll-slim absolute z-10 mt-1 max-h-48 w-full overflow-y-auto p-1 shadow-lg">
             <For each={getOptions()}>
               {(who) => (
                 <li>
-                  <button type="button" class="ref-item w-full text-left" onClick={() => add(who)}>
+                  <button type="button" class="ref-item flex w-full items-center rounded px-2 py-1 text-left text-sm text-zinc-800 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800" onClick={() => add(who)}>
                     {who}
                   </button>
                 </li>
