@@ -97,7 +97,10 @@ type importRequest struct {
 
 // ParseRequest decodes + validates the POST/CLI input (unknown keys 400,
 // fail closed). SSRF DNS is checked here (check-time; the clone-time
-// TOCTOU residual is documented in url.go).
+// TOCTOU residual is documented in url.go). The dangerous confirm flag is
+// evaluated here for the SSRF shape only — its AUTHORITY (authenticated
+// admin principal) is enforced by the Begin gate, since this function has
+// no principal (fix #237).
 func ParseRequest(body []byte, cfg *config.Config) (Params, string, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -194,6 +197,12 @@ func (s *Service) Begin(ctx context.Context, p auth.Principal, params Params, to
 	}
 	if err := s.checkCreate(ctx, p, params.Owner, params.Name); err != nil {
 		return nil, nil, err
+	}
+	// dangerous:true from the request body is honored only for an
+	// authenticated admin under a real auth mode (fix #237 — the flag's
+	// authority stays with the operator/CLI, never the untrusted body).
+	if params.Dangerous && !s.dangerousAllowed(p) {
+		return nil, nil, &StatusError{Status: 403, Message: "dangerous:true requires an authenticated admin (server.auth.mode token/oidc); operator hosts use `walhub import --dangerous` instead"}
 	}
 	params.importer = p.Name
 	target := params.target()
@@ -474,6 +483,25 @@ func (s *Service) checkCreate(ctx context.Context, p auth.Principal, owner, repo
 		}
 	}
 	return nil
+}
+
+// dangerousAllowed reports whether p may wield the dangerous confirm over
+// HTTP (fix #237): an authenticated admin under a real auth mode. The
+// auth-none principal carries Admin (zero-config law 10) but is NOT
+// authenticated — anyone on the network — so mode none never qualifies
+// (CLI --dangerous stays the operator path there). Unknown modes fail
+// closed: only token/oidc qualify. The CLI headless runner bypasses Begin
+// entirely, so operator --dangerous is unaffected.
+// No locks, no I/O — pure predicate on the principal + cfg.
+func (s *Service) dangerousAllowed(p auth.Principal) bool {
+	if p.Anonymous || !p.Admin {
+		return false
+	}
+	mode := "none"
+	if s.cfg != nil && s.cfg.Server.Auth.Mode != "" {
+		mode = s.cfg.Server.Auth.Mode
+	}
+	return mode == "token" || mode == "oidc"
 }
 
 // checkRead gates task-status reads on the namespace (the task may exist

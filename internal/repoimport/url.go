@@ -4,20 +4,30 @@
 // Canonical form: GitHub `owner/repo` shorthand and full
 // `https://github.com/owner/repo[.git]` normalize to
 // `https://github.com/<owner>/<repo>.git`; anything else must be a full
-// URL and is kept verbatim (modulo a single stripped `.git` suffix — the
-// ParseRepoId precedent). URLs with embedded credentials are refused
+// URL and is rebuilt as `scheme://host/path` with the host lowercased,
+// any default port stripped, trailing slashes trimmed, and one trailing
+// `.git` removed — so `:443`/uppercase/trailing-slash/`.git/` variants of
+// one source collapse to a SINGLE canonical string (fix #237). The gated
+// string IS the cloned string: CloneMirror receives Normalized.URL, never
+// the raw input. URLs with embedded credentials are refused
 // (400) so tokens never land in import.json, logs, or task params.
+// Explicit non-default ports are refused (400): allowlist entries are
+// plain hosts (config validation forbids ports), so a ported URL can never
+// legitimately match — fail closed rather than strip-and-rewrite.
 //
 // SSRF (v1 base): import.allow_private_networks=false denies loopback +
 // RFC1918/ULA resolution; import.url_allowlist non-empty restricts to the
 // listed hosts; file:// needs import.allow_file_urls=true (tests/fixtures
-// only). Residuals (R1 S5): DNS TOCTOU (check-time vs clone-time
-// resolution can differ) and redirect following (git follows HTTP
-// redirects; the allowlist is evaluated against the FINAL effective URL
-// only when the server follows — stock git does the following, so the
-// token helper is host-pinned to the ORIGINAL host and redirects never
-// carry it). A non-GitHub URL with an empty allowlist additionally
-// requires the explicit dangerous:true confirm flag (§9.6 idea, kept).
+// only). The allowlist compares the CANONICAL host (post-normalization),
+// case-insensitively on both sides. Residuals (R1 S5): DNS TOCTOU
+// (check-time vs clone-time resolution can differ) and redirect following
+// (git follows HTTP redirects; the allowlist is evaluated against the
+// FINAL effective URL only when the server follows — stock git does the
+// following, so the token helper is host-pinned to the ORIGINAL host and
+// redirects never carry it). A non-GitHub URL with an empty allowlist
+// additionally requires the explicit dangerous:true confirm flag from an
+// authenticated admin principal (§9.6 idea, kept; the Begin gate enforces
+// the principal — url.go only evaluates the flag).
 package repoimport
 
 import (
@@ -89,15 +99,21 @@ func NormalizeSource(raw string) (Normalized, error) {
 	if u.Host == "" {
 		return Normalized{}, &StatusError{Status: 400, Message: fmt.Sprintf("bad source_url %q: missing host", raw)}
 	}
-	host := u.Hostname()
+	host := strings.ToLower(u.Hostname())
 	scheme := strings.ToLower(u.Scheme)
-	canon := stripDotGit(u.String())
+	// Port policy (fix #237): the allowlist holds plain hosts, so an
+	// explicit port can never match — a default port folds into the
+	// canonical form, anything else is refused rather than silently
+	// stripped (stripping would gate one string and clone another).
+	if port := u.Port(); port != "" && !isDefaultPort(scheme, port) {
+		return Normalized{}, &StatusError{Status: 400, Message: fmt.Sprintf("bad source_url %q: explicit port %q is not allowed (import.url_allowlist matches plain hosts; use the canonical %s://%s form)", raw, port, scheme, host)}
+	}
 	kind := SourceGeneric
 	if strings.EqualFold(host, "github.com") {
 		kind = SourceGitHub
-		canon = canonicalGitHubURL(u)
+		return Normalized{URL: canonicalGitHubURL(u), Kind: kind, Host: "github.com", Scheme: scheme}, nil
 	}
-	return Normalized{URL: canon, Kind: kind, Host: strings.ToLower(host), Scheme: scheme}, nil
+	return Normalized{URL: canonicalGenericURL(u, scheme, host), Kind: kind, Host: host, Scheme: scheme}, nil
 }
 
 // ValidateTransport refuses transports the server cannot speak in v1
@@ -153,8 +169,44 @@ func splitShorthand(s string) (owner, repo string) {
 	return owner, strings.TrimSuffix(repo, ".git")
 }
 
-// stripDotGit removes one trailing ".git" (path or URL).
-func stripDotGit(s string) string { return strings.TrimSuffix(s, ".git") }
+// isDefaultPort reports whether port is the scheme's default (folded into
+// the canonical form by canonicalGenericURL).
+func isDefaultPort(scheme, port string) bool {
+	switch scheme {
+	case "https":
+		return port == "443"
+	case "http":
+		return port == "80"
+	case "ssh":
+		return port == "22"
+	case "git":
+		return port == "9418"
+	}
+	return false
+}
+
+// canonicalGenericURL rebuilds scheme://host+path with the host lowercased,
+// any default port stripped (non-default ports are rejected before this
+// runs), trailing slashes trimmed, and one trailing ".git" removed — so
+// `:443`/uppercase/trailing-slash/`.git/` variants of one logical source
+// share exactly one canonical string (fix #237: one source, one gate
+// decision, one import.json provenance match). Query and fragment are
+// preserved verbatim (distinct strings, same host gate — never silently
+// dropped).
+func canonicalGenericURL(u *url.URL, scheme, host string) string {
+	cu := *u
+	cu.Scheme = scheme
+	if strings.Contains(host, ":") {
+		cu.Host = "[" + host + "]" // IPv6 literal (brackets are not part of Hostname)
+	} else {
+		cu.Host = host
+	}
+	p := strings.TrimRight(cu.Path, "/")
+	p = strings.TrimSuffix(p, ".git")
+	cu.Path = p
+	cu.RawPath = "" // path was rewritten; drop any stale escaped hint
+	return cu.String()
+}
 
 // canonicalGitHubURL folds https://github.com/owner/repo[.git] (+ optional
 // trailing slash) to the single canonical https form.
@@ -175,6 +227,12 @@ type SSRFConfig struct {
 
 // CheckSSRF enforces the v1 egress policy on an already-normalized source.
 // file:// sources never reach DNS; their gate is AllowFile only.
+// The allowlist compares the CANONICAL host (fix #237): NormalizeSource
+// lowercases, strips default ports, and rejects non-default ports before
+// this runs, so the compared host is the fetched host. Comparison is
+// case-insensitive on both sides. cfg.Dangerous is the request's confirm
+// flag — its AUTHORITY (authenticated admin only) is enforced by the Begin
+// gate, not here (this function has no principal).
 func CheckSSRF(n Normalized, cfg SSRFConfig, resolve func(host string) ([]net.IP, error)) error {
 	if n.Kind == SourceFile {
 		if !cfg.AllowFile {
