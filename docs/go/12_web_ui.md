@@ -364,7 +364,8 @@ too_large (2 MiB cap hit)  → explanatory placeholder
 binary (NUL / invalid UTF-8) → explanatory placeholder ("binary file, {human size}"; exact bytes in title)
 name ends .md/.markdown    → MarkdownBlob   (Preview | Code toggle; marked + DOMPurify in preview,
                                               raw text in code view)
-otherwise                  → CodeBlob       (line-numbered <pre>, tinted by the mini tokenizer)
+otherwise                  → CodeBlob       (per-line <table>, tinted by the mini tokenizer,
+                                              GitHub-style #L12 / #L12-L20 selection — issue #243)
 ```
 
 ### 2.8 Commit rendering — hand-rolled unified-diff parser
@@ -570,3 +571,31 @@ Avoidance (playbook: `13_concurrency.md` — ownership and cancellation rules): 
   (create → sync → refusal → summary data) is in EVIDENCE.md E15, with the
   in-browser render recorded open (shared-daemon network guard blocks
   private/loopback targets — no private daemon per workspace rules).
+- **NEW (issue #243) — blob line selection with shareable #L links:** the
+  CodeBlob view renders a per-line `<table>` (one `<tr id="L<n>">` pairing a
+  `blob-num` gutter cell with a `blob-code` cell) instead of the old
+  two-`<pre>` layout, so the columns can never desync and every line is
+  fragment-targetable. Clicking a gutter number highlights the line and
+  pushes `#L<n>`; mousedown + mouseover drags (either direction, normalized
+  ascending) plus shift-click extend the range to `#L<start>-L<end>`; drag
+  frames use `history.replaceState` (no history spam) with a single push on
+  click/mouse-up. On load (and on `hashchange`) the hash re-highlights and
+  scrolls the first selected line into view — state comes from the URL, so
+  shared links work in a fresh tab. Code cells carry no handlers, so normal
+  text selection in the code area is untouched; the markdown Preview render
+  is prose, not lines, and stays unselectable (GitHub parity). Code is
+  tokenized per line (the mini tokenizer's block-comment spans can cross
+  newlines — splitting highlighted HTML mid-span would break tags; an
+  unclosed `/*` fragment renders plain on its line). Gutter anchors are
+  native `<a href="#L<n>">` (keyboard: Tab + Enter, shift included) with
+  `aria-label="Line <n>"`; the `.line-hl` row background + emerald gutter
+  edge ship in both themes (dark default). Selection helpers
+  (`splitLines`, `rangeOf`/`dragRange`, `lineHash`, `parseLineHash`,
+  `inSelection`, `sameSelection`) live in the headless-testable
+  `web/src/lib/blob-lines.js`. No backend, SDK, or API change
+  (client-side only — distant `#L` targets need no extra fetch); no new
+  deps. Headless cover: `web/test/unit/blob-lines.test.js` (codec, range,
+  round-trip, Blob.jsx + ui.css source pins); browser proof (click/drag/
+  share/load, both themes, zero console errors) is open (shared-daemon
+  network guard blocks private/loopback targets — no private daemon per
+  workspace rules).
