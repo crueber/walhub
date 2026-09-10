@@ -1,15 +1,20 @@
-// tags.go — Forgejo #253 composition: the tags service (Seam 1, both lanes)
-// over the P6 roles owned by identity, stock git through the bounded pool,
-// repo dirs through the WAL registry, and ref creates through the WAL
-// publish funnel. Nothing here is a second writer: the tag create publishes
-// via RepoHandle.Publish with a single-update REF_UPDATE txn (the manifest
-// CAS arbitrates; a present tag fails the create, never force-moves).
+// tags.go — Forgejo #253/#263 composition: the tags service (Seam 1, both
+// lanes) over the P6 roles owned by identity, stock git through the bounded
+// pool, repo dirs through the WAL registry, and ref creates through the WAL
+// publish funnel. Nothing here is a second writer: lightweight tag creates
+// publish via RepoHandle.Publish with a single-update REF_UPDATE txn, and
+// annotated tag creates (#263) publish the pre-packed tag object with the
+// same txn shape plus NewPeeled as one PUSH entry (the manifest CAS
+// arbitrates; a present tag fails the create, never force-moves).
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"git.packden.us/crueber/walhub/internal/identity"
@@ -67,6 +72,84 @@ func (p *tagsPublisher) zeroOid(ctx context.Context, repo, likeSHA string) strin
 		return strings.Repeat("0", 64)
 	}
 	return strings.Repeat("0", 40)
+}
+
+// CreateAnnotatedTag publishes an annotated tag (Forgejo #263, ruling (b)):
+// the single-object pack (tag object, produced by `git pack-objects
+// --stdout` in the tags package) is ingested through the existing
+// Layer.Ingest path (complete pack, never thin; fsck on — the object passed
+// mktag's strict fsck already), then published as one PUSH entry whose txn
+// creates refs/tags/<name> at the tag oid with NewPeeled = the peeled
+// commit. The pack PUT is the replication unit (law 4): a REF_UPDATE-only
+// publish would advertise a ref whose object replicas lack. Per-ref verdicts
+// map back to Go errors (conflicts carry the "conflict" wording the service
+// maps to 409).
+func (p *tagsPublisher) CreateAnnotatedTag(ctx context.Context, repo, name, tagOid, peeled string, pack []byte, meta map[string]string) error {
+	h, err := p.reg.Open(ctx, repo)
+	if err != nil {
+		return err
+	}
+	prepared, err := ingestTagPack(ctx, p.reg, h, pack)
+	if err != nil {
+		return err
+	}
+	agent := map[string]string{}
+	for k, v := range meta {
+		agent[k] = v
+	}
+	res, err := h.Publish(ctx, wal.PublishRequest{
+		Pack: prepared,
+		Txn: &proto.RefTransaction{Updates: []*proto.RefUpdate{{
+			Name:      "refs/tags/" + name,
+			OldOid:    p.zeroOid(ctx, repo, tagOid),
+			NewOid:    tagOid,
+			NewPeeled: peeled,
+		}}},
+		Meta: agent,
+	})
+	if err != nil {
+		return err
+	}
+	for _, rr := range res.PerRef {
+		if rr.Err != nil {
+			if rr.Err.Kind == wal.RefErrConflict || rr.Err.Kind == wal.RefErrStale {
+				return fmt.Errorf("CAS conflict: %s", rr.Err.Detail)
+			}
+			return fmt.Errorf("publish %s: %s", rr.Name, rr.Err.Detail)
+		}
+	}
+	return nil
+}
+
+// ingestTagPack ingests one complete single-object pack into the serving
+// copy and renders the PreparedPack the publish funnel uploads (pack PUT +
+// idx PUT, create-if-absent). The pack bytes already sit in memory and are
+// O(KiB); maxBytes just covers them.
+func ingestTagPack(ctx context.Context, reg *wal.Registry, h *wal.RepoHandle, pack []byte) (*wal.PreparedPack, error) {
+	res, err := reg.GitLayer().Ingest(ctx, h.Repo(), bytes.NewReader(pack), int64(len(pack)+1), false, true)
+	if err != nil {
+		return nil, err
+	}
+	sum := string(res.Checksum)
+	packDir := h.Repo().PackDir()
+	packPath := filepath.Join(packDir, "pack-"+sum+".pack")
+	idxPath := filepath.Join(packDir, "pack-"+sum+".idx")
+	packFi, err := os.Stat(packPath)
+	if err != nil {
+		return nil, err
+	}
+	idxFi, err := os.Stat(idxPath)
+	if err != nil {
+		return nil, err
+	}
+	return &wal.PreparedPack{
+		Checksum:    sum,
+		PackPath:    packPath,
+		IdxPath:     idxPath,
+		PackSize:    uint64(packFi.Size()),
+		IdxSize:     uint64(idxFi.Size()),
+		ObjectCount: res.ObjectCount,
+	}, nil
 }
 
 // CreateTag creates refs/tags/<name> → sha (CAS create: a live tag fails,

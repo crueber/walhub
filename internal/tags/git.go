@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -124,6 +125,68 @@ func (g *SubprocessGit) runCollect(ctx context.Context, dir string, argv []strin
 	return stdout, nil
 }
 
+// runBytes runs argv in dir with stdin bytes fed on stdin and buffers raw
+// stdout bytes. The feeder goroutine owns and closes the stdin pipe (the §2
+// deadlock rule: never Wait while a same-goroutine stdin writer is open).
+// On non-zero exit the returned error is a *gitExitError; backend failures
+// (missing binary, timeout, pipe setup) propagate as ErrUnavailable-class
+// errors.
+func (g *SubprocessGit) runBytes(ctx context.Context, dir string, argv []string, stdin []byte) ([]byte, error) {
+	var stdout []byte
+	var runErr error
+	var errText string
+	pool := g.Pool
+	if pool == nil {
+		pool = newGitPool(0)
+	}
+	perr := pool.run(ctx, func() error {
+		cctx, cancel := g.timeoutFor(ctx)
+		defer cancel()
+		cmd := exec.CommandContext(cctx, g.Binary, argv...)
+		cmd.Dir = dir
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_TERMINAL_PROMPT=0", "GIT_DIR=" + dir}
+		pipe, perr := cmd.StdinPipe()
+		if perr != nil {
+			runErr = perr
+			return perr
+		}
+		var out bytes.Buffer
+		var errBuf boundedStderr
+		cmd.Stdout = &out
+		cmd.Stderr = &errBuf
+		if serr := cmd.Start(); serr != nil {
+			runErr = serr
+			pipe.Close()
+			return serr
+		}
+		feedDone := make(chan struct{})
+		go func() {
+			defer close(feedDone)
+			defer pipe.Close()
+			_, _ = io.Copy(pipe, bytes.NewReader(stdin))
+		}()
+		runErr = cmd.Wait()
+		<-feedDone
+		stdout = append([]byte(nil), out.Bytes()...)
+		if runErr != nil {
+			errText = errBuf.String()
+			return runErr
+		}
+		return nil
+	})
+	if perr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: git %s: %v", ErrUnavailable, argv[0], ctx.Err())
+		}
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			return stdout, &gitExitError{argv: argv, errText: errText, err: runErr, stdout: string(stdout)}
+		}
+		return stdout, fmt.Errorf("%w: git %s: %v (%s)", ErrUnavailable, argv[0], runErr, errText)
+	}
+	return stdout, nil
+}
+
 // gitExitError carries a non-zero git exit with its stderr tail.
 type gitExitError struct {
 	argv    []string
@@ -148,6 +211,53 @@ func validateSHA(sha string) error {
 		}
 	}
 	return nil
+}
+
+// CreateTagObject mints an annotated tag object (Forgejo #263):
+// `git mktag` with the server-rendered tag content on stdin. mktag applies
+// strict fsck to the tag body, writes the loose object into the repo dir,
+// and prints the tag oid — chosen over `hash-object -t tag -w --stdin`
+// precisely because hash-object performs no fsck (a malformed tagger
+// line/date it accepts would later fail fsck on fetch or break git show).
+// A non-zero mktag exit is an ErrInvalid-class error (malformed tag content
+// never reaches the store); backend failures are ErrUnavailable-class.
+func (g *SubprocessGit) CreateTagObject(ctx context.Context, dir string, body []byte) (string, error) {
+	out, err := g.runBytes(ctx, dir, []string{"mktag"}, body)
+	if err != nil {
+		var ge *gitExitError
+		if errors.As(err, &ge) {
+			return "", fmt.Errorf("%w: mktag rejected tag: %s", ErrInvalid, strings.TrimSpace(ge.errText))
+		}
+		return "", err
+	}
+	oid := strings.TrimSpace(string(out))
+	if verr := validateSHA(oid); verr != nil {
+		return "", fmt.Errorf("%w: mktag printed non-sha %q", ErrInvalid, oid)
+	}
+	return oid, nil
+}
+
+// PackObject packs one object (Forgejo #263):
+// `<oid>\n | git pack-objects --stdout` (plain oid list on stdin, no
+// --revs), capturing the raw pack bytes from stdout. One object, no deltas;
+// flags minimal. Failures are ErrUnavailable-class (5xx, nothing published).
+func (g *SubprocessGit) PackObject(ctx context.Context, dir, oid string) ([]byte, error) {
+	oid = strings.TrimSpace(oid)
+	if verr := validateSHA(oid); verr != nil {
+		return nil, fmt.Errorf("%w: bad tag oid %q", ErrInvalid, oid)
+	}
+	pack, err := g.runBytes(ctx, dir, []string{"pack-objects", "--stdout"}, []byte(oid+"\n"))
+	if err != nil {
+		var ge *gitExitError
+		if errors.As(err, &ge) {
+			return nil, fmt.Errorf("%w: git pack-objects: %s", ErrUnavailable, strings.TrimSpace(ge.errText))
+		}
+		return nil, err
+	}
+	if len(pack) == 0 {
+		return nil, fmt.Errorf("%w: git pack-objects produced no pack", ErrUnavailable)
+	}
+	return pack, nil
 }
 
 // CommitExists resolves sha to its commit id:

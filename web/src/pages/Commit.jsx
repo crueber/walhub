@@ -114,11 +114,14 @@ function TrailerTable(props) {
 }
 
 function CreateTag(props) {
-  // Forgejo #253: lightweight-tag creation at this commit (write-gated —
+  // Forgejo #253/#263: tag creation at this commit (write-gated —
   // the server is authoritative; the affordance hides entirely otherwise).
+  // An optional annotation (#263) mints an annotated tag object; empty
+  // stays the lightweight path (the server decides, never downgrades).
   const { role } = useRole(props.full, props.client);
   const [getOpen, setOpen] = createSignal(false);
   const [getName, setName] = createSignal("");
+  const [getMessage, setMessage] = createSignal("");
   const [getBusy, setBusy] = createSignal(false);
   const [getError, setError] = createSignal("");
   const [getCreated, setCreated] = createSignal(null);
@@ -133,10 +136,13 @@ function CreateTag(props) {
     setBusy(true);
     setError("");
     try {
-      const tag = await props.client.tagsApi.create({ name, sha: props.sha });
-      setCreated(tag);
+      const fields = { name, sha: props.sha };
+      if (getMessage().trim()) fields.message = getMessage();
+      const tag = await props.client.tagsApi.create(fields);
+      setCreated({ tag, annotated: Boolean(getMessage().trim()) });
       setOpen(false);
       setName("");
+      setMessage("");
     } catch (err) {
       setError(String(err?.message ?? err));
       reportError(err, "create-tag");
@@ -167,8 +173,20 @@ function CreateTag(props) {
                   aria-label="Tag name"
                 />
               </label>
+              <label class="text-xs">
+                <span class="sr-only">Annotation (optional)</span>
+                <input
+                  type="text"
+                  class="input text-xs"
+                  placeholder="Annotation (optional — annotated tag)"
+                  value={getMessage()}
+                  onInput={(e) => setMessage(e.currentTarget.value)}
+                  disabled={getBusy()}
+                  aria-label="Tag annotation (optional)"
+                />
+              </label>
               <button type="submit" class="pill cursor-pointer" disabled={getBusy()}>
-                {getBusy() ? "creating…" : "Create lightweight tag"}
+                {getBusy() ? "creating…" : "Create tag"}
               </button>
               <button type="button" class="pill cursor-pointer" onClick={() => { setOpen(false); setError(""); }} disabled={getBusy()}>
                 Cancel
@@ -176,9 +194,9 @@ function CreateTag(props) {
             </form>
           </Show>
         }>
-          {(tag) => (
+          {(created) => (
             <p class="text-xs" role="status">
-              <span class="text-emerald-600 dark:text-emerald-400">Tag {tag().name} created.</span>{" "}
+              <span class="text-emerald-600 dark:text-emerald-400">Tag {created().tag.name} created{created().annotated ? " (annotated)" : ""}.</span>{" "}
               <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}/releases/new`}>
                 Create a release from it
               </A>

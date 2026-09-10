@@ -545,3 +545,25 @@ curl -N -H "Authorization: Bearer $WALHUB_TOKEN" \
   pushed tags. The releases flow composes unchanged (resolveTag requires the
   tag; create tag → create release now works end to end). No new npm deps
   (Solid signals + the dependency-free SDK surface `repo.tagsApi.create`).
+- **Annotated tag creation amendment (Forgejo #263, 2026-09-10,
+  `internal/tags`).** Rule (b): a non-empty `message` on POST
+  `/{o}/{r}/api/tags` now mints a tag OBJECT server-side instead of answering
+  422 — never a silent lightweight downgrade (empty/whitespace message stays
+  the lightweight path). Mechanics: `git mktag` (strict fsck, one spawn) →
+  `<oid> | git pack-objects --stdout` → the existing `Layer.Ingest` path →
+  `Publish` with `Pack` set (so `publish.go` maps it to `EntryKindPush`) and
+  a txn creating `refs/tags/<name>` at the tag oid with `NewPeeled` = the
+  commit. No new WAL kind, no proto change, no core `internal/wal` change —
+  only the feature package plus two pinned argv (04_git.md amendment, law 2).
+  The pack PUT (not the mktag loose object) is the replication unit, so
+  replicas materializing from packs alone never advertise a ref whose object
+  they lack. Tagger is server-rendered from the authed principal
+  (`<name> <<name>@walhub.local>`, wall-clock + local tz; `<>/\n/\r`
+  stripped, empty-after-sanitize → 400); messages reject NUL/non-UTF8,
+  normalize to one trailing `\n`, cap 64 KiB (400s). Failure semantics:
+  mktag rejection → 400, pack/ingest failure → 5xx, existing tag → 409 via
+  the verify step — nothing published on any failure. Events need no new
+  code (the bridge keys off txn ref updates by ref kind), with a test proving
+  the PUSH-shaped create emits the identical tag event as REF_UPDATE. UI: the
+  commit page gains an optional annotation field flowing to `message`; the
+  SDK `tagsApi.create` passes it through. No new npm deps.

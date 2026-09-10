@@ -185,7 +185,12 @@ func (h *Handler) handleTags(w http.ResponseWriter, r *http.Request, owner, repo
 
 var createTagFields = map[string]bool{"name": true, "sha": true, "message": true}
 
-// tagWire is the create response (the created lightweight tag).
+// MaxCreateBodyBytes bounds the POST …/tags body: room for a
+// MaxTagMessageLen message plus JSON framing/escaping overhead.
+const MaxCreateBodyBytes = 128 << 10
+
+// tagWire is the create response (the created tag: sha is the commit for
+// lightweight tags, the tag object oid for annotated ones).
 type tagWire struct {
 	Name string `json:"name"`
 	SHA  string `json:"sha"`
@@ -193,10 +198,12 @@ type tagWire struct {
 }
 
 // createTag answers POST …/tags: {name, sha, message?} → 201 tag (write;
-// unknown sha 404, existing tag 409, bad name 400, annotated 422).
+// unknown sha 404, existing tag 409, bad name/message 400). An empty message
+// creates a lightweight tag; a non-empty message mints an annotated tag
+// object (#263) — never a silent downgrade.
 func (h *Handler) createTag(w http.ResponseWriter, r *http.Request, owner, repo string, p auth.Principal) {
 	var in CreateInput
-	if !decodeStrict(w, r, 4096, createTagFields, &in) {
+	if !decodeStrict(w, r, MaxCreateBodyBytes, createTagFields, &in) {
 		return
 	}
 	t, err := h.Svc.CreateTag(r.Context(), owner, repo, p, in)
