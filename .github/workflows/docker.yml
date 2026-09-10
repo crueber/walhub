@@ -22,6 +22,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Embed guard (Forgejo #300): fresh checkouts must compile without a
+      # prior web build — go:embed all:dist fails on a missing directory.
+      - name: embed guard (web/dist/.keep present)
+        run: 'test -f web/dist/.keep || (echo "FAIL: web/dist/.keep missing (see Forgejo #300)" && exit 1)'
       - uses: pnpm/action-setup@v4
         with:
           version: 11

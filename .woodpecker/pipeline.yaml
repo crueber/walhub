@@ -7,7 +7,11 @@ when: { event: [push, pull_request] }
 steps:
   vet:
     image: golang:1.27
-    commands: [make vet]
+    commands:
+      # Forgejo #300: web/dist/.keep must stay tracked so fresh checkouts
+      # compile (go:embed all:dist fails on a missing directory).
+      - 'test -f web/dist/.keep || (echo "FAIL: web/dist/.keep missing (see #300)" && exit 1)'
+      - make vet
 
   web:
     image: node:22-alpine
