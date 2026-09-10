@@ -13,6 +13,7 @@ import {
   formatNextSync,
   formatLastResult,
   validateMirrorCreate,
+  mirrorRowBadge,
 } from "../../src/lib/mirror.js";
 import { SETTINGS_GROUP, resolveSettingsTab } from "../../src/lib/settingsNav.js";
 
@@ -61,4 +62,24 @@ test("Mirror tab is registered in the settings sidebar", () => {
   const ids = SETTINGS_GROUP.map((t) => t.id);
   assert.ok(ids.includes("mirror"), "mirror is a settings sidebar entry");
   assert.equal(resolveSettingsTab("mirror"), "mirror");
+});
+
+test("mirrorRowBadge turns the listing flag into badge presence/label (Forgejo #281)", () => {
+  // Non-mirrors (and missing rows) render no badge.
+  assert.deepEqual(mirrorRowBadge({ mirror: false }), { show: false, label: "", title: "" });
+  assert.deepEqual(mirrorRowBadge({}), { show: false, label: "", title: "" });
+  assert.deepEqual(mirrorRowBadge(null), { show: false, label: "", title: "" });
+  assert.deepEqual(mirrorRowBadge(undefined), { show: false, label: "", title: "" });
+  // Mirror with a known upstream names it (the accessible label).
+  const named = mirrorRowBadge({ mirror: true, upstream: "https://example.com/up.git" });
+  assert.equal(named.show, true);
+  assert.equal(named.label, "mirror");
+  assert.equal(named.title, "mirror of https://example.com/up.git · pull-only");
+  // Mirror with an unparseable/absent upstream still badges (fail closed), unnamed.
+  for (const row of [{ mirror: true }, { mirror: true, upstream: "" }, { mirror: true, upstream: "   " }]) {
+    const b = mirrorRowBadge(row);
+    assert.equal(b.show, true, `show: ${JSON.stringify(row)}`);
+    assert.equal(b.label, "mirror");
+    assert.equal(b.title, "mirror · pull-only");
+  }
 });

@@ -7,6 +7,7 @@
 import { createSignal, Show, onCleanup } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, copyText } from "../lib/clone.js";
+import { formatNextSync, formatLastResult } from "../lib/mirror.js";
 import { invalidate } from "../lib/data.js";
 
 function CopyButton(props) {
@@ -117,12 +118,54 @@ export function PlaceholderExtras(props) {
 }
 
 /**
+ * MirrorEmptyGuide — the Code-tab block for a mirror repo awaiting its
+ * first sync (Forgejo #281): the summary carries the mirror projection
+ * (upstream URL, schedule, next fire, last outcome — enough to tell
+ * "never synced" from a genuinely empty normal repo). Push guidance
+ * must NEVER render here: pushes to a pull-only mirror are rejected,
+ * so the correct action is waiting for the scheduled sync. No "Sync
+ * now" button: the manual-sync endpoint is admin-only, so a general
+ * affordance would promise what POST …/mirror/sync refuses.
+ */
+export function MirrorEmptyGuide(props) {
+  const m = () => props.summary?.mirror;
+  const clone = () => `git clone ${httpsCloneUrl(props.summary, props.full, location.origin)}`;
+  return (
+    <section class="empty-guide card space-y-3 p-4" aria-label="mirror awaiting first sync">
+      <h2 class="text-lg font-semibold">This repository is a mirror</h2>
+      <p class="text-sm">
+        Read-only mirror of <code class="font-mono">{m()?.upstream_url}</code> — pushes are
+        rejected for everyone. The content arrives from the upstream sync.
+      </p>
+      <p class="muted text-sm">
+        <Show when={!m()?.last_synced_at} fallback={<>Last synced {m()?.last_synced_at} — {formatNextSync(m())}.</>}>
+          First sync pending — the scheduled sync will populate this repository.
+        </Show>
+      </p>
+      <Show when={m()?.last_result && m()?.last_result !== "ok"}>
+        <p class="text-xs text-amber-700 dark:text-amber-400">
+          last sync: {formatLastResult(m())} — the next scheduled attempt will retry
+        </p>
+      </Show>
+      <div class="flex items-center gap-2">
+        <code class="clone-cmd block flex-1 overflow-x-auto rounded bg-zinc-100 px-2 py-1 font-mono text-xs dark:bg-zinc-800">
+          {clone()}
+        </code>
+        <CopyButton text={clone} />
+      </div>
+    </section>
+  );
+}
+
+/**
  * EmptyRepoGuide — the Code-tab block for unborn repos (summary health
  * "empty"): verbatim clone URL + `git remote add` / `git push -u origin
  * main` with copy buttons and the CloneMenu protocol-toggle parity. Static
  * commands only — no recipes fetch. When the summary carries the #210
  * placeholder projection, the creator/created line + admin Delete ride
- * below the commands (PlaceholderExtras).
+ * below the commands (PlaceholderExtras). When the summary carries the
+ * mirror projection (Forgejo #281), the mirror waiting state renders
+ * INSTEAD — a mirror awaiting its first sync never shows push guidance.
  */
 export function EmptyRepoGuide(props) {
   const [getProto, setProto] = createSignal("http");
@@ -132,6 +175,9 @@ export function EmptyRepoGuide(props) {
   const url = () => (getProto() === "ssh" ? sshCloneUrlFrom(props.summary, https(), props.full, location.hostname) : https());
   const remoteCmd = () => `git remote add origin ${url()}`;
   const pushCmd = () => `git push -u origin main`;
+  // Forgejo #281: a mirror awaiting its first sync renders the mirror
+  // waiting state, never the push guide (pushes are rejected there).
+  if (props.summary?.mirror) return <MirrorEmptyGuide full={props.full} summary={props.summary} />;
   return (
     <section class="empty-guide card space-y-3 p-4" aria-label="push to this empty repository">
       <h2 class="text-lg font-semibold">This repository is empty</h2>

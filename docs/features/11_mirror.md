@@ -211,3 +211,16 @@ see §6).
   `mirror` CLI stub stays a stub (out of scope); the loop cadence is a
   code constant (1m). Rationale: one gate/one clock, smallest seam
   footprint; knobs can be added additively later per 14 §14.12.
+- **Listing flag + waiting state + import creation (2026-09-10,
+  #281).** The summary `mirror` view stays the repo page's source, but
+  listing rows cannot afford per-row summaries: the detailed owner
+  listing (07_api.md) now carries `mirror` + `mirror_upstream?` from
+  bounded-parallel sidecar probes, and the empty-repo guide branches on
+  the already-in-hand shell summary projection (waiting state, never
+  push guidance — pushes to a pull-only mirror are rejected). `/import`
+  creates mirrors through the existing create-from-URL endpoint (mode
+  toggle, shared presets/validation). Rationale: the data was already
+  adjacent in both cases (listing payload, shell summary) — this change
+  only surfaces it, adding no client fetches (no per-row summary fetch)
+  and no new endpoint; the server adds bounded-parallel sidecar probes
+  (request count, no sequential depth — see 07_api.md).

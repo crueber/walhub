@@ -18,11 +18,15 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"git.packden.us/crueber/walhub/internal/sizecatalog"
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 // RepoSizeRow is one detailed listing row (additive shape, 14 §14.12 field
@@ -37,6 +41,16 @@ type RepoSizeRow struct {
 	LastCommitSHA  *string `json:"last_commit_sha"`  // nil = unknown/unbackfilled
 	LastCommitTime *string `json:"last_commit_time"` // RFC 3339 UTC, nil = unknown
 	LastPushAt     *string `json:"last_push_at"`     // RFC 3339 UTC, nil = unknown
+	// Mirror is true iff the pull-only mirror sidecar
+	// (repos/<o>/<r>/meta/mirror.json) exists (Forgejo #281). Always
+	// present (never null) so listing rows can render the mirror
+	// indicator without a per-row summary fetch.
+	Mirror bool `json:"mirror"`
+	// MirrorUpstream is the sidecar's canonical upstream URL, present
+	// only when the sidecar exists and parses (the row's accessible
+	// label names the upstream). Corrupt-but-present still reports
+	// Mirror=true with no upstream (fail closed).
+	MirrorUpstream string `json:"mirror_upstream,omitempty"`
 }
 
 // ownerReposDetailed serves the object-row listing with size + activity.
@@ -108,6 +122,11 @@ func (h *handlers) ownerReposDetailed(w http.ResponseWriter, r *http.Request) {
 			LastCommitSHA: row.LastCommitSHA, LastCommitTime: row.LastCommitTime, LastPushAt: row.LastPushAt,
 		})
 	}
+	// Mirror flags ride the same response (Forgejo #281): the sidecar
+	// probe per row is the only source (the aggregate catalog carries
+	// no mirror state), so the indicator costs no per-row summary
+	// fetch on the client. See fillMirrorFlags for the trip budget.
+	fillMirrorFlags(r.Context(), h.env.Store, owner, out)
 	writeCached(w, r, ccSWR, "", http.StatusOK, struct {
 		Repos []RepoSizeRow `json:"repos"`
 	}{Repos: out})
@@ -122,4 +141,64 @@ func parseBytesParam(s string) (*uint64, error) {
 		return nil, err
 	}
 	return &n, nil
+}
+
+// probeMirrorRow reports the mirror flag for one listing row: true iff
+// the mirror sidecar exists (probe, don't list — law 4). A present but
+// corrupt sidecar still counts as a mirror (fail closed — the
+// mirror.IsMirror parity — without ever importing the feature package
+// from core, law 8); the canonical upstream URL rides along only when
+// the body parses. Store errors and absent bodies degrade to
+// non-mirror (the listing degrades, never 500s, on a sick store).
+func probeMirrorRow(ctx context.Context, st store.ObjectStore, owner, name string) (bool, string) {
+	body, _, err := store.GetBytes(ctx, st, store.MirrorKey(owner, name), store.GetOptions{})
+	if err != nil || body == nil {
+		return false, ""
+	}
+	var doc struct {
+		UpstreamURL string `json:"upstream_url"`
+	}
+	if jerr := json.Unmarshal(body, &doc); jerr != nil {
+		return true, ""
+	}
+	return true, doc.UpstreamURL
+}
+
+// fillMirrorFlags stamps the mirror flag (+ upstream when known) onto
+// every listing row.
+//
+// ### Concurrency: one goroutine per row, at most 8 probes in flight;
+// each goroutine writes only its own slice index, so there is no
+// shared mutable state and no lock to order. No lock is held across
+// the store calls (there is none here at all). The sender-owns rule
+// is trivially satisfied (no channels carry results — WaitGroup joins
+// the disjoint writes before the response encodes).
+//
+// Trip budget (law 6): the catalog read stays ONE object read; the
+// sidecar probes are independent GETs of ~200-byte bodies issued in
+// parallel, so they add request count but no sequential depth. A
+// cancelled request stops launching (in-flight probes drain via ctx)
+// and still joins before return, so the response never races a probe.
+func fillMirrorFlags(ctx context.Context, st store.ObjectStore, owner string, out []RepoSizeRow) {
+	if st == nil || len(out) == 0 {
+		return
+	}
+	const maxInFlight = 8
+	sem := make(chan struct{}, maxInFlight)
+	var wg sync.WaitGroup
+	for i := range out {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			m, up := probeMirrorRow(ctx, st, owner, out[i].Name)
+			out[i].Mirror = m
+			out[i].MirrorUpstream = up
+		}(i)
+	}
+	wg.Wait()
 }
