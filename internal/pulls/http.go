@@ -183,6 +183,15 @@ func matchETag(header, etag string) bool {
 const (
 	ccSWR     = "private, max-age=0, stale-while-revalidate=60"
 	ccNoStore = "no-store"
+	// ccMutable is the mutable-collab freshness contract (issue #280;
+	// docs/go/07_api.md §4 third class): the pull view mutates via direct
+	// user action (comments, title/body/state patches), so it revalidates
+	// on EVERY read instead of serving a stale-while-revalidate window.
+	// The folded ETag keeps the revalidation cheap (304 when unchanged).
+	// getDiff below stays SWR: a patch body changes only via ref movement
+	// (push to head/base), which is exactly what the ref-dependent class
+	// bounds.
+	ccMutable = "private, no-cache"
 )
 
 // decodeStrict unmarshals body into v after rejecting unknown top-level
@@ -489,8 +498,40 @@ func (h *Handler) getPull(w http.ResponseWriter, r *http.Request, owner, repo st
 		writeErr(w, err)
 		return
 	}
-	// SWR + ETag <head sha> (§8): the head sha is the ref-class stamp.
-	writeCached(w, r, ccSWR, view.HeadLive, http.StatusOK, view)
+	// Mutable-collab class + folded ETag (§8 as amended for issue #280):
+	// the view revalidates on every read, and the token covers every
+	// mutation-sensitive stamp — never a stale window, never a 304 that
+	// hides a changed thread.
+	writeCached(w, r, ccMutable, pullETag(view), http.StatusOK, view)
+}
+
+// pullETag folds every mutation-sensitive stamp of the view into one token
+// (issue #280): the live head/base shas move with pushes, the thread/pr
+// versions bump on every comment/patch/state change, and the mergeable
+// stamp flips when a recompute lands. A HeadLive-only token would 304 a
+// thread whose comments changed without moving the head — the same
+// flip-flop #259 fixed for issues, one package over. Nil-tolerant: any
+// absent piece contributes its zero value rather than panicking.
+func pullETag(view *PullView) string {
+	var sb strings.Builder
+	sb.WriteString(view.HeadLive)
+	sb.WriteByte('.')
+	sb.WriteString(view.BaseLive)
+	if view.Thread != nil {
+		sb.WriteString(".t")
+		sb.WriteString(strconv.Itoa(view.Thread.Version))
+	}
+	if view.PR != nil {
+		sb.WriteString(".p")
+		sb.WriteString(strconv.Itoa(view.PR.Version))
+	}
+	if view.Mergeable != nil {
+		sb.WriteString(".m")
+		sb.WriteString(view.Mergeable.State)
+		sb.WriteByte('.')
+		sb.WriteString(view.Mergeable.ComputedAt)
+	}
+	return sb.String()
 }
 
 func (h *Handler) getDiff(w http.ResponseWriter, r *http.Request, owner, repo string, num int) {

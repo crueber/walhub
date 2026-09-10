@@ -9,7 +9,8 @@
 Everything reuses the frozen patterns of `docs/go/12_web_ui.md` — Solid signals (§2.1), `useData` TTL cache
 (§2.4), `mountStream` SSE helper (§2.5), unified-diff parser (§2.8), `@solidjs/router` (§2.3) — and the wire
 conventions of `docs/go/07_api.md` §2: plain-text errors shown verbatim, arrays `[]` never null, RFC 3339,
-SSE envelope (§6), SWR/ETag vs no-store cache classes (§4). No new npm dependencies beyond the D-WEB-6
+SSE envelope (§6), SWR/ETag vs no-store cache classes (§4 — plus the mutable-collab
+`private, no-cache` class for version-keyed collab GETs, issue #280). No new npm dependencies beyond the D-WEB-6
 budget (runtime `solid-js` + `@solidjs/router`; SDK dependency-free). No TypeScript.
 
 > **Adaptation (2026-09-04, D-WEB-6 — see Decisions; wording fixed for issue #76):** an earlier revision
@@ -121,9 +122,9 @@ this section is the client mirror of exactly one provider; auth levels shown per
 |---|---|---|
 | `list({state, base, head, sort, after, n})` | `GET …/pulls` | `{pulls: [], more}` |
 | `open({title, body, head, base, draft?})` | `POST …/pulls` | `201 {num}` (write) |
-| `get(num)` | `GET …/pulls/{num}` | header + `{mergeable, merge_state}` (SWR + `ETag: "<head sha>"`) |
+| `get(num)` | `GET …/pulls/{num}` | header + `{mergeable, merge_state}` (mutable-collab: `private, no-cache` + folded ETag, issue #280) |
 | `update(num, fields)` | `PUT …/pulls/{num}` | title/body/state (close/reopen; write) |
-| `diff(num)` | `GET …/pulls/{num}/diff` | `text/plain` unified patch base…head (DiffPage parser input), `ETag: "<head sha>"` |
+| `diff(num)` | `GET …/pulls/{num}/diff` | `text/plain` unified patch base…head (DiffPage parser input; ref-dependent SWR, no ETag — the shipped shape) |
 | `commits(num)` | `GET …/pulls/{num}/commits` | `{commits: [Commit]}` |
 | `merge(num, {strategy, commit_title?, commit_message?, delete_head?})` | `POST …/pulls/{num}/merge` | maintain; `202 {task}` + attach via `mergeTask(num)` poll (the task record carries progress + terminal outcome; shipped shape — 08's `merge_method/onEvent` spellings corrected 2026-09-04) |
 | `mergeTask(num)` | `GET …/pulls/{num}/merge/task` | merge-task attach poll (progress + terminal outcome) |

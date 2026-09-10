@@ -182,7 +182,13 @@ func matchETag(header, etag string) bool {
 }
 
 const (
-	ccSWR     = "private, max-age=0, stale-while-revalidate=60"
+	// ccMutable is the mutable-collab freshness contract (issue #280;
+	// docs/go/07_api.md §4 third class): social counters mutate on every
+	// star/watch/fork, so the response revalidates on EVERY read instead
+	// of serving a stale-while-revalidate window — a refresh may never
+	// paint pre-mutation counts. The version-token ETag keeps the
+	// revalidation cheap (304 when unchanged).
+	ccMutable = "private, no-cache"
 	ccNoStore = "no-store"
 )
 
@@ -237,7 +243,7 @@ func (h *Handler) star(w http.ResponseWriter, r *http.Request, owner, repo strin
 }
 
 // social serves GET /{o}/{r}/api/social →
-// {stars, watchers, forks, viewer: {starred, watching}} (SWR+ETag).
+// {stars, watchers, forks, viewer: {starred, watching}} (no-cache + ETag).
 func (h *Handler) social(w http.ResponseWriter, r *http.Request, owner, repo string, p auth.Principal) {
 	d, err := h.Svc.Counts(r.Context(), p, owner, repo)
 	if err != nil {
@@ -245,7 +251,7 @@ func (h *Handler) social(w http.ResponseWriter, r *http.Request, owner, repo str
 		return
 	}
 	starred, watching := h.Svc.ViewerState(r.Context(), p, owner, repo)
-	writeCached(w, r, ccSWR, socialETag(d), http.StatusOK, map[string]any{
+	writeCached(w, r, ccMutable, socialETag(d), http.StatusOK, map[string]any{
 		"stars": d.Stars, "watchers": d.Watchers, "forks": d.Forks,
 		"viewer": map[string]any{"starred": starred, "watching": watching},
 	})

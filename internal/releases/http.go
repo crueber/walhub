@@ -197,7 +197,13 @@ func matchETag(header, etag string) bool {
 }
 
 const (
-	ccSWR     = "private, max-age=0, stale-while-revalidate=60"
+	// ccMutable is the mutable-collab freshness contract (issue #280;
+	// docs/go/07_api.md §4 third class): releases mutate via direct user
+	// action (PUT/DELETE/upload), so every version-keyed GET revalidates
+	// on EVERY read instead of serving a stale-while-revalidate window.
+	// The store-version ETags keep the revalidation cheap (304 when
+	// unchanged). Asset BYTES stay immutable (content-addressed).
+	ccMutable = "private, no-cache"
 	ccNoStore = "no-store"
 )
 
@@ -352,7 +358,7 @@ func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request, owner, re
 		wire = append(wire, wireRelease(owner, repo, h.rel))
 		etagParts = append(etagParts, h.rel.Tag+"/"+string(h.ver))
 	}
-	writeCached(w, r, ccSWR, listETag(etagParts), http.StatusOK,
+	writeCached(w, r, ccMutable, listETag(etagParts), http.StatusOK,
 		map[string]any{"releases": wire, "more": more})
 }
 
@@ -368,7 +374,7 @@ func (h *Handler) latestRelease(w http.ResponseWriter, r *http.Request, owner, r
 		writeErr(w, err)
 		return
 	}
-	writeCached(w, r, ccSWR, string(ver), http.StatusOK, wireRelease(owner, repo, rel))
+	writeCached(w, r, ccMutable, string(ver), http.StatusOK, wireRelease(owner, repo, rel))
 }
 
 func (h *Handler) getRelease(w http.ResponseWriter, r *http.Request, owner, repo string, p auth.Principal, tag string) {
@@ -377,7 +383,7 @@ func (h *Handler) getRelease(w http.ResponseWriter, r *http.Request, owner, repo
 		writeErr(w, err)
 		return
 	}
-	writeCached(w, r, ccSWR, string(ver), http.StatusOK, wireRelease(owner, repo, rel))
+	writeCached(w, r, ccMutable, string(ver), http.StatusOK, wireRelease(owner, repo, rel))
 }
 
 var putReleaseFields = map[string]bool{"name": true, "body": true, "draft": true, "prerelease": true}
@@ -435,7 +441,9 @@ func (h *Handler) autodraft(w http.ResponseWriter, r *http.Request, owner, repo 
 		return
 	}
 	prs := ad.PRs
-	writeCached(w, r, ccSWR, "", http.StatusOK, map[string]any{
+	// Autodraft derives from live PR state (a user-mutable source), so it
+	// takes the mutable class too — no ETag token exists, hence no 304.
+	writeCached(w, r, ccMutable, "", http.StatusOK, map[string]any{
 		"tag": ad.Tag, "since": ad.Since, "body": ad.Body, "prs": prs, "more": ad.More,
 	})
 }

@@ -283,8 +283,8 @@ starts. Auth levels are P6 roles resolved per P6 §1–4.
 |---|---|---|---|
 | `GET …/pulls?state=&base=&head=&sort=&n=&after=` | read | → `{pulls:[{num, title, state, author, base_ref, head_ref, head_sha, draft, updated_at}], more}` (index-first per P4) | RouteProvider |
 | `POST …/pulls` | write | `{title, base_ref, head_ref, body?, fork?}` → `201` PR header (`409` if an OPEN pr already pairs base+head; `422` unresolvable refs) | RouteProvider |
-| `GET …/pulls/{num}` | read | → header + `pr.json` + live `mergeable` (stamped; §4) — SWR + ETag `<head sha>` | RouteProvider |
-| `GET …/pulls/{num}/diff` | read | → `text/plain` unified diff `base…head` (one well-formed `git diff` patch per spec §9.5; the 12_web_ui.md parser's exact input) | RouteProvider |
+| `GET …/pulls/{num}` | read | → header + `pr.json` + live `mergeable` (stamped; §4) — mutable-collab class (issue #280: `private, no-cache`) + folded ETag (live head/base shas + thread/pr versions + mergeable stamp) | RouteProvider |
+| `GET …/pulls/{num}/diff` | read | → `text/plain` unified diff `base…head` (one well-formed `git diff` patch per spec §9.5; the 12_web_ui.md parser's exact input; ref-dependent SWR, no ETag) | RouteProvider |
 | `GET …/pulls/{num}/commits` | read | → `{commits:[Commit], more}` (doc 07 `Commit` shape; skip/n pagination) | RouteProvider |
 | `PUT …/pulls/{num}` | write | `{title, body?, state?}` — title/state edits; close/reopen append events; triage may close others' | RouteProvider |
 | `POST …/pulls/{num}/merge` | maintain | `{strategy, commit_title?, commit_message?, delete_head?}` → SSE task attach (`pull-merge`) | RouteProvider + task kind `pull-merge` |
@@ -343,13 +343,19 @@ every call goes through the SDK).
   is UNCHANGED (still newest-activity-first); only the render sorts by
   num, and the SPA re-sorts at display (`web/src/lib/sort.js`).
 - **Task-table lock rule (09 audit fix): the `Finished` stamp in `taskTable.end`
-  takes the RECORD mutex, not just the table mutex** (`internal/pulls/tasks.go`):
-  production paths snapshot the live record directly (`StartMerge`/`UpdateBranch`
+  takes the RECORD mutex, not just the table mutex** (`internal/pulls/tasks.go`):  production paths snapshot the live record directly (`StartMerge`/`UpdateBranch`
   return `entry.rec.snapshot()`; `GET …/merge/task` reads it), so the table-only
   write raced a poll landing during completion (caught by `-race` under full-suite
   parallel load; pinned by `TestCoverTaskEndSnapshotRace`). Lock order is table →
   record everywhere; no path takes record → table. Rationale: the record mutex is
   the one all readers share — the table mutex only serializes leaders.
+- **Mutable-collab cache class on the pull view (issue #280).** `GET …/pulls/{num}` was SWR +
+  `ETag <head sha>` — doubly wrong for a thread: the stale window licensed pre-mutation paints,
+  and the token never moved on comments/title/state patches (only pushes move the head), so even
+  revalidation 304'd a changed thread. The view now serves `private, no-cache` with a folded ETag
+  (live head/base shas + thread/pr versions + mergeable stamp; 07_api.md §4 third class). The diff
+  stays SWR with no ETag (patch bytes change only via ref movement). Rationale: mutability, not
+  addressability, decides the class.
 
 ## Explicitly out of scope
 
@@ -432,10 +438,10 @@ every call goes through the SDK).
 - **Mergeable single-flight key** `"mergeable:"+repo+"/"+num` (joiners share
   the leader, bounded wait); **merge arbitration** is the `(repo,
   "pull-merge")` task join plus the WAL publish CAS (never force).
-- **ETag `<head sha>` + SWR** on `GET …/pulls/{num}`; `no-store` on task
-  starts; plain-text errors with the 07 §2 status mapping (unknown PR →
-  `404`, unmet protection → `409` with the rule-named reason, unreachable
-  head → `422`).
+- **Folded ETag + `private, no-cache`** on `GET …/pulls/{num}` (issue #280 — was `ETag <head
+  sha>` + SWR); `no-store` on task starts; the diff stays ref-dependent SWR (a patch body changes
+  only via ref movement, which is what that class bounds); plain-text errors with the 07 §2 status mapping (unknown PR →
+  `404`, unmet protection → `409` with the rule-named reason, unreachable head → `422`).
 - **Ancestry correction (found live, 2026-09-04):** §4's first ancestry
   parenthetical reads "`merge-base --is-ancestor <base> <head>` (exit 0 ⇒
   … `up_to_date`)". Taken literally, every ordinary PR (head branched off

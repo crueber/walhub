@@ -31,7 +31,7 @@ export function attachPulls(repo) {
         ...json({ title, base_ref, head_ref, body, fork }),
         ...opts,
       }),
-    /** Thread: `GET …/pulls/{num}` (header + pr.json + live mergeable; ETag `<head sha>`, SWR). */
+    /** Thread: `GET …/pulls/{num}` (header + pr.json + live mergeable; folded ETag, `private, no-cache` — issue #280). */
     get: (num, opts) =>
       client._call(p(`/pulls/${num}`), { method: "GET", ...opts }),
     /** Edit: `PUT …/pulls/{num}` (title/body/state; unknown keys 400). */

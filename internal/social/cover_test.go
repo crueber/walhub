@@ -106,7 +106,7 @@ func TestCoverStatusWriters(t *testing.T) {
 		t.Fatalf("encode: %d", rec.Code)
 	}
 	rec2 := httptest.NewRecorder()
-	writeCached(rec2, httptest.NewRequest("GET", "/", nil), ccSWR, "e", 200, func() {})
+	writeCached(rec2, httptest.NewRequest("GET", "/", nil), ccMutable, "e", 200, func() {})
 	if rec2.Code != 500 {
 		t.Fatalf("cached encode: %d", rec2.Code)
 	}

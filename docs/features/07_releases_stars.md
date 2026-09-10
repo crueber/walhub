@@ -233,8 +233,9 @@ counts as 0).
 ## 7. API endpoints
 
 Plain-text errors, `[]`-not-null, RFC 3339, per-segment encoding (07_api §2). Cache classes: single
-release / list / social GETs are ref-dependent class (SWR 60 s + `ETag: "<store version token>"`,
-`If-None-Match` → 304); asset BYTES are the static contract (immutable). `If-Match` on mutating PUTs is
+release / list / latest / autodraft / social GETs are the mutable-collab class (issue #280:
+`private, no-cache` + `ETag: "<store version token>"`, `If-None-Match` → 304 — every read
+revalidates, no stale-serve window); asset BYTES are the static contract (immutable). `If-Match` on mutating PUTs is
 optional optimistic concurrency (the GET's ETag value); without it, last-writer-wins via the CAS loop.
 
 Registration: provider `releases` (`internal/releases`) and provider `social` (`internal/social`),
@@ -316,6 +317,13 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
   CAS loops — no cross-feature locks; 03 owns the fork increment.
 - No private-read filtering of starred lists (14's private-read ACL deferral); unstar is always allowed.
 - No task kinds in v1; the Seam 5 import hook is named, not built.
+- **Mutable-collab cache class (issue #280).** §7 said single/list/social GETs were ref-dependent
+  class (SWR 60 s) — the wrong call: a version-keyed ETag gives correct revalidation, but SWR's
+  stale-serve window is a correctness concession mutable collab state cannot afford (the user just
+  clicked the button). All version-keyed GETs (single/latest/list/social) now serve
+  `private, no-cache` with their ETags intact (07_api.md §4 third class); the tokenless
+  autodraft GET takes the class without an ETag (always 200); asset bytes stay
+  immutable. Rationale: mutability, not addressability, decides the class.
 - New repo sub-path family `/{o}/{r}/releases/{tag}/assets/{name}` for bytes (static contract) — the
   spec note 14.3 requires.
 - **Starred lists are repo-ordered keyset pages, not starred_at-desc (#65, 2026-09-04):** star keys
