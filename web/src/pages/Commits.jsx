@@ -4,7 +4,7 @@
 // here and the ref arrives as a query param). The "older →" link carries the
 // query forward, keeping pagination URL-addressable.
 
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { useData, useResolved, SHA_TTL } from "../lib/data.js";
 import { CopySha, shortSha } from "../lib/sha.jsx";
@@ -102,6 +102,15 @@ function CommitList(props) {
   // (issue #209) — the doomed `commits?n=1` probe is suppressed, not trayed.
   const [getFirst] = useResolved(props.owner, props.name, props.rest, "commits");
 
+  // Issue #252: publish the resolved ref for the header pill (same contract
+  // as Tree.jsx; bare /commits resolves to the default branch, which matches
+  // the summary-head fallback anyway). Cleared on unmount.
+  createEffect(() => {
+    const h0 = getFirst();
+    if (h0 && h0.sha && !h0.empty && !h0.degraded) props.setViewed({ name: h0.ref ?? "", sha: h0.sha });
+  });
+  onCleanup(() => props.setViewed(null));
+
   // Windows beyond the first page (?skip=/?path=): same resolve → sha chain,
   // keyed sha+path+skip so each window is as immutable as its sha.
   const [getPage, setPage] = createSignal(undefined);
@@ -196,6 +205,7 @@ export default function Commits() {
           rest={ctx.rest || location.query.ref || ""}
           repoClient={ctx.repoClient}
           summary={ctx.summary}
+          setViewed={ctx.setViewed}
         />
       )}
     </Show>

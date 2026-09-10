@@ -1,7 +1,7 @@
 // web/src/pages/Tree.jsx — Code tab: tree at ref/path via the §9.2 resolve →
 // sha chain, breadcrumbs, entry listing, directory-docs markdown tabs.
 
-import { createSignal, createEffect, For, Show, Switch, Match } from "solid-js";
+import { createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { A } from "@solidjs/router";
 import { useResolved, useData } from "../lib/data.js";
 import { renderBody } from "../lib/render-md.js";
@@ -184,6 +184,20 @@ function DocTabs(props) {
 export default function Tree() {
   const ctx = useRepo();
   const [getTree] = useResolved(() => ctx.owner, () => ctx.name, () => ctx.rest || "", "tree");
+
+  // Issue #252: publish the resolved ref so the header pill follows the
+  // viewed ref (the summary Head is ref-blind by design — client
+  // composition, zero new fetches: this reuses the resolve step above, and
+  // its 5s SWR is what moves the pill when the viewed branch is pushed).
+  // Sha-addressed views resolve with an empty ref — published as-is, the
+  // pill then shows the short sha honestly. Cleared on unmount so non-ref
+  // tabs fall back to the summary head; loading states keep the previous
+  // value (no flash back to the default branch mid-navigation).
+  createEffect(() => {
+    const t = getTree();
+    if (t && t.sha && !t.empty && !t.degraded) ctx.setViewed({ name: t.ref ?? "", sha: t.sha });
+  });
+  onCleanup(() => ctx.setViewed(null));
 
   // Issue #211 last-modified column: git trees carry no mtime, and the tree
   // payload carries no per-entry stamp (TreeResult.commit is never populated

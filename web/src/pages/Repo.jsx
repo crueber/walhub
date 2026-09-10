@@ -11,6 +11,8 @@ import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText 
 import { formatNextSync } from "../lib/mirror.js";
 import { activeTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
+import { shortRef, pillHead, pillLabel } from "../lib/ref-pill.js";
+export { shortRef };
 
 export const BUSY_MS = 1500; // poll cadence while something runs
 export const IDLE_MS = 15000; // poll cadence when idle
@@ -29,10 +31,6 @@ export function fmtBytes(n) {
   let u = -1;
   while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[u]}`;
-}
-
-export function shortRef(name) {
-  return String(name ?? "").replace(/^refs\/(?:heads|tags)\//, "");
 }
 
 // --- clone menu (recipes from the server, never a local copy) ------------------
@@ -219,8 +217,10 @@ function RefPicker(props) {
   const navigate = useNavigate();
   // The trigger is the head pill (issue #214): `head` arrives as a getter so a
   // background summary refresh moves the pill without remounting the picker.
+  // Issue #252: the getter is context-first (viewed ref) with the summary
+  // head as fallback — the pill follows the Code tab, not always HEAD.
   const head = () => (typeof props.head === "function" ? props.head() : props.head);
-  const label = () => (head() ? `${shortRef(head().name)} @ ${String(head().sha).slice(0, 10)}` : "refs");
+  const label = () => pillLabel(head());
   const [getRefs, setRefs] = createSignal([]);
   const [getKind, setKind] = createSignal("branches");
   const [getQuery, setQuery] = createSignal("");
@@ -491,6 +491,11 @@ export default function Repo(props) {
   // renders "not found" instead of "loading…" forever. Any other error keeps
   // the data-layer contract (tray, value stays undefined → still loading).
   const [getSummary] = useData(() => `repo:${full()}`, () => tolerateMissing(repoClient.get(), null), REPO_TTL);
+  // Issue #252: the currently viewed ref ({name, sha} — full ref name, commit
+  // sha), published by ref-addressed tabs (Tree/Blob/Commits/Commit/
+  // CheckDetail) via createEffect + onCleanup (cleared on unmount so non-ref
+  // tabs fall back to the summary head). Null = no ref in view.
+  const [getViewed, setViewed] = createSignal(null);
 
   const ctx = {
     get owner() { return params.owner; },
@@ -504,6 +509,8 @@ export default function Repo(props) {
     // entry through the context — no second subscription, no extra fetch.
     // undefined = loading, null = missing/deleted (tolerateMissing, #200).
     summary: getSummary,
+    viewed: getViewed,
+    setViewed,
   };
 
   return (
@@ -545,7 +552,7 @@ export default function Repo(props) {
                 </div>
                 <div class="repo-meta mt-1 flex items-center gap-2 text-xs">
                   <Show when={s().head} fallback={<span class="pill">empty</span>}>
-                    <RefPicker full={full()} repo={repoClient} head={() => s().head} />
+                    <RefPicker full={full()} repo={repoClient} head={() => pillHead(getViewed(), s().head)} />
                   </Show>
                   <span class="muted">{s().branches ?? 0} branches · {s().tags ?? 0} tags</span>
                 </div>
