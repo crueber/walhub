@@ -520,3 +520,28 @@ curl -N -H "Authorization: Bearer $WALHUB_TOKEN" \
   merge on one shared shape beats two sidecars (double the push-path cost)
   and beats a push-path read (a sequential store round trip + a budget-test
   "never a sidecar read" violation); null + sweep-heal keeps every R1 bound.
+- **API tag creation amendment (Forgejo #253, 2026-09-10, `internal/tags`).**
+  POST `/{o}/{r}/api/tags` (+ the `/api-browser` twin, Seam 1 via the
+  `server.ExtraRoutes` chain) creates a LIGHTWEIGHT tag at a given commit by
+  publishing one `EntryKindRefUpdate` transaction (CAS old-oid zero = create)
+  through the normal WAL funnel — NO new WAL kind (14 §14.11 rule 1: the
+  `walgit.v1` enum stays closed; a lightweight tag is a pure ref move,
+  expressible as a RefUpdate today). Design call: lightweight-only v1 (the
+  task's recommended option (a)/(c)) — a non-empty `message` requests an
+  annotated tag, which needs a tag OBJECT the entry kinds don't carry, so the
+  server answers 422 with a documented message, never a silent lightweight
+  downgrade; annotated support (object-write path under the frozen proto
+  rules) is the tracked follow-up. P6 gate is RoleWrite (push-equivalent:
+  pushing a tag via receive-pack requires push permission), PLUS an explicit
+  `policy.EvaluateProtect` check for (principal, `refs/tags/<name>`, create)
+  — the pull-merge precedent — so protect rules denying tag creation apply
+  equally to the API path; an unparseable policy.json fails closed (refused).
+  Validation: `git.ValidateRefName` on the full `refs/tags/<name>` form (400
+  naming the rule), sha must resolve to a commit via the synced git dir
+  (`rev-parse --verify --quiet <sha>^{commit}`, 404 otherwise), existing tag
+  → 409 decided by the publish verify step (race-safe, no check-then-act).
+  Events need no new code: the WAL bridge derives ref events from REF_UPDATE
+  entries by ref kind, so API-created tags notify/webhook identically to
+  pushed tags. The releases flow composes unchanged (resolveTag requires the
+  tag; create tag → create release now works end to end). No new npm deps
+  (Solid signals + the dependency-free SDK surface `repo.tagsApi.create`).

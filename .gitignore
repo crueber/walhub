@@ -16,3 +16,7 @@ web/node_modules/
 *.json.tmp
 walgit-state.json
 covergate/
+
+# Forgejo #253: global gitignores blanket-ignore `tags` (ctags output) —
+# re-include the package dir so internal/tags/* is tracked.
+!internal/tags/

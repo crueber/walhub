@@ -4,13 +4,14 @@
 
 import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
-import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf } from "../lib/data.js";
+import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf, reportError } from "../lib/data.js";
 import { parsePatchFiles, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
 import { DiffBody } from "../components/DiffTable.jsx";
 import { CopySha, shortSha } from "../lib/sha.jsx";
 import { useRepo } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import { CheckPill, ContextRows } from "./Checks.jsx";
+import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
 
 const fileAnchor = (path) => `f-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -109,6 +110,86 @@ function TrailerTable(props) {
         </tbody>
       </table>
     </details>
+  );
+}
+
+function CreateTag(props) {
+  // Forgejo #253: lightweight-tag creation at this commit (write-gated —
+  // the server is authoritative; the affordance hides entirely otherwise).
+  const { role } = useRole(props.full, props.client);
+  const [getOpen, setOpen] = createSignal(false);
+  const [getName, setName] = createSignal("");
+  const [getBusy, setBusy] = createSignal(false);
+  const [getError, setError] = createSignal("");
+  const [getCreated, setCreated] = createSignal(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const name = getName().trim();
+    if (!name) {
+      setError("Give the tag a name.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const tag = await props.client.tagsApi.create({ name, sha: props.sha });
+      setCreated(tag);
+      setOpen(false);
+      setName("");
+    } catch (err) {
+      setError(String(err?.message ?? err));
+      reportError(err, "create-tag");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Show when={roleAtLeast(role(), "write")}>
+      <div class="create-tag mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800/60">
+        <Show when={getCreated()} fallback={
+          <Show when={getOpen()} fallback={
+            <button type="button" class="pill cursor-pointer" onClick={() => { setOpen(true); setError(""); }}>
+              Create tag
+            </button>
+          }>
+            <form class="flex flex-wrap items-center gap-2" onSubmit={submit}>
+              <label class="text-xs">
+                <span class="sr-only">Tag name</span>
+                <input
+                  type="text"
+                  class="input font-mono text-xs"
+                  placeholder="v1.0.0"
+                  value={getName()}
+                  onInput={(e) => setName(e.currentTarget.value)}
+                  disabled={getBusy()}
+                  aria-label="Tag name"
+                />
+              </label>
+              <button type="submit" class="pill cursor-pointer" disabled={getBusy()}>
+                {getBusy() ? "creating…" : "Create lightweight tag"}
+              </button>
+              <button type="button" class="pill cursor-pointer" onClick={() => { setOpen(false); setError(""); }} disabled={getBusy()}>
+                Cancel
+              </button>
+            </form>
+          </Show>
+        }>
+          {(tag) => (
+            <p class="text-xs" role="status">
+              <span class="text-emerald-600 dark:text-emerald-400">Tag {tag().name} created.</span>{" "}
+              <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.full}/releases/new`}>
+                Create a release from it
+              </A>
+            </p>
+          )}
+        </Show>
+        <Show when={getError()}>
+          <p class="err-line mt-1 text-sm" role="alert">{getError()}</p>
+        </Show>
+      </div>
+    </Show>
   );
 }
 
@@ -248,6 +329,7 @@ function CommitDetail(props) {
                   {` across ${d().stats.length} file${d().stats.length === 1 ? "" : "s"} (server stats)`}
                 </p>
                 <CheckDetails full={props.full} sha={String(c().sha ?? props.sha)} client={props.repoClient} />
+                <CreateTag full={props.full} sha={String(c().sha ?? props.sha)} client={props.repoClient} />
               </section>
 
               <Show when={d().files.length > 0}>
