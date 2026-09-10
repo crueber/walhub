@@ -138,7 +138,9 @@ func TestViewMethodErrors503(t *testing.T) {
 	} {
 		f, fv := newFailFixture(t)
 		// rev-addressed handlers resolve first; give them a working resolve
+		// (whole-tail keys — blob resolves the full tail, issue #251)
 		f.view.resolves["demo/walgit/main"] = Resolution{SHA: fakeSHA, Kind: "branch", Revision: 7}
+		f.view.resolves["demo/walgit/main/x.txt"] = Resolution{SHA: fakeSHA, Path: "x.txt", Kind: "branch", Revision: 7}
 		f.view.resolves["demo/walgit/"] = Resolution{SHA: fakeSHA, Kind: "branch", Revision: 7}
 		f.view.resolves["demo/walgit/"+fakeSHA] = Resolution{SHA: fakeSHA, Kind: "commit", Revision: 7}
 		fv.fail[name] = errBoom

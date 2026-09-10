@@ -795,6 +795,19 @@ func revIsFullSHA(rev string) bool {
 	return true
 }
 
+// refPartOf recovers the addressed rev from a greedy blob/tree tail: rest
+// minus the resolved file path (issue #251 — the rev may itself contain
+// slashes, so the split comes from Resolve's longest-prefix match, not from
+// the first segment). Only a full-sha rev earns the immutable cache class.
+func refPartOf(rest, path string) string {
+	if path != "" {
+		if s, ok := strings.CutSuffix(rest, "/"+path); ok {
+			return s
+		}
+	}
+	return rest
+}
+
 // isUTF8 reports whether b is valid UTF-8 (and contains no NUL — the blob
 // binary test, §9.5).
 func isUTF8(b []byte) bool {

@@ -60,9 +60,8 @@ func Routes(e *Env) []Route {
 		{Method: "GET", Sub: "refs/{ns}", Template: "/{owner}/{repo}/api/refs/{branches|tags}", Handler: h.refsList, Auth: AuthRead, Expose: true},
 		{Method: "GET", Sub: "resolve", Template: "/{owner}/{repo}/api/resolve/{ref}", Handler: h.resolve, Auth: AuthRead, Expose: true},
 		{Method: "GET", Sub: "resolve/{rest...}", Handler: h.resolve, Auth: AuthRead},
-		{Method: "GET", Sub: "tree/{rev}", Template: "/{owner}/{repo}/api/tree/{rev}", Handler: h.tree, Auth: AuthRead, Expose: true},
-		{Method: "GET", Sub: "tree/{rev}/{path...}", Handler: h.tree, Auth: AuthRead},
-		{Method: "GET", Sub: "blob/{rev}/{path...}", Template: "/{owner}/{repo}/api/blob/{rev}/{path}", Handler: h.blob, Auth: AuthRead, Expose: true},
+		{Method: "GET", Sub: "tree/{rest...}", Template: "/{owner}/{repo}/api/tree/{rev}", Handler: h.tree, Auth: AuthRead, Expose: true},
+		{Method: "GET", Sub: "blob/{rest...}", Template: "/{owner}/{repo}/api/blob/{rev}/{path}", Handler: h.blob, Auth: AuthRead, Expose: true},
 		{Method: "GET", Sub: "commits", Template: "/{owner}/{repo}/api/commits", Handler: h.commits, Auth: AuthRead, Expose: true},
 		{Method: "GET", Sub: "commit/{sha}", Template: "/{owner}/{repo}/api/commit/{sha}", Handler: h.commitDetail, Auth: AuthRead, Expose: true},
 
