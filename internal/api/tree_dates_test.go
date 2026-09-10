@@ -181,6 +181,30 @@ func TestAssignTreeCommitMeta(t *testing.T) {
 			t.Fatalf("1-char path misattributed: %+v", es[0])
 		}
 	})
+	t.Run("marker-looking paths stay paths", func(t *testing.T) {
+		// A path in path position is a path even when it parses as a
+		// header — both the valid-header shape (must not poison later
+		// attributions) and the near-miss shape (must not clear
+		// haveCommit and orphan the rest of the commit).
+		bogus := treeLogMarker + " " + strings.Repeat("9", 40) + " 2025-05-05T05:05:05Z"
+		es := []TreeEntry{
+			{Name: bogus, Type: "blob"},
+			{Name: "WALHUBTREE draft", Type: "blob"},
+			{Name: "ok.txt", Type: "blob"},
+		}
+		out := encodeTreeLog(t, []struct {
+			sha, date string
+			touches   []logTouch
+		}{
+			{sha1, d1, []logTouch{{"M", bogus}, {"M", "WALHUBTREE draft"}, {"M", "ok.txt"}}},
+		})
+		assignTreeCommitMeta(es, "", out)
+		for _, e := range es {
+			if e.CommitSHA != sha1 || e.CommitTime != d1 {
+				t.Fatalf("marker-looking path misattributed: %+v", e)
+			}
+		}
+	})
 	t.Run("status letters all attribute", func(t *testing.T) {
 		es := []TreeEntry{
 			{Name: "a", Type: "blob"}, {Name: "b", Type: "blob"},

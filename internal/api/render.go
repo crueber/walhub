@@ -298,7 +298,13 @@ func assignTreeCommitMeta(entries []TreeEntry, dir string, out []byte) {
 	haveCommit := false
 	expectPath := false
 	for _, f := range strings.Split(norm, "\x00") {
-		if strings.HasPrefix(f, treeLogMarker+" ") {
+		// Headers split positionally: a MARK record is a commit header only
+		// in status position (!expectPath). In path position the record IS
+		// the touched path — even one literally named "WALHUBTREE <sha>
+		// <date>" (a valid-looking header there must not clobber haveCommit
+		// or poison later attributions; --no-renames emits no rename pairs,
+		// so a status is always followed by exactly one path).
+		if !expectPath && strings.HasPrefix(f, treeLogMarker+" ") {
 			parts := strings.Split(f, " ")
 			if len(parts) == 3 && parts[1] != "" && !parseRFC3339(parts[2]).IsZero() {
 				sha, date, haveCommit = parts[1], parts[2], true
