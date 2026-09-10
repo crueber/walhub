@@ -137,9 +137,22 @@
 
   /* Floating popovers (issues #37, #115): solid panels — the shared .card
      background is translucent in dark mode and page text would bleed through.
-     Every absolutely-positioned .card menu carries one of these classes. */
-  .clone-body, .ref-drop, .tasks-drop, .notif-drop, .reaction-drop, .label-drop, .close-drop, .tag-drop {
+     Every absolutely-positioned .card menu carries one of these classes
+     (.milestone-drop joined in issue #278: it is the same shape as
+     .label-drop and was missing the opaque treatment). */
+  .clone-body, .ref-drop, .tasks-drop, .notif-drop, .reaction-drop, .label-drop, .milestone-drop, .close-drop, .tag-drop {
     @apply bg-white dark:bg-zinc-900;
+  }
+
+  /* Popover viewport bounds (issue #278): fixed-width right-anchored panels
+     (.clone-body/.tasks-drop w-96 = 384px, .tray fixed w-96) overflowed a
+     390px phone viewport — clone-body measured hanging off at x = -10, the
+     tray fully off-screen. Every absolute/fixed panel is capped at the
+     viewport minus 1rem of breathing room; right/fixed-anchored panels then
+     shrink into view instead of clipping, and no open popover can be wider
+     than the screen. Theme-independent (applies to dark + light alike). */
+  .clone-body, .ref-drop, .tasks-drop, .notif-drop, .reaction-drop, .label-drop, .milestone-drop, .close-drop, .tag-drop, .tray {
+    max-width: calc(100vw - 1rem);
   }
 
   /* Slim themed scrollbars for popover lists (issue #115): thin styled
