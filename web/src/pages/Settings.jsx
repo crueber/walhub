@@ -206,7 +206,8 @@ function ScheduledTab(props) {
                   {(f) => (
                     <tr>
                       <th class="w-40 align-top break-words font-mono text-xs sm:w-64">{f.key}</th>
-                      <td>
+                      {/* Issue #275: unbroken values wrap instead of panning the page. */}
+                      <td class="break-words">
                         {String(f.value ?? "")}{" "}
                         {f.source === "setting"
                           ? <span class="chip">repo setting</span>

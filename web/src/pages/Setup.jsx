@@ -258,6 +258,8 @@ export default function Setup() {
           <Show when={(getData().errors ?? []).length > 0}>
             <section class="card errors-card p-4">
               <h3 class="mb-2 font-semibold">Current validation errors (from the server)</h3>
+              {/* Issue #275: long values scroll in place, the page never pans. */}
+              <div class="overflow-x-auto">
               <table class="data-table">
                 <thead>
                   <tr><th>section</th><th>key</th><th>message</th><th>value</th></tr>
@@ -275,6 +277,7 @@ export default function Setup() {
                   </For>
                 </tbody>
               </table>
+              </div>
               <p class="muted mt-2 text-sm">Nothing is disabled — fix the values and re-validate.</p>
             </section>
           </Show>

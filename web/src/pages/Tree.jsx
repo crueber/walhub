@@ -247,7 +247,11 @@ export default function Tree() {
                     icon + name, last-modified) are self-evident. No type
                     column either (mode lead char + icons carry it). The
                     right-side columns hug their content (see .tree-table in
-                    src/ui.css); only the name column takes spare width. */}
+                    src/ui.css); only the name column takes spare width.
+                    Issue #275: the table scrolls inside an overflow-x-auto
+                    wrapper so a 390px page never pans; the mode column
+                    hides below sm: (icons carry the kind on phones). */}
+                <div class="overflow-x-auto">
                 <table class="data-table tree-table">
                   <tbody>
                     <For each={t().entries ?? []}>
@@ -259,7 +263,7 @@ export default function Tree() {
                         const parts = () => (e.type === "blob" && e.size != null ? fmtSizeParts(e.size) : null);
                         return (
                         <tr>
-                          <td class="entry-mode muted font-mono text-xs" title={e.mode ?? undefined}>{fmtMode(e.mode, e.type)}</td>
+                          <td class="entry-mode muted font-mono text-xs hidden sm:table-cell" title={e.mode ?? undefined}>{fmtMode(e.mode, e.type)}</td>
                           <td class="entry-size-num muted tabular text-right text-xs" title={e.type === "blob" && e.size != null ? `${e.size} bytes` : undefined}>{parts() ? parts().num : e.type === "blob" ? "-" : ""}</td>
                           <td class="entry-size-unit muted text-xs">{parts()?.unit ?? ""}</td>
                           <td class="entry-icon">{e.type === "tree" ? "📁" : e.type === "commit" ? "↗" : "📄"}</td>
@@ -278,6 +282,7 @@ export default function Tree() {
                     </For>
                   </tbody>
                 </table>
+                </div>
                 <DocTabs
                   entries={t().entries}
                   readme={t().readme}
