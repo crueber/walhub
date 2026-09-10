@@ -601,3 +601,9 @@ superseded by Forgejo #272, which lists the mirror repo lanes; see the #272 amen
   docs/features/01. Rationale: a profile for a namespace that may never have a repo cannot ride any
   repo-scoped commit point, and org-role resolution lives in identity — the seam keeps both truths
   without a core→feature import.
+- **Forgejo #307 `repo_count` rides the §14.12 additive field rule — no new seam.** The instance
+  repo total needed no new endpoint, discovery template, task kind, or route registration: one
+  always-present field on the existing `owners/detailed` rows (consumers ignore unknown fields;
+  arrays stay `[]`; the count is never null because membership implies ≥1 live repo), served
+  through the existing triple twins. The frozen overwritable-key list is untouched (no bucket
+  state added — the count derives from the manifest-gated registry walk at request time).

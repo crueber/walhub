@@ -6,9 +6,11 @@
 //     activity-ordered (this is what fixes the >50-owner cap: the server
 //     ranks over ALL owners before the client slices);
 //   - GET /api/v1/owners/detailed?sort=&order= → {owners: [{name,
-//     last_commit_sha|null, last_commit_time|null}]} object rows carrying the
-//     per-owner max (max over the owner's repos; null when the owner has no
-//     commits), triple twins + discovery + SDK, the #248 detailed precedent.
+//     repo_count, last_commit_sha|null, last_commit_time|null}]} object rows
+//     carrying the per-owner max (max over the owner's repos; null when the
+//     owner has no commits) plus the manifest-gated live-repo count
+//     (Forgejo #307 — the instance repo-total rail, ghost-filtered like
+//     liveRepos), triple twins + discovery + SDK, the #248 detailed precedent.
 //
 // Both read the aggregate catalog in ONE exact-key GET regardless of owner
 // count (law 6; probe, don't list — law 4); the rollup itself is derived at
@@ -34,6 +36,12 @@ import (
 // empty, mirroring RepoSizeRow).
 type OwnerActivityRow struct {
 	Name string `json:"name"`
+	// RepoCount is the owner's live-repo count (Forgejo #307 — the instance
+	// repo-total rail: the page sums this field over the uncapped payload,
+	// never a capped slice and never a per-owner listing walk). Always
+	// present (never null): membership implies at least one live repo.
+	// Ghost-filtered exactly like liveRepos (manifest-backed repos only).
+	RepoCount int `json:"repo_count"`
 	// LastCommitSHA is the tip sha of the owner's newest committed repo
 	// (nil = unknown/unbackfilled — the owner has no repo with a known tip).
 	LastCommitSHA *string `json:"last_commit_sha"`
@@ -76,8 +84,11 @@ func ownerRollups(r *http.Request, h *handlers) (map[string]sizecatalog.OwnerRol
 }
 
 // ownersDetailed serves the per-owner activity rows with the shared
-// sort/order query. Membership is the registry Owners() list (the source of
-// truth — the catalog never invents owners); activity rides the derived
+// sort/order query. Membership AND repo counts come from the registry's
+// OwnerRepoCounts (one manifest-gated walk — the same trip profile as the
+// Owners call it replaces, law 6; the catalog never invents owners and
+// never sizes the counts, because the sweep never prunes deleted rows —
+// catalog counts would resurrect ghosts); activity rides the derived
 // rollup. Cache class: SWR (ref-dependent listing, same as owners).
 func (h *handlers) ownersDetailed(w http.ResponseWriter, r *http.Request) {
 	if !h.env.gate(w, r, AuthRead) {
@@ -87,10 +98,14 @@ func (h *handlers) ownersDetailed(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusServiceUnavailable, "repo registry not configured")
 		return
 	}
-	names, err := h.env.Repos.Owners(r.Context())
+	counts, err := h.env.Repos.OwnerRepoCounts(r.Context())
 	if err != nil {
 		mapViewErr(w, err)
 		return
+	}
+	names := make([]string, 0, len(counts))
+	for n := range counts {
+		names = append(names, n)
 	}
 	sortKey, order := ownerSortParams(r)
 	rollups, err := ownerRollups(r, h)
@@ -100,7 +115,7 @@ func (h *handlers) ownersDetailed(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]OwnerActivityRow, 0, len(names))
 	for _, n := range sizecatalog.SortOwners(names, rollups, sortKey, order) {
-		row := OwnerActivityRow{Name: n}
+		row := OwnerActivityRow{Name: n, RepoCount: counts[n]}
 		if rl, ok := rollups[n]; ok && rl.LastCommitTime != "" {
 			ct := rl.LastCommitTime
 			row.LastCommitTime = &ct

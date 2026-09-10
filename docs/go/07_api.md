@@ -411,7 +411,10 @@ hint*, not an ACL.
   an unknown owner (never 404).
 - `GET /api/v1/owners/detailed[?sort=&order=]` (Forgejo #283 — NEW alongside v1, triple twins
   `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.listDetailed`) →
-  `{owners: [{name, last_commit_sha|null, last_commit_time|null}]}` (`[]` never null;
+  `{owners: [{name, repo_count, last_commit_sha|null, last_commit_time|null}]}` (`[]` never null;
+  `repo_count` (Forgejo #307) is the owner's manifest-gated live-repo count — always present,
+  never null (membership implies ≥1 live repo), ghost-filtered exactly like `liveRepos`;
+  the instance repo total is the sum over the uncapped payload;
   times are the per-owner max over the owner's repos — RFC 3339 UTC, null when the owner has no
   commits; never a fake epoch). Query: `sort=name|activity` (default name), `order=asc|desc`
   (default asc) — the same total order as the string list (unknowns always last, ties
@@ -1043,3 +1046,15 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   never fails the tree. Rationale: GitHub-truth per-row dates without
   breaking the hot-path cost model — one bounded local invocation, parse
   stops at full coverage.
+- **Instance repo total rides `owners/detailed` as `repo_count` (Forgejo #307).** Each row gains
+  one always-present `repo_count` (14 §14.12 field rule — no new endpoint, no new discovery
+  template, all three twins + SDK shape comment carry it for free). Source is the REGISTRY's
+  `OwnerRepoCounts` (one manifest-gated walk — the same trip profile as the `Owners` call it
+  replaces, so the endpoint costs zero added store trips), deliberately NOT the #283 catalog
+  aggregate: the sweep only adds/updates catalog rows and never prunes deleted repos, so a
+  catalog fold would resurrect ghosts, and unbackfilled repos would undercount — the registry
+  `liveRepos` gate is the only ghost-exact source. The Go `RepoRegistry` interface grows one
+  method (real registry + both test fakes updated in the same change; compiler-checked, no
+  fallback branch). Rationale: the issue's preferred rail (counts nearly free) with the sound
+  source (ghost parity with the #295 acceptance rule) — the page sums the field over the
+  uncapped payload (12_web_ui.md), never a capped slice and never a per-owner listing walk.

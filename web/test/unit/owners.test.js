@@ -7,6 +7,7 @@ import {
   MAX_REPOS_PER_OWNER,
   activeOwnerNames,
   hasKnownActivity,
+  instanceRepoTotal,
   newestFirst,
   orderByActivity,
   orderOwnersByActivity,
@@ -295,4 +296,48 @@ test("explore cold load costs 1 listing + MAX_OWNERS section fetches (#295)", ()
       assert.equal(fetches, 1 + MAX_OWNERS); // 6 cold reads, not ~61
     });
   });
+});
+
+// Forgejo #307: the instance repo total is the sum of the served repo_count
+// fields over the UNCAPPED owners/detailed payload — never the top-5 slice,
+// never a per-owner listing walk.
+test("instanceRepoTotal sums served repo_counts over the uncapped payload", () => {
+  const payload = {
+    owners: [
+      { name: "o1", repo_count: 3, last_commit_time: "2026-09-10T12:00:00Z" },
+      { name: "o2", repo_count: 1, last_commit_time: "2026-09-09T12:00:00Z" },
+      { name: "o3", repo_count: 2, last_commit_time: "2026-09-08T12:00:00Z" },
+      { name: "o4", repo_count: 1, last_commit_time: "2026-09-07T12:00:00Z" },
+      { name: "o5", repo_count: 1, last_commit_time: "2026-09-06T12:00:00Z" },
+      { name: "o6", repo_count: 4, last_commit_time: "2026-09-05T12:00:00Z" },
+      { name: "ghost", repo_count: 1, last_commit_time: null }, // inactive, still counted
+    ],
+  };
+  assert.equal(instanceRepoTotal(payload.owners), 13); // true total, uncapped
+  // The top-5 slice's capped sum (8) is NOT the total — the page must sum
+  // the payload rows, not the shown sections.
+  const { shown } = pageSlice(activeOwnerNames(payload.owners), MAX_OWNERS);
+  assert.equal(shown.length, 5);
+  const cappedSum = payload.owners
+    .filter((r) => shown.includes(r.name))
+    .reduce((s, r) => s + r.repo_count, 0);
+  assert.equal(cappedSum, 8);
+  assert.notEqual(cappedSum, instanceRepoTotal(payload.owners));
+});
+
+test("instanceRepoTotal tolerates missing counts and non-array input", () => {
+  assert.equal(instanceRepoTotal(undefined), 0);
+  assert.equal(instanceRepoTotal(null), 0);
+  assert.equal(instanceRepoTotal("o1"), 0);
+  assert.equal(instanceRepoTotal([]), 0);
+  // Older servers without the rail contribute 0 rather than NaN.
+  assert.equal(
+    instanceRepoTotal([
+      { name: "a", repo_count: 2 },
+      { name: "b" },
+      { name: "c", repo_count: null },
+      { name: "d", repo_count: "3" },
+    ]),
+    2,
+  );
 });

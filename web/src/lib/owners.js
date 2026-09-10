@@ -172,6 +172,27 @@ export function activeOwnerNames(detailRows) {
 }
 
 /**
+ * instanceRepoTotal(detailRows) → the instance repo total (Forgejo #307 over
+ * the #283 `owners/detailed` rows).
+ *
+ * The sum of the served `repo_count` fields over the UNCAPPED payload rows
+ * (callers pass `payload.owners`, never the top-5 slice — a capped sum as a
+ * total would be dishonest, the #295 gap this rail closes). Rows without a
+ * numeric `repo_count` contribute 0 (tolerant of older servers); non-array
+ * input is 0.
+ */
+export function instanceRepoTotal(detailRows) {
+  const rows = Array.isArray(detailRows) ? detailRows : [];
+  let total = 0;
+  for (const r of rows) {
+    if (r && typeof r.repo_count === "number" && Number.isFinite(r.repo_count) && r.repo_count > 0) {
+      total += Math.floor(r.repo_count);
+    }
+  }
+  return total;
+}
+
+/**
  * pageSlice(list, limit?) → {shown, extra}. Split a name list into the rows
  * the page renders (the first `limit`, in the caller's order) and the
  * overflow count folded behind the "+N more" link. Non-array input behaves

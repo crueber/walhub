@@ -810,6 +810,9 @@ func (fakeRegistry) Owners(ctx context.Context) ([]string, error) {
 func (fakeRegistry) Repos(ctx context.Context, owner string) ([]string, error) {
 	return nil, nil
 }
+func (fakeRegistry) OwnerRepoCounts(ctx context.Context) (map[string]int, error) {
+	return map[string]int{"alice": 1}, nil
+}
 func (fakeRegistry) Exists(ctx context.Context, id git.RepoId) (bool, error) {
 	return false, nil
 }
