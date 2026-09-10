@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -85,18 +86,18 @@ func TestCreateTagGates(t *testing.T) {
 }
 
 func TestCreateTagValidation(t *testing.T) {
-	t.Run("annotated 422", func(t *testing.T) {
+	t.Run("whitespace message is lightweight", func(t *testing.T) {
 		x := newHarness(t)
 		grantWrite(x)
-		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "release one"})
-		if !isErr(err, errUnsupported) {
-			t.Fatalf("err = %v, want ErrUnsupported", err)
+		tag, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "   \n "})
+		if err != nil {
+			t.Fatalf("whitespace message: %v", err)
 		}
-		if statusFor(err) != 422 {
-			t.Fatalf("status = %d, want 422", statusFor(err))
+		if tag.SHA != testSHA {
+			t.Fatalf("tag.SHA = %q, want lightweight commit %q", tag.SHA, testSHA)
 		}
-		if len(x.refs.created) != 0 {
-			t.Fatal("annotated request must not publish")
+		if len(x.refs.created) != 1 || len(x.refs.annotated) != 0 {
+			t.Fatalf("created=%d annotated=%d, want 1/0", len(x.refs.created), len(x.refs.annotated))
 		}
 	})
 	t.Run("empty sha 400", func(t *testing.T) {
@@ -148,6 +149,300 @@ func TestCreateTagResolution(t *testing.T) {
 			t.Fatalf("err = %v, want ErrUnavailable", err)
 		}
 	})
+}
+
+func TestCreateAnnotatedHappyPath(t *testing.T) {
+	x := newHarness(t)
+	grantWrite(x)
+	tag, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v2", SHA: testSHA, Message: "release two"})
+	if err != nil {
+		t.Fatalf("CreateTag: %v", err)
+	}
+	if tag.Name != "v2" || tag.Ref != "refs/tags/v2" {
+		t.Fatalf("tag = %+v", tag)
+	}
+	if tag.SHA != testTagOid {
+		t.Fatalf("tag.SHA = %q, want tag object %q", tag.SHA, testTagOid)
+	}
+	// The lightweight funnel stays untouched by annotated creates.
+	if len(x.refs.created) != 0 {
+		t.Fatalf("lightweight creates = %d, want 0", len(x.refs.created))
+	}
+	if len(x.refs.annotated) != 1 {
+		t.Fatalf("annotated creates = %d, want 1", len(x.refs.annotated))
+	}
+	a := x.refs.annotated[0]
+	if a.repo != "o/r" || a.name != "v2" || a.tagOid != testTagOid || a.peeled != testSHA {
+		t.Fatalf("annotated = %+v", a)
+	}
+	if string(a.pack) != "PACK-bytes" {
+		t.Fatalf("pack = %q", a.pack)
+	}
+	if a.meta["principal"] != "jane" {
+		t.Fatalf("meta = %v", a.meta)
+	}
+	// mktag got exactly one object; pack-objects got the tag oid back.
+	if len(x.git.tagBodies) != 1 {
+		t.Fatalf("mktag bodies = %d, want 1", len(x.git.tagBodies))
+	}
+	if len(x.git.packOids) != 1 || x.git.packOids[0] != testTagOid {
+		t.Fatalf("pack oids = %v", x.git.packOids)
+	}
+	// The tag body is the canonical server-rendered shape: headers, blank,
+	// message; tagger attributes the principal as server-minted.
+	body := string(x.git.tagBodies[0])
+	for _, want := range []string{
+		"object " + testSHA + "\n",
+		"type commit\n",
+		"tag v2\n",
+		"tagger jane <jane@walhub.local>",
+		"+0000\n",
+		"\nrelease two\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("mktag body %q lacks %q", body, want)
+		}
+	}
+	if !strings.HasSuffix(body, "release two\n") || strings.HasSuffix(body, "\n\n") {
+		t.Fatalf("message not normalized to one trailing newline: %q", body)
+	}
+}
+
+func TestCreateAnnotatedValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    tagError
+		status  int
+	}{
+		{"nul rejected", "hi\x00there", errInvalid, 400},
+		{"non-utf8 rejected", "hi\xffthere", errInvalid, 400},
+		{"oversize rejected", strings.Repeat("x", MaxTagMessageLen+1), errInvalid, 400},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newHarness(t)
+			grantWrite(x)
+			_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: tc.message})
+			if !isErr(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if statusFor(err) != tc.status {
+				t.Fatalf("status = %d, want %d", statusFor(err), tc.status)
+			}
+			if len(x.refs.annotated) != 0 || len(x.refs.created) != 0 {
+				t.Fatal("invalid message must not publish")
+			}
+			if len(x.git.tagBodies) != 0 {
+				t.Fatal("invalid message must not reach mktag")
+			}
+		})
+	}
+	t.Run("max size accepted", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		if _, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: strings.Repeat("y", MaxTagMessageLen)}); err != nil {
+			t.Fatalf("max-size message: %v", err)
+		}
+	})
+	t.Run("empty sha 400 before git", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", Message: "m"})
+		if !isErr(err, errInvalid) {
+			t.Fatalf("err = %v, want ErrInvalid", err)
+		}
+		if len(x.git.tagBodies) != 0 {
+			t.Fatal("empty sha must not reach mktag")
+		}
+	})
+	t.Run("unknown sha 404 before mktag", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: strings.Repeat("f", 40), Message: "m"})
+		if !isErr(err, errNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+		if len(x.git.tagBodies) != 0 {
+			t.Fatal("unknown sha must not reach mktag")
+		}
+	})
+	t.Run("policy deny 403 before mktag", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		seedPolicy(t, x, `{"version":1,"rules":[{"name":"freeze-tags","match":{"refs":["refs/tags/**"]},"effect":{"protect":{"restricts":["create"]}}}]}`)
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errForbidden) {
+			t.Fatalf("err = %v, want ErrForbidden", err)
+		}
+		if len(x.git.tagBodies) != 0 {
+			t.Fatal("policy-denied create must not reach mktag")
+		}
+	})
+}
+
+func TestCreateAnnotatedFailures(t *testing.T) {
+	t.Run("mktag rejection 400 nothing published", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		x.git.errTag = fmt.Errorf("%w: mktag rejected tag: bad tagger", ErrInvalid)
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errInvalid) {
+			t.Fatalf("err = %v, want ErrInvalid", err)
+		}
+		if statusFor(err) != 400 {
+			t.Fatalf("status = %d, want 400", statusFor(err))
+		}
+		if len(x.refs.annotated) != 0 || len(x.git.packOids) != 0 {
+			t.Fatal("mktag failure must publish nothing and pack nothing")
+		}
+	})
+	t.Run("mktag backend 503 nothing published", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		x.git.errTag = fmt.Errorf("%w: git down", ErrUnavailable)
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
+		}
+		if len(x.refs.annotated) != 0 {
+			t.Fatal("backend failure must publish nothing")
+		}
+	})
+	t.Run("pack failure 5xx nothing published", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		x.git.errPack = fmt.Errorf("%w: git pack-objects: boom", ErrUnavailable)
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
+		}
+		if statusFor(err)/100 != 5 {
+			t.Fatalf("status = %d, want 5xx", statusFor(err))
+		}
+		if len(x.refs.annotated) != 0 {
+			t.Fatal("pack failure must publish nothing")
+		}
+	})
+	t.Run("dirs flake between resolve and mktag 503", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		x.svc.Dirs = &flakyDirs{dir: t.TempDir() + "/repo.git"}
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
+		}
+		if len(x.refs.annotated) != 0 || len(x.git.tagBodies) != 0 {
+			t.Fatal("dirs failure must publish nothing and mint nothing")
+		}
+	})
+	t.Run("unsanitizable principal 400", func(t *testing.T) {
+		x := newHarness(t)
+		x.roles.grant("o", "r", "<>", "write")
+		_, err := x.svc.CreateTag(ctx(), "o", "r", auth.Principal{Name: "<>"}, CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errInvalid) {
+			t.Fatalf("err = %v, want ErrInvalid", err)
+		}
+		if statusFor(err) != 400 {
+			t.Fatalf("status = %d, want 400", statusFor(err))
+		}
+		if len(x.refs.annotated) != 0 || len(x.git.tagBodies) != 0 {
+			t.Fatal("bad principal must publish nothing and mint nothing")
+		}
+	})
+	t.Run("existing tag 409", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		x.refs.existing["v1"] = testSHA
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errConflict) {
+			t.Fatalf("err = %v, want ErrConflict", err)
+		}
+		if statusFor(err) != 409 {
+			t.Fatalf("status = %d, want 409", statusFor(err))
+		}
+	})
+	t.Run("unwired publisher 503", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		x.svc.Refs = nil
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if !isErr(err, errUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
+		}
+	})
+	t.Run("publish backend error propagates", func(t *testing.T) {
+		x := newHarness(t)
+		grantWrite(x)
+		x.refs.err = fmt.Errorf("bucket down")
+		_, err := x.svc.CreateTag(ctx(), "o", "r", writer(), CreateInput{Name: "v1", SHA: testSHA, Message: "m"})
+		if err == nil || isErr(err, errConflict) {
+			t.Fatalf("err = %v, want non-conflict failure", err)
+		}
+	})
+}
+
+func TestRenderTagger(t *testing.T) {
+	tagger, err := renderTagger(writer(), nowFixed())
+	if err != nil {
+		t.Fatalf("renderTagger: %v", err)
+	}
+	want := fmt.Sprintf("jane <jane@walhub.local> %d +0000", nowFixed().Unix())
+	if tagger != want {
+		t.Fatalf("tagger = %q, want %q", tagger, want)
+	}
+	// Sanitization strips angle brackets and line breaks.
+	tagger, err = renderTagger(auth.Principal{Name: "a<b>\nc\rd>"}, nowFixed())
+	if err != nil {
+		t.Fatalf("sanitized: %v", err)
+	}
+	if !strings.HasPrefix(tagger, "abcd <abcd@walhub.local> ") {
+		t.Fatalf("sanitized tagger = %q", tagger)
+	}
+	// Empty-after-sanitize is a 400.
+	if _, err := renderTagger(auth.Principal{Name: "<>\n\r  "}, nowFixed()); !isErr(err, errInvalid) {
+		t.Fatalf("empty-after-sanitize err = %v, want ErrInvalid", err)
+	}
+	if _, err := renderTagger(auth.Principal{}, nowFixed()); !isErr(err, errInvalid) {
+		t.Fatalf("empty name err = %v, want ErrInvalid", err)
+	}
+	// Negative offsets render with a minus sign and zero-padded fields.
+	neg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.FixedZone("EST", -5*3600-1800))
+	tagger, err = renderTagger(writer(), neg)
+	if err != nil {
+		t.Fatalf("negative tz: %v", err)
+	}
+	wantNeg := fmt.Sprintf("jane <jane@walhub.local> %d -0530", neg.Unix())
+	if tagger != wantNeg {
+		t.Fatalf("negative-tz tagger = %q, want %q", tagger, wantNeg)
+	}
+}
+
+func TestNowDefaultsToWallClock(t *testing.T) {
+	svc := New(store.NewMemory(), nil)
+	if svc.now().IsZero() {
+		t.Fatal("nil Now must fall back to wall clock")
+	}
+}
+
+func TestRenderTagBody(t *testing.T) {
+	got := string(renderTagBody("v1", testSHA, "jane <jane@walhub.local> 1 +0000", "hello\n"))
+	want := "object " + testSHA + "\ntype commit\ntag v1\ntagger jane <jane@walhub.local> 1 +0000\n\nhello\n"
+	if got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeTagMessage(t *testing.T) {
+	if got, err := normalizeTagMessage("hi"); err != nil || got != "hi\n" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	if got, err := normalizeTagMessage("hi\n\n\n"); err != nil || got != "hi\n" {
+		t.Fatalf("trailing collapse: %q %v", got, err)
+	}
+	if got, err := normalizeTagMessage("a\nb\n"); err != nil || got != "a\nb\n" {
+		t.Fatalf("interior kept: %q %v", got, err)
+	}
 }
 
 func TestCreateTagPublish(t *testing.T) {

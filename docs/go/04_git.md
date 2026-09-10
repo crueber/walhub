@@ -723,3 +723,18 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   refuse itself. Sync clones use the pinned `clone --mirror` argv (§12); the
   only fetch variant is the same argv with a host-pinned credential helper
   for token-bearing first/manual syncs (memory-only, never stored).
+- **Annotated-tag construction argv (Forgejo #263, 2026-09-10, `internal/tags`
+  + the `cmd/walhub` tags composition).** Two new pinned argv, both run in the
+  repo git-dir (`GIT_DIR=<repo>`, `GIT_TERMINAL_PROMPT=0`, bounded pool + ctx
+  timeout, 8 KiB stderr discipline per §2):
+  `git mktag` (server-rendered tag content on stdin — `object/type/tag/tagger`
+  headers, blank line, message — strict-fscks the tag body, writes the loose
+  object, prints the tag oid) and `<oid>\n | git pack-objects --stdout`
+  (plain oid list on stdin, no `--revs`; one object, no deltas, flags
+  minimal). `mktag` is chosen over `git hash-object -t tag -w --stdin`
+  precisely because `hash-object` performs no fsck: it would accept a
+  malformed tagger line/date that later fails fsck on fetch or breaks
+  `git show`. The pack feeds the existing `Layer.Ingest` path
+  (`index-pack --stdin --keep --rev-index --threads=0 [--fsck-objects]`,
+  `thin=false` — the pack is complete), and composition publishes it as a
+  PUSH entry (txn create with `NewPeeled`) through the unchanged funnel.

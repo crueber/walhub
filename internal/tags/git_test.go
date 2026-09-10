@@ -119,6 +119,80 @@ func TestCommitExistsNonSHAOutput(t *testing.T) {
 	}
 }
 
+func TestSubprocessGitTagObjectRoundTrip(t *testing.T) {
+	dir := gitTestRepo(t)
+	g := NewSubprocessGit("git")
+	g.Timeout = 30 * time.Second
+	ctx := context.Background()
+
+	head, err := g.CommitExists(ctx, dir, "HEAD")
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	// Mint via mktag; the tagger line is server-rendered, the message exact.
+	body := renderTagBody("v9", head, "t <t@walhub.local> 1789041600 +0000", "hello\n")
+	oid, err := g.CreateTagObject(ctx, dir, body)
+	if err != nil {
+		t.Fatalf("CreateTagObject: %v", err)
+	}
+	if verr := validateSHA(oid); verr != nil {
+		t.Fatalf("oid = %q", oid)
+	}
+	// git sees a real tag object carrying the tagger line and message.
+	if typ, err := g.runCollect(ctx, dir, []string{"cat-file", "-t", oid}); err != nil || strings.TrimSpace(typ) != "tag" {
+		t.Fatalf("cat-file -t = %q %v", typ, err)
+	}
+	if raw, err := g.runCollect(ctx, dir, []string{"cat-file", "tag", oid}); err != nil ||
+		!strings.Contains(raw, "tagger t <t@walhub.local> 1789041600 +0000") ||
+		!strings.Contains(raw, "hello") {
+		t.Fatalf("cat-file tag = %q %v", raw, err)
+	}
+	// Pack the single object; the bytes are a real pack (PACK magic).
+	pack, err := g.PackObject(ctx, dir, oid)
+	if err != nil {
+		t.Fatalf("PackObject: %v", err)
+	}
+	if len(pack) < 4 || string(pack[:4]) != "PACK" {
+		t.Fatalf("pack magic = %q (len %d)", pack, len(pack))
+	}
+	// Malformed tag content is an mktag rejection (400-class), never stored.
+	if _, err := g.CreateTagObject(ctx, dir, []byte("this is not a tag object\n")); !isErr(err, errInvalid) {
+		t.Fatalf("garbage mktag err = %v, want ErrInvalid", err)
+	}
+	// Unknown object oid fails pack-objects (5xx-class, nothing published).
+	if _, err := g.PackObject(ctx, dir, strings.Repeat("0", 40)); !isErr(err, errUnavailable) {
+		t.Fatalf("zero-oid pack err = %v, want ErrUnavailable", err)
+	}
+	// Bad oid never spawns (400-class input validation).
+	if _, err := g.PackObject(ctx, dir, "nope"); !isErr(err, errInvalid) {
+		t.Fatalf("bad-oid pack err = %v, want ErrInvalid", err)
+	}
+}
+
+func TestTagObjectBackendFailures(t *testing.T) {
+	ctx := context.Background()
+	g := NewSubprocessGit("walhub-no-such-git-binary")
+	g.Timeout = 5 * time.Second
+	if _, err := g.CreateTagObject(ctx, t.TempDir(), []byte("x")); !isErr(err, errUnavailable) {
+		t.Fatalf("mktag bad binary: %v", err)
+	}
+	if _, err := g.PackObject(ctx, t.TempDir(), strings.Repeat("a", 40)); !isErr(err, errUnavailable) {
+		t.Fatalf("pack bad binary: %v", err)
+	}
+	// A binary answering non-sha output exercises the validateSHA path.
+	ge := NewSubprocessGit("echo")
+	ge.Timeout = 5 * time.Second
+	if _, err := ge.CreateTagObject(ctx, t.TempDir(), []byte("x")); !isErr(err, errInvalid) {
+		t.Fatalf("echo mktag: %v", err)
+	}
+	// A binary answering empty output exercises the empty-pack path.
+	gt := NewSubprocessGit("true")
+	gt.Timeout = 5 * time.Second
+	if _, err := gt.PackObject(ctx, t.TempDir(), strings.Repeat("a", 40)); !isErr(err, errUnavailable) {
+		t.Fatalf("empty pack: %v", err)
+	}
+}
+
 func TestValidateSHA(t *testing.T) {
 	if err := validateSHA(strings.Repeat("a", 40)); err != nil {
 		t.Fatalf("40-hex: %v", err)

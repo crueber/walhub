@@ -54,7 +54,13 @@ func TestHandleTable(t *testing.T) {
 		{"empty name 400", grantWrite, "POST", "/o/r/api/tags", func() string { return `{"sha":"` + testSHA + `"}` }, writerHeaders(), 400, "must not be empty"},
 		{"unknown sha 404", grantWrite, "POST", "/o/r/api/tags", func() string { return `{"name":"v1","sha":"ffffffffffffffffffffffffffffffffffffffff"}` }, writerHeaders(), 404, "unknown revision"},
 		{"empty sha 400", grantWrite, "POST", "/o/r/api/tags", func() string { return `{"name":"v1","sha":""}` }, writerHeaders(), 400, "must not be empty"},
-		{"annotated 422", grantWrite, "POST", "/o/r/api/tags", func() string { return `{"name":"v1","sha":"` + testSHA + `","message":"hi"}` }, writerHeaders(), 422, "annotated"},
+		{"annotated message 201", grantWrite, "POST", "/o/r/api/tags", func() string { return `{"name":"v1","sha":"` + testSHA + `","message":"release one"}` }, writerHeaders(), 201, `"sha":"` + testTagOid + `"`},
+		{"annotated oversize 400", grantWrite, "POST", "/o/r/api/tags", func() string {
+			return `{"name":"v1","sha":"` + testSHA + `","message":"` + strings.Repeat("x", MaxTagMessageLen+1) + `"}`
+		}, writerHeaders(), 400, "exceeds"},
+		{"annotated nul 400", grantWrite, "POST", "/o/r/api/tags", func() string {
+			return "{\"name\":\"v1\",\"sha\":\"" + testSHA + "\",\"message\":\"hi\\u0000there\"}"
+		}, writerHeaders(), 400, "NUL"},
 		{"unknown field 400", grantWrite, "POST", "/o/r/api/tags", func() string { return `{"name":"v1","sha":"` + testSHA + `","bogus":1}` }, writerHeaders(), 400, "unknown field"},
 		{"invalid json 400", grantWrite, "POST", "/o/r/api/tags", func() string { return `{"name":` }, writerHeaders(), 400, "invalid JSON"},
 		{"null body 400", grantWrite, "POST", "/o/r/api/tags", func() string { return `null` }, writerHeaders(), 400, "expected an object"},
@@ -102,6 +108,50 @@ func TestHandleConflict(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "already exists") {
 		t.Fatalf("body %q lacks conflict wording", w.Body.String())
+	}
+}
+
+// TestHandleAnnotatedRecords is the wire proof for #263: a POST with a
+// message takes the annotated path end to end (201 with the tag object oid),
+// records the PUSH-shaped publish (tag oid + peeled commit + pack), and the
+// mktag body carries the tagger line and message.
+func TestHandleAnnotatedRecords(t *testing.T) {
+	x := newHarness(t)
+	grantWrite(x)
+	w := doReq(t, x, "POST", "/o/r/api/tags", `{"name":"v2","sha":"`+testSHA+`","message":"release two"}`, writerHeaders())
+	if w.Code != 201 {
+		t.Fatalf("= %d (%q), want 201", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"sha":"`+testTagOid+`"`) {
+		t.Fatalf("body %q lacks tag object oid", w.Body.String())
+	}
+	if len(x.refs.annotated) != 1 {
+		t.Fatalf("annotated = %d, want 1", len(x.refs.annotated))
+	}
+	a := x.refs.annotated[0]
+	if a.name != "v2" || a.tagOid != testTagOid || a.peeled != testSHA || len(a.pack) == 0 {
+		t.Fatalf("annotated = %+v", a)
+	}
+	if len(x.git.tagBodies) != 1 {
+		t.Fatalf("mktag bodies = %d, want 1", len(x.git.tagBodies))
+	}
+	body := string(x.git.tagBodies[0])
+	for _, want := range []string{"object " + testSHA, "type commit", "tag v2", "tagger jane <jane@walhub.local>", "release two"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("mktag body %q lacks %q", body, want)
+		}
+	}
+}
+
+// TestHandleAnnotatedConflict proves the annotated path races like the
+// lightweight one: create-against-present is a CAS 409, never a move.
+func TestHandleAnnotatedConflict(t *testing.T) {
+	x := newHarness(t)
+	grantWrite(x)
+	x.refs.existing["v2"] = testSHA
+	w := doReq(t, x, "POST", "/o/r/api/tags", `{"name":"v2","sha":"`+testSHA+`","message":"release two"}`, writerHeaders())
+	if w.Code != 409 {
+		t.Fatalf("= %d (%q), want 409", w.Code, w.Body.String())
 	}
 }
 
