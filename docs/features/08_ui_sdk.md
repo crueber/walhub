@@ -405,10 +405,9 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   closes, then closes as completed). Both segments + menu share one root: a document click outside
   it dismisses (RefPicker/ReactionMenu pattern, removed in `onCleanup`), clicks on ▾ itself just
   toggle (inside the boundary, never close-then-reopen), Escape refocuses the toggle, Tab-out
-  dismisses. Both segments disable together from the composer's busy guard (single-flight, no
-  double-close). No backend change — `state_reason` vocabulary unchanged. Incidental fix in the
-  same change: the Comment-and-Close chooser passed `props.disabled` (always undefined) instead
-  of the busy guard — both split menus now disable from `getBusy()`. Headless cover in
+  dismisses. All three controls in each split menu (primary, ▾, item) disable from the
+  composer's `getBusy()` guard (single-flight, no double-close), as the chooser menus did.
+  No backend change — `state_reason` vocabulary unchanged. Headless cover in
   `web/test/unit/split-close.test.js` (source-text state-machine pins, same convention as
   `clone-outside-close.test.js`); no new deps.
 
