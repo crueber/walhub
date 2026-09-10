@@ -36,6 +36,16 @@
      the identical treatment for nav-styled links living in the right-aligned
      utility cluster (issue #238: the API link sits ml-auto, left of the tray). */
   .site-nav a, .nav-link { @apply text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100; }
+  /* Site header at narrow widths (issue #273): the row is brand + scrolling
+     nav + pinned right cluster (see App.jsx). The nav strip scrolls
+     internally instead of wrapping (single header row, the common git-host
+     pattern); links never shrink to unreadability. The strip's own scrollbar
+     is hidden so the header keeps one stable row height — the links stay
+     keyboard-reachable (Tab moves focus along them and the strip follows
+     focus) and touch-scrollable. Dark + light share it. */
+  .site-nav { scrollbar-width: none; }
+  .site-nav::-webkit-scrollbar { display: none; }
+  .site-nav a { @apply shrink-0; }
 
   /* Controls */
   .btn { @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors
