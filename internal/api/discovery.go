@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"git.packden.us/crueber/walhub/internal/sizecatalog"
 )
 
 // --- GET /api/v1 (§8 discovery; no phantom routes, derived from the table) ----------
@@ -124,6 +126,21 @@ func (h *handlers) owners(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		mapViewErr(w, err)
 		return
+	}
+	// sort=activity orders the frozen []string by the derived per-owner
+	// max-commit rollup (Forgejo #283 — the server ranks over ALL owners
+	// before the client's MAX_OWNERS slice, so an active owner past the
+	// name-cap still surfaces). Default (no sort) is byte-identical to the
+	// legacy store order: no catalog read, zero added trips. Absent
+	// catalog degrades to name order; corrupt catalog is a 503 (the bucket
+	// is wrong) — the same contract as ownerReposDetailed.
+	if sortKey, order := ownerSortParams(r); sortKey == "activity" {
+		rollups, rerr := ownerRollups(r, h)
+		if rerr != nil {
+			mapViewErr(w, rerr)
+			return
+		}
+		names = sizecatalog.SortOwners(names, rollups, sortKey, order)
 	}
 	writeCached(w, r, ccSWR, "", http.StatusOK, nonNil(names))
 }

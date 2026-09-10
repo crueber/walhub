@@ -62,8 +62,11 @@ test("owners listings always bypass the HTTP cache (issue #200)", async () => {
   const { fetch, calls } = fakeFetch(() => jsonResponse([]));
   const c = new ReposClient({ base: BASE, fetch });
   assert.deepEqual(await c.owners.list(), []);
+  assert.deepEqual(await c.owners.list({ sort: "activity", order: "desc" }), []);
   assert.deepEqual(await c.owners.repos("demo"), []);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].init.cache, "no-store");
-  assert.equal(calls[1].init.cache, "no-store");
+  assert.deepEqual(await c.owners.listDetailed({ sort: "activity", order: "desc" }), []);
+  assert.equal(calls.length, 4);
+  for (const call of calls) {
+    assert.equal(call.init.cache, "no-store");
+  }
 });

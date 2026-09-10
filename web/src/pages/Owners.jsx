@@ -1,23 +1,28 @@
 // web/src/pages/Owners.jsx — route "/explore": intro + every owner with their repos.
 // Owner/repo names come from the store-backed core listing endpoints
-// (GET /api/v1/owners; per-owner rows from GET
+// (GET /api/v1/owners?sort=activity&order=desc — 07 §8, Forgejo #283: the
+// server ranks ALL owners by the per-owner max-commit rollup before the
+// client's MAX_OWNERS slice, so an active owner past the name cap still
+// surfaces and first paint is already ordered; per-owner rows from GET
 // /api/v1/owners/{owner}/repos/detailed?sort=activity&order=desc — 07 §8,
 // Forgejo #247: true most-recent-commit order server-side, stabilized
-// client-side by lib/owners.js orderByActivity). Owner SECTIONS order by
-// most recent commit too (Forgejo #283): each section reports its newest
-// row time (lib/owners.js ownerActivity over the same detailed doc it
-// already fetched — zero extra GETs) and the page re-ranks sections via
-// orderOwnersByActivity as docs land. Owners with no known activity
-// (fetch pending, or no commits) sort last with a deterministic name
-// tiebreak; until every section reports, not-yet-loaded owners keep that
-// trailing name order — first paint may shift once, then settles.
+// client-side by lib/owners.js orderByActivity). Owner SECTIONS keep the
+// client re-rank as fallback/enhancement (Forgejo #283): each section
+// reports its newest row time (lib/owners.js ownerActivity over the same
+// detailed doc it already fetched — zero extra GETs) and the page re-ranks
+// sections via orderOwnersByActivity as docs land, which also heals a stale
+// catalog rollup with fresher per-section times. Owners with no known
+// activity (fetch pending, unbackfilled, or no commits) sort last with a
+// deterministic name tiebreak; until every section reports, not-yet-loaded
+// owners keep that trailing name order — first paint is server-ordered and
+// only refines once, then settles.
 // The page adds per-section caps (lib/owners.js) and the intro card. Star
 // counts ride the shared `social:{o}/{r}` cache entries (<StarCount>,
 // lib/stars.js) and last-active stamps render from the listing rows
 // (<ActivityStamp at/empty props> — no per-row commits fetch on this page;
 // see the component header). Rows share <RepoRow> with `/:owner`
 // (Repos.jsx) in a responsive two-column grid (one column on narrow
-// widths). No new endpoint, no new SDK method (issues #117, #137, #142).
+// widths). No new deps (issues #117, #137, #142).
 
 import repos from "../../sdk/src/index.js";
 import { For, Show, createEffect, createSignal } from "solid-js";
@@ -89,7 +94,9 @@ function OwnerSection(props) {
 }
 
 export default function Owners() {
-  const [getOwners] = useData("owners", () => repos.owners.list());
+  // Server-ordered owner names (#283 rollup — correct past the cap and on
+  // first paint); the client re-rank below refines as section docs land.
+  const [getOwners] = useData("owners", () => repos.owners.list({ sort: "activity", order: "desc" }));
   const [getMe] = useData("me", () => repos.me().catch(() => null));
   // Per-owner newest-commit times reported by OwnerSections as their
   // detailed docs land (Forgejo #283). Missing key = fetch pending;
