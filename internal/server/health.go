@@ -333,6 +333,9 @@ func hasSuffixFold(s, suf string) bool {
 }
 
 func equalFoldLast(s, suf string) bool {
+	if len(s) < len(suf) {
+		return false
+	}
 	for i := 0; i < len(suf); i++ {
 		a, b := s[len(s)-len(suf)+i], suf[i]
 		if a == b {
