@@ -26,7 +26,7 @@ function block(src, start, end) {
 }
 
 test("site-nav holds explore → import → keys → setup, no API", () => {
-  const nav = block(APP, '<nav class="site-nav', "</nav>");
+  const nav = block(APP, '<nav aria-label="Site" class="site-nav', "</nav>");
   for (const href of ["/explore", "/import", "/keys", "/setup"]) {
     assert.ok(nav.includes(`href="${href}"`), `site-nav must link ${href}`);
   }

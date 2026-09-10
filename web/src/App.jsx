@@ -44,17 +44,23 @@ export default function App(props) {
       </div>
 
       <header class="site-header sticky top-0 z-40">
-        <div class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-2.5">
-          <A href="/" class="brand text-lg">
+        {/* Narrow widths (issue #273): the row never grows past the viewport.
+            The brand + right cluster are pinned (shrink-0); the site-nav takes
+            the leftover (min-w-0 flex-1) and scrolls internally
+            (overflow-x-auto) instead of pushing the page sideways. Gaps relax
+            at sm: so desktop spacing is unchanged. No page-level horizontal
+            scroll from the header at 390px. */}
+        <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2.5 sm:gap-6">
+          <A href="/" class="brand shrink-0 text-lg">
             walhub
           </A>
-          <nav class="site-nav flex items-center gap-4">
+          <nav aria-label="Site" class="site-nav flex min-w-0 flex-1 items-center gap-3 overflow-x-auto whitespace-nowrap sm:gap-4">
             <A href="/explore">explore</A>
             <A href="/import">import</A>
             <A href="/keys">keys</A>
             <A href="/setup">setup</A>
           </nav>
-          <div class="ml-auto flex items-center gap-2">
+          <div class="ml-auto flex shrink-0 items-center gap-2">
             <A href="/api" class="nav-link">API</A>
             <NotificationTray />
             <button
