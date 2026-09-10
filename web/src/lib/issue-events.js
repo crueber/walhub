@@ -13,9 +13,10 @@
 // Milestone fragments resolve ids to titles through the optional
 // `milestones` list (the page-owned `milestones:{o}/{r}` cache — the same
 // source the sidebar renders). The event carries ids only (02 §7), so
-// without the list the fragment falls back to the bare id; a deleted
-// milestone likewise renders as its bare id (the 02 §3.1 self-heal
-// stance, shared with milestoneTitle).
+// `undefined` (set not yet loaded) renders the honest generic interim
+// "changed the milestone" — never a bare-id flash (issue #259); a
+// loaded set missing the id (deleted milestone) renders the bare id
+// (the 02 §3.1 self-heal stance, shared with milestoneTitle).
 //
 // `closePatch(reason)` builds the PATCH body for an explicit-reason close.
 // The API contract (02 §7, internal/issues service.go) defaults an omitted
@@ -51,6 +52,12 @@ function assigneeFragment(ev) {
 }
 
 function milestoneFragment(ev, milestones) {
+  // Issue #259: `undefined` means the page-owned milestone set has not
+  // loaded yet — render the honest generic interim, never the bare id
+  // (no id flash on cold loads; the titled text heals in reactively
+  // when the set settles). A loaded set missing the id (deleted) still
+  // renders the bare id via milestoneTitle (02 §3.1 self-heal).
+  if (milestones === undefined) return "changed the milestone";
   const from = ev.from == null ? null : milestoneTitle(milestones, ev.from);
   const to = ev.to == null ? null : milestoneTitle(milestones, ev.to);
   if (from == null && to != null) return `added this to the “${to}” milestone`;

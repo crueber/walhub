@@ -226,7 +226,7 @@ RFC 3339, cache class per route. `num` matches `[1-9][0-9]{0,8}` (decimal on the
 |---|---|---|
 | `GET …/api/issues?state=&labels=&assignee=&milestone=&since=&after=&n=` | read | → `{issues:[card], more:bool}`; index-first, LIST fallback; `labels` comma-list AND, `assignee` login or `*none`, `milestone` id or `none`, `since` RFC3339 on `updated_at`, `after` num cursor, `n` ≤ 100 default 50. no-store |
 | `POST …/api/issues` | read (authenticated) | `{title, body?}` → `201 {thread, events:[opened]}`; allocates num via P2 |
-| `GET …/api/issues/{num}` | read | → `{thread, events:[last 50], events_more:bool}`; `?after_seq=&n=` windows the log; `ETag: "v<version>"`, 304 on If-None-Match |
+| `GET …/api/issues/{num}` | read | → `{thread, events:[last 50], events_more:bool}`; `?after_seq=&n=` windows the log; `Cache-Control: private, no-cache` (revalidate every read — never a stale window, issue #259), `ETag: "v<version>"`, 304 on If-None-Match |
 | `GET …/api/issues/{num}/events?after_seq=&n=` | read | → `{events:[], more:bool}`; seq-window pagination, newest-last |
 | `PATCH …/api/issues/{num}` | title/state: author or triage; labels/assignees/milestone keys: triage | `{title?, state?, state_reason?, labels?, assignees?, milestone?}` → `{thread}`; unknown keys 400; no-op fields omitted; `milestone: null` clears (absent key = no change) |
 | `POST …/api/issues/{num}/comments` | read (authenticated) | `{body}` → `201 {event}` |
@@ -255,7 +255,10 @@ plain text (`404` "unknown issue", `409` "milestone has open issues"); every LIS
 ### Concurrency
 
 One header read + one header CAS + one event Create inline — sub-second bucket ops, the Seam 1 rule; nothing here is task-worthy
-except compaction (§9). GET-by-num is ref-class SWR keyed on the header version; list endpoints are no-store.
+except compaction (§9). GET-by-num revalidates on every read (`private, no-cache` keyed on the header version — issue #259
+retired the 60 s `stale-while-revalidate` window, which served pre-mutation threads across refreshes while the no-store
+events tail already showed the mutation); list endpoints are no-store. Neither class serves stale, so the thread summary
+and the events tail cannot disagree.
 
 ## 8. Reactions
 
@@ -379,6 +382,17 @@ handler holds no repo locks across store calls (13 §2 rule 4).
 
 - **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §11 page sketches read in the shipped idiom: `.jsx` route components, `useData` on Solid primitives, SSE refetch over the SDK readers. Routes, live behavior, and wire shapes are unchanged.
 - **Milestone sidebar minus-button + linked title (issue #148, 2026-09-05).** Set state hides the `+` dropdown and shows a triage-gated `−` button that clears via the existing `selectMilestone(null)` path (explicit-null PATCH, pinned key, busy guard — #143/#145 discipline unchanged); unset state keeps the `+` dropdown with its "No milestone" clear row. The milestone title links to the canonical per-milestone view (`/{o}/{r}/issues?milestone=<id>`, same href as the milestones-page title links from #119).
+- **Thread freshness + id→name render gating (issue #259, 2026-09-10).**
+  The thread GET's `private, max-age=0, stale-while-revalidate=60` window served pre-mutation bodies across refreshes
+  (reactions flip-flopping while the no-store events tail already showed the mutation) — threads are interactive,
+  mutation-heavy state, so the route now answers `private, no-cache` with the same version-keyed `ETag`
+  (`304` when unchanged, so revalidation stays cheap; refresh cost is still one conditional GET — no new round
+  trips, law 6). Mutation-triggered refetches already bypassed the HTTP cache (`withNoStore` + the #41 guarded
+  `invalidate`), so no client invalidation change was needed. Milestone/label id flashes came from the thread
+  (ids) racing the 30 s page-owned side-caches: the sidebar chip and milestone event rows now wait on the
+  `milestones:{o}/{r}` set (`milestoneDisplay` pending state + the honest generic "changed the milestone"
+  interim in `issueEventText`) instead of rendering bare ids; deleted ids keep the bare-id self-heal.
+  Label chips needed no gate (label names ride the thread payload; only the color dot resolves late).
 
 - Issue nums are `<num:06x>` hex keys (decimal on the wire) — numeric order from byte-order LIST scans, same idiom as P3's `012x` seqs.
 - `issues/index.json` carries cards for BOTH kinds; issue endpoints filter `kind: "issue"` — one index for one numbering space (03 lists PRs from the same object).

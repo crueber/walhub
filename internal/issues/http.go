@@ -15,7 +15,7 @@ import (
 
 // Wire conventions (07 §2, same as internal/api and internal/identity):
 // JSON success, plain-text errors, arrays [] never null, RFC 3339 UTC,
-// per-segment decoding, no-store or SWR+ETag per route, both lanes
+// per-segment decoding, no-store or no-cache+ETag per route, both lanes
 // everywhere. Anonymous-denied reads get a real 401 with
 // WWW-Authenticate: Bearer (never a 200 with an in-band error).
 
@@ -172,7 +172,15 @@ func matchETag(header, etag string) bool {
 }
 
 const (
-	ccSWR     = "private, max-age=0, stale-while-revalidate=60"
+	// ccThread is the thread-GET freshness contract (issue #259): a
+	// thread is interactive, mutation-heavy state (every mutation bumps
+	// Thread.Version under CAS), so the response revalidates on EVERY
+	// read instead of serving a stale-while-revalidate window — a
+	// refresh may never paint a pre-mutation body. The version-keyed
+	// ETag keeps the revalidation cheap (304 when unchanged), and the
+	// no-store events tail agrees with it (neither class serves stale,
+	// so summary and tail cannot disagree across a refresh).
+	ccThread  = "private, no-cache"
 	ccNoStore = "no-store"
 )
 
@@ -456,7 +464,7 @@ func (h *Handler) getIssue(w http.ResponseWriter, r *http.Request, owner, repo s
 		writeErr(w, err)
 		return
 	}
-	writeCached(w, r, ccSWR, "v"+strconv.Itoa(view.Thread.Version), http.StatusOK, view)
+	writeCached(w, r, ccThread, "v"+strconv.Itoa(view.Thread.Version), http.StatusOK, view)
 }
 
 func (h *Handler) listEvents(w http.ResponseWriter, r *http.Request, owner, repo string, num int) {

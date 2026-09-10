@@ -13,7 +13,7 @@ import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, patchCached, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { toggleLabel, labelColorMap } from "../lib/labels.js";
-import { milestoneTitle, milestonePatch } from "../lib/milestones.js";
+import { milestoneDisplay, milestonePatch } from "../lib/milestones.js";
 import LabelPicker, { LabelChip } from "../components/LabelPicker.jsx";
 import MilestonePicker from "../components/MilestonePicker.jsx";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
@@ -29,10 +29,12 @@ import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-event
 // System-row text comes from the shared honest-event lib (null = comment
 // body). Never asserts a close reason the event does not carry.
 // Milestone ids resolve to titles through the page-owned milestones
-// cache (same source as the sidebar display); deleted milestones fall
-// back to the bare id (02 §3.1 self-heal).
-function eventText(ev, milestones) {
-  return issueEventText(ev, milestones);
+// cache (same source as the sidebar display); the raw set rides through
+// (undefined until loaded) so milestone rows render the honest generic
+// interim instead of flashing bare ids (issue #259); deleted milestones
+// fall back to the bare id (02 §3.1 self-heal).
+function eventText(ev, msSet) {
+  return issueEventText(ev, msSet?.milestones);
 }
 
 export default function Issue() {
@@ -397,7 +399,7 @@ export default function Issue() {
               </Show>
               <ThreadTimeline
                 events={events()}
-                textFor={(ev) => eventText(ev, allMilestones())}
+                textFor={(ev) => eventText(ev, getMilestoneSet())}
                 summaryFor={(ev) => {
                   // The ONLY reaction surface (#113): one row per comment
                   // in/near where its reactions appear — summary chips plus
@@ -512,15 +514,24 @@ export default function Issue() {
                 </div>
                 <div class="flex flex-wrap gap-1">
                   <Show when={t().milestone} fallback={<span class="muted text-xs">none</span>}>
-                    {(m) => (
-                      <A
-                        class="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
-                        href={`/${ctx.full}/issues?milestone=${encodeURIComponent(m())}`}
-                        title={`issues on milestone ${milestoneTitle(allMilestones(), m())}`}
-                      >
-                        {milestoneTitle(allMilestones(), m())}
-                      </A>
-                    )}
+                    {(m) => {
+                      // Issue #259: the title waits on the page-owned
+                      // milestone set — a placeholder, never the bare id,
+                      // until the set settles (deleted ids still fall back
+                      // to the bare id via milestoneDisplay's unknown path).
+                      const d = () => milestoneDisplay(getMilestoneSet()?.milestones, m());
+                      return (
+                        <Show when={!d().pending} fallback={<span class="muted text-xs">…</span>}>
+                          <A
+                            class="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+                            href={`/${ctx.full}/issues?milestone=${encodeURIComponent(m())}`}
+                            title={`issues on milestone ${d().text}`}
+                          >
+                            {d().text}
+                          </A>
+                        </Show>
+                      );
+                    }}
                   </Show>
                 </div>
               </div>
