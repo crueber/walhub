@@ -22,6 +22,7 @@ export default function NotificationTray() {
     TTL.notifications,
   );
   let bellRef = null;
+  let root = null; // wraps bell + dropdown so outside clicks dismiss
   let cancelStream = null;
 
   onMount(() => {
@@ -42,7 +43,15 @@ export default function NotificationTray() {
   });
   onCleanup(() => {
     if (cancelStream) cancelStream();
+    document.removeEventListener("click", onDoc);
   });
+
+  // Outside-click close (issue #255, same gap as CloneMenu): a click
+  // outside the tray dismisses the dropdown. The bell trigger lives inside
+  // root, so its toggle never fights this handler. Esc keeps focus-return
+  // behavior via close() above.
+  const onDoc = (e) => { if (root && !root.contains(e.target)) setOpen(false); };
+  document.addEventListener("click", onDoc);
 
   const close = () => {
     setOpen(false);
@@ -63,7 +72,7 @@ export default function NotificationTray() {
   };
 
   return (
-    <div class="relative" onKeyDown={onKey}>
+    <div class="relative" ref={root} onKeyDown={onKey}>
       <button
         ref={bellRef}
         type="button"
