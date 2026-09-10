@@ -221,4 +221,6 @@ see §6).
   creates mirrors through the existing create-from-URL endpoint (mode
   toggle, shared presets/validation). Rationale: the data was already
   adjacent in both cases (listing payload, shell summary) — this change
-  only surfaces it, adding no fetches and no new endpoint.
+  only surfaces it, adding no client fetches (no per-row summary fetch)
+  and no new endpoint; the server adds bounded-parallel sidecar probes
+  (request count, no sequential depth — see 07_api.md).

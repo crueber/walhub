@@ -139,7 +139,7 @@ export function MirrorEmptyGuide(props) {
       </p>
       <p class="muted text-sm">
         <Show when={!m()?.last_synced_at} fallback={<>Last synced {m()?.last_synced_at} — {formatNextSync(m())}.</>}>
-          First sync in progress — {formatNextSync(m())}.
+          First sync pending — the scheduled sync will populate this repository.
         </Show>
       </p>
       <Show when={m()?.last_result && m()?.last_result !== "ok"}>

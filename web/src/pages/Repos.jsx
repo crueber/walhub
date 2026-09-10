@@ -57,7 +57,7 @@ export function RepoRow(props) {
         {full()}
       </A>
       <Show when={badge().show}>
-        <span class="pill mirror-badge" title={badge().title} aria-label={badge().title}>
+        <span class="pill mirror-badge" role="img" title={badge().title} aria-label={badge().title}>
           {badge().label}
         </span>
       </Show>
