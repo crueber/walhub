@@ -68,18 +68,6 @@ The host key auto-generates into the data volume, so it is stable across contain
 
 For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml) — the shipped stack builds from source; to run it from the published image instead, replace the `walhub` service's `build: .` with `image: ghcr.io/crueber/walhub:latest` (the rustfs service and the `WALHUB__STORE__*` env stay as they are). [`compose.standalone.yml`](compose.standalone.yml) is the same standalone shape as above, built from source instead of pulled.
 
-## What's in the box
-
-| Area | Where | Notes |
-|---|---|---|
-| Object store | `internal/store` | One `ObjectStore` contract (CAS, conditional GET, compose, leases): filesystem, S3 (hand-rolled SigV4), GCS (JSON API), memory; protobuf wire codec with golden fixtures |
-| WAL engine | `internal/wal` | The manifest CAS is the only commit point; sync levels, checkpoints, replay, group commit, remote reader, tasks |
-| Git layer | `internal/git` | `git` is a subprocess, always: ingest, receive/upload-pack, pkt-line, repack, bundles, repair |
-| HTTP | `internal/server` | chi router, hand-rolled middleware (CORS, h2c, compress), auth (none/token/oidc + hand-rolled JWKS), static serving, setup UI |
-| API | `internal/api` | Repo-scoped JSON + SSE envelope, two lanes (bearer / browser), `repos.js` SDK |
-| Subsystems | `internal/{bundle,events,maintain,policy,setup,config}` | bundle-uri scheduler, webhook bridge, maintainer loop, push policy rule language, bootstrap, config |
-| Frontend | `web/` | SolidJS SPA + Tailwind v4 (CSS-first) and a dependency-free `repos.js` SDK; vite + esbuild build both into `web/dist/` for embedding |
-
 ## v1 release requirements
 
 - [x] [git storage](internal/store)
