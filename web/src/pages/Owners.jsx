@@ -1,28 +1,39 @@
-// web/src/pages/Owners.jsx — route "/explore": intro + every owner with their repos.
+// web/src/pages/Owners.jsx — route "/explore": intro + the TOP 5 most active owners.
 // Owner/repo names come from the store-backed core listing endpoints
-// (GET /api/v1/owners?sort=activity&order=desc — 07 §8, Forgejo #283: the
-// server ranks ALL owners by the per-owner max-commit rollup before the
-// client's MAX_OWNERS slice, so an active owner past the name cap still
-// surfaces and first paint is already ordered; per-owner rows from GET
+// (GET /api/v1/owners/detailed?sort=activity&order=desc — 07 §8, Forgejo
+// #283: the server ranks ALL owners by the per-owner max-commit rollup
+// before the client's slice, so an active owner past any cap still surfaces
+// and first paint is already ordered; the rows carry each owner's
+// last_commit_time, so the page filters to active owners WITHOUT extra
+// GETs — Forgejo #295; per-owner rows from GET
 // /api/v1/owners/{owner}/repos/detailed?sort=activity&order=desc — 07 §8,
 // Forgejo #247: true most-recent-commit order server-side, stabilized
 // client-side by lib/owners.js orderByActivity). Owner SECTIONS keep the
 // client re-rank as fallback/enhancement (Forgejo #283): each section
 // reports its newest row time (lib/owners.js ownerActivity over the same
 // detailed doc it already fetched — zero extra GETs) and the page re-ranks
-// sections via orderOwnersByActivity as docs land, which also heals a stale
-// catalog rollup with fresher per-section times. Owners with no known
-// activity (fetch pending, unbackfilled, or no commits) sort last with a
-// deterministic name tiebreak; until every section reports, not-yet-loaded
-// owners keep that trailing name order — first paint is server-ordered and
-// only refines once, then settles.
-// The page adds per-section caps (lib/owners.js) and the intro card. Star
+// the shown sections via orderOwnersByActivity as docs land, which also
+// heals a stale catalog rollup with fresher per-section times. Sections
+// that never report (fetch pending) sort last with a deterministic name
+// tiebreak; until any section reports, not-yet-loaded owners keep the
+// server order — first paint is server-ordered and only refines once, then
+// settles. Inactive owners (null last_commit_time) never mount at all.
+// The page adds per-section caps (lib/owners.js) and the intro card, which
+// carries the instance owner total (the payload's uncapped row count —
+// never the page's slice). Star
 // counts ride the shared `social:{o}/{r}` cache entries (<StarCount>,
 // lib/stars.js) and last-active stamps render from the listing rows
 // (<ActivityStamp at/empty props> — no per-row commits fetch on this page;
 // see the component header). Rows share <RepoRow> with `/:owner`
 // (Repos.jsx) in a responsive two-column grid (one column on narrow
 // widths). No new deps (issues #117, #137, #142).
+//
+// NOTE (Forgejo #295): there is deliberately NO instance repo total on this
+// page — no endpoint serves one (owners/detailed rows carry no repo counts
+// and walking every owner's listing would be the N-fetch antipattern this
+// page avoids). That count needs a backend rail (e.g. repo_count on the
+// owners/detailed rows); until then the page states the owner total only
+// rather than printing a capped sum as a total.
 
 import repos from "../../sdk/src/index.js";
 import { For, Show, createEffect, createSignal } from "solid-js";
@@ -32,6 +43,7 @@ import { RepoRow } from "./Repos.jsx";
 import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
+  activeOwnerNames,
   hasKnownActivity,
   orderByActivity,
   orderOwnersByActivity,
@@ -95,9 +107,13 @@ function OwnerSection(props) {
 }
 
 export default function Owners() {
-  // Server-ordered owner names (#283 rollup — correct past the cap and on
-  // first paint); the client re-rank below refines as section docs land.
-  const [getOwners] = useData("owners", () => repos.owners.list({ sort: "activity", order: "desc" }));
+  // Server-ranked per-owner activity rows (#283 rollup — correct past any
+  // cap and on first paint); the client re-rank below refines the shown
+  // sections as their docs land. The payload's row count is the instance
+  // owner total (uncapped — totals never derive from the page's slice).
+  const [getOwners] = useData("owners", () =>
+    repos.owners.listDetailed({ sort: "activity", order: "desc" }),
+  );
   const [getMe] = useData("me", () => repos.me().catch(() => null));
   // Per-owner newest-commit times reported by OwnerSections as their
   // detailed docs land (Forgejo #283). Missing key = fetch pending;
@@ -134,29 +150,51 @@ export default function Owners() {
             What is walhub? →
           </A>
         </p>
+        <Show when={getOwners()}>
+          {(doc) => {
+            const rows = doc().owners;
+            const total = Array.isArray(rows) ? rows.length : 0;
+            return (
+              <p class="muted mt-2 text-sm">
+                Home to {total} owner{total === 1 ? "" : "s"} — showing the most active below.
+              </p>
+            );
+          }}
+        </Show>
       </section>
       <Show when={getOwners()} fallback={<p class="muted">loading…</p>}>
-        {(owners) => {
-          // Server order first: until a section reports a known time there is
-          // nothing to re-rank with, and re-sorting an all-unknown map would
-          // fall back to name order — discarding the server's activity
-          // ranking before the MAX_OWNERS slice (Forgejo #283 follow-up).
+        {(doc) => {
+          const payload = doc();
+          const rows = Array.isArray(payload.owners) ? payload.owners : [];
+          // Active-only, server order first (#295 over the #283 rows):
+          // owners with no known commit time never reach the slice. Until
+          // a section reports a known time there is nothing to re-rank
+          // with, and re-sorting an all-unknown map would fall back to
+          // name order — discarding the server's activity ranking before
+          // the slice (Forgejo #283 follow-up).
+          const ranked = activeOwnerNames(rows);
           const activity = getActivity();
           const ordered = hasKnownActivity(activity)
-            ? orderOwnersByActivity(owners(), activity)
-            : owners();
+            ? orderOwnersByActivity(ranked, activity)
+            : ranked;
           const { shown, extra } = pageSlice(ordered, MAX_OWNERS);
           return (
             <Show
               when={shown.length > 0}
-              fallback={<p class="muted">no repositories yet — push one, or use the API to create it</p>}
+              fallback={
+                rows.length > 0 ? (
+                  <p class="muted">no commit activity yet — push a commit and the active owners land here</p>
+                ) : (
+                  <p class="muted">no repositories yet — push one, or use the API to create it</p>
+                )
+              }
             >
               <div class="divide-y divide-zinc-200 dark:divide-zinc-800">
                 <For each={shown}>{(o) => <OwnerSection owner={o} onActivity={reportActivity} />}</For>
               </div>
               <Show when={extra > 0}>
                 <p class="muted mt-4 text-sm">
-                  showing most active {shown.length} of {owners().length} owners
+                  showing top {shown.length} of {ranked.length} active owners
                 </p>
               </Show>
             </Show>

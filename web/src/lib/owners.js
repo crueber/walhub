@@ -2,10 +2,16 @@
 // Headless-testable: no Solid, no DOM — importable in Node.
 
 /**
- * Max owners rendered on `/`. One `owners.detailed(owner)` GET fans out per
- * shown owner, so the cap bounds the page to 1 + MAX_OWNERS store reads.
+ * Max owner SECTIONS rendered on `/explore` (Forgejo #295: the top 5 most
+ * active owners — not the 50 name-sorted sections the page used to render).
+ * One `owners.detailed(owner)` GET fans out per shown owner, so the cap
+ * bounds the page to 1 + MAX_OWNERS store reads (a cold load drops from ~51
+ * to ~6). The section list comes server-ranked from
+ * `GET /api/v1/owners/detailed?sort=activity&order=desc` (#283 rollup) and
+ * is filtered to active owners (see activeOwnerNames) BEFORE this slice, so
+ * the cap keeps the server's top-N.
  */
-export const MAX_OWNERS = 50;
+export const MAX_OWNERS = 5;
 
 /**
  * Max repos rendered inside one owner's section. Overflow folds behind a
@@ -141,6 +147,28 @@ export function orderOwnersByActivity(names, activityByOwner) {
 export function hasKnownActivity(activityByOwner) {
   if (!activityByOwner || typeof activityByOwner !== "object") return false;
   return Object.values(activityByOwner).some((t) => typeof t === "string");
+}
+
+/**
+ * activeOwnerNames(detailRows) → the names of owners with known commit
+ * activity, in the caller's (server-ranked) order (Forgejo #295 over the
+ * #283 `owners/detailed` rows).
+ *
+ * "Active" = the row carries a `last_commit_time` string (the server's
+ * per-owner max-commit rollup; null = the owner has no commits). Owners
+ * without activity are dropped — they are the opposite of active and never
+ * appear in the top-5 page. Non-array input behaves as an empty list; rows
+ * without a string name are skipped.
+ */
+export function activeOwnerNames(detailRows) {
+  const rows = Array.isArray(detailRows) ? detailRows : [];
+  const out = [];
+  for (const r of rows) {
+    if (!r || typeof r.name !== "string") continue;
+    if (typeof r.last_commit_time !== "string") continue;
+    out.push(r.name);
+  }
+  return out;
 }
 
 /**
