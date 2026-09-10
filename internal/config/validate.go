@@ -26,6 +26,7 @@ func Validate(c *Config) (warnings []string, errs []error) {
 	errs = append(errs, checkPaths(c)...)
 	errs = append(errs, checkSSH(c)...)
 	errs = append(errs, checkImport(c)...)
+	errs = append(errs, checkTreeLog(c)...)
 	return warnings, errs
 }
 
@@ -398,4 +399,14 @@ func checkImport(c *Config) []error {
 		}
 	}
 	return errs
+}
+
+// checkTreeLog validates the additive server.max_tree_log bound (issue
+// #301): the per-entry tree-date walk cap, mirroring the [import] bounds
+// pattern (positive bound, fail closed on garbage).
+func checkTreeLog(c *Config) []error {
+	if c.Server.MaxTreeLog < 1 {
+		return []error{fmt.Errorf("server.max_tree_log must be >= 1 (got %d)", c.Server.MaxTreeLog)}
+	}
+	return nil
 }

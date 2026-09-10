@@ -9,7 +9,7 @@
  *   author_date: string, committer: string, commit_date: string, subject: string,
  *   body: string, trailers: {key: string, value: string}[]}} Commit
  *
- * @typedef {{name: string, type: "blob"|"tree"|"commit", mode: string, size: number|null, sha: string}} TreeEntry
+  * @typedef {{name: string, type: "blob"|"tree"|"commit", mode: string, size: number|null, sha: string, commit_sha?: string, commit_time?: string}} TreeEntry
  *
  * @typedef {{ref: string, sha: string, path: string, kind: "branch"|"tag"|"commit"}} Resolve
  *

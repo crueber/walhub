@@ -205,6 +205,7 @@ export const FIELDS = [
   { key: "server.request_timeout", type: "duration", ex: "1h", advanced: true },
   { key: "server.drain_timeout", type: "duration", ex: "30s", advanced: true },
   { key: "server.max_push_bytes", type: "size", ex: "2GiB" },
+  { key: "server.max_tree_log", type: "int", min: 1, ex: "200", advanced: true, note: "per-entry tree-date walk cap (commits walked per listing)" },
   { key: "server.roles", type: "list", enum: ["serve", "maintain", "events"], ex: "serve, maintain" },
   { key: "server.auto_create_on_push", type: "bool", ex: "true" },
   { key: "server.accel_redirect", type: "bool", ex: "true", advanced: true, note: "only honoured behind an edge that announces accel-redirect" },

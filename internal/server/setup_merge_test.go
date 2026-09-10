@@ -412,6 +412,34 @@ func TestSetupImportKeysRoundTrip(t *testing.T) {
 	}
 }
 
+// Issue #301: the server.max_tree_log FIELDS example validates on
+// POST /api/v1/setup/test and round-trips through PUT /api/v1/setup with
+// effect (the per-entry tree-date walk cap).
+func TestSetupTreeLogKeyRoundTrip(t *testing.T) {
+	dataDir := t.TempDir()
+	s, _ := setupMergeServer(t, dataDir)
+	s.boot.Mode = "normal"
+
+	body, _ := json.Marshal(map[string]any{"overrides": map[string]any{"server.max_tree_log": "200"}})
+	req := httptest.NewRequest("POST", "/api/v1/setup/test", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+	s.setupTest(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup/test server.max_tree_log = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	payload, _ := json.Marshal(map[string]any{"overrides": map[string]any{"server.max_tree_log": 50}})
+	if code, resp := putSetup(t, s, string(payload)); code != http.StatusOK {
+		t.Fatalf("put server.max_tree_log = %d %v", code, resp)
+	}
+	after, err := config.LoadSetupBase(dataDir, s.boot.ConfigPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Server.MaxTreeLog != 50 {
+		t.Fatalf("max_tree_log not persisted: %d", after.Server.MaxTreeLog)
+	}
+}
+
 // The setup surface is open at ANY time while auth mode is "none" — first
 // run, normal running mode, and setup-only mode alike — with no credential.
 func TestSetupOpenWheneverAuthNone(t *testing.T) {

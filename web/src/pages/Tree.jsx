@@ -7,7 +7,6 @@ import { useResolved, useData } from "../lib/data.js";
 import { renderBody } from "../lib/render-md.js";
 import { docCandidates, defaultDocFile, docFetchArgs, docSlug, docFromHash } from "../lib/doctabs.js";
 import { fmtSize, fmtMode, fmtSizeParts } from "../lib/format.js";
-import { latestActivity } from "../lib/activity.js";
 import DateTime from "../components/DateTime.jsx";
 import { useRepo, shortRef } from "./Repo.jsx";
 import { EmptyRepoGuide, DegradedNotice } from "../components/EmptyRepoGuide.jsx";
@@ -199,29 +198,12 @@ export default function Tree() {
   });
   onCleanup(() => ctx.setViewed(null));
 
-  // Issue #211 last-modified column: git trees carry no mtime, and the tree
-  // payload carries no per-entry stamp (TreeResult.commit is never populated
-  // server-side), so per-file last-touch would cost one `log -1 -- <path>`
-  // per row (N+1, unbounded) — deliberately not done. Every row instead
-  // shares the containing commit's stamp: one extra `commits?n=1` at the
-  // resolved sha (immutable → Infinity cache, shared across directory
-  // navigations at the same commit; the tree IS the state at that commit, so
-  // every entry is current as of it). It never blocks first paint: rows
-  // render from the tree payload and the date cells ("" until this lands)
-  // fill in when it arrives. No backend change: the endpoint already exists.
-  const [getHead] = useData(
-    () => {
-      const t = getTree();
-      return t && t.sha && !t.empty && !t.degraded ? `sha:${t.sha}:commits1` : "tree:date:none";
-    },
-    () => {
-      const t = getTree();
-      if (!t || !t.sha || t.empty || t.degraded) return Promise.resolve(null);
-      return ctx.repoClient.commits({ ref: t.sha, n: 1 });
-    },
-    Infinity,
-  );
-  const treeDate = () => latestActivity(getHead());
+  // Issue #301 per-entry last-commit column: every row renders its own
+  // commit_time from the tree payload (one batched server-side log walk per
+  // listing, capped by server.max_tree_log). Entries with no date
+  // (submodules, capped walks) show a muted em-dash — never the repo HEAD
+  // date as a stand-in (the old treeDate()-for-all-rows proxy). No extra
+  // fetch: the dates ride the tree payload itself.
 
   return (
     <div class="tree-page">
@@ -275,7 +257,7 @@ export default function Tree() {
                               <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${ctx.full}/blob/${treeRest()}/${e.name}`}>{e.name}</A>
                             </Show>
                           </td>
-                          <td class="entry-date muted text-right text-xs"><DateTime value={treeDate()} /></td>
+                          <td class="entry-date muted text-right text-xs"><DateTime value={e.commit_time} fallback="—" /></td>
                         </tr>
                         );
                       }}

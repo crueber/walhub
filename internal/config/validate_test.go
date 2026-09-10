@@ -280,6 +280,20 @@ func TestValidateMalformedListen(t *testing.T) {
 	}
 }
 
+// server.max_tree_log (issue #301): the default validates clean; a
+// non-positive bound fails closed, mirroring the [import] bounds pattern.
+func TestValidateTreeLog(t *testing.T) {
+	if _, errs := Validate(Defaults()); len(errs) != 0 {
+		t.Fatalf("tree-log default must validate clean: %v", errs)
+	}
+	for _, bad := range []int{0, -5} {
+		c := Defaults()
+		c.Server.MaxTreeLog = bad
+		_, errs := Validate(c)
+		errsContain(t, errs, "server.max_tree_log must be >= 1")
+	}
+}
+
 // [import] section: defaults pass; bounds and allowlist shape fail closed.
 func TestValidateImport(t *testing.T) {
 	if _, errs := Validate(Defaults()); len(errs) != 0 {
