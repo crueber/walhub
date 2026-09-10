@@ -738,3 +738,16 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   (`index-pack --stdin --keep --rev-index --threads=0 [--fsck-objects]`,
   `thin=false` — the pack is complete), and composition publishes it as a
   PUSH entry (txn create with `NewPeeled`) through the unchanged funnel.
+- **Per-entry tree-date walk argv (Forgejo #301, 2026-09-10, recipe owned by
+  `internal/api` — normative in 07_api.md §9.4, registered here per the
+  exact-argv law):**
+  `git log <sha> --format=WALHUBTREE\ %H\ %cI --name-status --no-renames --no-color --first-parent -z --max-count=<server.max_tree_log> [-- <dir>]`
+  (run in the serving copy, request ctx, no extra pool — it rides the
+  per-repo HTTP semaphore like every other §9 recipe). One invocation per
+  tree listing, newest-first; `--first-parent` attributes a merge's whole
+  merged diff; `--no-renames` lands renames as delete+add (no pair
+  parsing); `-z` keeps path bytes exact (no C-quote misses). Output shape
+  (verified byte-for-byte): `MARK <sha> <date>` NUL, `\n`, alternating
+  1-char status / path NUL records per commit. Bound: `server.max_tree_log`
+  (default 200, validated `>= 1`); failure degrades to undated entries,
+  never a tree failure.

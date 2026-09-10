@@ -578,15 +578,30 @@ by `path` segments via `git ls-tree -z <tree> <seg>` per segment or a single
 ```text
 git ls-tree -l -z <tree-sha>            # entries of THAT directory
 git log -1 --format=<FMT_COMMIT> --no-color <commit-sha> -- <path>   # commit? newest touching path
+git log <commit-sha> --format=WALHUBTREE\ %H\ %cI --name-status --no-renames --no-color --first-parent -z --max-count=<server.max_tree_log> [-- <dir>]   # per-entry dates (issue #301)
 ```
 
 - `-z` output lines: `<mode> SP <type> SP <sha> SP <size> TAB <name>` NUL-terminated. `type` ∈
   `blob|tree|commit` (submodule); `size` is `-` for trees/submodules → emit `-1`.
 - Sort in Go: directories first, then byte order by name (NOT git's order).
+- Per-entry dates (issue #301): ONE batched walk per listing (never one
+  subprocess per row — law 6), newest-first, first-parent (a merge
+  attributes its whole merged diff), `--no-renames` (a rename lands as
+  delete+add, so the new path still attributes with no rename-pair
+  parsing), `-z` for exact path bytes. Each direct child of the listing
+  gets the newest commit touching its path (`commit_sha` + `commit_time`
+  verbatim `%cI`, both `omitempty`); nested paths attribute their direct
+  child; submodule entries (`type: commit`) stay dateless; entries
+  untouched within the capped walk stay dateless (neutral UI fallback, not
+  the HEAD stamp). A failed walk leaves every entry undated and never
+  fails the tree; an empty or all-submodule listing skips the walk. The
+  dates derive from the same resolved sha, so the payload stays sha-pure
+  (ETag/SWR contract unchanged) and the walk adds zero store round trips.
+  Cap: `server.max_tree_log` (default 200, `>= 1`, validated fail-closed).
 - `readme`: the first blob named `readme` with optional extension `.md|.markdown|.txt|.rst`,
   case-insensitive, in the sorted order above; contents fetched via `git cat-file blob <sha>`, emitted
   only when valid UTF-8 (`readme: {name, contents}` omitted otherwise).
-- Response: `{ref, sha, path, entries:[{name,type,mode,size,sha}], commit?, readme?}`; `commit` present
+- Response: `{ref, sha, path, entries:[{name,type,mode,size,sha,commit_sha?,commit_time?}], commit?, readme?}`; `commit` present
   only when `path` is non-empty; a full-sha addressed rev (the rev portion of the tail) → immutable class; `404` if the target is not a tree.
 - `mode` is the 6-char git mode string verbatim (`100644`, `040000` for trees as git prints, `160000`).
 
@@ -1011,3 +1026,20 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   past the MAX_OWNERS cap (unmounted sections never report) and first paint
   lies; the server ranks over ALL owners before the slice while the client
   rank stays as the fallback for missing/stale values (12_web_ui.md).
+- **FIXED (issue #301) — per-entry last-commit dates on the tree payload.**
+  Every tree row used to show the repo HEAD date (the UI stamped one
+  `commits?n=1` value onto all rows). `TreeEntry` gains `commit_sha` +
+  `commit_time` (both `omitempty` — additive JSON per 14 §14.12, SDK
+  `TreeEntry` typedef extended, no route change: the tree keeps its single
+  template on both lanes), computed by ONE batched walk per listing
+  (`treeLogArgv`, §9.4 — never N per-row subprocesses, the rejected
+  alternative). The walk is `--max-count` capped by the new
+  `server.max_tree_log` key (default 200, `>= 1`, fail-closed — the
+  [import] bounds pattern); past the cap and for submodules the fields
+  stay absent and the UI renders the #133 `DateTime` with an em-dash
+  fallback, never the HEAD date. The dates derive from the resolved sha,
+  so the payload stays sha-pure (ETag/SWR §§4/9.2 unchanged) and the walk
+  adds zero store round trips (local git only). Fail-open: a failed walk
+  never fails the tree. Rationale: GitHub-truth per-row dates without
+  breaking the hot-path cost model — one bounded local invocation, parse
+  stops at full coverage.

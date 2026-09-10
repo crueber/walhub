@@ -58,7 +58,8 @@ type Server struct {
 	RequestTimeout        Duration  `toml:"request_timeout"`
 	DrainTimeout          Duration  `toml:"drain_timeout"`
 	MaxPushBytes          ByteSize  `toml:"max_push_bytes"`
-	Roles                 []string  `toml:"roles"` // serve | maintain | events; empty = all
+	MaxTreeLog            int       `toml:"max_tree_log"` // per-entry tree-date walk cap (§9.4; default 200)
+	Roles                 []string  `toml:"roles"`        // serve | maintain | events; empty = all
 	AutoCreateOnPush      bool      `toml:"auto_create_on_push"`
 	AccelRedirect         bool      `toml:"accel_redirect"`
 	PublicURL             string    `toml:"public_url"`
@@ -313,6 +314,7 @@ func Defaults() *Config {
 			RequestTimeout:        Duration(time.Hour),
 			DrainTimeout:          Duration(20 * time.Second),
 			MaxPushBytes:          64 << 30,
+			MaxTreeLog:            200,
 			Auth: Auth{
 				Mode:           "none",
 				AnonymousRead:  true,

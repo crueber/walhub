@@ -52,6 +52,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.request_timeout` | `"1h"` | documented cap |
 | `server.drain_timeout` | `"20s"` | phase-2 drain: in-flight requests finish; new work refused |
 | `server.max_push_bytes` | `"64GiB"` | largest accepted push |
+| `server.max_tree_log` | `200` | per-entry tree-date walk cap: commits walked per tree listing (07_api.md §9.4, issue #301) |
 | `server.roles` | `[]` | `serve` / `maintain` (implies compact+bundle) / `events`; empty = all |
 | `server.auto_create_on_push` | `false` | create a repo on first push † |
 | `server.accel_redirect` | `false` | answer byte requests with X-Accel-Redirect (edge-fronted hosts only) |

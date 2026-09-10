@@ -230,6 +230,121 @@ func sortTreeEntries(entries []TreeEntry) {
 	}
 }
 
+// --- per-entry last-commit dates (§9.4, issue #301) -----------------------------------
+
+// treeLogMarker prefixes every commit header line of the tree-dates walk so
+// headers split unambiguously from the 1-char status records. The sha and
+// %cI date contain no NUL/space, so a header is exactly three
+// space-separated fields.
+const treeLogMarker = "WALHUBTREE"
+
+// defaultMaxTreeLog bounds the tree-dates walk when the config carries no
+// positive value (zero-value walView in tests, unset key). Mirrors the
+// [import] bounds pattern: one cap, validated >= 1, fail-open past it.
+const defaultMaxTreeLog = 200
+
+// treeLogArgv is the normative per-entry-dates walk (pinned argv — law 2):
+// one `git log` per tree listing, newest-first, first-parent history (a merge
+// attributes its whole merged diff, the same semantic as the merge-commit
+// row on the commits page), renames off (a rename lands as delete+add, so
+// the new path still attributes — no rename-pair parsing), -z for exact
+// path bytes (no C-quoting misses), --max-count capping the walk. <sha> is
+// the resolved commit; dir is the listing directory ("" = root, no pathspec).
+func treeLogArgv(sha, dir string, cap int) []string {
+	argv := []string{"log", "--format=" + treeLogMarker + " %H %cI",
+		"--name-status", "--no-renames", "--no-color", "--first-parent",
+		"-z", "--max-count=" + itoa(cap), sha}
+	if dir != "" {
+		argv = append(argv, "--", dir)
+	}
+	return argv
+}
+
+// assignTreeCommitMeta stamps each dateable entry (everything but submodules,
+// type "commit" — gitlinks carry no history of their own) with the newest
+// commit touching its path, parsed from one treeLogArgv walk's stdout.
+// Newest-first order makes the first touch per direct child win; parsing
+// stops once every dateable entry is assigned (the walk itself is bounded by
+// --max-count). Entries untouched within the walk keep no date — the UI
+// renders the neutral fallback, never the HEAD stamp. Malformed input
+// degrades to unassigned, never to a wrong date.
+func assignTreeCommitMeta(entries []TreeEntry, dir string, out []byte) {
+	pending := 0
+	idx := make(map[string]int, len(entries))
+	for i := range entries {
+		if entries[i].Type == "commit" {
+			continue // submodules are dateless by design
+		}
+		idx[entries[i].Name] = i
+		pending++
+	}
+	if pending == 0 || len(out) == 0 {
+		return
+	}
+	prefix := ""
+	if dir != "" {
+		prefix = dir + "/"
+	}
+	// -z shape (verified byte-for-byte against real git): per commit,
+	// "MARK <sha> <date>" NUL, "\n" (the --format line ending), then
+	// alternating 1-char status and path records, each NUL-terminated; the
+	// next commit's MARK follows the previous path's NUL directly.
+	// Collapse the header's "\x00\n" first: NUL never occurs inside a path,
+	// so this only touches separators, and the "\n" would otherwise glue
+	// onto the first status record ("\nM"). Positional parsing (not content
+	// sniffing) keeps 1-char paths unambiguous.
+	norm := strings.ReplaceAll(string(out), "\x00\n", "\x00")
+	var sha, date string
+	haveCommit := false
+	expectPath := false
+	for _, f := range strings.Split(norm, "\x00") {
+		// Headers split positionally: a MARK record is a commit header only
+		// in status position (!expectPath). In path position the record IS
+		// the touched path — even one literally named "WALHUBTREE <sha>
+		// <date>" (a valid-looking header there must not clobber haveCommit
+		// or poison later attributions; --no-renames emits no rename pairs,
+		// so a status is always followed by exactly one path).
+		if !expectPath && strings.HasPrefix(f, treeLogMarker+" ") {
+			parts := strings.Split(f, " ")
+			if len(parts) == 3 && parts[1] != "" && !parseRFC3339(parts[2]).IsZero() {
+				sha, date, haveCommit = parts[1], parts[2], true
+			} else {
+				haveCommit = false
+			}
+			expectPath = false
+			continue
+		}
+		if !haveCommit || f == "" {
+			continue
+		}
+		if !expectPath {
+			if len(f) == 1 && f != "\n" {
+				expectPath = true // single-letter status; next record is its path
+			}
+			continue
+		}
+		expectPath = false
+		rest := f
+		if prefix != "" {
+			var ok bool
+			rest, ok = strings.CutPrefix(f, prefix)
+			if !ok {
+				continue // outside the listing dir (defensive: pathspec filters)
+			}
+		}
+		name := rest
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			name = rest[:i] // nested path attributes its direct child
+		}
+		if j, ok := idx[name]; ok && entries[j].CommitSHA == "" {
+			entries[j].CommitSHA, entries[j].CommitTime = sha, date
+			if pending--; pending == 0 {
+				return
+			}
+		}
+	}
+}
+
 // --- numstat -z parsing (§9.8) -------------------------------------------------------
 
 // parseNumstatPatch splits `git show --format= --no-color -M

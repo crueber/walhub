@@ -321,13 +321,18 @@ type RefQuery struct {
 	N      int    // page size (default 100, max 1000)
 }
 
-// TreeEntry is one ls-tree row.
+// TreeEntry is one ls-tree row. CommitSHA/CommitTime carry the newest commit
+// touching the entry's path (07_api.md §9.4: one batched log walk per tree
+// listing); both are omitted when unknown (submodules, capped walks, empty).
+// CommitTime is the verbatim git %cI value (RFC 3339).
 type TreeEntry struct {
-	Name string `json:"name"`
-	Type string `json:"type"` // blob|tree|commit
-	Mode string `json:"mode"`
-	Size int64  `json:"size"` // -1 for trees/submodules
-	SHA  string `json:"sha"`
+	Name       string `json:"name"`
+	Type       string `json:"type"` // blob|tree|commit
+	Mode       string `json:"mode"`
+	Size       int64  `json:"size"` // -1 for trees/submodules
+	SHA        string `json:"sha"`
+	CommitSHA  string `json:"commit_sha,omitempty"`
+	CommitTime string `json:"commit_time,omitempty"`
 }
 
 // Readme is the repo landing readme (§9.4): emitted only when valid UTF-8.

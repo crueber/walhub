@@ -104,6 +104,18 @@ type walView struct {
 	engine WalEngine
 	layer  *git.Layer // ref-snapshot machinery over the serving copies
 	binary string     // git.binary
+	// maxTreeLog caps the per-entry-dates log walk (§9.4, issue #301);
+	// <= 0 means the default (defaultMaxTreeLog).
+	maxTreeLog int
+}
+
+// treeLogCap resolves the walk bound: explicit config wins, non-positive
+// falls back to the default (keeps zero-value walViews in tests working).
+func (v *walView) treeLogCap() int {
+	if v.maxTreeLog > 0 {
+		return v.maxTreeLog
+	}
+	return defaultMaxTreeLog
 }
 
 var _ RepoView = (*walView)(nil)
@@ -392,11 +404,43 @@ func (v *walView) Tree(ctx context.Context, id git.RepoId, sha, path string) (Tr
 	}
 	entries := parseLsTree(out)
 	sortTreeEntries(entries)
+	v.stampTreeDates(ctx, repo, sha, path, entries)
 	tr := TreeResult{Entries: entries, Path: path}
 	if path != "" {
 		tr.Readme = v.readmeOf(ctx, repo, entries)
 	}
 	return tr, nil
+}
+
+// stampTreeDates runs the ONE batched per-entry-dates walk (§9.4, issue
+// #301) and stamps the entries in place. Best-effort by design: a failed
+// walk, an empty listing, or an all-submodule listing leaves the entries
+// undated (the UI's neutral fallback) and never fails the tree — the dates
+// are display metadata, and the payload stays a pure function of the
+// resolved sha (ETag/SWR contract unchanged).
+//
+// ### Concurrency
+//   - Hazard: N concurrent tree renders each spawn a log walk; an unbounded
+//     walk on a huge history stalls the render.
+//   - Avoidance: the walk is bounded by --max-count (server.max_tree_log,
+//     default 200) and runs no locks — gitCmd is lock-free; the entries
+//     slice is request-local.
+func (v *walView) stampTreeDates(ctx context.Context, repo *git.LocalRepo, sha, path string, entries []TreeEntry) {
+	dateable := false
+	for i := range entries {
+		if entries[i].Type != "commit" {
+			dateable = true
+			break
+		}
+	}
+	if !dateable {
+		return
+	}
+	out, err := v.gitCmd(ctx, repo, treeLogArgv(sha, path, v.treeLogCap())...)
+	if err != nil {
+		return //nolint:nilerr // dates degrade to unassigned, never a tree failure
+	}
+	assignTreeCommitMeta(entries, path, out)
 }
 
 func (v *walView) Blob(ctx context.Context, id git.RepoId, sha, path string, raw bool) (BlobResult, error) {
@@ -726,10 +770,14 @@ func NewEnv(st store.ObjectStore, repos RepoRegistry, cfg *config.Config, engine
 	e.Ready()
 	if engine != nil {
 		binary := "git"
-		if cfg != nil && cfg.Git.Binary != "" {
-			binary = cfg.Git.Binary
+		maxTreeLog := 0
+		if cfg != nil {
+			if cfg.Git.Binary != "" {
+				binary = cfg.Git.Binary
+			}
+			maxTreeLog = cfg.Server.MaxTreeLog
 		}
-		e.Repo = &walView{engine: engine, layer: git.NewLayer(), binary: binary}
+		e.Repo = &walView{engine: engine, layer: git.NewLayer(), binary: binary, maxTreeLog: maxTreeLog}
 	}
 	return e
 }
