@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/releases"
@@ -25,6 +26,7 @@ import (
 // comes from releases.max_asset_bytes (0 = the 2 GiB default inside the
 // package) and the spool stages uploads under cacheDir (LFS §6.2 pattern).
 func newReleasesService(st store.ObjectStore, ident *identity.Service, reg *wal.Registry, gitBinary, cacheDir string, maxAssetBytes int64) (*releases.Service, *releases.Handler) {
+	api.RegisterExposed(releases.ExposedTemplates...)
 	svc := releases.New(st, ident)
 	svc.Git = releases.NewSubprocessGit(gitBinary)
 	svc.Dirs = &pullsDirs{reg: reg}

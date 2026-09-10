@@ -9,6 +9,7 @@ package main
 import (
 	"net/http"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/review"
@@ -22,6 +23,7 @@ import (
 // P8 backfill via the timeline). Suggest's team expansion rides
 // identity's ExpandGroups; its commit authors ride pulls' HeadAuthors.
 func newReviewService(st store.ObjectStore, ident *identity.Service, pullsSvc *pulls.Service) (*review.Service, *review.Handler) {
+	api.RegisterExposed(review.ExposedTemplates...)
 	svc := review.New(st, ident)
 	if ident != nil {
 		svc.Expander = ident

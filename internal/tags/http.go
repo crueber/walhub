@@ -18,6 +18,15 @@ import (
 // Anonymous-denied writes get a real 401 with WWW-Authenticate: Bearer
 // (never a 200 with an in-band error).
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). Pinned
+// by TestExposedTemplatesExact + TestExposedCoversRoutes (no phantoms,
+// nothing missing).
+var ExposedTemplates = []string{
+	"/{owner}/{repo}/api/tags",
+}
+
 // Handler is the Seam 1 surface: POST /{o}/{r}/api/tags (and the
 // /api-browser twin). Composition chains it in front of the core api mux:
 // Handle reports false for non-tags paths so the core mux answers.

@@ -37,11 +37,16 @@ import (
 
 // ExposedTemplates lists the discovery endpoints[] entries this
 // surface serves (14 §14.12 lane rule) — registered from composition
-// via api.RegisterExposed in the same change (law 12). Only the
-// top-level twin is exposed (repo-lane feature routes stay out of
-// discovery, the 01/02/03/C2 rule).
+// via api.RegisterExposed in the same change (law 12). The top-level
+// create-from-URL twin uses its literal /api/v1 spelling; the repo lanes
+// use the /{owner}/{repo}/api spelling (Forgejo #272: repo-lane mirror
+// routes are real JSON API routes, so they are discovery entries too).
+// Pinned by TestExposedTemplatesExact + TestExposedCoversRoutes (no
+// phantoms, nothing missing).
 var ExposedTemplates = []string{
 	"/api/v1/repos/mirrors",
+	"/{owner}/{repo}/api/mirror",
+	"/{owner}/{repo}/api/mirror/sync",
 }
 
 // Handler is the Seam 1 surface. Composition chains it in front of

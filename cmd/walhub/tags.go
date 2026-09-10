@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/server"
 	"git.packden.us/crueber/walhub/internal/server/auth"
@@ -29,6 +30,7 @@ import (
 // newTagsService builds the tags service over st/ident. Git, Dirs, and Refs
 // are wired by the caller (serveHTTP).
 func newTagsService(st store.ObjectStore, ident *identity.Service, reg *wal.Registry, gitBinary string) (*tags.Service, *tags.Handler) {
+	api.RegisterExposed(tags.ExposedTemplates...)
 	svc := tags.New(st, ident)
 	svc.Git = tags.NewSubprocessGit(gitBinary)
 	svc.Dirs = &pullsDirs{reg: reg}

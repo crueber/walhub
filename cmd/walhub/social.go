@@ -9,6 +9,7 @@ package main
 import (
 	"net/http"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/server"
@@ -19,6 +20,7 @@ import (
 
 // newSocialService builds the social service over st/ident.
 func newSocialService(st store.ObjectStore, ident *identity.Service) (*social.Service, *social.Handler) {
+	api.RegisterExposed(social.ExposedTemplates...)
 	svc := social.New(st, ident)
 	h := &social.Handler{Svc: svc}
 	return svc, h

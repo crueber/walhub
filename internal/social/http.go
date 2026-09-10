@@ -16,6 +16,20 @@ import (
 // per-segment decoding, SWR+ETag on JSON GETs, both lanes everywhere.
 // Anonymous-denied reads get a real 401 with WWW-Authenticate: Bearer.
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). One entry
+// per distinct path shape: methods share a template (PUT+DELETE on star
+// is one entry). Top-level starred twins use their literal /api/v1
+// spelling. Pinned by TestExposedTemplatesExact +
+// TestExposedCoversRoutes (no phantoms, nothing missing).
+var ExposedTemplates = []string{
+	"/{owner}/{repo}/api/star",
+	"/{owner}/{repo}/api/social",
+	"/api/v1/me/starred",
+	"/api/v1/users/{principal}/starred",
+}
+
 // Handler is the Seam 1 surface: star/watch-adjacent social endpoints on
 // both lanes plus the top-level starred twins. Composition chains it in
 // front of the core api mux: Handle reports false for non-social paths so

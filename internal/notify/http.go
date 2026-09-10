@@ -29,6 +29,28 @@ import (
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). One entry
+// per distinct path shape (read and unread flips are distinct entries).
+// Top-level twins use their literal /api/v1 spelling; repo lanes use the
+// /{owner}/{repo}/api spelling. Pinned by TestExposedTemplatesExact +
+// TestExposedCoversRoutes (no phantoms, nothing missing).
+var ExposedTemplates = []string{
+	"/api/v1/notifications",
+	"/api/v1/notifications/unread_count",
+	"/api/v1/notifications/read_all",
+	"/api/v1/notifications/stream",
+	"/api/v1/notifications/{id}/read",
+	"/api/v1/notifications/{id}/unread",
+	"/{owner}/{repo}/api/watch",
+	"/{owner}/{repo}/api/webhooks",
+	"/{owner}/{repo}/api/webhooks/{id}",
+	"/{owner}/{repo}/api/webhooks/{id}/ping",
+	"/{owner}/{repo}/api/webhooks/{id}/deliveries",
+	"/{owner}/{repo}/api/collab/stream",
+}
+
 // Handler is the Seam 1 surface: top-level /api/v1/notifications* twins
 // plus repo-scoped watch/webhook routes via both lanes.
 type Handler struct {

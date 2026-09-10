@@ -19,6 +19,27 @@ import (
 // everywhere. Anonymous-denied reads get a real 401 with
 // WWW-Authenticate: Bearer (never a 200 with an in-band error).
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). One entry
+// per distinct path shape: methods share a template (GET+POST on pulls
+// is one entry). The top-level fork twin uses its literal /api/v1
+// spelling; repo lanes use the /{owner}/{repo}/api spelling. Pinned by
+// TestExposedTemplatesExact + TestExposedCoversRoutes (no phantoms,
+// nothing missing).
+var ExposedTemplates = []string{
+	"/api/v1/repos/{owner}/{repo}/forks",
+	"/{owner}/{repo}/api/pulls",
+	"/{owner}/{repo}/api/pulls/{num}",
+	"/{owner}/{repo}/api/pulls/{num}/diff",
+	"/{owner}/{repo}/api/pulls/{num}/commits",
+	"/{owner}/{repo}/api/pulls/{num}/comments",
+	"/{owner}/{repo}/api/pulls/{num}/merge",
+	"/{owner}/{repo}/api/pulls/{num}/merge/task",
+	"/{owner}/{repo}/api/pulls/{num}/update-branch",
+	"/{owner}/{repo}/api/pulls/{num}/head",
+}
+
 // Handler is the Seam 1 surface: every §8 endpoint on both lanes.
 // Composition chains it in front of the core mux: Handle reports false for
 // non-pulls paths so the core mux answers (the Wave A amendment in

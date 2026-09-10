@@ -21,6 +21,22 @@ import (
 // bytes, both lanes everywhere. Anonymous-denied reads get a real 401 with
 // WWW-Authenticate: Bearer (never a 200 with an in-band error).
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). One entry
+// per distinct path shape: methods share a template (GET+PUT+DELETE on
+// releases/{tag} is one entry). The asset byte route (HandleRepo, outside
+// the api lanes) is not a discovery entry — the static contract, not the
+// JSON API. Pinned by TestExposedTemplatesExact +
+// TestExposedCoversRoutes (no phantoms, nothing missing).
+var ExposedTemplates = []string{
+	"/{owner}/{repo}/api/releases",
+	"/{owner}/{repo}/api/releases/latest",
+	"/{owner}/{repo}/api/releases/autodraft",
+	"/{owner}/{repo}/api/releases/{tag}",
+	"/{owner}/{repo}/api/releases/{tag}/assets/{name}",
+}
+
 // Handler is the Seam 1 surface: every §7 releases endpoint on both lanes
 // plus the byte route (HandleRepo, consulted by the server's repoDispatch
 // fallback — the static uncompressed group per the 14.3 routing note).
