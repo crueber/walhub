@@ -508,6 +508,12 @@ type Env struct {
 	// composition when internal/identity is compiled in.
 	GroupExpander policy.Expander
 
+	// OwnerEdit grants org-role profile edits (Forgejo #234, docs/features/01
+	// P6). Nil → the core default only (host admin or name-matched
+	// principal). Wired by composition when internal/identity is compiled
+	// in (this package never imports it — law 8).
+	OwnerEdit OwnerEditor
+
 	// MirrorSummary is the pull-only mirror projection (Forgejo #240):
 	// non-nil + true → the summary carries the mirror view (upstream
 	// URL, schedule, computed next fire, last outcome). Nil → no

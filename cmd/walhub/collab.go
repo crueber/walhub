@@ -72,11 +72,13 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	c.identHandler = &identity.Handler{Svc: c.ident}
 	var _ api.OrgGate = c.ident
 	var _ api.AccessBootstrap = c.ident
+	var _ api.OwnerEditor = c.ident
 	if apiEnv != nil {
 		apiEnv.Access = c.ident
 		apiEnv.GroupExpander = c.ident.PolicyExpander()
 		apiEnv.OrgGate = c.ident
 		apiEnv.AccessBoot = c.ident
+		apiEnv.OwnerEdit = c.ident // Forgejo #234: org-owner profile edits
 		// Explicit create-repo placeholder (Forgejo #210, R1 B2): the
 		// POST /api/v1/repos twin (+ /api-browser/v1 twin) via the
 		// server.ExtraRoutes chain + api.RegisterExposed discovery
