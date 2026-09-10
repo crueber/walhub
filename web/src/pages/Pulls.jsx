@@ -105,7 +105,9 @@ export default function Pulls() {
                     <span>
                       {pr.base_ref} ← {pr.head_ref}
                     </span>
+                    {" · "}
                     <span>{pr.author}</span>
+                    {" · "}
                     <span><DateTime value={pr.updated_at} /></span>
                   </div>
                 </li>

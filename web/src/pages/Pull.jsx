@@ -121,7 +121,9 @@ function ReviewsList(props) {
             <li class="card">
               <div class="card-meta">
                 <span>{rv.by}</span>
+                {" · "}
                 <span class={decisionBadge(rv.state ?? rv.kind)}>{rv.kind === "review_dismissed" ? `dismissed #${rv.dismisses}` : rv.state}</span>
+                {" · "}
                 <span><DateTime value={rv.at} /></span>
               </div>
               <Show when={rv.kind === "review_dismissed"}>
