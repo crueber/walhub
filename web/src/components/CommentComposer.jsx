@@ -4,55 +4,72 @@
 // fed by the assignables cache (repo collaborators ∪ org members),
 // submit via the feature's comment endpoint. Internal busy guard doubles
 // as the double-submit guard (disabled while posting + guard clause).
-// Optional close controls (issues #33, honest-close #109): `closeLabel` +
-// `onClose` render a Close/Reopen control, `onCommentAndClose` a
-// "Comment and Close" control (posts the body when non-empty, then closes
-// — GitHub semantics). When `closeChooser` is set (open issue), the close
-// controls are chooser menus — "Close as completed" / "Close as not
-// planned" — because the API defaults an omitted state_reason to
-// completed and the UI must never silently claim completion: the reason
-// is chosen BEFORE closing and passed as onClose(reason) /
-// onCommentAndClose(body, reason). Reopen stays a plain button (no reason
+// Optional close controls (issues #33, honest-close #109, split-button
+// #311): `closeLabel` + `onClose` render a Close/Reopen control,
+// `onCommentAndClose` a "Comment and Close" control (posts the body when
+// non-empty, then closes — GitHub semantics). When `closeChooser` is set
+// (open issue), the close controls are SPLIT buttons — primary segment
+// closes immediately as completed (one click, the API default made
+// explicit via CLOSE_COMPLETED), ▾ segment opens a menu with the
+// not-planned alternate only (CLOSE_NOT_PLANNED). The reason is passed as
+// onClose(reason) / onCommentAndClose(body, reason), so the UI never
+// silently claims completion. Reopen stays a plain button (no reason
 // to choose). Menus are native buttons (role menu/menuitem), Escape
-// closes and refocuses the toggle. All actions share one right-aligned
-// row; the composer clears only when the handler resolves, so a failed
-// post keeps its text for retry.
+// closes and refocuses the toggle, any outside click dismisses. All
+// actions share one right-aligned row; the composer clears only when the
+// handler resolves, so a failed post keeps its text for retry.
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Show, onCleanup } from "solid-js";
 import { reportError } from "../lib/data.js";
 import { MentionDatalist } from "../pages/Mentions.jsx";
 import { CLOSE_COMPLETED, CLOSE_NOT_PLANNED } from "../lib/issue-events.js";
 import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
 
-const CLOSE_CHOICES = [
-  { reason: CLOSE_COMPLETED, verb: "Close as completed" },
-  { reason: CLOSE_NOT_PLANNED, verb: "Close as not planned" },
-];
-
-/** One chooser menu: toggle button + two explicit reason items. */
-function ChooserMenu(props) {
+/** Split-button close control (issue #311, GitHub pattern): the primary
+ * segment runs the default action immediately (close as completed — one
+ * click, no menu); the ▾ segment opens a menu with the alternate
+ * (not-planned) variant only — the button IS the completed path, so the
+ * menu never needs a "completed" item.
+ *
+ * Props: { primaryLabel, primaryAria, menuLabel, alternateVerb,
+ * alternateReason, disabled, onPrimary, onPick }.
+ *
+ * Dismissal: Escape (refocuses the ▾ toggle), Tab-out, and any pointer
+ * click outside the whole split root — the document listener ignores
+ * clicks inside `root` (both segments + menu), so clicking ▾ itself
+ * never close-then-reopens; it just toggles. Listener removed in
+ * onCleanup (RefPicker/ReactionMenu pattern). Menu opens upward
+ * (bottom-full) beneath the composer, as before. */
+function SplitCloseMenu(props) {
   const [getOpen, setOpen] = createSignal(false);
+  let root;
   let toggleRef;
   let menuRef;
 
-  const close = () => {
+  const close = (refocus) => {
     setOpen(false);
-    toggleRef?.focus();
+    if (refocus) toggleRef?.focus();
   };
   const toggle = (e) => {
     e.preventDefault();
     setOpen((o) => !o);
     if (!getOpen()) {
-      // Focus the first item once the menu renders.
+      // Focus the item once the menu renders.
       queueMicrotask(() => menuRef?.querySelector("button")?.focus());
     }
   };
+  const onDocClick = (e) => {
+    if (getOpen() && root && !root.contains(e.target)) close(false);
+  };
+  document.addEventListener("click", onDocClick);
+  onCleanup(() => document.removeEventListener("click", onDocClick));
+
   const onMenuKey = (e) => {
     const items = [...(menuRef?.querySelectorAll("button") ?? [])];
     const i = items.indexOf(document.activeElement);
     if (e.key === "Escape") {
       e.preventDefault();
-      close();
+      close(true);
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       items[(i + 1) % items.length]?.focus();
@@ -69,30 +86,45 @@ function ChooserMenu(props) {
     props.onPick(reason);
   };
 
-  const label = (reason) => (props.verbFor ? props.verbFor(reason) : CLOSE_CHOICES.find((c) => c.reason === reason)?.verb ?? reason);
-
   return (
-    <div class="relative" onKeyDown={(e) => e.key === "Escape" && getOpen() && (e.preventDefault(), close())}>
+    <div
+      class="relative inline-flex"
+      ref={root}
+      onKeyDown={(e) => e.key === "Escape" && getOpen() && (e.preventDefault(), close(true))}
+    >
+      <button
+        type="button"
+        class="btn rounded-r-none border-r-0"
+        aria-label={props.primaryAria ?? props.primaryLabel}
+        disabled={props.disabled}
+        onClick={(e) => {
+          e.preventDefault();
+          props.onPrimary();
+        }}
+      >
+        {props.primaryLabel}
+      </button>
       <button
         ref={toggleRef}
         type="button"
-        class="btn"
+        class="btn rounded-l-none px-2"
         aria-haspopup="menu"
         aria-expanded={getOpen() ? "true" : "false"}
+        aria-label={`${props.menuLabel ?? props.primaryLabel}: more options`}
         disabled={props.disabled}
         onClick={toggle}
       >
-        {props.toggleLabel} <span aria-hidden="true">▾</span>
+        <span aria-hidden="true">▾</span>
       </button>
       <Show when={getOpen()}>
         <div
           ref={menuRef}
           role="menu"
-          aria-label={props.menuLabel ?? props.toggleLabel}
+          aria-label={props.menuLabel ?? props.primaryLabel}
           class="close-drop card absolute bottom-full right-0 z-10 mb-1 grid min-w-52 gap-0.5 p-1"
           onKeyDown={onMenuKey}
         >
-          <For each={CLOSE_CHOICES}>
+          <For each={[{ reason: props.alternateReason, verb: props.alternateVerb }]}>
             {(c) => (
               <button
                 type="button"
@@ -101,7 +133,7 @@ function ChooserMenu(props) {
                 disabled={props.disabled}
                 onClick={() => choose(c.reason)}
               >
-                {label(c.reason)}
+                {c.verb}
               </button>
             )}
           </For>
@@ -221,10 +253,14 @@ export default function CommentComposer(props) {
               </button>
             }
           >
-            <ChooserMenu
-              toggleLabel={props.closeLabel ?? "Close"}
-              menuLabel="Choose close reason"
+            <SplitCloseMenu
+              primaryLabel={props.closeLabel ?? "Close"}
+              primaryAria={`Close as completed`}
+              menuLabel="Close options"
+              alternateVerb="Close as not planned"
+              alternateReason={CLOSE_NOT_PLANNED}
               disabled={getBusy()}
+              onPrimary={() => runClose(CLOSE_COMPLETED)}
               onPick={(reason) => runClose(reason)}
             />
           </Show>
@@ -246,11 +282,14 @@ export default function CommentComposer(props) {
               </button>
             }
           >
-            <ChooserMenu
-              toggleLabel={props.commentAndCloseLabel ?? "Comment and Close"}
-              menuLabel="Choose close reason"
-              verbFor={(reason) => (reason === CLOSE_NOT_PLANNED ? "Comment and close as not planned" : "Comment and close as completed")}
+            <SplitCloseMenu
+              primaryLabel={props.commentAndCloseLabel ?? "Comment and Close"}
+              primaryAria={`Comment and close as completed`}
+              menuLabel="Comment and close options"
+              alternateVerb="Comment and close as not planned"
+              alternateReason={CLOSE_NOT_PLANNED}
               disabled={getBusy()}
+              onPrimary={() => commentAndClose(getBody(), CLOSE_COMPLETED)}
               onPick={(reason) => commentAndClose(getBody(), reason)}
             />
           </Show>
