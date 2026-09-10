@@ -46,6 +46,7 @@ export default function Issue() {
   const { role } = useRole(ctx.full, ctx.repoClient);
   const canComment = () => role() !== null;
   const canTriage = () => roleAtLeast(role(), "triage");
+  const canCreate = () => role() !== null;
   // Create gate (issue #310): POST …/api/issues is read (authenticated)
   // — any principal passing the read gate (02 §11 table), NOT triage.
   // Client mirror is role() !== null (the same shape as canComment: the
