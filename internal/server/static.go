@@ -18,12 +18,18 @@ import (
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, key, contentType string) {
 	ctx := r.Context()
 	meta, err := s.store.Head(ctx, key)
-	if err != nil || meta == nil {
-		if store.IsNotFound(err) || meta == nil {
+	if err != nil {
+		// A genuine miss is a 404; any other store failure is a 503 —
+		// an outage must never masquerade as "not found" (#289).
+		if store.IsNotFound(err) {
 			plainStatus(w, http.StatusNotFound, "not found")
 			return
 		}
 		plainStatus(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	if meta == nil {
+		plainStatus(w, http.StatusNotFound, "not found")
 		return
 	}
 	version := string(meta.Version)
