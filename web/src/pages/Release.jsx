@@ -38,10 +38,6 @@ export default function Release() {
   // assets) and passes the digest through — the two phases stay honest.
   const [getUpload, setUpload] = createSignal(null);
   const [getDrag, setDrag] = createSignal(false);
-  // The file input element, captured in a `let` ref (issue #270): Solid
-  // nulls e.currentTarget once the handler yields, so touching it after
-  // the upload await throws. Never read the event object past an await.
-  let fileInput;
 
   const startEdit = () => {
     const rel = getRel();
@@ -341,7 +337,6 @@ export default function Release() {
                 <label class={`btn primary cursor-pointer${getBusy() ? " pointer-events-none opacity-50" : ""}`}>
                   {getUpload() ? uploadLabel() : "Upload asset"}
                   <input
-                    ref={fileInput}
                     type="file"
                     class="hidden"
                     disabled={getBusy()}
