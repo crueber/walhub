@@ -189,7 +189,8 @@ var createTagFields = map[string]bool{"name": true, "sha": true, "message": true
 // MaxTagMessageLen message plus JSON framing/escaping overhead.
 const MaxCreateBodyBytes = 128 << 10
 
-// tagWire is the create response (the created lightweight tag).
+// tagWire is the create response (the created tag: sha is the commit for
+// lightweight tags, the tag object oid for annotated ones).
 type tagWire struct {
 	Name string `json:"name"`
 	SHA  string `json:"sha"`
