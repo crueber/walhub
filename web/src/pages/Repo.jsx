@@ -208,8 +208,9 @@ function WatchToggle(props) {
           onClick={flip}
           title={w().watching ? "Unwatch this repo" : "Watch this repo"}
           aria-pressed={w().watching}
+          aria-label={w().watching ? "Unwatch this repo" : "Watch this repo"}
         >
-          {w().watching ? "👁 watching" : "👁 watch"} · {w().watchers ?? 0}
+          👁 {w().watchers ?? 0}
         </button>
       )}
     </Show>
@@ -362,8 +363,9 @@ function StarToggle(props) {
           onClick={flip}
           title={s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
           aria-pressed={s().viewer?.starred}
+          aria-label={s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
         >
-          ★ {s().viewer?.starred ? "starred" : "star"} · {s().stars ?? 0}
+          ★ {s().stars ?? 0}
         </button>
       )}
     </Show>
