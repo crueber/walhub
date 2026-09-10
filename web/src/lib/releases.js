@@ -17,3 +17,18 @@ export function keyAssets(assets, limit = LATEST_ASSET_LIMIT) {
   const k = Math.floor(n);
   return { shown: list.slice(0, k), extra: Math.max(0, list.length - k) };
 }
+
+/**
+ * filterTagNames(names, query) → string[]. Client-side substring filter
+ * for the new-release tag combobox (issue #254): the option source is the
+ * page-owned `tags:{full}` cache entry (most-recent-first stream order,
+ * preserved — filtering never re-sorts), so this helper performs no
+ * fetch. Empty/blank query returns every name; matching is
+ * case-insensitive; non-array input behaves as an empty list.
+ */
+export function filterTagNames(names, query) {
+  const list = Array.isArray(names) ? names.map(String) : [];
+  const q = String(query ?? "").trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((n) => n.toLowerCase().includes(q));
+}

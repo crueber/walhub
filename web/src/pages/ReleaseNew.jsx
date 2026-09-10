@@ -1,14 +1,15 @@
 // web/src/pages/ReleaseNew.jsx — route "/:owner/:name/releases/new"
-// (07 §8): tag picker fed by the existing tags ref stream, autodraft
+// (07 §8): tag combobox fed by the existing tags ref stream, autodraft
 // button filling the body from merged PRs, draft/prerelease checkboxes,
 // create → detail. Composer composition follows the IssueNew/PullNew
 // convention (issue #49): centered max-w-2xl column, section fieldsets
 // with help text, checkbox option rows, inline validation errors.
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Show, onCleanup } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, reportError } from "../lib/data.js";
+import { filterTagNames } from "../lib/releases.js";
 
 export default function ReleaseNew() {
   const ctx = useRepo();
@@ -72,6 +73,67 @@ export default function ReleaseNew() {
   const tags = () => getTags()?.refs ?? getTags()?.tags ?? [];
   const tagNames = () => tags().map((t) => String(t.name ?? t).replace(/^refs\/tags\//, ""));
 
+  // Tag combobox (issue #254): the text input stays the source of truth;
+  // the ▾ trigger opens a styled popover of recent tags (tags-stream
+  // order — most recent first) filtered client-side on tagNames(), so no
+  // new fetch rides anything but the existing `tags:{full}` cache entry.
+  // Keyboard mirrors the RefPicker conventions (arrows move, Enter
+  // selects, Esc closes); a pointer click outside closes it (the
+  // LabelPicker/MilestonePicker document-level idiom).
+  const [getTagOpen, setTagOpen] = createSignal(false);
+  const [getTagActive, setTagActive] = createSignal(-1);
+  let comboRoot;
+  let tagInput;
+  const filteredTags = () => filterTagNames(tagNames(), getTag());
+  const closeTags = () => {
+    setTagOpen(false);
+    setTagActive(-1);
+  };
+  const chooseTag = (name) => {
+    setTag(name);
+    closeTags();
+    tagInput?.focus();
+  };
+  const onTagDocClick = (e) => {
+    if (getTagOpen() && comboRoot && !comboRoot.contains(e.target)) closeTags();
+  };
+  const onTagDocKey = (e) => {
+    if (getTagOpen() && e.key === "Escape") {
+      closeTags();
+      tagInput?.focus();
+    }
+  };
+  document.addEventListener("click", onTagDocClick);
+  document.addEventListener("keydown", onTagDocKey);
+  onCleanup(() => {
+    document.removeEventListener("click", onTagDocClick);
+    document.removeEventListener("keydown", onTagDocKey);
+  });
+  const onTagKey = (e) => {
+    const list = filteredTags();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!getTagOpen()) {
+        if (list.length > 0) {
+          setTagOpen(true);
+          setTagActive(0);
+        }
+        return;
+      }
+      if (list.length === 0) return;
+      const d = e.key === "ArrowDown" ? 1 : -1;
+      setTagActive((i) => (i + d + list.length) % list.length);
+    } else if (e.key === "Enter" && getTagOpen()) {
+      const i = getTagActive();
+      if (i >= 0 && i < list.length) {
+        e.preventDefault();
+        chooseTag(list[i]);
+      } else {
+        closeTags();
+      }
+    }
+  };
+
   return (
     <div class="mx-auto max-w-2xl">
       <div class="mb-3 flex items-baseline gap-2">
@@ -98,24 +160,95 @@ export default function ReleaseNew() {
             <label class="text-sm font-medium" for="release-tag">
               Tag <span class="muted font-normal">· required, must already exist</span>
             </label>
-            <input
-              id="release-tag"
-              class="input font-mono"
-              list="release-tags"
-              value={getTag()}
-              onInput={(e) => setTag(e.currentTarget.value.trim())}
-              placeholder="v1.0.0"
-              autocomplete="off"
-              aria-describedby="release-tag-help"
-            />
-            <datalist id="release-tags">
-              <For each={tagNames()}>{(name) => <option value={name} />}</For>
-            </datalist>
+            <div class="relative" ref={comboRoot}>
+              <div class="flex gap-2">
+                <input
+                  ref={tagInput}
+                  id="release-tag"
+                  role="combobox"
+                  aria-expanded={getTagOpen() ? "true" : "false"}
+                  aria-controls="release-tag-list"
+                  aria-autocomplete="list"
+                  aria-activedescendant={
+                    getTagActive() >= 0 ? `release-tag-opt-${getTagActive()}` : undefined
+                  }
+                  class="input min-w-0 flex-1 font-mono"
+                  value={getTag()}
+                  onInput={(e) => {
+                    setTag(e.currentTarget.value.trim());
+                    setTagActive(-1);
+                    if (!getTagOpen() && tagNames().length > 0) setTagOpen(true);
+                  }}
+                  onFocus={() => {
+                    if (!getTagOpen() && tagNames().length > 0) setTagOpen(true);
+                  }}
+                  onKeyDown={onTagKey}
+                  placeholder="v1.0.0"
+                  autocomplete="off"
+                  aria-describedby="release-tag-help"
+                />
+                <button
+                  type="button"
+                  class="btn shrink-0"
+                  aria-haspopup="listbox"
+                  aria-expanded={getTagOpen() ? "true" : "false"}
+                  aria-controls="release-tag-list"
+                  aria-label="Show recent tags"
+                  title="Show recent tags"
+                  disabled={tagNames().length === 0}
+                  onClick={() => {
+                    const next = !getTagOpen();
+                    setTagOpen(next);
+                    setTagActive(-1);
+                    if (next) tagInput?.focus();
+                  }}
+                >
+                  <span aria-hidden="true">▾</span>
+                </button>
+              </div>
+              <Show when={getTagOpen() && tagNames().length > 0}>
+                <div
+                  id="release-tag-list"
+                  role="listbox"
+                  aria-label="Recent tags"
+                  class="tag-drop scroll-slim card absolute inset-x-0 z-30 mt-1 max-h-72 overflow-y-auto p-1"
+                >
+                  <For
+                    each={filteredTags()}
+                    fallback={
+                      <p class="muted px-2 py-1 text-xs">
+                        No matching tags — check the name or create it from a commit.
+                      </p>
+                    }
+                  >
+                    {(name, i) => (
+                      <button
+                        type="button"
+                        role="option"
+                        id={`release-tag-opt-${i()}`}
+                        aria-selected={getTagActive() === i() ? "true" : "false"}
+                        aria-label={`use tag ${name}`}
+                        title={name}
+                        class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        classList={{ "bg-zinc-100 dark:bg-zinc-800": getTagActive() === i() }}
+                        onClick={() => chooseTag(name)}
+                        onMouseMove={() => setTagActive(i())}
+                      >
+                        <span class="inline-block w-4 shrink-0 text-center" aria-hidden="true">
+                          {getTag() === name ? "✓" : ""}
+                        </span>
+                        <span class="font-mono">{name}</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
             <p id="release-tag-help" class="muted text-xs">
               <Show when={getTags() !== undefined} fallback="Loading tags…">
                 <Show
                   when={tagNames().length > 0}
-                  fallback="No tags yet — push one with git first (a release can't create tags)."
+                  fallback="No tags yet — create one from a commit page or push one with git."
                 >
                   {tagNames().length} tags available — pick from the list or type the name.
                 </Show>
