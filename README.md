@@ -90,7 +90,7 @@ For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml
 - [ ] packages
 - [ ] [actions](https://git.packden.us/crueber/walhub/issues/288)
 - [ ] [fork](internal/social)
-- [ ] [webhooks](internal/notify)
+- [x] [webhooks](internal/notify)
 - [ ] [cli](cmd/walhub)
 - [x] [oidc](internal/server)
 
