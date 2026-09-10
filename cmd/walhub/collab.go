@@ -26,6 +26,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/social"
 	"git.packden.us/crueber/walhub/internal/store"
+	"git.packden.us/crueber/walhub/internal/tags"
 	"git.packden.us/crueber/walhub/internal/wal"
 )
 
@@ -45,6 +46,8 @@ type collabWiring struct {
 	checksHandler   *checks.Handler
 	releasesSvc     *releases.Service
 	releasesHandler *releases.Handler
+	tagsSvc         *tags.Service
+	tagsHandler     *tags.Handler
 	socialSvc       *social.Service
 	socialHandler   *social.Handler
 	notifySvc       *notify.Service
@@ -129,6 +132,11 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// latest pointer, and changelog autodraft. Publish fan-out rides
 	// internal/notify through the nil-safe seams bound below (P8).
 	c.releasesSvc, c.releasesHandler = newReleasesService(st, c.ident, reg, cfg.Git.Binary, cfg.Cache.Dir, int64(cfg.Releases.MaxAssetBytes))
+	// Forgejo #253 tags (create lightweight tag at a commit, server-side
+	// via the WAL ref-update path): the P6 write gate + policy create
+	// check live in the package; ref creates funnel through the WAL
+	// publish path (never force); events ride the existing WAL bridge.
+	c.tagsSvc, c.tagsHandler = newTagsService(st, c.ident, reg, cfg.Git.Binary)
 	// Feature 07 social (docs/features/07 §§4–6): stars, watcher
 	// reads, counters, starred lists. Watch mutation stays in
 	// internal/notify (06 §6); the fork counter binds onto pulls
@@ -207,6 +215,9 @@ func chainCollab(srv *server.Server, c *collabWiring) {
 	}
 	if c.releasesHandler != nil {
 		chainReleases(srv, c.releasesHandler)
+	}
+	if c.tagsHandler != nil {
+		chainTags(srv, c.tagsHandler)
 	}
 	if c.socialHandler != nil {
 		chainSocial(srv, c.socialHandler)
