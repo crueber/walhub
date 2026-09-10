@@ -112,3 +112,16 @@ func MirrorKey(owner, name string) string { return RepoPrefix(owner, name) + Mir
 // is leases/<name>.pb via LeaseKey). Owner/name never contain slashes
 // (ParseRepoId charset), so the name is one path segment.
 func MirrorLeaseName(owner, name string) string { return "mirror-" + owner + "-" + name }
+
+// OwnerProfileKeySuffix is the owner-scoped profile sidecar (Forgejo #234):
+// owners/<owner>/profile.json, CAS'd (read-modify-CAS loop, human rate),
+// in the frozen overwritable family (14_extensibility.md §14.11 rule 2 —
+// amended in the same change that adopts it). It carries the owner's display
+// name, location, IANA timezone, and markdown bio. Owner scope has no WAL or
+// manifest, so — unlike repo settings — the CAS loop IS the commit point
+// (the §14.10.2 issues-index shape, not the publish path).
+const OwnerProfileKeySuffix = "profile.json"
+
+// OwnerProfileKey returns "owners/<owner>/profile.json". Owner never
+// contains slashes (ParseRepoId charset — callers validate before use).
+func OwnerProfileKey(owner string) string { return "owners/" + owner + "/" + OwnerProfileKeySuffix }

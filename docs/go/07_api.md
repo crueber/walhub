@@ -350,6 +350,7 @@ The discovery document:
     "/api/v1/owners",
     "/api/v1/owners/{owner}/repos",
     "/api/v1/owners/{owner}/repos/detailed",
+    "/api/v1/owners/{owner}/profile",
     "/{owner}/{repo}/api",
     "/{owner}/{repo}/api/refs",
     "/{owner}/{repo}/api/refs/branches",
@@ -394,6 +395,21 @@ adding a route without updating this list is a bug. The doc never lists admin-on
   for a missing optional object). Ties break on `(owner, name)` (shared with #247 ordering).
   SWR class. Size semantic: stored-object size (packs+idx — see 02 §2.1; overview
   `LiveBytes` stays Σ PackSize-only and is documented as differing by IdxSize).
+- `GET /api/v1/owners/{o}/profile` (Forgejo #234 — NEW alongside v1, triple twins
+  `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.profile`) →
+  `{owner, display_name, location, timezone, bio_markdown, updated_at?, can_edit?}` (all strings,
+  `""` = unset; `can_edit` is request-scoped, never stored). AuthRead (public bio). Unknown owners
+  read as an empty profile (`200`, the `ownerRepos` 200-[] convention — never 404); only a
+  syntactically invalid slug (outside the repo-id owner charset) 404s. SWR class.
+- `PUT /api/v1/owners/{o}/profile` (Forgejo #234 — same triple twins, SDK `owners.updateProfile`) —
+  idempotent full-document replace `{display_name, location, timezone, bio_markdown}` (body-carried
+  `owner`/`updated_at`/`can_edit` ignored; the key names the owner, the server stamps `updated_at`);
+  unknown fields, over-budget values (names/locations 200 chars, timezone 64 bytes IANA shape,
+  bio 64 KiB), and malformed JSON are 400. AuthWrite gate first (anonymous → 401/403), then the
+  owner rule: host admin, name-matched principal (case-insensitive), or org-owner role via the
+  `OwnerEditor` seam (identity implements it — law 8; probe failure fails closed with 503).
+  Written to `owners/<o>/profile.json` through the bounded CAS loop (the sidecar commit point —
+  no WAL at owner scope); 5 consecutive races → 409. `200` answers the stored doc.
 - `GET /services/api/instance` → `{kind, name, revision, instance, version, roles[], disk, shape, cpus,
   memory_bytes}` (`no-store`) — "this machine" for UI footers: hostname, declared roles, disk mode, CPU
   count, `runtime.NumCPU()` / total memory.

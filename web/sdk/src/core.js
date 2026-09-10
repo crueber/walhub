@@ -269,7 +269,46 @@ export class ReposClient {
       list: () => self.ownersList(),
       repos: (owner) => self.ownerRepos(owner),
       detailed: (owner, query) => self.ownerReposDetailed(owner, query),
+      profile: (owner) => self.ownerProfile(owner),
+      updateProfile: (owner, doc) => self.ownerProfilePut(owner, doc),
     };
+  }
+
+  /**
+   * Owner profile (Forgejo #234):
+   * `GET /api/v1/owners/{owner}/profile` →
+   * `{owner, display_name, location, timezone, bio_markdown, updated_at?,
+   * can_edit?}` (all strings, `""` = unset; unknown owners read as an empty
+   * profile, never 404). Same no-store rationale as ownerRepos (issue #200):
+   * a post-PUT refetch must never read a pre-mutation body.
+   *
+   * @param {string} owner @returns {Promise<import("./types.js").OwnerProfile>}
+   */
+  ownerProfile(owner) {
+    return this._call(`/api/v1/owners/${encodeURIComponent(owner)}/profile`, {
+      method: "GET",
+      cache: "no-store",
+    });
+  }
+
+  /**
+   * Owner profile replace (Forgejo #234):
+   * `PUT /api/v1/owners/{owner}/profile` with
+   * `{display_name, location, timezone, bio_markdown}` → the stored profile.
+   * Owner-only (host admin, name-matched principal, or org-owner role —
+   * others get 401/403); unknown fields and over-budget values get 400.
+   *
+   * @param {string} owner
+   * @param {{display_name?: string, location?: string, timezone?: string, bio_markdown?: string}} doc
+   * @returns {Promise<import("./types.js").OwnerProfile>}
+   */
+  ownerProfilePut(owner, doc) {
+    return this._call(`/api/v1/owners/${encodeURIComponent(owner)}/profile`, {
+      method: "PUT",
+      body: JSON.stringify(doc ?? {}),
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+    });
   }
 
   /**

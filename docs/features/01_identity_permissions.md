@@ -420,3 +420,17 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
 - **SAML/SCIM, LDAP-synced teams** — P9; a Seam 2 provider maps directory groups onto teams later.
 - **Fine-grained per-branch roles, CODEOWNERS-style routing, custom repo roles** — roles are the fixed five-level ladder (P6); finer control is `policy.json` rules (Seam 3).
 - **Nested teams, org roles beyond owner/member; audit history; invite emails** — the fixed ladder plus owner/member is the whole org surface; overwritable objects keep no history (a Seam 4 `jsonl` audit sink is the record if needed); SMTP is operator-side.
+- **Owner-profile edit gate (Forgejo #234, §8):** `PUT /api/v1/owners/{owner}/profile` (core
+  `internal/api` surface, triple twins) requires the AuthWrite gate first (anonymous → 401/403 —
+  the bio stays public-read), then exactly one of: (a) host `admin` flag (covers org namespaces
+  with no name-matched principal and bootstrapping), (b) case-insensitive principal-name match
+  against the owner slug (user-self: the `me()` principal IS the owner name on instances whose
+  token mapping mints slug names), or (c) org `owner` role in `orgs/<org>/members.json` via the
+  `api.OwnerEditor` seam implemented by `(*Service).CanEditOwnerProfile` (one exact-key roster
+  GET, human-rate; probe errors fail closed with 503, never 403-as-404 — the #210 creategate
+  rule). Rationale: principals are emails while owner slugs are namespaces, so no pure core rule
+  can express "org owner" — but core must not import identity (law 8), hence the seam (the
+  OrgGate/AccessBoot shape, wired in `cmd/walhub` composition). Org `member` (non-owner) and
+  team membership grant nothing: the profile speaks for the namespace, so only namespace owners
+  (plus host admins) write it. The GET carries request-scoped `can_edit` (same rule, probe
+  failure degrades to false) so the UI affordance never guesses — client gating stays cosmetic.

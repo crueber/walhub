@@ -67,6 +67,9 @@
  * @typedef {{version: number, principal: string, display_name: string, bio: string,
  *   created_at: string, updated_at: string}} Profile
  *
+ * @typedef {{owner: string, display_name: string, location: string, timezone: string,
+ *   bio_markdown: string, updated_at: string, can_edit: boolean}} OwnerProfile
+ *
  * @typedef {{version: number, org: string, display_name: string, description: string,
  *   created_at: string, updated_at: string}} Org
  *

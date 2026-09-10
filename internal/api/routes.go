@@ -52,6 +52,12 @@ func Routes(e *Env) []Route {
 		{Method: "GET", Sub: "/api/v1/owners/{owner}/repos/detailed", Template: "/api/v1/owners/{owner}/repos/detailed", Handler: h.ownerReposDetailed, Auth: AuthRead, Expose: true, NonRepo: true},
 		{Method: "GET", Sub: "/api-browser/v1/owners/{owner}/repos/detailed", Handler: h.ownerReposDetailed, Auth: AuthRead, NonRepo: true},
 		{Method: "GET", Sub: "/services/api/owners/{owner}/repos/detailed", Handler: h.ownerReposDetailed, Auth: AuthRead, NonRepo: true},
+		{Method: "GET", Sub: "/api/v1/owners/{owner}/profile", Template: "/api/v1/owners/{owner}/profile", Handler: h.ownerProfileGet, Auth: AuthRead, Expose: true, NonRepo: true},
+		{Method: "GET", Sub: "/api-browser/v1/owners/{owner}/profile", Handler: h.ownerProfileGet, Auth: AuthRead, NonRepo: true},
+		{Method: "GET", Sub: "/services/api/owners/{owner}/profile", Handler: h.ownerProfileGet, Auth: AuthRead, NonRepo: true},
+		{Method: "PUT", Sub: "/api/v1/owners/{owner}/profile", Handler: h.ownerProfilePut, Auth: AuthWrite, NonRepo: true},
+		{Method: "PUT", Sub: "/api-browser/v1/owners/{owner}/profile", Handler: h.ownerProfilePut, Auth: AuthWrite, NonRepo: true},
+		{Method: "PUT", Sub: "/services/api/owners/{owner}/profile", Handler: h.ownerProfilePut, Auth: AuthWrite, NonRepo: true},
 		{Method: "GET", Sub: "/services/api/instance", Handler: h.instance, Auth: AuthOpen, NonRepo: true},
 
 		// --- repo reads (§9) ---------------------------------------------------
