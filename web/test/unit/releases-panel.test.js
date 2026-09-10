@@ -1,9 +1,11 @@
 // web/test/unit/releases-panel.test.js — keyAssets helper (issue #35):
-// shown/extra split for the Latest sidebar card — plus filterTagNames
-// (issue #254): the client-side tag filter for the new-release combobox.
+// shown/extra split for the Latest row card — plus filterTagNames
+// (issue #254): the client-side tag filter for the new-release combobox —
+// plus filterReleases/excerptBody (issue #270): the list filter chips and
+// row excerpts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { keyAssets, LATEST_ASSET_LIMIT, filterTagNames } from "../../src/lib/releases.js";
+import { keyAssets, LATEST_ASSET_LIMIT, filterTagNames, filterReleases, excerptBody } from "../../src/lib/releases.js";
 
 const assets = (n) => Array.from({ length: n }, (_, i) => ({ name: `a${i + 1}.zip` }));
 
@@ -68,4 +70,51 @@ test("filterTagNames: non-array input behaves as an empty list", () => {
   assert.deepEqual(filterTagNames(undefined, "v1"), []);
   assert.deepEqual(filterTagNames(null, ""), []);
   assert.deepEqual(filterTagNames("v1.0.0", ""), []);
+});
+
+test("filterReleases: all returns every release as a fresh array", () => {
+  const rels = [{ tag: "v1" }, { tag: "v2", draft: true }];
+  const out = filterReleases(rels, "all");
+  assert.deepEqual(out, rels);
+  assert.notEqual(out, rels);
+  assert.deepEqual(filterReleases(rels, "bogus"), rels);
+});
+
+test("filterReleases: drafts/prereleases narrow by flag", () => {
+  const rels = [
+    { tag: "v3" },
+    { tag: "v2", draft: true },
+    { tag: "v1", prerelease: true },
+  ];
+  assert.deepEqual(filterReleases(rels, "drafts").map((r) => r.tag), ["v2"]);
+  assert.deepEqual(filterReleases(rels, "prereleases").map((r) => r.tag), ["v1"]);
+});
+
+test("filterReleases: non-array input behaves as an empty list", () => {
+  assert.deepEqual(filterReleases(undefined, "all"), []);
+  assert.deepEqual(filterReleases(null, "drafts"), []);
+  assert.deepEqual(filterReleases("v1", "all"), []);
+});
+
+test("excerptBody: first non-blank line, markers stripped", () => {
+  assert.equal(excerptBody("\n\n## Highlights\n- a\n- b"), "Highlights");
+  assert.equal(excerptBody("> quoted line\nsecond"), "quoted line");
+  assert.equal(excerptBody("- item one\n- item two"), "item one");
+  assert.equal(excerptBody("1. first step\n2. second"), "first step");
+  assert.equal(excerptBody("  spaced   out   "), "spaced out");
+});
+
+test("excerptBody: truncates long lines with an ellipsis", () => {
+  const long = "x".repeat(200);
+  const out = excerptBody(long, 140);
+  assert.equal(out.length, 140);
+  assert.ok(out.endsWith("…"));
+  assert.equal(excerptBody("short", 140), "short");
+});
+
+test("excerptBody: non-string input renders as empty", () => {
+  assert.equal(excerptBody(undefined), "");
+  assert.equal(excerptBody(null), "");
+  assert.equal(excerptBody(42), "");
+  assert.equal(excerptBody(""), "");
 });

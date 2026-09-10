@@ -1,8 +1,11 @@
 // web/src/pages/Releases.jsx — route "/:owner/:name/releases" (07 §8):
-// release cards (tag, name, draft/prerelease badges, date, asset count)
-// plus the Latest release panel (issue #35: tag card with badges, publish
-// date, key asset downloads, detail link; the shared Empty callout when
-// none). `release` frames ride
+// name-led release rows (tag in mono, draft/prerelease badges, body
+// excerpt, asset count, publish date) with client-side all/drafts/
+// prereleases chips over the loaded page (no new endpoint). The Latest
+// pointer folds into the list (issue #270): the matching row carries the
+// `latest` chip plus the key asset quick-downloads, so the sidebar's
+// content duplication is gone and the page is single-column like Issues.
+// `release` frames ride
 // the ONE repo collaboration stream (08 §4) and invalidate the list +
 // latest coalesced; the page refetches on navigation and on demand
 // (no polling loops).
@@ -10,8 +13,8 @@
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useRepo, fmtBytes } from "./Repo.jsx";
-import { useData, invalidate, reportError } from "../lib/data.js";
-import { keyAssets, LATEST_ASSET_LIMIT } from "../lib/releases.js";
+import { useData, invalidate } from "../lib/data.js";
+import { keyAssets, filterReleases, excerptBody, LATEST_ASSET_LIMIT } from "../lib/releases.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -29,9 +32,19 @@ export function ReleaseBadges(props) {
   );
 }
 
+// Client-side filter chips (issue #270): the list endpoint hides drafts,
+// so the chips narrow the loaded page only — same params, same endpoints,
+// layout + filter only.
+const FILTERS = [
+  { id: "all", label: "All" },
+  { id: "drafts", label: "Drafts" },
+  { id: "prereleases", label: "Prereleases" },
+];
+
 export default function Releases() {
   const ctx = useRepo();
   const [getAfter, setAfter] = createSignal(0);
+  const [getFilter, setFilter] = createSignal("all");
   const query = () => ({ n: 50, ...(getAfter() ? { after: getAfter() } : {}) });
   const key = () => `releases:${ctx.full}:${JSON.stringify(query())}`;
   const [getPage] = useData(key, () => ctx.repoClient.releases.list(query()));
@@ -48,158 +61,153 @@ export default function Releases() {
   // Live list: `release` frames invalidate the list + latest (coalesced).
   useCollabStream(() => ctx.full, ctx.repoClient, ["release"]);
 
-  // Empty state (issue #50): exactly ONE "New release" CTA — the Empty
-  // callout's action. The toolbar button and the Latest sidebar (which
-  // carries its own Empty + CTA) render only when releases exist, so the
-  // empty page is one centered composition with no sidebar.
-  const hasReleases = () => (getPage()?.releases ?? []).length > 0;
   const newHref = () => `/${ctx.full}/releases/new`;
+  const releases = () => getPage()?.releases ?? [];
+  const visible = () => filterReleases(releases(), getFilter());
+  const filterCount = (id) => (id === "all" ? releases().length : filterReleases(releases(), id).length);
+  // Latest folds into the first card (issue #270): the chip + key assets
+  // render inline on the matching row, first page with no filter only.
+  const isLatestRow = (rel) =>
+    getFilter() === "all" && !getAfter() && getLatest() && rel.tag === getLatest().tag;
+
+  const pickFilter = (id) => setFilter(id);
 
   return (
-    <Show
-      when={hasReleases()}
-      fallback={
-        <section aria-label="Releases">
-          <div class="mb-3 flex items-center justify-end gap-2">
-            <button type="button" class="btn px-2 py-1" onClick={reload}>
-              refresh
-            </button>
-          </div>
-          <div class="mx-auto max-w-xl">
-            <Empty
-              icon="tag"
-              title="No releases yet"
-              hint="Tag a commit and publish release notes — drafts and prereleases are supported."
-              actionHref={newHref()}
-              actionLabel="New release"
-            />
-          </div>
-        </section>
-      }
-    >
-    <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
-      <section aria-label="Releases">
-        <div class="mb-3 flex items-center gap-2">
-          <A href={newHref()} class="btn px-2 py-1">
+    <div class="releases-page">
+      <div class="mb-2 flex flex-wrap items-center gap-2">
+        <h2 class="text-xl font-semibold tracking-tight">Releases</h2>
+        <div class="ml-auto flex gap-2">
+          <button type="button" class="btn" onClick={reload}>
+            Refresh
+          </button>
+          <A class="btn primary" href={newHref()}>
             New release
           </A>
-          <button type="button" class="btn ml-auto px-2 py-1" onClick={reload}>
-            refresh
-          </button>
         </div>
-        <ul class="card-list">
-          <For each={getPage()?.releases ?? []}>
-            {(rel) => (
-              <li class="card">
-                <div class="flex items-center gap-2">
-                  <A href={`/${ctx.full}/releases/${encodeURIComponent(rel.tag)}`} class="card-title font-mono">
-                    {rel.tag}
-                  </A>
-                  <ReleaseBadges release={rel} />
+      </div>
+
+      <div class="mb-3 flex flex-wrap gap-1.5" role="group" aria-label="release filters">
+        <For each={FILTERS}>
+          {(f) => (
+            <button
+              type="button"
+              class={`pill${getFilter() === f.id ? " btn-active" : ""}`}
+              aria-pressed={getFilter() === f.id}
+              onClick={() => pickFilter(f.id)}
+            >
+              {f.label} ({filterCount(f.id)})
+            </button>
+          )}
+        </For>
+      </div>
+
+      <Show when={getPage() !== undefined} fallback={<p class="muted">loading…</p>}>
+        <Show
+          when={visible().length > 0}
+          fallback={
+            <Show
+              when={releases().length > 0}
+              fallback={
+                <div class="mx-auto max-w-xl">
+                  <Empty
+                    icon="tag"
+                    title="No releases yet"
+                    hint="Tag a commit and publish release notes — drafts and prereleases are supported."
+                    actionHref={newHref()}
+                    actionLabel="New release"
+                  />
                 </div>
-                <div class="card-meta">
-                  <span>{rel.name}</span>
-                  <span><DateTime value={rel.published_at ?? rel.created_at} /></span>
-                  <span>{(rel.assets ?? []).length} assets</span>
-                </div>
-              </li>
-            )}
-          </For>
-        </ul>
-        <Show when={getPage()?.more}>
-          <button
-            type="button"
-            class="btn mt-3 px-2 py-1"
-            onClick={() => {
-              const rels = getPage()?.releases ?? [];
-              const last = rels[rels.length - 1];
-              if (last) setAfter(`${last.created_at}|${last.tag}`);
-            }}
-          >
-            more
-          </button>
-        </Show>
-      </section>
-      <aside aria-label="Latest release" class="card h-fit p-4">
-        <Show when={getLatest() !== undefined} fallback={<p class="muted text-sm" role="status">loading latest…</p>}>
-          <Show
-            when={getLatest()}
-            fallback={
-              <div>
-                <h2 class="mb-2 text-sm font-semibold">Latest</h2>
-                <Empty
-                  compact
-                  icon="tag"
-                  title="No published releases"
-                  hint="Tag a commit and publish release notes — drafts and prereleases are supported."
-                  actionHref={newHref()}
-                  actionLabel="New release"
-                />
-              </div>
-            }
-          >
-            {(rel) => {
-              const detail = () => `/${ctx.full}/releases/${encodeURIComponent(rel().tag)}`;
-              const date = () => rel().published_at ?? rel().created_at;
-              const assets = () => keyAssets(rel().assets, LATEST_ASSET_LIMIT);
-              return (
-                <div>
-                  <div class="mb-2 flex items-center justify-between gap-2">
-                    <h2 class="text-sm font-semibold">Latest</h2>
-                    <A href={detail()} class="text-xs text-emerald-700 hover:underline dark:text-emerald-400">
-                      view release →
-                    </A>
-                  </div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <A href={detail()} class="font-mono text-lg font-semibold text-emerald-700 hover:underline dark:text-emerald-400">
-                      {rel().tag}
-                    </A>
-                    <ReleaseBadges release={rel()} />
-                  </div>
-                  <Show when={rel().name}>
-                    <p class="mt-0.5 text-sm font-medium">{rel().name}</p>
-                  </Show>
-                  <Show when={date()}>
-                    <p class="muted mt-0.5 text-xs">
-                      Published <DateTime value={date()} />
-                    </p>
-                  </Show>
-                  <div class="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800/60">
-                    <h3 class="muted text-xs font-medium uppercase tracking-wide">
-                      Assets ({(rel().assets ?? []).length})
-                    </h3>
-                    <Show when={assets().shown.length > 0} fallback={<p class="muted mt-1 text-xs">No assets.</p>}>
-                      <ul class="mt-1 space-y-1">
+              }
+            >
+              <Empty
+                icon="tag"
+                title={`No ${getFilter()} releases in this view`}
+                hint="The filter applies to the loaded page only — try All, or publish a matching release."
+              />
+            </Show>
+          }
+        >
+          <ul>
+            <For each={visible()}>
+              {(rel) => {
+                const detail = () => `/${ctx.full}/releases/${encodeURIComponent(rel.tag)}`;
+                const title = () => rel.name || rel.tag;
+                const excerpt = () => {
+                  const ex = excerptBody(rel.body);
+                  return ex && ex !== title() ? ex : "";
+                };
+                const assets = () => keyAssets(rel.assets, LATEST_ASSET_LIMIT);
+                return (
+                  // Divider-separated rows, never boxed (#135, echoing the
+                  // Issues rows from #231). Name-led title first (the tag
+                  // follows in mono); badges inline; asset quick-downloads
+                  // render on the Latest row only.
+                  <li class="border-t border-zinc-200 py-3 first:border-t-0 first:pt-0 dark:border-zinc-800">
+                    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <A
+                        class="min-w-0 max-w-full truncate font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+                        href={detail()}
+                      >
+                        {title()}
+                      </A>
+                      <Show when={isLatestRow(rel)}>
+                        <span class="chip shrink-0">latest</span>
+                      </Show>
+                      <ReleaseBadges release={rel} />
+                      <span class="ml-auto shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+                        {(rel.assets ?? []).length} assets · <DateTime value={rel.published_at ?? rel.created_at} />
+                      </span>
+                    </div>
+                    <div class="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+                      <span class="shrink-0 font-mono text-xs text-zinc-500 dark:text-zinc-400">{rel.tag}</span>
+                      <Show when={excerpt()}>
+                        <span class="min-w-0 truncate text-zinc-600 dark:text-zinc-400">{excerpt()}</span>
+                      </Show>
+                    </div>
+                    <Show when={isLatestRow(rel) && assets().shown.length > 0}>
+                      <div class="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-xs">
                         <For each={assets().shown}>
                           {(a) => (
-                            <li class="flex items-baseline justify-between gap-2 text-sm">
+                            <span class="flex min-w-0 items-baseline gap-1.5">
                               <a
-                                class="min-w-0 truncate font-mono text-[13px] text-emerald-700 hover:underline dark:text-emerald-400"
-                                href={ctx.repoClient.releaseAssetUrl(rel().tag, a.name)}
+                                class="min-w-0 max-w-64 truncate font-mono text-emerald-700 hover:underline dark:text-emerald-400"
+                                href={ctx.repoClient.releaseAssetUrl(rel.tag, a.name)}
                                 download={a.name}
                                 title={a.name}
                               >
                                 {a.name}
                               </a>
-                              <span class="muted tabular shrink-0 text-xs">{fmtBytes(a.size)}</span>
-                            </li>
+                              <span class="muted tabular shrink-0">{fmtBytes(a.size)}</span>
+                            </span>
                           )}
                         </For>
-                      </ul>
+                        <Show when={assets().extra > 0}>
+                          <A href={detail()} class="shrink-0 text-emerald-700 hover:underline dark:text-emerald-400">
+                            +{assets().extra} more →
+                          </A>
+                        </Show>
+                      </div>
                     </Show>
-                    <Show when={assets().extra > 0}>
-                      <A href={detail()} class="mt-1 inline-block text-xs text-emerald-700 hover:underline dark:text-emerald-400">
-                        +{assets().extra} more →
-                      </A>
-                    </Show>
-                  </div>
-                </div>
-              );
-            }}
-          </Show>
+                  </li>
+                );
+              }}
+            </For>
+          </ul>
         </Show>
-      </aside>
+        <Show when={getPage()?.more}>
+          <button
+            type="button"
+            class="btn mt-3"
+            onClick={() => {
+              const rels = releases();
+              const last = rels[rels.length - 1];
+              if (last) setAfter(`${last.created_at}|${last.tag}`);
+            }}
+          >
+            Older
+          </button>
+        </Show>
+      </Show>
     </div>
-    </Show>
   );
 }
