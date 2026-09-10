@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-// --- GET …/blob/{rev}/{path}[?raw] (§9.5) -------------------------------------------
+// --- GET …/blob/{rest}[?raw] (§9.5: rev may contain slashes — Resolve splits) ---
 
 type blobBody struct {
 	Ref      string `json:"ref"`
@@ -22,20 +22,23 @@ func (h *handlers) blob(w http.ResponseWriter, r *http.Request) {
 	if !h.open(w, r, AuthRead) {
 		return
 	}
-	rev := r.PathValue("rev")
-	path := r.PathValue("path")
-	if path == "" {
-		writePlain(w, http.StatusNotFound, "blob requires a path")
-		return
-	}
-	res, err := h.env.Repo.Resolve(r.Context(), RepoOf(r), rev)
+	// Greedy tail (issue #251): the rev may itself contain slashes, so the
+	// handler passes the whole tail to Resolve and lets its longest-prefix
+	// match split ref from path — the same treatment resolve already has.
+	rest := r.PathValue("rest")
+	res, err := h.env.Repo.Resolve(r.Context(), RepoOf(r), rest)
 	if err != nil {
 		mapViewErr(w, err)
 		return
 	}
+	path := res.Path
+	if path == "" {
+		writePlain(w, http.StatusNotFound, "blob requires a path")
+		return
+	}
 	ctx := r.Context()
 	class := ccSWR
-	if revIsFullSHA(rev) {
+	if revIsFullSHA(refPartOf(rest, path)) {
 		class = ccImmutable
 	}
 

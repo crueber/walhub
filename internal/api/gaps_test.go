@@ -140,6 +140,9 @@ func TestSummaryWithoutHead(t *testing.T) {
 func TestBlobRawAndGuards(t *testing.T) {
 	f := newFixture(t)
 	f.view.resolves["demo/walgit/"+fakeSHA] = Resolution{Ref: "", SHA: fakeSHA, Kind: "commit", Revision: 7}
+	// The handlers resolve the full tail (issue #251): the sha-addressed
+	// seed carries the split a real Resolve would return.
+	f.view.resolves["demo/walgit/"+fakeSHA+"/hi.txt"] = Resolution{Ref: "", SHA: fakeSHA, Path: "hi.txt", Kind: "commit", Revision: 7}
 	f.view.blobRaw["demo/walgit|"+fakeSHA+"|hi.txt"] = []byte("raw bytes")
 	f.view.blobs["demo/walgit|"+fakeSHA+"|hi.txt"] = BlobResult{Contents: []byte("hello"), Size: 5}
 
@@ -171,11 +174,13 @@ func TestBlobRawAndGuards(t *testing.T) {
 	if w = f.req("GET", "/demo/walgit/api/blob/main/absent.txt?raw"); w.Code != http.StatusNotFound {
 		t.Fatalf("raw missing = %d", w.Code)
 	}
-	// missing path (route-level empty path) → 404 guard
+	// missing path (empty resolved path) → 404 guard
 	h := &handlers{env: f.env}
+	f.view.resolves["demo/walgit/main"] = Resolution{Ref: "refs/heads/main", SHA: fakeSHA, Kind: "branch", Revision: 7}
 	r := httptest.NewRequest("GET", "/blob/main/", nil)
-	r.SetPathValue("rev", "main")
-	r.SetPathValue("path", "")
+	r.SetPathValue("owner", "demo")
+	r.SetPathValue("repo", "walgit")
+	r.SetPathValue("rest", "main")
 	w2 := httptest.NewRecorder()
 	h.blob(w2, r)
 	if w2.Code != http.StatusNotFound || w2.Body.String() != "blob requires a path" {

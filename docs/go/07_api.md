@@ -505,9 +505,12 @@ Response `{ref, sha, path, kind:"branch"|"tag"|"commit"}`; SWR + `ETag: "<sha>"`
 
 A tags-name tie example: rest `v1/src` with tag `v1` and branch `v1` both existing → branch wins, `path = "src"`.
 
-### 9.4 Tree — `GET …/tree/{rev}[/{path}]`
+### 9.4 Tree — `GET …/tree/{rest}` (rev may contain slashes)
 
-Resolve `{rev}` first (§9.3); then `git ls-tree -l -z <tree-sha> -- <path>` is wrong when `path` is a
+The route is greedy: the handler passes the whole tail to `Resolve` and the
+§9.3 longest-prefix match splits ref from path (issue #251 — a slashed
+branch like `feat/identity` resolves exactly as `…/resolve/feat/identity`
+does). Then `git ls-tree -l -z <tree-sha>` is wrong when `path` is a
 prefix walk — normative recipe: resolve the tree object of `path` first (`rev`'s commit → tree, descend
 by `path` segments via `git ls-tree -z <tree> <seg>` per segment or a single
 `git ls-tree -z -l <commit-ish> -- <path>` on the directory), then:
@@ -524,12 +527,14 @@ git log -1 --format=<FMT_COMMIT> --no-color <commit-sha> -- <path>   # commit? n
   case-insensitive, in the sorted order above; contents fetched via `git cat-file blob <sha>`, emitted
   only when valid UTF-8 (`readme: {name, contents}` omitted otherwise).
 - Response: `{ref, sha, path, entries:[{name,type,mode,size,sha}], commit?, readme?}`; `commit` present
-  only when `path` is non-empty; full-sha `rev` → immutable class; `404` if the target is not a tree.
+  only when `path` is non-empty; a full-sha addressed rev (the rev portion of the tail) → immutable class; `404` if the target is not a tree.
 - `mode` is the 6-char git mode string verbatim (`100644`, `040000` for trees as git prints, `160000`).
 
-### 9.5 Blob — `GET …/blob/{rev}/{path}[?raw]`
+### 9.5 Blob — `GET …/blob/{rest}[?raw]` (rev may contain slashes)
 
-1. Resolve `rev`, then walk `path` to the blob sha (must be `100644|100755|120000`; else `404`).
+1. Resolve the whole tail (§9.3 longest-prefix split — issue #251); a
+   slashed branch resolves exactly as the resolve endpoint splits it. Empty
+   resolved path → `404` "blob requires a path". Then walk `path` to the blob sha (must be `100644|100755|120000`; else `404`).
 2. `size` via `git cat-file -s <sha>`; if `size > 2 MiB` → `{"ref","sha","path","name","size","too_large":true}` (no contents).
 3. Else `git cat-file blob <sha>` capped at 2 MiB+1 read; NUL or invalid UTF-8 → `"binary":true`; else `"contents":"<utf-8 text>"`.
 4. `?raw` bypasses JSON: `200 text/plain; charset=utf-8` full raw bytes (the cap is a JSON-shape rule). Same caching rules as the JSON form.
@@ -750,6 +755,17 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
 
 ## 14. Decisions & deviations from the Rust design
 
+- **Greedy blob/tree tails (Forgejo #251).** `tree/{rev}[/{path}]` and
+  `blob/{rev}/{path}` were single-segment rev routes, so a slashed branch
+  (`feat/identity`) was amputated to `feat` before Resolve saw it (404)
+  while `resolve/{rest...}` answered fine. Both routes are now greedy
+  (`tree/{rest...}`, `blob/{rest...}`) and the handlers pass the whole tail
+  to Resolve's longest-prefix split, using `res.Path` as the file path;
+  the immutable cache class tests the rev portion of the tail
+  (`refPartOf`), and render/?raw cache keys still sit on the resolved sha.
+  Discovery templates keep the `{rev}`/`{path}` spellings, so `endpoints[]`
+  is unchanged. Rationale: one split rule (§9.3) for every ref-addressed
+  read instead of two disagreeing ones.
 - **Hand-rolled LRU + single-flight** instead of moka/`golang-lru`/`singleflight` crates — the dependency
   policy allows only `x/net` and `BurntSushi/toml`; the single-flight sketch (§5.1) is the whole pattern.
 - **Render-cache entries are revision-stamped** and the bucket envelope carries `revision` — the Rust spec

@@ -490,6 +490,7 @@ func TestTreeCacheClasses(t *testing.T) {
 	}
 	// sha-addressed: immutable
 	f.view.trees["demo/walgit|"+fakeSHA+"|src"] = f.view.trees["demo/walgit|"+fakeSHA+"|src"]
+	f.view.resolves["demo/walgit/"+fakeSHA+"/src"] = Resolution{Ref: "", SHA: fakeSHA, Path: "src", Kind: "commit", Revision: 7}
 	w = f.req("GET", "/demo/walgit/api/tree/"+fakeSHA+"/src")
 	if cc := w.Header().Get("Cache-Control"); cc != ccImmutable {
 		t.Fatalf("sha tree cache = %q", cc)
@@ -518,6 +519,12 @@ func TestTreeCacheClasses(t *testing.T) {
 func TestBlobShapes(t *testing.T) {
 	f := newFixture(t)
 	seedSummary(f)
+	// The handlers resolve the full tail (issue #251), so the fake seeds
+	// the whole-tail keys a real Resolve would split ref-first.
+	for _, p := range []string{"src/a.txt", "src/b.bin", "src/c.big"} {
+		f.view.resolves["demo/walgit/main/"+p] = Resolution{Ref: "refs/heads/main", SHA: fakeSHA, Path: p, Kind: "branch", Revision: 7}
+	}
+	f.view.resolves["demo/walgit/"+fakeSHA+"/src/a.txt"] = Resolution{Ref: "", SHA: fakeSHA, Path: "src/a.txt", Kind: "commit", Revision: 7}
 	f.view.blobs["demo/walgit|"+fakeSHA+"|src/a.txt"] = BlobResult{Size: 5, Contents: []byte("hello")}
 	f.view.blobs["demo/walgit|"+fakeSHA+"|src/b.bin"] = BlobResult{Size: 3, Binary: true, Contents: []byte{0, 1, 2}}
 	big := strings.Repeat("x", 2<<20+1)
@@ -1120,7 +1127,10 @@ func TestRoutingConventions(t *testing.T) {
 		t.Fatalf("junk status = %d", w.Code)
 	}
 	// per-segment decoding: one segment "feat/ure x" (the encoded slash
-	// must NOT split the segment into a path separator)
+	// must NOT split the segment into a path separator). The handler
+	// resolves the whole tail, so the seed mirrors a longest-prefix split
+	// of branch "main" + leftover path "feat/ure x".
+	f.view.resolves["demo/walgit/main/feat/ure x"] = Resolution{Ref: "refs/heads/main", SHA: fakeSHA, Path: "feat/ure x", Kind: "branch", Revision: 7}
 	f.view.trees["demo/walgit|"+fakeSHA+"|feat/ure x"] = TreeResult{Entries: []TreeEntry{}}
 	w = f.req("GET", "/demo/walgit/api/tree/main/feat%2Fure%20x")
 	if w.Code != 200 {
