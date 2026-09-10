@@ -37,6 +37,7 @@ commits are ordinary git objects; a PR's *head* is an ordinary ref published thr
 | [`09_rollout.md`](09_rollout.md) | Implementation phasing, agent dispatch plan, API versioning, invariants | all |
 | [`10_git_import.md`](10_git_import.md) | One-shot git import (clone-and-land + provenance) | — |
 | [`11_mirror.md`](11_mirror.md) | Pull-only mirrors with scheduled upstream syncs | 10 (clone/enumerate/refmap/scrub/SSRF reuse) |
+| [`12_runner.md`](12_runner.md) | GitHub-style runners design plan (DRAFT — awaiting review, do not implement) | 05 (checks reporting + merge gate) |
 
 ## Shared primitives (normative for every feature doc)
 
