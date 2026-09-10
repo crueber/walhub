@@ -543,6 +543,34 @@ func (r *repoRegistry) Repos(ctx context.Context, owner string) ([]string, error
 	return r.liveRepos(ctx, owner)
 }
 
+// OwnerRepoCounts answers the api.RepoRegistry per-owner live-repo counts
+// (Forgejo #307 — the owners/detailed repo_count rail). It walks exactly
+// what Owners walks — one liveRepos pass per owner, same manifest-gated
+// ghost rule, same trip profile — and keeps the lengths Owners discards,
+// so the detailed endpoint pays zero added store trips for the counts.
+// Owners with zero live repos are absent, never zero-valued.
+//
+// ### Concurrency
+// Hazard: none new — the loop is sequential like Owners (no shared mutable
+// state, no lock); parallelism lives inside each liveRepos call, unchanged.
+func (r *repoRegistry) OwnerRepoCounts(ctx context.Context) (map[string]int, error) {
+	owners, err := listOwners(ctx, r.st)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	for _, owner := range owners {
+		repos, rerr := r.liveRepos(ctx, owner)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if len(repos) > 0 {
+			out[owner] = len(repos)
+		}
+	}
+	return out, nil
+}
+
 // liveRepos lists the manifest-backed repos under owner: the raw prefix
 // listing minus deleted-repo ghosts (manifest.pb swept, sidecar litter
 // behind) and unborn fork-provisioned prefixes (fork.json, manifest not yet

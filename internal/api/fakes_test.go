@@ -223,6 +223,22 @@ func (f *fakeRegistry) Repos(_ context.Context, owner string) ([]string, error) 
 	return append([]string{}, f.repos[owner]...), f.fail
 }
 
+// OwnerRepoCounts mirrors the real registry's rule (serve.go liveRepos):
+// manifest-gated counts, so owners with zero live repos are absent, never
+// zero-valued. The fake has no ghosts — every listed repo is live.
+func (f *fakeRegistry) OwnerRepoCounts(_ context.Context) (map[string]int, error) {
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	out := map[string]int{}
+	for o, repos := range f.repos {
+		if len(repos) > 0 {
+			out[o] = len(repos)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeRegistry) Exists(_ context.Context, id git.RepoId) (bool, error) {
 	return f.created[id.String()], f.fail
 }

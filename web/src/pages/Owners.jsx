@@ -28,12 +28,11 @@
 // (Repos.jsx) in a responsive two-column grid (one column on narrow
 // widths). No new deps (issues #117, #137, #142).
 //
-// NOTE (Forgejo #295): there is deliberately NO instance repo total on this
-// page — no endpoint serves one (owners/detailed rows carry no repo counts
-// and walking every owner's listing would be the N-fetch antipattern this
-// page avoids). That count needs a backend rail (e.g. repo_count on the
-// owners/detailed rows); until then the page states the owner total only
-// rather than printing a capped sum as a total.
+// CLOSED (Forgejo #307): the instance repo total now rides the
+// owners/detailed rows (`repo_count` per row — the manifest-gated live-repo
+// count, ghost-filtered like liveRepos). The intro card sums it over the
+// uncapped payload via lib/owners.js instanceRepoTotal — never the top-5
+// slice, never a per-owner listing walk.
 
 import repos from "../../sdk/src/index.js";
 import { For, Show, createEffect, createSignal } from "solid-js";
@@ -45,6 +44,7 @@ import {
   MAX_REPOS_PER_OWNER,
   activeOwnerNames,
   hasKnownActivity,
+  instanceRepoTotal,
   orderByActivity,
   orderOwnersByActivity,
   ownerActivity,
@@ -153,10 +153,14 @@ export default function Owners() {
         <Show when={getOwners()}>
           {(doc) => {
             const rows = doc().owners;
-            const total = Array.isArray(rows) ? rows.length : 0;
+            const owners = Array.isArray(rows) ? rows.length : 0;
+            // Instance repo total (Forgejo #307): the sum of the served
+            // repo_count fields over the UNCAPPED payload rows — never the
+            // top-5 slice, never a per-owner listing walk.
+            const repos = instanceRepoTotal(rows);
             return (
               <p class="muted mt-2 text-sm">
-                Home to {total} owner{total === 1 ? "" : "s"} — showing the most active below.
+                Home to {owners} owner{owners === 1 ? "" : "s"} and {repos} repositor{repos === 1 ? "y" : "ies"} — showing the most active below.
               </p>
             );
           }}

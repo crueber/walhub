@@ -220,6 +220,13 @@ func TestOwnersDetailedShapeAndSort(t *testing.T) {
 			t.Fatalf("%s must be null: %+v", r.Name, r)
 		}
 	}
+	// repo_count rides every row (Forgejo #307 — one live repo each here);
+	// null-activity rows still carry their count (unknown activity ≠ no repos).
+	for _, r := range rows {
+		if r.RepoCount != 1 {
+			t.Fatalf("%s repo_count = %d, want 1 (%+v)", r.Name, r.RepoCount, r)
+		}
+	}
 	// Asc: bob before alice, unknowns still last.
 	w = f.req("GET", "/api/v1/owners/detailed?sort=activity&order=asc")
 	rows = decodeOwnersDetailed(t, w.Body.Bytes())
@@ -358,5 +365,111 @@ func TestOwnersActivityErrorBranches(t *testing.T) {
 	}
 	if w := f4.req("GET", "/api/v1/owners/detailed"); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("corrupt detailed → %d, want 503", w.Code)
+	}
+}
+
+// TestOwnersDetailedRepoCounts pins the Forgejo #307 rail: every row carries
+// its manifest-gated live-repo count, and the instance repo total is the sum
+// over the uncapped payload (never a capped slice, never a per-owner walk).
+func TestOwnersDetailedRepoCounts(t *testing.T) {
+	cases := []struct {
+		name   string
+		repos  map[string][]string
+		query  string
+		counts map[string]int
+		total  int
+	}{
+		{
+			name:   "varied counts sum to the instance total",
+			repos:  map[string][]string{"alice": {"a1", "a2", "a3"}, "bob": {"b"}, "zed": {"z1", "z2"}},
+			query:  "",
+			counts: map[string]int{"alice": 3, "bob": 1, "zed": 2},
+			total:  6,
+		},
+		{
+			name:   "counts ride the activity sort too",
+			repos:  map[string][]string{"alice": {"a1", "a2", "a3"}, "bob": {"b"}},
+			query:  "?sort=activity&order=desc",
+			counts: map[string]int{"alice": 3, "bob": 1},
+			total:  4,
+		},
+		{
+			name:   "zero-live owners are absent, never zero-valued",
+			repos:  map[string][]string{"alice": {"a"}, "empty": {}},
+			query:  "",
+			counts: map[string]int{"alice": 1},
+			total:  1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.reg.repos = tc.repos
+			// All three twins serve the field identically.
+			for _, lane := range []string{"/api/v1/owners/detailed", "/api-browser/v1/owners/detailed", "/services/api/owners/detailed"} {
+				w := f.req("GET", lane+tc.query)
+				if w.Code != 200 {
+					t.Fatalf("%s%s → %d", lane, tc.query, w.Code)
+				}
+				rows := decodeOwnersDetailed(t, w.Body.Bytes())
+				if len(rows) != len(tc.counts) {
+					t.Fatalf("%s: %d rows, want %d (%+v)", lane, len(rows), len(tc.counts), rows)
+				}
+				sum := 0
+				for _, r := range rows {
+					want, ok := tc.counts[r.Name]
+					if !ok {
+						t.Fatalf("%s: unexpected owner %q (%+v)", lane, r.Name, rows)
+					}
+					if r.RepoCount != want {
+						t.Fatalf("%s: %q repo_count = %d, want %d", lane, r.Name, r.RepoCount, want)
+					}
+					sum += r.RepoCount
+				}
+				if sum != tc.total {
+					t.Fatalf("%s: instance total = %d, want %d", lane, sum, tc.total)
+				}
+			}
+		})
+	}
+}
+
+// TestOwnersDetailedRepoCountPresent decodes one payload raw: repo_count is
+// always present (never null, never omitted — membership implies ≥1 live
+// repo), so a zero count on the wire is a bug, not "unknown".
+func TestOwnersDetailedRepoCountPresent(t *testing.T) {
+	f := multiOwnerFixture(t)
+	w := f.req("GET", "/api/v1/owners/detailed")
+	if w.Code != 200 {
+		t.Fatalf("code=%d", w.Code)
+	}
+	var doc struct {
+		Owners []map[string]any `json:"owners"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Owners) != 4 {
+		t.Fatalf("rows = %v", doc.Owners)
+	}
+	for _, r := range doc.Owners {
+		v, ok := r["repo_count"]
+		if !ok {
+			t.Fatalf("repo_count missing: %v", r)
+		}
+		if n, isNum := v.(float64); !isNum || n < 1 {
+			t.Fatalf("repo_count = %v, want a positive number (%v)", v, r)
+		}
+	}
+}
+
+// TestOwnersDetailedCountsError pins the failure mapping: a registry failure
+// behind OwnerRepoCounts is a 503 (never a nil-pointer 500, never a 200 with
+// zeroed rows).
+func TestOwnersDetailedCountsError(t *testing.T) {
+	f := newFixture(t)
+	f.reg.fail = errFakeOwners
+	if w := f.req("GET", "/api/v1/owners/detailed"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("counts failure → %d, want 503", w.Code)
 	}
 }

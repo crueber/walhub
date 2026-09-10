@@ -266,10 +266,13 @@ export class ReposClient {
   }
 
   /**
-   * Per-owner activity rows (Forgejo #283):
+   * Per-owner activity rows (Forgejo #283, counts Forgejo #307):
    * `GET /api/v1/owners/detailed?sort=&order=` →
-   * `{owners: [{name, last_commit_sha|null, last_commit_time|null}]}` (the
-   * max over each owner's repos; null when the owner has no commits).
+   * `{owners: [{name, repo_count, last_commit_sha|null, last_commit_time|null}]}`
+   * (activity is the max over each owner's repos; null when the owner has no
+   * commits. `repo_count` is the owner's manifest-gated live-repo count —
+   * always present; the instance repo total is the sum over the uncapped
+   * payload, never a capped slice).
    * Same no-store rationale as ownersList (issue #200).
    *
    * @param {{sort?: "name"|"activity", order?: "asc"|"desc"}} [query]

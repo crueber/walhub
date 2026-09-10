@@ -133,3 +133,57 @@ func TestRepoRegistryDeleteVanishesAndRecreates(t *testing.T) {
 		checkStrings(t, "Owners after re-create", owners, []string{"acme"})
 	}
 }
+
+// OwnerRepoCounts is the Forgejo #307 count rail: per-owner live-repo counts
+// over the same manifest-gated liveRepos walk Owners uses — ghosts (deleted
+// litter, unborn fork prefixes) never count, litter-only owners are absent.
+func TestRepoRegistryOwnerCounts(t *testing.T) {
+	r, ctx := testRepoRegistry(t)
+	mustCreate(t, r, ctx, "acme/api")
+	mustCreate(t, r, ctx, "acme/keep")
+	mustCreate(t, r, ctx, "solo/one")
+	mustPut(t, ctx, r.st, "repos/acme/ghost/note.json") // deleted-repo litter: not a repo
+	mustPut(t, ctx, r.st, "repos/acme/child/fork.json") // unborn fork child: not a repo yet
+	mustPut(t, ctx, r.st, "repos/litter/ghost/note.json")
+
+	counts, err := r.OwnerRepoCounts(ctx)
+	if err != nil {
+		t.Fatalf("OwnerRepoCounts: %v", err)
+	}
+	want := map[string]int{"acme": 2, "solo": 1}
+	if len(counts) != len(want) {
+		t.Fatalf("counts = %v, want %v", counts, want)
+	}
+	for o, n := range want {
+		if counts[o] != n {
+			t.Fatalf("counts = %v, want %v", counts, want)
+		}
+	}
+	// Instance total is the sum over the payload; the litter-only owner is absent.
+	sum := 0
+	for _, n := range counts {
+		sum += n
+	}
+	if sum != 3 {
+		t.Fatalf("instance total = %d, want 3 (%v)", sum, counts)
+	}
+
+	// Delete moves the count; deleting the last repo removes the owner —
+	// the same membership rule Owners enforces.
+	if err := r.Delete(ctx, git.RepoId{Owner: "acme", Name: "api"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if counts, err = r.OwnerRepoCounts(ctx); err != nil {
+		t.Fatalf("OwnerRepoCounts: %v", err)
+	} else if counts["acme"] != 1 {
+		t.Fatalf("counts after delete = %v", counts)
+	}
+	if err := r.Delete(ctx, git.RepoId{Owner: "solo", Name: "one"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if counts, err = r.OwnerRepoCounts(ctx); err != nil {
+		t.Fatalf("OwnerRepoCounts: %v", err)
+	} else if _, ok := counts["solo"]; ok {
+		t.Fatalf("solo must vanish with its last repo: %v", counts)
+	}
+}

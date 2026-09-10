@@ -126,6 +126,11 @@ type RepoRegistry interface {
 	Owners(ctx context.Context) ([]string, error)
 	// Repos returns sorted short repo names; [] for an unknown owner.
 	Repos(ctx context.Context, owner string) ([]string, error)
+	// OwnerRepoCounts returns the live-repo count per owner (Forgejo #307:
+	// the owners/detailed repo_count rail). Same membership and ghost rule
+	// as Owners/Repos (manifest-backed repos only — the liveRepos rule);
+	// owners with zero live repos are absent, never zero-valued.
+	OwnerRepoCounts(ctx context.Context) (map[string]int, error)
 	// Exists reports whether the repo is registered.
 	Exists(ctx context.Context, id git.RepoId) (bool, error)
 	// Create registers a new repo with the given object format; ErrExists-class
