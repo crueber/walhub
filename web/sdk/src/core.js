@@ -315,10 +315,13 @@ export class ReposClient {
    * Object-row listing with size + activity state (Forgejo #248, extended
    * #247):
    * `GET /api/v1/owners/{owner}/repos/detailed?sort=&order=&min_bytes=&max_bytes=`
-   * → `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?, last_commit_sha|null, last_commit_time|null, last_push_at|null}]}`.
+   * → `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?, last_commit_sha|null, last_commit_time|null, last_push_at|null, mirror, mirror_upstream?}]}`.
    * `size_bytes: null` = unknown/unbackfilled (UI hides); `0` = verified-empty.
    * Activity nulls = unknown (stamps fall back to the per-row fetch), except
    * verified-empty repos which render "no commits yet" without a fetch.
+   * `mirror` (Forgejo #281) = a mirror sidecar exists; `mirror_upstream` =
+   * its canonical upstream URL when the sidecar parses — the listing-row
+   * badge rides this payload, never a per-row summary fetch.
    * `sort=activity&order=desc` orders by most recent commit (explore page).
    * Same no-store rationale as ownerRepos (issue #200).
    *

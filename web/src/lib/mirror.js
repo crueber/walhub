@@ -75,3 +75,24 @@ export function validateMirrorCreate({ sourceUrl, owner, name, schedule }) {
   if (!isMirrorPreset(schedule)) return { error: "pick a schedule preset" };
   return {};
 }
+
+/**
+ * Listing-row badge rule (Forgejo #281): the detailed owner listing
+ * carries only the mirror flag (+ the upstream URL when the sidecar
+ * parses) — never a per-row summary — so <RepoRow> turns the flag
+ * into badge text through this pure helper. Headless-testable (no
+ * Solid, no DOM); the pages stay thin.
+ *
+ * @param {{mirror?: boolean, upstream?: string}|null} row the listing row's mirror fields
+ * @returns {{show: boolean, label: string, title: string}} title names
+ * the upstream when known (the accessible label); label is the chip text
+ */
+export function mirrorRowBadge(row) {
+  if (!row?.mirror) return { show: false, label: "", title: "" };
+  const up = String(row.upstream ?? "").trim();
+  return {
+    show: true,
+    label: "mirror",
+    title: up ? `mirror of ${up} · pull-only` : "mirror · pull-only",
+  };
+}

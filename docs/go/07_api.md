@@ -416,6 +416,14 @@ hint*, not an ACL.
   for a missing optional object). Ties break on `(owner, name)` (shared with #247 ordering).
   SWR class. Size semantic: stored-object size (packs+idx — see 02 §2.1; overview
   `LiveBytes` stays Σ PackSize-only and is documented as differing by IdxSize).
+  Mirror flags (Forgejo #281): every row also carries `mirror` (always present,
+  never null — true iff the pull-only mirror sidecar exists) plus
+  `mirror_upstream` (the sidecar's canonical upstream URL, only when the
+  sidecar parses) so listing rows render the mirror indicator with no
+  per-row summary fetch. The flags come from bounded-parallel per-row
+  sidecar probes (≤ 8 in flight — request count, no sequential depth;
+  see Decisions); absent/corrupt sidecars degrade to `false` / `true`
+  without upstream (fail closed), never an error.
 - `GET /api/v1/owners/{o}/profile` (Forgejo #234 — NEW alongside v1, triple twins
   `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.profile`) →
   `{owner, display_name, location, timezone, bio_markdown, updated_at?, can_edit?}` (all strings,
@@ -953,3 +961,20 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   (a HeadLive-only token would 304 a thread whose comments never moved the
   head). Client invalidation helpers are unchanged (out of scope — the
   header contract covers the reload case).
+- **Listing mirror flags ride the detailed endpoint (Forgejo #281).**
+  `GET /api/v1/owners/{owner}/repos/detailed` rows gain `mirror` (always
+  present, never null) + `mirror_upstream?` (only when the sidecar parses)
+  so listing rows render the mirror indicator with no per-row summary
+  fetch (the N-summary-GETs alternative is rejected — same additive shape,
+  consumers-ignore-unknown-fields rule as #247/#248). The flags come from
+  per-row sidecar probes (`repos/<o>/<r>/meta/mirror.json` — probe, don't
+  list, law 4) issued in bounded-parallel (≤ 8 in flight: request count,
+  no sequential depth — the catalog read stays the single sequential
+  object read) with disjoint per-index writes (no locks; see the
+  `### Concurrency` note on `fillMirrorFlags`). Present-but-corrupt counts
+  as a mirror without upstream (the `IsMirror` fail-closed parity); the
+  probe reads the body inline (no `internal/mirror` import from core —
+  law 8) and any store error degrades to non-mirror, never a 500.
+  Rationale: the catalog carries no mirror state and the listing (not a
+  push/refs hot path) is where the indicator must live; parallelism keeps
+  the round-trip budget honest.

@@ -54,7 +54,7 @@ function OwnerSection(props) {
               <Show when={shown.length > 0} fallback={<p class="muted mt-1 text-sm">nothing under {props.owner} yet</p>}>
                 <ul class="mt-1 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
                   <For each={shown}>
-                    {(row) => <RepoRow owner={props.owner} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} />}
+                    {(row) => <RepoRow owner={props.owner} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} mirror={row.mirror} mirrorUpstream={row.mirror_upstream} />}
                   </For>
                 </ul>
               </Show>

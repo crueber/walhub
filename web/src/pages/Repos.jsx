@@ -16,7 +16,7 @@
 // `social:{o}/{r}` cache entries (<StarCount>, lib/stars.js) and last-active
 // stamps render from the listing rows (<ActivityStamp at/empty props>, no
 // per-row fetch), so rows fetched on `/` are reused here. The shared
-// <RepoRow> (link + star count + last-active stamp) renders in a responsive
+// <RepoRow> (link + mirror badge + star count + last-active stamp) renders in a responsive
 // two-column grid, one column on narrow widths — the owners page builds on
 // the same component.
 
@@ -32,17 +32,22 @@ import {
   profileSaveBody,
 } from "../lib/profile.js";
 import { renderBody } from "../lib/render-md.js";
+import { mirrorRowBadge } from "../lib/mirror.js";
 import StarCount from "../components/StarCount.jsx";
 import ActivityStamp from "../components/ActivityStamp.jsx";
 
-/** One repo row: link + star count + last-active stamp. Shared with `/`.
+/** One repo row: link + mirror badge + star count + last-active stamp. Shared with `/`.
  *  Issue #235, explicitly descoped: rows ride the detailed owners listing,
  *  so there is no per-repo summary in hand — showing descriptions here would
  *  cost one summary fetch per row (N round trips for N repos). The repo
  *  header remains the description surface. `at`/`empty` carry the listing's
- *  activity so the stamp renders without a fetch (Forgejo #247). */
+ *  activity so the stamp renders without a fetch (Forgejo #247).
+ *  `mirror`/`mirrorUpstream` carry the listing's mirror flag (Forgejo #281:
+ *  same payload, no extra fetch) so mirror rows render the badge with an
+ *  accessible label naming the upstream when known. */
 export function RepoRow(props) {
   const full = () => `${props.owner}/${props.name}`;
+  const badge = () => mirrorRowBadge({ mirror: props.mirror, upstream: props.mirrorUpstream });
   return (
     <li class="flex flex-wrap items-baseline gap-x-1.5">
       <A
@@ -51,6 +56,11 @@ export function RepoRow(props) {
       >
         {full()}
       </A>
+      <Show when={badge().show}>
+        <span class="pill mirror-badge" title={badge().title} aria-label={badge().title}>
+          {badge().label}
+        </span>
+      </Show>
       <StarCount full={full()} />
       <ActivityStamp full={full()} at={props.at} empty={props.empty} />
     </li>
@@ -260,7 +270,7 @@ export default function Repos() {
               >
                 <ul class="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
                   <For each={rows}>
-                    {(row) => <RepoRow owner={owner()} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} />}
+                    {(row) => <RepoRow owner={owner()} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} mirror={row.mirror} mirrorUpstream={row.mirror_upstream} />}
                   </For>
                 </ul>
               </Show>

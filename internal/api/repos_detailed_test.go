@@ -182,3 +182,62 @@ func TestOwnerReposDetailedTwinsAndDiscovery(t *testing.T) {
 		t.Fatalf("discovery missing detailed template: %v", doc.Endpoints)
 	}
 }
+
+// TestOwnerReposDetailedMirrorFlag (Forgejo #281): rows carry the
+// mirror flag (+ upstream when the sidecar parses) with no per-row
+// summary fetch — the listing itself is the source. Absent sidecar →
+// false; valid sidecar → true + upstream; corrupt-but-present → true
+// with no upstream (fail closed).
+func TestOwnerReposDetailedMirrorFlag(t *testing.T) {
+	f := newFixture(t)
+	putTestCatalog(t, f)
+	ctx := context.Background()
+	put := func(owner, name, body string) {
+		t.Helper()
+		if _, err := f.env.Store.Put(ctx, store.MirrorKey(owner, name),
+			store.PutBody{Bytes: []byte(body)}, store.PutOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byName := func(rows []RepoSizeRow) map[string]RepoSizeRow {
+		m := map[string]RepoSizeRow{}
+		for _, r := range rows {
+			m[r.Name] = r
+		}
+		return m
+	}
+
+	// No sidecars → every row is a non-mirror (flag present, false).
+	w := f.req("GET", "/api/v1/owners/demo/repos/detailed")
+	if w.Code != 200 {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	rows := byName(decodeDetailed(t, w.Body.Bytes()))
+	if rows["hello"].Mirror || rows["walgit"].Mirror {
+		t.Fatalf("no sidecars, want mirror=false: %+v", rows)
+	}
+	if rows["hello"].MirrorUpstream != "" {
+		t.Fatalf("no upstream without sidecar: %+v", rows["hello"])
+	}
+
+	// Valid sidecar on hello; corrupt-but-present on walgit.
+	put("demo", "hello", `{"version":1,"upstream_url":"https://example.com/up.git","schedule":"daily"}`)
+	put("demo", "walgit", `}{ not json`)
+	w = f.req("GET", "/api/v1/owners/demo/repos/detailed")
+	if w.Code != 200 {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	rows = byName(decodeDetailed(t, w.Body.Bytes()))
+	if !rows["hello"].Mirror {
+		t.Fatalf("hello sidecar present, want mirror=true: %+v", rows["hello"])
+	}
+	if rows["hello"].MirrorUpstream != "https://example.com/up.git" {
+		t.Fatalf("hello upstream: %+v", rows["hello"])
+	}
+	if !rows["walgit"].Mirror {
+		t.Fatalf("corrupt sidecar still counts as mirror (fail closed): %+v", rows["walgit"])
+	}
+	if rows["walgit"].MirrorUpstream != "" {
+		t.Fatalf("corrupt sidecar carries no upstream: %+v", rows["walgit"])
+	}
+}

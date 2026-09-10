@@ -1,22 +1,33 @@
 // web/src/pages/Import.jsx — route "/import" (docs/features/10 §5):
 // import form → running (progress bars + log tail from the task SSE
-// stream) → done/error. Solid signals/stores + context only (D-WEB-6);
-// every call through the SDK (dogfood rule); dark + light via dark:
-// variants on every surface; permission gating disables the form AND
-// honors server 401/403 (never client-only enforcement).
+// stream) → done/error. Forgejo #281 adds the mirror mode: the same
+// source/owner/name/token fields plus a schedule preset switch the
+// submit target to POST /api/v1/repos/mirrors (shared
+// validateMirrorCreate/MIRROR_PRESETS); the 202 lands on the repo page,
+// which renders the awaiting-first-sync state. Solid signals/stores +
+// context only (D-WEB-6); every call through the SDK (dogfood rule);
+// dark + light via dark: variants on every surface; permission gating
+// disables the form AND honors server 401/403 (never client-only
+// enforcement).
 
 import { createSignal, For, Show, onCleanup } from "solid-js";
-import { A, useSearchParams } from "@solidjs/router";
+import { A, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { normalizeSource } from "../../sdk/src/import.js";
+import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
 import { reportError, invalidate } from "../lib/data.js";
 
 export default function Import() {
   const [search] = useSearchParams();
+  const navigate = useNavigate();
   const [getUrl, setUrl] = createSignal("");
   const [getOwner, setOwner] = createSignal(search.owner ?? "");
   const [getName, setName] = createSignal("");
   const [getToken, setToken] = createSignal("");
+  // Forgejo #281: mode toggle — one-shot import vs continuous mirror.
+  // Import = snapshot now; mirror = recurring pull (pushes rejected).
+  const [getMode, setMode] = createSignal("import"); // import | mirror
+  const [getSchedule, setSchedule] = createSignal(DEFAULT_MIRROR_PRESET);
   const [getBranchOnly, setBranchOnly] = createSignal(false);
   const [getPullHeads, setPullHeads] = createSignal(false);
   const [getNotes, setNotes] = createSignal(false);
@@ -76,10 +87,51 @@ export default function Import() {
     setBars({});
     setLog([]);
     setOutcome(null);
-    setPhase("running");
     ctrl?.abort();
     ctrl = new AbortController();
     const signal = ctrl.signal;
+    // Mirror mode: validate through the shared mirror rule, create via
+    // the mirror endpoint (POST /api/v1/repos/mirrors), then land on
+    // the repo page — which renders the awaiting-first-sync state (#281
+    // criterion 2) until the async first sync lands. No SSE attach: the
+    // 202 only carries the sync task id, and the repo page is the
+    // progress surface.
+    if (getMode() === "mirror") {
+      setPhase("running");
+      try {
+        const mv = validateMirrorCreate({
+          sourceUrl: getUrl(),
+          owner: getOwner(),
+          name: getName(),
+          schedule: getSchedule(),
+        });
+        if (mv.error) throw new Error(mv.error);
+        const payload = {
+          source_url: getUrl().trim(),
+          owner: getOwner().trim(),
+          name: getName().trim(),
+          schedule: getSchedule(),
+        };
+        if (getToken()) payload.token = getToken();
+        if (getDangerous()) payload.dangerous = true;
+        const created = await repos.mirrors.create(payload, { signal });
+        const target = created?.target ?? `${payload.owner}/${payload.name}`;
+        landedVisible(target);
+        navigate(`/${target}`);
+        return;
+      } catch (err) {
+        if (err?.status === 499 || signal.aborted) return; // navigated away
+        const msg = String(err?.message ?? err ?? "mirror create failed");
+        setErr(msg);
+        pushLog(`error: ${msg}`);
+        setPhase("error");
+        reportError(err, "import");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    setPhase("running");
     try {
       const payload = {
         source_url: getUrl().trim(),
@@ -132,7 +184,16 @@ export default function Import() {
       <h2 class="text-xl font-semibold">Import repository</h2>
       <Show when={getPhase() === "form" || getPhase() === "error"}>
         <form class="card grid gap-3 p-4" onSubmit={start} aria-label="Import repository">
-          <label class="grid gap-1">
+          <div class="flex flex-wrap gap-4" role="radiogroup" aria-label="Import kind">
+            <label class="flex items-center gap-1 text-sm">
+              <input type="radio" name="kind" checked={getMode() === "import"} onChange={() => setMode("import")} />
+              import once <span class="muted">(one-shot snapshot)</span>
+            </label>
+            <label class="flex items-center gap-1 text-sm">
+              <input type="radio" name="kind" checked={getMode() === "mirror"} onChange={() => setMode("mirror")} />
+              mirror continuously <span class="muted">(recurring pull, pushes rejected)</span>
+            </label>
+          </div>          <label class="grid gap-1">
             <span class="text-sm font-medium">Source URL (owner/repo, GitHub URL, or any git URL)</span>
             <input
               class="input font-mono"
@@ -194,27 +255,43 @@ export default function Import() {
             />
           </label>
           <div class="flex flex-wrap gap-4">
-            <label class="flex items-center gap-1 text-sm">
-              <input type="checkbox" checked={getBranchOnly()} onChange={(e) => setBranchOnly(e.currentTarget.checked)} />
-              default branch only
-            </label>
-            <label class="flex items-center gap-1 text-sm" title="refs/pull/N/head only — never /merge">
-              <input type="checkbox" checked={getPullHeads()} onChange={(e) => setPullHeads(e.currentTarget.checked)} />
-              include PR heads
-            </label>
-            <label class="flex items-center gap-1 text-sm">
-              <input type="checkbox" checked={getNotes()} onChange={(e) => setNotes(e.currentTarget.checked)} />
-              include notes
-            </label>
-            <label class="flex items-center gap-1 text-sm">
-              <span>format</span>
-              <select class="input w-auto" value={getFormat()} onChange={(e) => setFormat(e.currentTarget.value)}>
-                <option value="">follow source</option>
-                <option value="sha1">sha1</option>
-                <option value="sha256">sha256</option>
-              </select>
-            </label>
+            <Show when={getMode() === "import"}>
+              <label class="flex items-center gap-1 text-sm">
+                <input type="checkbox" checked={getBranchOnly()} onChange={(e) => setBranchOnly(e.currentTarget.checked)} />
+                default branch only
+              </label>
+              <label class="flex items-center gap-1 text-sm" title="refs/pull/N/head only — never /merge">
+                <input type="checkbox" checked={getPullHeads()} onChange={(e) => setPullHeads(e.currentTarget.checked)} />
+                include PR heads
+              </label>
+              <label class="flex items-center gap-1 text-sm">
+                <input type="checkbox" checked={getNotes()} onChange={(e) => setNotes(e.currentTarget.checked)} />
+                include notes
+              </label>
+              <label class="flex items-center gap-1 text-sm">
+                <span>format</span>
+                <select class="input w-auto" value={getFormat()} onChange={(e) => setFormat(e.currentTarget.value)}>
+                  <option value="">follow source</option>
+                  <option value="sha1">sha1</option>
+                  <option value="sha256">sha256</option>
+                </select>
+              </label>
+            </Show>
+            <Show when={getMode() === "mirror"}>
+              <label class="flex items-center gap-1 text-sm">
+                <span>sync schedule</span>
+                <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Sync schedule">
+                  <For each={MIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
+                </select>
+              </label>
+            </Show>
           </div>
+          <Show when={getMode() === "mirror"}>
+            <p class="muted text-xs">
+              Mirrors are pull-only: pushes are rejected for everyone, and the upstream
+              syncs on the schedule. The first sync starts immediately.
+            </p>
+          </Show>
           <p class="muted text-xs">
             LFS-tracked files import as pointer blobs (never smudged). Server-side ssh is not
             supported in v1 — use https with a token for private sources.
@@ -232,7 +309,12 @@ export default function Import() {
           </label>
           <Show when={anonymous()}>
             <p class="text-xs text-amber-700 dark:text-amber-400">
-              You are not signed in — the server will refuse the import (401). Sign in first.
+              You are not signed in — the server will refuse the {getMode() === "mirror" ? "mirror create" : "import"} (401). Sign in first.
+            </p>
+          </Show>
+          <Show when={getMode() === "mirror" && validateMirrorCreate({ sourceUrl: getUrl(), owner: getOwner(), name: getName(), schedule: getSchedule() }).error && (getUrl() || getOwner() || getName())}>
+            <p class="text-xs text-red-700 dark:text-red-400">
+              {validateMirrorCreate({ sourceUrl: getUrl(), owner: getOwner(), name: getName(), schedule: getSchedule() }).error}
             </p>
           </Show>
           <Show when={getPhase() === "error"}>
@@ -247,7 +329,7 @@ export default function Import() {
               </button>
             </Show>
             <button type="submit" class="btn primary px-3 py-1" disabled={getBusy() || anonymous() || !getUrl() || !getOwner() || !getName()}>
-              {getBusy() ? "starting…" : "start import"}
+              {getBusy() ? "starting…" : getMode() === "mirror" ? "create mirror" : "start import"}
             </button>
           </div>
         </form>
@@ -255,7 +337,7 @@ export default function Import() {
       <Show when={getPhase() === "running"}>
         <div class="card grid gap-3 p-4" aria-label="Import progress" aria-live="polite">
           <h3 class="font-semibold">
-            importing {getOwner()}/{getName()}
+            {getMode() === "mirror" ? "creating mirror" : "importing"} {getOwner()}/{getName()}
             <Show when={getTaskId()}>
               <span class="muted font-mono text-xs"> ({getTaskId()})</span>
             </Show>
