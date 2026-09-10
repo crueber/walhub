@@ -19,6 +19,37 @@ export function keyAssets(assets, limit = LATEST_ASSET_LIMIT) {
 }
 
 /**
+ * filterReleases(rels, filter) → array. Client-side draft/prerelease chips
+ * for the releases list (issue #270): the list endpoint hides drafts, so
+ * the chips filter the loaded page only — no new endpoint. Unknown filters
+ * behave as "all". Non-array input behaves as an empty list. Returns a
+ * fresh array, never the input.
+ */
+export function filterReleases(rels, filter) {
+  const list = Array.isArray(rels) ? rels.slice() : [];
+  if (filter === "drafts") return list.filter((r) => !!r?.draft);
+  if (filter === "prereleases") return list.filter((r) => !!r?.prerelease);
+  return list;
+}
+
+/**
+ * excerptBody(body, max?) → string. One-line plain-text excerpt of release
+ * notes for the list rows (issue #270): the first non-blank line with
+ * leading markdown markers (# heading, > quote, -/* list, 1. ordered)
+ * stripped and internal whitespace collapsed, truncated to `max` chars
+ * (default 140) with an ellipsis. Non-string input renders as "".
+ */
+export function excerptBody(body, max = 140) {
+  if (typeof body !== "string") return "";
+  const line = body.split("\n").find((l) => l.trim()) ?? "";
+  let text = line.trim().replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, "").trim();
+  text = text.replace(/\s+/g, " ");
+  const n = Number(max);
+  const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 140;
+  if (text.length <= limit) return text;
+  return text.slice(0, Math.max(0, limit - 1)).trimEnd() + "…";
+}
+/**
  * filterTagNames(names, query) → string[]. Client-side substring filter
  * for the new-release tag combobox (issue #254): the option source is the
  * page-owned `tags:{full}` cache entry (most-recent-first stream order,
