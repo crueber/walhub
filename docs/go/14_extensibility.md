@@ -520,9 +520,26 @@ superseded by Forgejo #272, which lists the mirror repo lanes; see the #272 amen
   field rule — the B2 "new endpoint" is `/detailed` itself, landed by #248).
   No new task kind (cold derivation is hook code inside the existing fold,
   not a §4 unit), no new Go modules, no new npm deps. Rationale: field-scoped
-  merge on one shared shape beats two sidecars (double the push-path cost)
-  and beats a push-path read (a sequential store round trip + a budget-test
-  "never a sidecar read" violation); null + sweep-heal keeps every R1 bound.
+   merge on one shared shape beats two sidecars (double the push-path cost)
+   and beats a push-path read (a sequential store round trip + a budget-test
+   "never a sidecar read" violation); null + sweep-heal keeps every R1 bound.
+- **Owner rollup amendment (Forgejo #283 follow-up — derived, no new bucket
+  keys).** The frozen overwritable families gain NO new keys and the proto
+  gains NO new fields: the per-owner max-commit rollup is a pure fold
+  (`sizecatalog.OwnerRollups`) over the existing `RepoCatalogEntry` activity
+  fields at request time, served two additive ways — `sort=activity&order=`
+  on the frozen v1 string list (reordering a `[]string` changes no shape)
+  and the NEW object-row endpoint `GET /api/v1/owners/detailed` (triple
+  twins + discovery + SDK `owners.listDetailed`, the #248 "row-shape change
+  forces a new endpoint" rule). No new task kind (the maintainer fold is
+  unchanged — per-repo activity was already incremental, so a push moves
+  its owner's max without a rescan), no new Go modules, no new npm deps.
+  Rationale: a STORED per-owner aggregate would duplicate per-repo state
+  (backfill + monotonicity machinery) to save only in-memory comparisons on
+  a non-hot listing path; derivation keeps one source of truth while the
+  server still ranks over ALL owners before the client's MAX_OWNERS slice.
+  The client rank (`orderOwnersByActivity`) stays as the fallback for
+  missing/stale values in the same total order.
 - **API tag creation amendment (Forgejo #253, 2026-09-10, `internal/tags`).**
   POST `/{o}/{r}/api/tags` (+ the `/api-browser` twin, Seam 1 via the
   `server.ExtraRoutes` chain) creates a LIGHTWEIGHT tag at a given commit by

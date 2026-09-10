@@ -14,15 +14,16 @@ export const MAX_OWNERS = 50;
 export const MAX_REPOS_PER_OWNER = 10;
 
 /**
- * newestFirst(names) → a reversed copy: owners newest-first.
+ * newestFirst(names) → a reversed copy: reverse-lexicographic name order.
  *
- * Ordering key, documented honestly: the owners listing path exposes NO
- * creation timestamp — `GET /api/v1/owners` returns a store-sorted
- * (ascending) name list of plain strings. Reverse-lexicographic stays the
- * deterministic newest-first proxy for OWNER sections. (Repo rows no longer
- * use this: Forgejo #247 serves them pre-ordered by most recent commit via
- * `GET /api/v1/owners/{owner}/repos/detailed?sort=activity&order=desc`, and
- * `orderByActivity` below stabilizes that order client-side.)
+ * LEGACY proxy, retained for compatibility (Forgejo #283): the owners
+ * listing path exposes NO creation timestamp — `GET /api/v1/owners`
+ * returns a store-sorted (ascending) name list of plain strings, so this
+ * was the deterministic newest-first stand-in for OWNER sections. The
+ * explore page no longer uses it: owner sections now order by most recent
+ * commit via `orderOwnersByActivity` below (per-owner times come from the
+ * #247 detailed listing rows the page already fetches — zero extra GETs).
+ * New callers want `orderOwnersByActivity`, not this.
  */
 export function newestFirst(names) {
   const list = Array.isArray(names) ? names : [];
@@ -64,6 +65,82 @@ export function orderByActivity(rows) {
     return 0;
   });
   return list;
+}
+
+/**
+ * ownerActivity(docOrRows) → newest `last_commit_time` across one owner's
+ * detailed listing rows, or null when the owner has no known activity
+ * (Forgejo #283).
+ *
+ * Accepts either the `owners.detailed()` doc (`{repos: [...]}`) or a bare
+ * rows array; non-array/missing input is null. Comparison is lexicographic
+ * on RFC 3339 strings — chronological order, same as `orderByActivity`.
+ * Non-string times (null/missing) are skipped, never selected.
+ */
+export function ownerActivity(docOrRows) {
+  const rows = Array.isArray(docOrRows)
+    ? docOrRows
+    : docOrRows && Array.isArray(docOrRows.repos)
+      ? docOrRows.repos
+      : [];
+  let newest = null;
+  for (const r of rows) {
+    const t = r && typeof r.last_commit_time === "string" ? r.last_commit_time : null;
+    if (t !== null && (newest === null || t > newest)) newest = t;
+  }
+  return newest;
+}
+
+/**
+ * orderOwnersByActivity(names, activityByOwner) → a sorted copy of owner
+ * names, most-recently-committed owner first (Forgejo #283).
+ *
+ * `activityByOwner` maps owner name → newest `last_commit_time` string (as
+ * computed by `ownerActivity` over the #247 detailed rows the explore page
+ * already fetches per section — zero extra GETs, no per-row commit fetch).
+ * Total order, mirroring `orderByActivity`: known times descending,
+ * unknown (null/missing/unreported — fetch pending or owner without
+ * commits) always last, ties broken deterministically on name ascending.
+ * Non-array input behaves as an empty list; a non-object activity map
+ * behaves as all-unknown (name order — the page's pre-activity paint).
+ */
+export function orderOwnersByActivity(names, activityByOwner) {
+  const list = Array.isArray(names) ? [...names] : [];
+  const byOwner =
+    activityByOwner && typeof activityByOwner === "object" ? activityByOwner : {};
+  const timeOf = (n) => {
+    const t = byOwner[n];
+    return typeof t === "string" ? t : null;
+  };
+  list.sort((a, b) => {
+    const ta = timeOf(a);
+    const tb = timeOf(b);
+    if (ta !== tb) {
+      if (ta === null) return 1; // unknowns always last
+      if (tb === null) return -1;
+      return ta < tb ? 1 : -1; // newest first
+    }
+    return a < b ? -1 : a > b ? 1 : 0; // deterministic name tiebreak
+  });
+  return list;
+}
+
+/**
+ * hasKnownActivity(activityByOwner) → whether any owner has a known commit
+ * time string (Forgejo #283 follow-up).
+ *
+ * The explore page fetches server-ordered names (`sort=activity&order=desc`)
+ * and must NOT re-sort until at least one section has reported a real time:
+ * re-running `orderOwnersByActivity` over an all-unknown map would resort to
+ * plain name order and discard the server ranking BEFORE the MAX_OWNERS
+ * slice (an active owner past the name cap would never mount). Null/missing/
+ * non-string values are all "not yet known" — a page where every section
+ * settles null keeps the server order (which for all-unknown servers already
+ * degrades to name order, so both agree).
+ */
+export function hasKnownActivity(activityByOwner) {
+  if (!activityByOwner || typeof activityByOwner !== "object") return false;
+  return Object.values(activityByOwner).some((t) => typeof t === "string");
 }
 
 /**

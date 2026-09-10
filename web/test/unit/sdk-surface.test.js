@@ -22,6 +22,9 @@ test("public surface: named exports + default export (§1.1)", async () => {
 const SURFACE = [
   { name: "me", run: (c) => c.me(), method: "GET", path: "/api/v1/me" },
   { name: "owners.list", run: (c) => c.owners.list(), method: "GET", path: "/api/v1/owners" },
+  { name: "owners.list activity", run: (c) => c.owners.list({ sort: "activity", order: "desc" }), method: "GET", path: "/api/v1/owners?sort=activity&order=desc" },
+  { name: "owners.listDetailed", run: (c) => c.owners.listDetailed(), method: "GET", path: "/api/v1/owners/detailed" },
+  { name: "owners.listDetailed activity", run: (c) => c.owners.listDetailed({ sort: "activity", order: "desc" }), method: "GET", path: "/api/v1/owners/detailed?sort=activity&order=desc" },
   { name: "owners.repos", run: (c) => c.owners.repos("demo"), method: "GET", path: "/api/v1/owners/demo/repos" },
   { name: "owners.detailed", run: (c) => c.owners.detailed("demo"), method: "GET", path: "/api/v1/owners/demo/repos/detailed" },
   { name: "owners.detailed query", run: (c) => c.owners.detailed("demo", { sort: "size", order: "desc", min_bytes: 10, max_bytes: 99 }), method: "GET", path: "/api/v1/owners/demo/repos/detailed?sort=size&order=desc&min_bytes=10&max_bytes=99" },

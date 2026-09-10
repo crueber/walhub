@@ -399,9 +399,24 @@ hint*, not an ACL.
 
 - `GET /api/v1/me` → `{principal, write, anonymous}`, `no-store`; `401` (plain text) when unauthenticated
   in a mode that requires auth.
-- `GET /api/v1/owners` → sorted owner names **from the STORE** (object-store listing / registry), never
-  from a local disk directory; SWR class. `GET /api/v1/owners/{o}/repos` → short repo names, `200 []` for
+- `GET /api/v1/owners[?sort=activity&order=]` (Forgejo #283) → sorted owner names **from the STORE** (object-store listing / registry), never
+  from a local disk directory; SWR class. Default (no query) is the legacy
+  store order, byte-identical — no catalog read, zero added trips.
+  `sort=activity` orders by the derived per-owner max-commit rollup (max
+  `last_commit_time` over the owner's catalog rows — ONE catalog read
+  regardless of owner count; `order=asc|desc`, default asc; unknowns always
+  last in either direction; ties name-ascending, the `FilterSort` key order).
+  Absent catalog degrades to name order (never 404/500 for the missing
+  optional object); corrupt catalog is a 503. `GET /api/v1/owners/{o}/repos` → short repo names, `200 []` for
   an unknown owner (never 404).
+- `GET /api/v1/owners/detailed[?sort=&order=]` (Forgejo #283 — NEW alongside v1, triple twins
+  `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.listDetailed`) →
+  `{owners: [{name, last_commit_sha|null, last_commit_time|null}]}` (`[]` never null;
+  times are the per-owner max over the owner's repos — RFC 3339 UTC, null when the owner has no
+  commits; never a fake epoch). Query: `sort=name|activity` (default name), `order=asc|desc`
+  (default asc) — the same total order as the string list (unknowns always last, ties
+  name-ascending). Membership is the registry owners list (the catalog never invents owners);
+  activity rides the derived rollup in the same ONE catalog read. SWR class.
 - `GET /api/v1/owners/{o}/repos/detailed` (Forgejo #248 — NEW alongside v1, triple twins
   `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.detailed`) →
   `{repos: [{name, size_bytes|null, object_count?, head_seq?, updated_at?, last_commit_sha|null, last_commit_time|null, last_push_at?}]}` (`[]` never null;
@@ -973,8 +988,26 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   object read) with disjoint per-index writes (no locks; see the
   `### Concurrency` note on `fillMirrorFlags`). Present-but-corrupt counts
   as a mirror without upstream (the `IsMirror` fail-closed parity); the
-  probe reads the body inline (no `internal/mirror` import from core —
-  law 8) and any store error degrades to non-mirror, never a 500.
-  Rationale: the catalog carries no mirror state and the listing (not a
-  push/refs hot path) is where the indicator must live; parallelism keeps
-  the round-trip budget honest.
+   probe reads the body inline (no `internal/mirror` import from core —
+   law 8) and any store error degrades to non-mirror, never a 500.
+   Rationale: the catalog carries no mirror state and the listing (not a
+   push/refs hot path) is where the indicator must live; parallelism keeps
+   the round-trip budget honest.
+- **Owner activity rollup (Forgejo #283 follow-up — server-side ordering).**
+  `GET /api/v1/owners?sort=activity&order=` returns the FROZEN string list
+  activity-ordered (no shape change — sort alone is additive), and
+  `GET /api/v1/owners/detailed` (+ `/api-browser/v1` + `/services/api`
+  twins, discovery `endpoints[]`, SDK `owners.listDetailed`) is the
+  object-row surface the v1 string list can never become in place
+  (14 §14.12: row-shape change forces a new endpoint — the #248 precedent).
+  The per-owner max is DERIVED at request time (`sizecatalog.OwnerRollups`
+  over the in-memory catalog — one comparison per repo, zero new bucket
+  keys, zero new store trips beyond the ONE catalog GET, no proto/codec/
+  fixture change): storing it would duplicate per-repo state needing
+  backfill/monotonicity for no trip saving on a non-hot path. Incremental
+  maintenance is structural — the #247 per-repo activity is already
+  incremental (blind push-path write + sweep heal), so a new push moves its
+  owner's max without a rescan. Rationale: the client re-rank cannot see
+  past the MAX_OWNERS cap (unmounted sections never report) and first paint
+  lies; the server ranks over ALL owners before the slice while the client
+  rank stays as the fallback for missing/stale values (12_web_ui.md).

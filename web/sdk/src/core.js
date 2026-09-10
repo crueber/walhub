@@ -242,15 +242,45 @@ export class ReposClient {
   }
 
   /**
+   * @param {{sort?: "name"|"activity", order?: "asc"|"desc"}} [query]
    * @returns {Promise<string[]>}
    *
    * Always `cache: "no-store"` (issue #200): the server answers SWR
    * (`max-age=0, stale-while-revalidate=60`), and a stale-while-revalidate
    * hit would resurrect a just-deleted repo in /explore for up to 60 s. The
    * data-layer TTL still bounds repeat reads; this only skips the HTTP cache.
+   *
+   * `sort=activity&order=desc` (Forgejo #283) returns the frozen name list
+   * ordered by the server-side per-owner max-commit rollup (newest first,
+   * unknowns last) — the server ranks over ALL owners before the client's
+   * MAX_OWNERS slice, so an active owner past the name cap still surfaces.
+   * Default (no query) is the legacy store order.
    */
-  ownersList() {
-    return this._call("/api/v1/owners", { method: "GET", cache: "no-store" });
+  ownersList(query = {}) {
+    const qs = Object.entries(query)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .join("&");
+    const suffix = qs ? `?${qs}` : "";
+    return this._call(`/api/v1/owners${suffix}`, { method: "GET", cache: "no-store" });
+  }
+
+  /**
+   * Per-owner activity rows (Forgejo #283):
+   * `GET /api/v1/owners/detailed?sort=&order=` →
+   * `{owners: [{name, last_commit_sha|null, last_commit_time|null}]}` (the
+   * max over each owner's repos; null when the owner has no commits).
+   * Same no-store rationale as ownersList (issue #200).
+   *
+   * @param {{sort?: "name"|"activity", order?: "asc"|"desc"}} [query]
+   */
+  ownersListDetailed(query = {}) {
+    const qs = Object.entries(query)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .join("&");
+    const suffix = qs ? `?${qs}` : "";
+    return this._call(`/api/v1/owners/detailed${suffix}`, { method: "GET", cache: "no-store" });
   }
 
   /**
@@ -266,7 +296,8 @@ export class ReposClient {
   get owners() {
     const self = this;
     return {
-      list: () => self.ownersList(),
+      list: (query) => self.ownersList(query),
+      listDetailed: (query) => self.ownersListDetailed(query),
       repos: (owner) => self.ownerRepos(owner),
       detailed: (owner, query) => self.ownerReposDetailed(owner, query),
       profile: (owner) => self.ownerProfile(owner),
