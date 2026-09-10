@@ -80,6 +80,31 @@ For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml
 | Subsystems | `internal/{bundle,events,maintain,policy,setup,config}` | bundle-uri scheduler, webhook bridge, maintainer loop, push policy rule language, bootstrap, config |
 | Frontend | `web/` | SolidJS SPA + Tailwind v4 (CSS-first) and a dependency-free `repos.js` SDK; vite + esbuild build both into `web/dist/` for embedding |
 
+## v1 release requirements
+
+- [x] [git storage](internal/store)
+- [ ] [issues](internal/issues)
+- [ ] [pull requests](internal/pulls)
+- [ ] [tags](internal/tags)
+- [ ] [releases](internal/releases)
+- [ ] packages
+- [ ] [actions](https://git.packden.us/crueber/walhub/issues/288)
+- [ ] [fork](internal/social)
+- [x] [webhooks](internal/notify)
+- [ ] [cli](cmd/walhub)
+- [x] [oidc](internal/server)
+
+## Backlog
+
+- projects
+- wiki
+- insights
+- moderation
+- sponsorships
+- forum
+- ownership transfer
+- pr/merge protection rules
+
 ## Development
 
 ```sh
