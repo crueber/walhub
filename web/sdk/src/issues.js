@@ -25,7 +25,7 @@ export function attachIssues(repo) {
     /** Create: `POST …/issues` → `201 {thread, events:[opened]}`. */
     create: ({ title, body } = {}, opts) =>
       client._call(p("/issues"), { method: "POST", ...json({ title, body }), ...opts }),
-    /** Thread: `GET …/issues/{num}?after_seq=&n=` (ETag `v<version>`, SWR). */
+    /** Thread: `GET …/issues/{num}?after_seq=&n=` (no-cache + ETag `v<version>`, 304 on revalidate). */
     get: (num, query = {}, opts) =>
       client._call(p(`/issues/${num}${qs(query)}`), { method: "GET", ...opts }),
     /** Patch: `PATCH …/issues/{num}` (unknown keys 400). */

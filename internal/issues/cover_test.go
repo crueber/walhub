@@ -737,7 +737,7 @@ func TestHelpers(t *testing.T) {
 		t.Fatalf("writeJSON bad = %d", w.Code)
 	}
 	w2 := httptest.NewRecorder()
-	writeCached(w2, httptest.NewRequest("GET", "/", nil), ccSWR, "etag1", 200, map[string]any{"f": func() {}})
+	writeCached(w2, httptest.NewRequest("GET", "/", nil), ccThread, "etag1", 200, map[string]any{"f": func() {}})
 	if w2.Code != 500 {
 		t.Fatalf("writeCached bad = %d", w2.Code)
 	}

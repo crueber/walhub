@@ -211,6 +211,12 @@ func TestGetIssueHTTP(t *testing.T) {
 	if etag == "" {
 		t.Fatal("missing ETag")
 	}
+	// Issue #259: the thread GET never serves a stale window — every
+	// read revalidates (no-cache), so a refresh can never paint a
+	// pre-mutation body from the browser cache.
+	if cc := w.Header().Get("Cache-Control"); cc != ccThread {
+		t.Fatalf("cache = %q, want %q", cc, ccThread)
+	}
 	var view ThreadView
 	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
 		t.Fatal(err)
@@ -230,6 +236,38 @@ func TestGetIssueHTTP(t *testing.T) {
 	if w2.Code != http.StatusNotModified {
 		t.Fatalf("inm = %d", w2.Code)
 	}
+	// Issue #259: a mutation retires the old ETag — revalidating with
+	// the pre-mutation ETag answers 200 with the new version (never a
+	// stale 304 or a stale body), and the fresh ETag still revalidates
+	// cheaply.
+	if _, err := s.AddComment(reqCtx(), "acme", "repo", 1, janeP, "c2"); err != nil {
+		t.Fatal(err)
+	}
+	r3 := httptest.NewRequest("GET", "/acme/repo/api/issues/1", nil)
+	r3.Header.Set("If-None-Match", etag)
+	w3 := httptest.NewRecorder()
+	h.ServeHTTP(w3, r3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("stale etag after mutation = %d, want 200", w3.Code)
+	}
+	etag2 := w3.Header().Get("ETag")
+	if etag2 == "" || etag2 == etag {
+		t.Fatalf("etag did not advance: %q -> %q", etag, etag2)
+	}
+	var view2 ThreadView
+	if err := json.Unmarshal(w3.Body.Bytes(), &view2); err != nil {
+		t.Fatal(err)
+	}
+	if len(view2.Events) != 3 {
+		t.Fatalf("post-mutation events = %d, want 3", len(view2.Events))
+	}
+	r4 := httptest.NewRequest("GET", "/acme/repo/api/issues/1", nil)
+	r4.Header.Set("If-None-Match", etag2)
+	w4 := httptest.NewRecorder()
+	h.ServeHTTP(w4, r4)
+	if w4.Code != http.StatusNotModified {
+		t.Fatalf("fresh inm = %d, want 304", w4.Code)
+	}
 	// Unknown issue → 404 plain text.
 	if w := doReq(h, "GET", "/acme/repo/api/issues/9", ""); w.Code != http.StatusNotFound {
 		t.Errorf("ghost = %d", w.Code)
@@ -245,6 +283,11 @@ func TestGetIssueHTTP(t *testing.T) {
 	w = doReq(h, "GET", "/acme/repo/api/issues/1/events?after_seq=2", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("events = %d", w.Code)
+	}
+	// Issue #259: the tail stays no-store — like the thread's no-cache,
+	// it never serves stale, so summary and tail cannot disagree.
+	if cc := w.Header().Get("Cache-Control"); cc != ccNoStore {
+		t.Fatalf("events cache = %q, want no-store", cc)
 	}
 	var evres struct {
 		Events []*Event `json:"events"`

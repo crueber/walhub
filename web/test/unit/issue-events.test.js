@@ -86,14 +86,24 @@ test("milestone fragments fall back to the bare id (deleted milestone self-heal)
     issueEventText({ type: "milestone_changed", from: null, to: "0000ff" }, ms),
     "added this to the “0000ff” milestone",
   );
-  // No list at all (e.g. cache not yet loaded) — bare id, never blank.
-  assert.equal(
-    issueEventText({ type: "milestone_changed", from: null, to: "000001" }),
-    "added this to the “000001” milestone",
-  );
+  // Loaded-but-empty set (deleted milestone) — bare id, never blank.
   assert.equal(
     issueEventText({ type: "milestone_changed", from: "000001", to: null }, []),
     "removed this from the “000001” milestone",
+  );
+});
+
+test("milestone fragments wait for the side-cache (issue #259, no id flash)", () => {
+  // `undefined` = the page-owned milestone set has not loaded yet: the
+  // honest generic interim, never the bare id. The titled text heals in
+  // reactively once the set settles.
+  assert.equal(
+    issueEventText({ type: "milestone_changed", from: null, to: "000001" }, undefined),
+    "changed the milestone",
+  );
+  assert.equal(
+    issueEventText({ type: "milestone_changed", from: "000001", to: "000002" }, undefined),
+    "changed the milestone",
   );
 });
 test("reference rows are single-line fragments without actors", () => {
