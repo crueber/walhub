@@ -44,9 +44,11 @@
   /* Settings sidebar (issue #123): two clear sections — the standard
      listing plus the Danger Zone in its own danger-styled section. Entries
      are native buttons; the active one carries aria-current="page" (wired
-     in Settings.jsx), which is the selected style. On narrow widths the
-     sidebar stacks above the content and each section scrolls horizontally
-     instead of squeezing. Dark + light ship together (dark is default). */
+     in Settings.jsx), which is the selected style. Narrow widths (issue
+     #276): below sm: the sections stack full-width above the content, each
+     with its own horizontally-scrolling chip bar; sm:–lg: the sections sit
+     side by side with internal bar scroll; lg:+ is the sticky sidebar.
+     Dark + light ship together (dark is default). */
   .side-nav-heading { @apply mb-1 whitespace-nowrap px-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400; }
   .side-nav-heading-danger { @apply text-red-600 dark:text-red-400; }
   .side-nav-item { @apply flex w-full items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-sm
