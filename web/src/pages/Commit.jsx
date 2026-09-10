@@ -4,7 +4,7 @@
 
 import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
-import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf } from "../lib/data.js";
+import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf, reportError } from "../lib/data.js";
 import { parsePatchFiles, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
 import { DiffBody } from "../components/DiffTable.jsx";
 import { CopySha, shortSha } from "../lib/sha.jsx";
