@@ -25,7 +25,7 @@ const routes = [
   ["GET", "/api/v1/repos/imports/{id}", "import status (read)"],
   ["POST", "/api/v1/repos/mirrors", "create a repo from a URL as a pull mirror (admin)"],
   ["GET|PUT|DELETE", "/{o}/{r}/api/mirror", "mirror sidecar: open read · replace/delete (admin)"],
-  ["GET", "/{o}/{r}/api/mirror/sync", "last sync status (write)"],
+  ["GET", "/{o}/{r}/api/mirror/sync", "last sync status (open read, like GET mirror)"],
   ["POST", "/{o}/{r}/api/mirror/sync", "sync now (admin)"],
   ["GET|PUT", "/api/v1/users/{principal}", "profile (read; self or admin to edit)"],
   ["GET|POST", "/api/v1/orgs", "orgs (read; write to create)"],
