@@ -80,7 +80,7 @@ function TrailerTable(props) {
                     return (
                       <tr>
                         <td class="trailer-key align-top font-mono text-xs">{t.key}</td>
-                        <td class="trailer-value">
+                        <td class="trailer-value break-words">
                           <Show when={v.sha}>
                             <A
                               class="sha font-mono text-emerald-700 hover:underline dark:text-emerald-400"

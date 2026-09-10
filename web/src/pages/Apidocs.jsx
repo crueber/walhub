@@ -119,6 +119,8 @@ export default function Apidocs() {
 
       <section class="card mb-4 p-4">
         <h3 class="mb-2 font-semibold">Routes</h3>
+        {/* Issue #275: path codes scroll in place, the page never pans. */}
+        <div class="overflow-x-auto">
         <table class="data-table">
           <thead>
             <tr><th class="w-40">method</th><th>path</th><th>what</th></tr>
@@ -135,6 +137,7 @@ export default function Apidocs() {
             </For>
           </tbody>
         </table>
+        </div>
       </section>
 
       <section class="card p-4">
