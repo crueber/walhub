@@ -50,7 +50,13 @@ function CloneMenu(props) {
   let root; // the <details> popover
   let box; // the clone-command textbox
   let timer = 0;
-  onCleanup(() => clearTimeout(timer));
+  // Outside-click close (issue #255, mirrors the TasksOverlay onDoc
+  // pattern below): a click outside the <details> dismisses the popover.
+  // The <summary> trigger lives inside root, so its native toggle still
+  // fires and never fights this handler.
+  const onDoc = (e) => { if (root && !root.contains(e.target)) root.open = false; };
+  document.addEventListener("click", onDoc);
+  onCleanup(() => { clearTimeout(timer); document.removeEventListener("click", onDoc); });
   const load = () => {
     if (getRecipes()) return;
     fetchRecipes()
