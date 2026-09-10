@@ -46,6 +46,12 @@ export default function Issue() {
   const { role } = useRole(ctx.full, ctx.repoClient);
   const canComment = () => role() !== null;
   const canTriage = () => roleAtLeast(role(), "triage");
+  // Create gate (issue #310): POST …/api/issues is read (authenticated)
+  // — any principal passing the read gate (02 §11 table), NOT triage.
+  // Client mirror is role() !== null (the same shape as canComment: the
+  // comment/create server gates are identical); the server 401s
+  // anonymous attributeless callers. Client gating stays cosmetic per
+  // perms.jsx — the server is authoritative.
   // Repo label set for the sidebar picker + chip colors (08 §6
   // `labels:{o}/{r}`, 30 s TTL; the page owns the cache per the
   // LabelPicker contract — the component only renders props).
@@ -457,6 +463,14 @@ export default function Issue() {
         </Show>
       </div>
       <aside class="grid content-start gap-3">
+        {/* New-issue page action (#310): above the metadata card but
+            outside it — full-width in the narrow column (no overflow at
+            390px), btn primary to match the issues-list treatment. */}
+        <Show when={canCreate()}>
+          <A class="btn primary w-full" href={`/${ctx.full}/issues/new`}>
+            New issue
+          </A>
+        </Show>
         <Show when={thread()}>
           {(t) => (
             // One metadata container (#107): state lives in the header
