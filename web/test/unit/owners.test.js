@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
+  activeOwnerNames,
   hasKnownActivity,
   newestFirst,
   orderByActivity,
@@ -14,7 +15,7 @@ import {
 } from "../../src/lib/owners.js";
 
 test("caps are sane documented defaults", () => {
-  assert.equal(MAX_OWNERS, 50);
+  assert.equal(MAX_OWNERS, 5); // Forgejo #295: top-5 most-active owners
   assert.equal(MAX_REPOS_PER_OWNER, 10);
 });
 
@@ -42,8 +43,8 @@ test("pageSlice splits shown/extra at the cap", () => {
 test("pageSlice defaults cover the owners-page composition", () => {
   const owners = Array.from({ length: 60 }, (_, i) => `o${i}`);
   const { shown, extra } = pageSlice(newestFirst(owners), MAX_OWNERS);
-  assert.equal(shown.length, 50);
-  assert.equal(extra, 10);
+  assert.equal(shown.length, 5);
+  assert.equal(extra, 55);
   assert.equal(shown[0], "o59"); // newest-first survives the cap
   const repos = Array.from({ length: 12 }, (_, i) => `r${i}`);
   const rp = pageSlice(newestFirst(repos), MAX_REPOS_PER_OWNER);
@@ -200,4 +201,98 @@ test("server order survives first paint: gate re-rank until a known time lands (
     rank(server, { alice: "2026-09-11T12:00:00Z" }),
     ["alice", "amy", "bob", "zed"],
   );
+});
+
+// Forgejo #295: /explore shows the top-5 most-active owners over the #283
+// owners/detailed rows (server-ranked, unknowns already last).
+test("activeOwnerNames keeps server order, drops owners without activity", () => {
+  const rows = [
+    { name: "bob", last_commit_time: "2026-09-10T12:00:00Z" },
+    { name: "ghost", last_commit_time: null }, // no commits: not active
+    { name: "alice", last_commit_time: "2026-09-09T12:00:00Z" },
+    { name: "pending" }, // missing time: not active
+    { name: "zed", last_commit_time: "2026-09-11T12:00:00Z" },
+  ];
+  assert.deepEqual(activeOwnerNames(rows), ["bob", "alice", "zed"]);
+  assert.deepEqual(rows.length, 5); // input untouched
+});
+
+test("activeOwnerNames treats non-array input as empty, skips nameless rows", () => {
+  assert.deepEqual(activeOwnerNames(undefined), []);
+  assert.deepEqual(activeOwnerNames(null), []);
+  assert.deepEqual(activeOwnerNames("bob"), []);
+  assert.deepEqual(activeOwnerNames({ owners: [] }), []);
+  assert.deepEqual(
+    activeOwnerNames([{ last_commit_time: "2026-09-10T12:00:00Z" }, { name: "bob", last_commit_time: "2026-09-10T12:00:00Z" }]),
+    ["bob"],
+  );
+});
+
+test("explore composition: active filter, top-5 slice, uncapped owner total (#295)", () => {
+  // Mirrors Owners.jsx: the owners/detailed payload arrives server-ranked
+  // (sort=activity&order=desc, unknowns last); the page filters to active
+  // owners BEFORE the MAX_OWNERS slice, and the owner total is the
+  // payload's row count — never the slice.
+  const payload = {
+    owners: [
+      { name: "o1", last_commit_time: "2026-09-10T12:00:00Z" },
+      { name: "o2", last_commit_time: "2026-09-09T12:00:00Z" },
+      { name: "o3", last_commit_time: "2026-09-08T12:00:00Z" },
+      { name: "o4", last_commit_time: "2026-09-07T12:00:00Z" },
+      { name: "o5", last_commit_time: "2026-09-06T12:00:00Z" },
+      { name: "o6", last_commit_time: "2026-09-05T12:00:00Z" },
+      { name: "o7", last_commit_time: "2026-09-04T12:00:00Z" },
+      { name: "ghost", last_commit_time: null }, // opposite of active: never shown
+    ],
+  };
+  const totalOwners = payload.owners.length;
+  assert.equal(totalOwners, 8); // true total, uncapped
+  const ranked = activeOwnerNames(payload.owners);
+  assert.deepEqual(ranked, ["o1", "o2", "o3", "o4", "o5", "o6", "o7"]);
+  const { shown, extra } = pageSlice(ranked, MAX_OWNERS);
+  assert.deepEqual(shown, ["o1", "o2", "o3", "o4", "o5"]);
+  assert.equal(extra, 2); // overflow counts active owners only
+});
+
+test("explore composition: fewer than 5 active owners renders fewer sections (#295)", () => {
+  const payload = {
+    owners: [
+      { name: "o1", last_commit_time: "2026-09-10T12:00:00Z" },
+      { name: "o2", last_commit_time: "2026-09-09T12:00:00Z" },
+      { name: "ghost", last_commit_time: null },
+    ],
+  };
+  const { shown, extra } = pageSlice(activeOwnerNames(payload.owners), MAX_OWNERS);
+  assert.deepEqual(shown, ["o1", "o2"]); // no filler
+  assert.equal(extra, 0);
+  assert.equal(payload.owners.length, 3); // total still counts every owner
+});
+
+test("explore cold load costs 1 listing + MAX_OWNERS section fetches (#295)", () => {
+  // Headless fetch-count mirror of Owners.jsx: one owners/detailed listing
+  // for the ranked rows + totals, then exactly one detailed fetch per
+  // SHOWN section (the top-5 slice) — never one per owner on the instance.
+  let fetches = 0;
+  const stubOwners = (query) => {
+    fetches += 1; // the listing
+    assert.deepEqual(query, { sort: "activity", order: "desc" });
+    return Promise.resolve({
+      owners: Array.from({ length: 60 }, (_, i) => ({
+        name: `o${i}`,
+        last_commit_time: `2026-09-${String((i % 28) + 1).padStart(2, "0")}T12:00:00Z`,
+      })),
+    });
+  };
+  const stubSection = () => {
+    fetches += 1; // one per mounted section
+    return Promise.resolve({ repos: [] });
+  };
+  return stubOwners({ sort: "activity", order: "desc" }).then((doc) => {
+    assert.equal(fetches, 1);
+    const { shown } = pageSlice(activeOwnerNames(doc.owners), MAX_OWNERS);
+    assert.equal(shown.length, 5);
+    return Promise.all(shown.map(stubSection)).then(() => {
+      assert.equal(fetches, 1 + MAX_OWNERS); // 6 cold reads, not ~61
+    });
+  });
 });
