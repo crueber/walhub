@@ -17,6 +17,36 @@ import (
 // both lanes everywhere. Anonymous-denied reads get a real 401 with
 // WWW-Authenticate: Bearer.
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). One entry
+// per distinct path shape: methods share a template (GET+PUT on
+// users/{principal} is one entry). Top-level twins use their literal
+// /api/v1 spelling; repo lanes use the /{owner}/{repo}/api spelling.
+// Pinned by TestExposedTemplatesExact + TestExposedCoversRoutes (no
+// phantoms, nothing missing).
+var ExposedTemplates = []string{
+	"/api/v1/users/{principal}",
+	"/api/v1/orgs",
+	"/api/v1/orgs/{org}",
+	"/api/v1/orgs/{org}/members",
+	"/api/v1/orgs/{org}/members/{principal}",
+	"/api/v1/orgs/{org}/teams",
+	"/api/v1/orgs/{org}/teams/{slug}",
+	"/api/v1/orgs/{org}/teams/{slug}/members/{principal}",
+	"/api/v1/orgs/{org}/invitations",
+	"/api/v1/orgs/{org}/invitations/{id}",
+	"/api/v1/invitations",
+	"/api/v1/invitations/{id}",
+	"/api/v1/invitations/{id}/accept",
+	"/{owner}/{repo}/api/access",
+	"/{owner}/{repo}/api/permissions",
+	"/{owner}/{repo}/api/collaborators",
+	"/{owner}/{repo}/api/assignables",
+	"/{owner}/{repo}/api/invitations",
+	"/{owner}/{repo}/api/invitations/{id}",
+}
+
 // Handler is the Seam 1 surface: every §8 endpoint on both lanes.
 // Composition chains it in front of the core api mux: Handle reports false
 // for non-identity paths so the core mux answers.

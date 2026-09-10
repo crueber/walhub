@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/checks"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/issues"
@@ -29,6 +30,7 @@ import (
 // nil ident leaves a valid service whose mention/team recipients drop
 // (documented fail-closed for emission, fail-open nowhere).
 func newNotifyService(st store.ObjectStore, ident *identity.Service) (*notify.Service, *notify.Handler) {
+	api.RegisterExposed(notify.ExposedTemplates...)
 	svc := notify.New(st, ident)
 	svc.Logger = slog.Default()
 	if ident != nil {

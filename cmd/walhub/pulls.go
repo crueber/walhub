@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/events"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/issues"
@@ -30,6 +31,7 @@ import (
 // stay nil until internal/notify lands (documented no-op, P8 backfill via
 // the timeline).
 func newPullsService(st store.ObjectStore, ident *identity.Service, issuesSvc *issues.Service, reg *wal.Registry, gitBinary string) (*pulls.Service, *pulls.Handler) {
+	api.RegisterExposed(pulls.ExposedTemplates...)
 	svc := pulls.New(st, ident)
 	svc.Git = pulls.NewSubprocessGit(gitBinary)
 	svc.Dirs = &pullsDirs{reg: reg}

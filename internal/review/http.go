@@ -20,6 +20,26 @@ import (
 // real 401 with WWW-Authenticate: Bearer (never a 200 with an in-band
 // error).
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). One entry
+// per distinct path shape: methods share a template (GET+POST on reviews
+// is one entry). The /pulls root itself is pulls' surface, not ours.
+// Pinned by TestExposedTemplatesExact + TestExposedCoversRoutes (no
+// phantoms, nothing missing).
+var ExposedTemplates = []string{
+	"/{owner}/{repo}/api/pulls/{num}/reviews",
+	"/{owner}/{repo}/api/pulls/{num}/reviews/{seq}",
+	"/{owner}/{repo}/api/pulls/{num}/reviews/{seq}/dismiss",
+	"/{owner}/{repo}/api/pulls/{num}/threads",
+	"/{owner}/{repo}/api/pulls/{num}/threads/{id}",
+	"/{owner}/{repo}/api/pulls/{num}/threads/{id}/comments",
+	"/{owner}/{repo}/api/pulls/{num}/threads/{id}/resolve",
+	"/{owner}/{repo}/api/pulls/{num}/threads/{id}/unresolve",
+	"/{owner}/{repo}/api/pulls/{num}/review-requests",
+	"/{owner}/{repo}/api/pulls/{num}/review-suggest",
+}
+
 // Handler is the Seam 1 surface: every §7 endpoint on both lanes.
 // Composition chains it in front of the core mux: Handle reports false for
 // non-review paths so the core mux answers (the Wave A amendment in

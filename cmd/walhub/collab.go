@@ -58,6 +58,33 @@ type collabWiring struct {
 	mirrorHandler   *mirror.Handler
 }
 
+// newIdentityService builds the Wave A identity surface (docs/features/01:
+// the access.json/org/team surface, Seam 1, both lanes) over st/cfg and
+// registers its discovery templates (Forgejo #272 — template + handler
+// land in the same change, law 12; the Feature 10 precedent).
+func newIdentityService(st store.ObjectStore, cfg *config.Config) (*identity.Service, *identity.Handler) {
+	api.RegisterExposed(identity.ExposedTemplates...)
+	svc := identity.New(st, cfg)
+	return svc, &identity.Handler{Svc: svc}
+}
+
+// newIssuesService builds the Wave B issues surface (docs/features/02:
+// the thread/event/label/milestone surface, Seam 1, both lanes) over
+// st/ident and registers its discovery templates (Forgejo #272 — template
+// + handler land in the same change, law 12; the Feature 10 precedent).
+func newIssuesService(st store.ObjectStore, ident *identity.Service, cfg *config.Config) (*issues.Service, *issues.Handler) {
+	api.RegisterExposed(issues.ExposedTemplates...)
+	svc := issues.New(st, ident)
+	svc.MaxImageBytes = int64(cfg.Attachments.MaxImageBytes)
+	if svc.MaxImageBytes <= 0 {
+		svc.MaxImageBytes = issues.DefaultMaxImageBytes
+	}
+	if cfg.Cache.Dir != "" {
+		svc.SpoolDir = filepath.Join(cfg.Cache.Dir, "attachments-spool")
+	}
+	return svc, &issues.Handler{Svc: svc}
+}
+
 // buildCollab assembles every collaboration service + handler over the
 // shared store/registry/config and binds the nil-safe cross-package seams
 // (fan-out, counters, frames, access bootstrap). apiEnv may be nil in
@@ -68,8 +95,7 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// surface (Seam 1, both lanes), the require_read gate (Seam 3
 	// expansion wired into dry-run via GroupExpander), and the
 	// access-bootstrap op (Seam 5).
-	c.ident = identity.New(st, cfg)
-	c.identHandler = &identity.Handler{Svc: c.ident}
+	c.ident, c.identHandler = newIdentityService(st, cfg)
 	var _ api.OrgGate = c.ident
 	var _ api.AccessBootstrap = c.ident
 	var _ api.OwnerEditor = c.ident
@@ -94,15 +120,7 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// by identity. Notifications emit through the 02 §10 seam —
 	// nil until wireNotifyFanout binds the real emitter below
 	// (best-effort synchronous fan-out contract, P8).
-	c.issuesSvc = issues.New(st, c.ident)
-	c.issuesSvc.MaxImageBytes = int64(cfg.Attachments.MaxImageBytes)
-	if c.issuesSvc.MaxImageBytes <= 0 {
-		c.issuesSvc.MaxImageBytes = issues.DefaultMaxImageBytes
-	}
-	if cfg.Cache.Dir != "" {
-		c.issuesSvc.SpoolDir = filepath.Join(cfg.Cache.Dir, "attachments-spool")
-	}
-	c.issuesHandler = &issues.Handler{Svc: c.issuesSvc}
+	c.issuesSvc, c.issuesHandler = newIssuesService(st, c.ident, cfg)
 	// Wave C1 pulls (docs/features/03): PR threads over the shared
 	// numbering/thread/index family, pr.json sidecars, the stamped
 	// mergeable.json cache, the pull-merge/pull-mergeable/pull-fork

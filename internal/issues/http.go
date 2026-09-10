@@ -19,6 +19,28 @@ import (
 // everywhere. Anonymous-denied reads get a real 401 with
 // WWW-Authenticate: Bearer (never a 200 with an in-band error).
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #272). One entry
+// per distinct path shape: methods share a template (GET+POST on issues
+// is one entry). The repo-subpath attachment byte route (HandleRepo,
+// outside the api lanes) is not a discovery entry — same rule as release
+// asset bytes. Pinned by TestExposedTemplatesExact +
+// TestExposedCoversRoutes (no phantoms, nothing missing).
+var ExposedTemplates = []string{
+	"/{owner}/{repo}/api/issues",
+	"/{owner}/{repo}/api/issues/{num}",
+	"/{owner}/{repo}/api/issues/{num}/events",
+	"/{owner}/{repo}/api/issues/{num}/comments",
+	"/{owner}/{repo}/api/issues/{num}/reactions",
+	"/{owner}/{repo}/api/issues/{num}/reactions/{seq}/{content}",
+	"/{owner}/{repo}/api/labels",
+	"/{owner}/{repo}/api/labels/{name}",
+	"/{owner}/{repo}/api/milestones",
+	"/{owner}/{repo}/api/milestones/{id}",
+	"/{owner}/{repo}/api/attachments",
+}
+
 // Handler is the Seam 1 surface: every §7 endpoint on both lanes.
 // Composition chains it in front of the core api mux: Handle reports
 // false for non-issues paths so the core mux answers. (Code-seam note:

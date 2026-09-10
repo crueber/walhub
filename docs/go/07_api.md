@@ -383,9 +383,14 @@ The discovery document:
 such route exists — the walhub Go discovery doc MUST list only routes the router actually serves (the
 list above; keep it mechanically derived from the route table so it cannot drift). Feature-owned
 routes served by `server.ExtraRoutes` append their templates via `api.RegisterExposed` from
-composition in the same change (law 12 — currently the checks shapes, the `/api/v1/repos` create
-twin, the import twins, and the mirror create twin); a registered template for an unserved route is
-the same bug as a missing one. Merge-queue data
+composition in the same change (law 12 — Forgejo #272: EVERY ExtraRoutes surface registers, so
+`endpoints[]` also carries the issues, pulls, releases, review, social, notify, identity, tags,
+and mirror (top-level twin AND repo lanes) shapes alongside checks, the `/api/v1/repos` create
+twin, and the import twins); a registered template for an unserved route is
+the same bug as a missing one. Each surface pins the template↔route correspondence both ways in
+its own `TestExposedCoversRoutes` (plus an exact-shape test), and composition pins the
+registration in `cmd/walhub` (`TestCollabServicesRegisterDiscovery`) — removing a registration
+or a template fails CI. Merge-queue data
 arrives as commit trailers; there is no merge-queue endpoint. `endpoints` entries are path templates;
 adding a route without updating this list is a bug. Core admin-only writes stay out of the
 table-derived list (PUT/DELETE rows are never `Expose`); feature-registered capability entries
@@ -813,6 +818,22 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   the `/api` page documents the routes, auth, request/response shapes, and a worked CI example
   (`#checks-ci`, linked from `/checks`), and `TestExposedCoversRoutes` pins the template↔route
   correspondence both ways. No wire or behavior change.
+- **All feature surfaces surfaced in discovery + `/api` docs (Forgejo #272).** #271 proved the
+  pattern on checks; #272 applies it everywhere the issue's audit found gaps: issues, pulls,
+  releases, review, social, notify, identity, and tags each gained `ExposedTemplates` (one entry
+  per distinct path shape, both lanes collapsing to one template) registered from composition in
+  the same change, plus `TestExposedTemplatesExact` + `TestExposedCoversRoutes` per package and a
+  composition registration test (`TestCollabServicesRegisterDiscovery`). Mirror's repo lanes
+  (`/{owner}/{repo}/api/mirror`, `…/mirror/sync`) joined discovery too — they are real JSON API
+  routes, so the old top-level-only exception is gone. The `/api` page renders the live discovery
+  document beside a static route table that is now derived from the same registry (every row
+  matches a template; drift fails CI), with per-surface auth/shape notes and worked examples for
+  the release-asset upload and the notification SSE flow. Byte routes outside the api lanes
+  (release asset bytes, attachment bytes) stay out of `endpoints[]` — the static contract, not
+  the JSON API. Each documented route's auth was spot-checked against its `Handle`/service gate;
+  the SDK already wrapped every surface (`issues`, `pulls`, `reviews`, `releases`, `social`,
+  `notifications`, `users`, `orgs`, `invites`, `tags`, `collab`) — no method/route mismatch
+  found. No wire or behavior change (docs + discovery wiring only).
 - **`%x00` field separators in `--format` argv** (§9.6/§9.8) — argv strings cannot contain NUL bytes;
   git expands the literal `%x00`, so the format text is ASCII while the output is NUL-delimited.
 - **Commit render splits into two `git show` invocations** (header via `show -s`, patch+numstat via
@@ -868,9 +889,9 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
     the existing PUT — not an alias/shim/deprecated flag; the frozen 409-with-`html_url` stays
     plain text (`writePlain`), and every added response field is enumerated in §9.1.1.
   - *Discovery via `RegisterExposed`* (Feature 10 precedent): `POST /api/v1/repos` (+
-    `/api-browser/v1` twin) rides `server.ExtraRoutes` — no core-table edit (law 8). The
-    `01/02/03/C2/05/06` routes stay out of discovery; this exception is per-feature, not a rule
-    change.
+    `/api-browser/v1` twin) rides `server.ExtraRoutes` — no core-table edit (law 8). At the time
+    the `01/02/03/C2/05/06` routes stayed out of discovery; Forgejo #272 superseded that —
+    registration is now the norm for every ExtraRoutes surface (see Decisions).
   - *SDK:* `repo.create(opts)` stays flag-less (frozen PUT); the flag rides new
     `repo.createPlaceholder({object_format})`, and the top-level twin is `client.repos.create()`
     (new `create.js` submodule + naming validation mirroring `ParseRepoId`; `S1`
