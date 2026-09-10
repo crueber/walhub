@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/checks"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/pulls"
@@ -24,12 +25,16 @@ import (
 	"git.packden.us/crueber/walhub/internal/wal"
 )
 
-// newChecksService builds the checks service over st/ident. Sha validation
+// newChecksService builds the checks service over st/ident and registers
+// the discovery templates (called once per process from buildCollab — the
+// Feature 10 precedent: template + handler land in the same change,
+// law 12; Forgejo #271). Sha validation
 // rides the serve-synced dirs plus stock git (git rev-parse --verify
 // --quiet <sha>^{commit} — the same argv pulls resolves through); the
 // merge task consults the gate through pullsSvc.Checks. Notify/Stream
 // stay nil until internal/notify lands.
 func newChecksService(st store.ObjectStore, ident *identity.Service, pullsSvc *pulls.Service, reg *wal.Registry, gitBinary string) (*checks.Service, *checks.Handler) {
+	api.RegisterExposed(checks.ExposedTemplates...)
 	svc := checks.New(st, ident)
 	git := pulls.NewSubprocessGit(gitBinary)
 	dirs := &pullsDirs{reg: reg}

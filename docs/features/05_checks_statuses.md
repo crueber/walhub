@@ -137,7 +137,8 @@ neither cache class of §9.2 applies — sha-addressed does NOT mean immutable h
 | `DELETE /{o}/{r}/api/checks/tokens/{id}` | admin | `204` (sets `revoked_at`) | — |
 
 No SSE-attach endpoints here: check reports are instant CAS writes, never long work (P7) — the *PR
-stream* consumes them, §7. `GET /api/v1` discovery lists these routes with `Name() == "checks"`.
+stream* consumes them, §7. `GET /api/v1` discovery lists these routes via `checks.ExposedTemplates`,
+registered from composition with `api.RegisterExposed` (Forgejo #271; the Feature 10 precedent).
 
 ### Concurrency
 
@@ -261,6 +262,7 @@ re-exports; envelope/SSE parsing reuses `sdk/src/sse.js` — one parser (12_web_
 - **Combined/status GETs are no-store, not sha-addressed-immutable** — sha-addressed content here mutates by design; misclassifying it as immutable would cache stale reds/greens forever.
 - **No new task kind except `checks-index-compact`** — reports are short writes; only index compaction outgrows a request, and it follows P4's compaction rule.
 - **Failure notifications only for head shas of open PRs** — every context failure for every sha would spam; the PR is the review surface that cares.
+- **Discovery + API-docs surfacing (Forgejo #271).** The checks surface was dynamically reportable from day one, but neither `GET /api/v1` nor the `/api` docs page mentioned it. The fix registers `checks.ExposedTemplates` from composition (`api.RegisterExposed`, Feature 10 precedent), documents the routes + auth + request/response shapes with a worked CI example on the `/api` page (`#checks-ci`, linked from the `/checks` page), and pins the template↔route correspondence both ways in `TestExposedCoversRoutes` (+ the composition half in `cmd/walhub`). No wire or behavior change.
 
 ## Explicitly out of scope
 
@@ -277,10 +279,12 @@ re-exports; envelope/SSE parsing reuses `sdk/src/sse.js` — one parser (12_web_
   on both lanes), not `api.Lanes` — the package fronts the core mux
   exactly like `internal/identity`, `internal/issues`, `internal/pulls`,
   and `internal/review` (see the Wave A amendment in
-  14_extensibility.md Decisions). No discovery entries: `/api/v1`
-  `endpoints[]` derive from the core route table only (same rule as
-  01/02/03/C2); the SDK enumerates checks statically. There is no
-  `Name()` method — nothing calls it.
+  14_extensibility.md Decisions). Discovery entries ride the additive
+  `api.RegisterExposed` registry (`checks.ExposedTemplates`, registered
+  from composition in the same change — Forgejo #271, the Feature 10
+  precedent; `/api/v1` `endpoints[]` = core route table + registered
+  feature templates). The SDK enumerates checks statically too. There is
+  no `Name()` method — nothing calls it.
 - **Seam 2 in code is `AuthService.ExtraCredential`** (a func hook
   consulted after static tokens in `token`/`oidc` modes), not an
   `auth.Provider` registry — this tree has no provider registry, and the

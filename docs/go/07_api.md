@@ -381,10 +381,16 @@ The discovery document:
 
 **Normative fix (§20.4):** the Rust discovery document advertises `…/commit/{sha}/merge-queue`, but no
 such route exists — the walhub Go discovery doc MUST list only routes the router actually serves (the
-list above; keep it mechanically derived from the route table so it cannot drift). Merge-queue data
+list above; keep it mechanically derived from the route table so it cannot drift). Feature-owned
+routes served by `server.ExtraRoutes` append their templates via `api.RegisterExposed` from
+composition in the same change (law 12 — currently the checks shapes, the `/api/v1/repos` create
+twin, the import twins, and the mirror create twin); a registered template for an unserved route is
+the same bug as a missing one. Merge-queue data
 arrives as commit trailers; there is no merge-queue endpoint. `endpoints` entries are path templates;
-adding a route without updating this list is a bug. The doc never lists admin-only writes either —
-`endpoints` is a *capability hint*, not an ACL.
+adding a route without updating this list is a bug. Core admin-only writes stay out of the
+table-derived list (PUT/DELETE rows are never `Expose`); feature-registered capability entries
+(checks token mint/revoke, the create twin) are listed anyway — `endpoints` is a *capability
+hint*, not an ACL.
 
 - `GET /api/v1/me` → `{principal, write, anonymous}`, `no-store`; `401` (plain text) when unauthenticated
   in a mode that requires auth.
@@ -801,6 +807,12 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   use (`cache.*_entries`); one weighted-bytes budget is simpler and the bucket/LRU split is preserved.
 - **Discovery document lists only real routes** and is derived from the route table — fixes §20.4 (the
   phantom `…/commit/{sha}/merge-queue` advertisement must not be copied).
+- **Checks API surfaced in discovery + `/api` docs (Forgejo #271).** The checks surface was
+  dynamically reportable but undiscoverable: `endpoints[]` now also carries the five checks
+  templates (`checks.ExposedTemplates`, registered from composition — the Feature 10 precedent),
+  the `/api` page documents the routes, auth, request/response shapes, and a worked CI example
+  (`#checks-ci`, linked from `/checks`), and `TestExposedCoversRoutes` pins the template↔route
+  correspondence both ways. No wire or behavior change.
 - **`%x00` field separators in `--format` argv** (§9.6/§9.8) — argv strings cannot contain NUL bytes;
   git expands the literal `%x00`, so the format text is ASCII while the output is NUL-delimited.
 - **Commit render splits into two `git show` invocations** (header via `show -s`, patch+numstat via
