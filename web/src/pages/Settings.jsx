@@ -1068,10 +1068,13 @@ function WebhooksTab(props) {
 
 // One sidebar entry: a native button (keyboard reachable, focus ring from
 // the global :focus-visible rule) with aria-current="page" on the active
-// entry. Danger entries carry the danger tone via the `danger` flag.
+// entry. Danger entries carry the danger tone via the `danger` flag. The
+// li is flex-none so chips in the narrow horizontal bars keep their
+// content width and scroll inside the bar instead of squeezing (issue
+// #276); in the lg: column the stretch cross-axis still fills the width.
 function SideItem(props) {
   return (
-    <li>
+    <li class="flex-none">
       <button
         type="button"
         class={props.danger ? "side-nav-item side-nav-item-danger" : "side-nav-item"}
@@ -1117,8 +1120,14 @@ export default function Settings() {
     <div class="settings-page">
       <h2 class="mb-3 text-lg font-semibold">Settings</h2>
       <div class="flex flex-col gap-4 lg:flex-row lg:gap-6">
-        <nav class="shrink-0 lg:w-56" aria-label="Settings sections">
-          <div class="flex gap-4 lg:sticky lg:top-4 lg:block lg:space-y-4">
+        <nav class="min-w-0 shrink-0 lg:w-56" aria-label="Settings sections">
+          {/* Issue #276: below sm: the two sections stack full-width, each
+              with its own internally-scrolling chip bar above the content —
+              side-by-side sections squeezed the standard bar to ~230px at
+              390px and could push the pair past the viewport under larger
+              fonts. sm:–lg: keeps the sections side by side (fits); lg:+
+              is the classic sticky sidebar. */}
+          <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:gap-4 lg:sticky lg:top-4 lg:block lg:space-y-4">
             <section aria-labelledby="settings-nav-standard" class="min-w-0 flex-1 lg:flex-none">
               <h3 id="settings-nav-standard" class="side-nav-heading">Settings</h3>
               <ul class="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
@@ -1133,7 +1142,7 @@ export default function Settings() {
                 </For>
               </ul>
             </section>
-            <section aria-labelledby="settings-nav-danger" class="flex-none lg:flex-none">
+            <section aria-labelledby="settings-nav-danger" class="min-w-0 flex-none">
               <h3 id="settings-nav-danger" class="side-nav-heading side-nav-heading-danger">Danger Zone</h3>
               <ul class="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
                 <For each={DANGER_GROUP}>
