@@ -159,6 +159,13 @@ export default function Checks() {
           <button type="button" class="btn px-2 py-1" onClick={reload}>
             refresh
           </button>
+          <A
+            class="link text-xs"
+            href="/api#checks-ci"
+            title="How external CI reports check results"
+          >
+            reporting API
+          </A>
         </div>
       </div>
       <Show when={getPage()} fallback={<p class="muted">loading checks…</p>}>

@@ -20,6 +20,20 @@ import (
 // Anonymous-denied reads get a real 401 with WWW-Authenticate: Bearer
 // (never a 200 with an in-band error).
 
+// ExposedTemplates lists the discovery endpoints[] entries this surface
+// serves (14 §14.12 lane rule) — registered from composition via
+// api.RegisterExposed in the same change (law 12; Forgejo #271). One entry
+// per distinct path shape: methods share a template (GET+POST on
+// statuses/{sha} is one entry). Pinned by TestExposedTemplatesExact +
+// TestExposedCoversRoutes (no phantoms, nothing missing).
+var ExposedTemplates = []string{
+	"/{owner}/{repo}/api/checks",
+	"/{owner}/{repo}/api/checks/{sha}",
+	"/{owner}/{repo}/api/checks/statuses/{sha}",
+	"/{owner}/{repo}/api/checks/tokens",
+	"/{owner}/{repo}/api/checks/tokens/{id}",
+}
+
 // Handler is the Seam 1 surface: every §4 endpoint on both lanes.
 // Composition chains it in front of the core mux: Handle reports false for
 // non-checks paths so the core mux answers (the Wave A amendment in
