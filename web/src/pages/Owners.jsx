@@ -141,7 +141,7 @@ export default function Owners() {
               </div>
               <Show when={extra > 0}>
                 <p class="muted mt-4 text-sm">
-                  showing newest {shown.length} of {owners().length} owners
+                  showing most active {shown.length} of {owners().length} owners
                 </p>
               </Show>
             </Show>

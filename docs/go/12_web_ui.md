@@ -263,12 +263,12 @@ GIF reuse: all four concept scenes reappear with alt text imported verbatim from
   rows carry `last_commit_sha/time` + `last_push_at`), so the server sorts
   (`sort=activity&order=desc`) and the client stabilizes with
    `orderByActivity` in `web/src/lib/owners.js` (RFC 3339 desc, unknowns last,
-   ties on `(owner, name)` — the server's key order — headless-tested). `newestFirst` stays for owner
-  sections only. (Superseded by Forgejo #283 below — owner sections now rank
-  on commit activity; `newestFirst` is a retained legacy proxy, unused by the page.)
+    ties on `(owner, name)` — the server's key order — headless-tested).
+   (Forgejo #283: owner sections now rank on commit activity via
+   `orderOwnersByActivity`; `newestFirst` is a retained legacy proxy, unused by the page.)
 - **Caps**: `MAX_OWNERS` 50 owners, `MAX_REPOS_PER_OWNER` 10 repos per section (constants in
   `web/src/lib/owners.js`, headless-tested). Overflow folds behind links, never a spinner: per-owner
-  `+N more →` to `/:owner` (uncapped there), and a "showing newest 50 of N owners" line. The page
+   `+N more →` to `/:owner` (uncapped there), and a "showing most active 50 of N owners" line. The page
   costs 1 + shown-owners SWR GETs; per-owner sections render independently (one slow owner never
   blocks the rest).
 - **Styling** (issues #137, #142): the intro keeps its `.card`, but owner sections are flat —
