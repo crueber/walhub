@@ -46,6 +46,18 @@
   .site-nav { scrollbar-width: none; }
   .site-nav::-webkit-scrollbar { display: none; }
   .site-nav a { @apply shrink-0; }
+  /* Repo tab bar at narrow widths (issue #274): the same treatment as the
+     #273 site-nav strip — the nav scrolls internally instead of wrapping
+     (single tab row, the common git-host pattern); links never shrink to
+     unreadability. The strip's own scrollbar is hidden so the row keeps one
+     stable height — the tabs stay keyboard-reachable (Tab moves focus along
+     them and the strip follows focus) and touch-scrollable, and the active
+     tab is scrolled into view on navigation (see Repo.jsx). The truncated
+     peek of the next tab is the scroll affordance on touch layouts.
+     Dark + light share it. */
+  .repo-tabs { scrollbar-width: none; }
+  .repo-tabs::-webkit-scrollbar { display: none; }
+  .repo-tabs a { @apply shrink-0; }
 
   /* Controls */
   .btn { @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors

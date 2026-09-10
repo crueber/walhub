@@ -503,6 +503,20 @@ export default function Repo(props) {
   // tabs fall back to the summary head). Null = no ref in view.
   const [getViewed, setViewed] = createSignal(null);
 
+  // Issue #274: keep the active tab visible in the internally-scrolling
+  // strip below. Tracks location.pathname reactively (via activeTab);
+  // scrolls the [aria-current="page"] link to the strip center without
+  // moving the page vertically (block: "nearest"). Guarded for non-DOM
+  // (headless-test) environments where the ref is unset.
+  let tabsNav;
+  createEffect(() => {
+    const id = activeTab(location.pathname);
+    const el = tabsNav?.querySelector?.('[aria-current="page"]');
+    if (id && el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest", inline: "center" });
+    }
+  });
+
   const ctx = {
     get owner() { return params.owner; },
     get name() { return params.name; },
@@ -576,7 +590,16 @@ export default function Repo(props) {
           </div>
         </div>
 
-        <nav class="repo-tabs mb-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-800" aria-label="repository sections">
+        {/* Narrow widths (issue #274): the tab row never grows past the
+            viewport. The nav scrolls internally (overflow-x-auto,
+            whitespace-nowrap — the same treatment as the #273 site-nav
+            strip) instead of pushing the page sideways; tab links never
+            shrink to unreadability (.repo-tabs a in ui.css). The strip is
+            a labelled landmark and follows keyboard focus natively; the
+            createEffect above keeps the active tab scrolled into view on
+            navigation. The truncated peek of the next tab is the scroll
+            affordance on touch layouts. */}
+        <nav ref={tabsNav} class="repo-tabs mb-4 flex max-w-full gap-1 overflow-x-auto whitespace-nowrap border-b border-zinc-200 dark:border-zinc-800" aria-label="repository sections">
           <For each={TABS}>
             {(t) => (
               <A
