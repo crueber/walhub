@@ -1,7 +1,8 @@
 // web/test/unit/dates.test.js — issue #133: app-wide date display tiers.
-// fmtDate: just-now / minutes / hours / days+ordinal / absolute; ordinals
-// incl. the 11/12/13 edge; future + invalid + missing inputs. fmtDateTitle:
-// local wall-time shape + zone suffix, invalid passthrough.
+// fmtDate: just-now / minutes / hours / relative-only days (#312) / absolute;
+// ordinals incl. the 11/12/13 edge; future + invalid + missing inputs.
+// fmtDateTitle: local wall-time shape + zone suffix, calendar-date prefix in
+// the 1–30-day window (#312), invalid passthrough.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dateTimeAttr, fmtDate, fmtDateTitle, ordinal } from "../../src/lib/format.js";
@@ -31,23 +32,14 @@ test("hour boundary: 1h singular, 2h and 23h plural", () => {
   assert.equal(fmtDate(agoIso(23 * HOUR)), "23 hours ago");
 });
 
-test("day tier carries relative + ordinal day + month name", () => {
-  const months = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-  ];
-  const dayAge = (ms) => {
-    const got = fmtDate(agoIso(ms));
-    const dd = new Date(Date.now() - ms);
-    assert.match(got, / ago - \d+(st|nd|rd|th) of [A-Z][a-z]+$/);
-    assert.ok(got.includes(`${ordinal(dd.getDate())} of ${months[dd.getMonth()]}`), got);
-    return got;
-  };
-  assert.ok(dayAge(DAY).startsWith("1 day ago"), fmtDate(agoIso(DAY)));
-  assert.ok(fmtDate(agoIso(3 * DAY)).startsWith("3 days ago - "), fmtDate(agoIso(3 * DAY)));
-  dayAge(3 * DAY);
-  assert.ok(fmtDate(agoIso(30 * DAY)).startsWith("30 days ago - "), fmtDate(agoIso(30 * DAY)));
-  dayAge(30 * DAY);
+test("day tier is relative only, no ordinal suffix (issue #312)", () => {
+  assert.equal(fmtDate(agoIso(DAY)), "1 day ago");
+  assert.equal(fmtDate(agoIso(3 * DAY)), "3 days ago");
+  assert.equal(fmtDate(agoIso(28 * DAY)), "28 days ago");
+  assert.equal(fmtDate(agoIso(30 * DAY)), "30 days ago");
+  for (const ms of [DAY, 3 * DAY, 30 * DAY]) {
+    assert.ok(!fmtDate(agoIso(ms)).includes(" - "), fmtDate(agoIso(ms)));
+  }
 });
 
 test("31 days and beyond render absolute month + ordinal + year", () => {
@@ -71,8 +63,8 @@ test("one year ago is absolute", () => {
 test("issue examples render in the right tier", () => {
   assert.equal(fmtDate(agoIso(13 * MIN)), "13 minutes ago");
   assert.equal(fmtDate(agoIso(2 * HOUR)), "2 hours ago");
-  assert.match(fmtDate(agoIso(3 * DAY)), /^3 days ago - /);
-  assert.match(fmtDate(agoIso(28 * DAY)), /^28 days ago - /);
+  assert.match(fmtDate(agoIso(3 * DAY)), /^3 days ago$/);
+  assert.match(fmtDate(agoIso(28 * DAY)), /^28 days ago$/);
   assert.match(fmtDate(agoIso(400 * DAY)), /^[A-Z][a-z]+ \d+(st|nd|rd|th), \d{4}$/);
 });
 
@@ -120,6 +112,44 @@ test("title is the local wall time plus a real zone name", () => {
   assert.match(got, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+$/);
   assert.ok(got.startsWith(want), `title ${got} should start with local wall time ${want}`);
   assert.ok(!got.endsWith("Z"), "title must be local, never UTC-suffixed");
+});
+
+test("title prepends the calendar date in the 1-30-day window (issue #312)", () => {
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  const pad = (n) => String(n).padStart(2, "0");
+  const titleAt = (ms) => {
+    const now = Date.now();
+    const iso = new Date(now - ms).toISOString();
+    return { got: fmtDateTitle(iso, now), d: new Date(iso) };
+  };
+  // Boundary pins: exactly 1 day and 30 days carry the prefix, 31 days does not.
+  for (const ms of [DAY, 3 * DAY, 30 * DAY]) {
+    const { got, d } = titleAt(ms);
+    const wall = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const want = `${months[d.getMonth()]} ${ordinal(d.getDate())} · ${wall}`;
+    assert.ok(got.startsWith(want), `title ${got} should start with ${want}`);
+    assert.ok(!got.endsWith("Z"), "title must be local, never UTC-suffixed");
+  }
+  // 31+ days keep the plain wall-time title (visible text already absolute).
+  {
+    const { got, d } = titleAt(31 * DAY);
+    const wall = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    assert.ok(got.startsWith(wall), `title ${got} should start with local wall time ${wall}`);
+    assert.ok(!got.includes("·"), `31-day title ${got} must not carry the calendar prefix`);
+  }
+  // Under a day keeps the plain wall-time title (no calendar date needed).
+  {
+    const { got, d } = titleAt(2 * HOUR);
+    const wall = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    assert.ok(got.startsWith(wall), `title ${got} should start with local wall time ${wall}`);
+    assert.ok(!got.includes("·"), `sub-day title ${got} must not carry the calendar prefix`);
+  }
 });
 
 test("dateTimeAttr normalizes to UTC ISO, never throws", () => {

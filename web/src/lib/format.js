@@ -133,8 +133,9 @@ function fmtModeBody(s) {
 //
 //   age < 1 day   → relative only: "just now" (< 60 s), "N minute(s) ago"
 //                   (< 60 min), "N hour(s) ago" (< 24 h)
-//   1–30 days     → "N day(s) ago - {ordinal} of {Month}"
-//                   (e.g. "3 days ago - 2nd of September")
+//   1–30 days     → relative only: "N day(s) ago" (e.g. "3 days ago"); the
+//                   calendar date ("{Month} {ordinal}", e.g. "September 2nd")
+//                   lives in the hover title instead (issue #312)
 //   31+ days      → "{Month} {ordinal}, {Year}" (e.g. "September 28th, 2024")
 //
 // Decisions (documented per AGENTS.md law 12):
@@ -149,6 +150,11 @@ function fmtModeBody(s) {
 //   with the real zone abbreviation from Intl (`timeZoneName: "short"` —
 //   e.g. "CDT", "CET", "GMT+2"), never UTC-suffixed. When Intl yields no zone
 //   name, a GMT±H[:MM] offset computed from getTimezoneOffset is used.
+//   Timestamps in the 1–30-day window prepend the calendar date the visible
+//   text no longer carries: "{Month} {ordinal} · YYYY-MM-DD HH:MM <zone>"
+//   (e.g. "September 2nd · 2025-09-02 14:03 CDT", issue #312). The < 1 day
+//   tier needs no calendar date (it is hours/minutes old) and the 31+ day
+//   tier already shows the full date, so both keep the plain wall-time title.
 // - Fallbacks are unchanged from the old per-page formatters: falsy input →
 //   "", unparseable input → String(input) (both text and title).
 
@@ -198,9 +204,8 @@ export function fmtDate(iso, now = Date.now()) {
   if (age < HOUR) return plural(Math.floor(age / MIN), "minute");
   if (age < DAY) return plural(Math.floor(age / HOUR), "hour");
   const days = Math.floor(age / DAY);
-  const monthDay = `${ordinal(d.getDate())} of ${MONTHS[d.getMonth()]}`;
-  if (days <= 30) return `${plural(days, "day")} - ${monthDay}`;
-  return `${MONTHS[d.getMonth()]} ${ordinal(d.getDate())}, ${d.getFullYear()}`;
+  if (days <= 30) return plural(days, "day");
+  return `${monthOrdinal(d)}, ${d.getFullYear()}`;
 }
 
 function pad2(n) {
@@ -223,16 +228,28 @@ function zoneName(d) {
   return `GMT${sign}${hh}${mm ? `:${pad2(mm)}` : ""}`;
 }
 
+// monthOrdinal(d) → "{Month} {ordinal}" (e.g. "September 2nd"): the calendar
+// date the middle tier's hover title carries (issue #312). Shared with the
+// 31+-day absolute form so the two spellings cannot drift apart.
+function monthOrdinal(d) {
+  return `${MONTHS[d.getMonth()]} ${ordinal(d.getDate())}`;
+}
+
 /**
- * fmtDateTitle(iso) → "YYYY-MM-DD HH:MM <zone>" in the user's local timezone
- * for the `<time title>`. Falsy → "", invalid → String(iso).
+ * fmtDateTitle(iso, now?) → "YYYY-MM-DD HH:MM <zone>" in the user's local
+ * timezone for the `<time title>`, prepended with "{Month} {ordinal} · " for
+ * timestamps in the 1–30-day window (issue #312). Falsy → "", invalid →
+ * String(iso). `now` (ms epoch) exists for tests; call sites omit it.
  */
-export function fmtDateTitle(iso) {
+export function fmtDateTitle(iso, now = Date.now()) {
   if (iso === undefined || iso === null || iso === "") return "";
   const d = toDate(iso);
   if (!d) return String(iso);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
+  const wall = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
     `${pad2(d.getHours())}:${pad2(d.getMinutes())} ${zoneName(d)}`;
+  const days = Math.floor(Math.max(0, now - d.getTime()) / DAY);
+  if (days >= 1 && days <= 30) return `${monthOrdinal(d)} · ${wall}`;
+  return wall;
 }
 
 /**
