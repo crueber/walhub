@@ -126,6 +126,24 @@ export function orderOwnersByActivity(names, activityByOwner) {
 }
 
 /**
+ * hasKnownActivity(activityByOwner) → whether any owner has a known commit
+ * time string (Forgejo #283 follow-up).
+ *
+ * The explore page fetches server-ordered names (`sort=activity&order=desc`)
+ * and must NOT re-sort until at least one section has reported a real time:
+ * re-running `orderOwnersByActivity` over an all-unknown map would resort to
+ * plain name order and discard the server ranking BEFORE the MAX_OWNERS
+ * slice (an active owner past the name cap would never mount). Null/missing/
+ * non-string values are all "not yet known" — a page where every section
+ * settles null keeps the server order (which for all-unknown servers already
+ * degrades to name order, so both agree).
+ */
+export function hasKnownActivity(activityByOwner) {
+  if (!activityByOwner || typeof activityByOwner !== "object") return false;
+  return Object.values(activityByOwner).some((t) => typeof t === "string");
+}
+
+/**
  * pageSlice(list, limit?) → {shown, extra}. Split a name list into the rows
  * the page renders (the first `limit`, in the caller's order) and the
  * overflow count folded behind the "+N more" link. Non-array input behaves

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
+  hasKnownActivity,
   newestFirst,
   orderByActivity,
   orderOwnersByActivity,
@@ -172,4 +173,31 @@ test("orderOwnersByActivity composes with pageSlice (slice-after-rank)", () => {
   assert.equal(shown.length, 10);
   assert.equal(extra, 2);
   assert.equal(shown[0], "o11"); // most recently committed owner survives the cap
+});
+
+test("hasKnownActivity is true only when a real time string is present", () => {
+  assert.equal(hasKnownActivity({}), false);
+  assert.equal(hasKnownActivity({ bob: null, amy: null }), false);
+  assert.equal(hasKnownActivity({ bob: undefined }), false);
+  assert.equal(hasKnownActivity(undefined), false);
+  assert.equal(hasKnownActivity(null), false);
+  assert.equal(hasKnownActivity("bob"), false);
+  assert.equal(hasKnownActivity({ bob: "2026-09-10T12:00:00Z", amy: null }), true);
+});
+
+test("server order survives first paint: gate re-rank until a known time lands (#283 follow-up)", () => {
+  // Mirrors Owners.jsx: server-ordered names pass through untouched while the
+  // activity map holds no known times, so the MAX_OWNERS slice keeps the
+  // server's top-N (an active owner past the name cap still surfaces).
+  const server = ["bob", "alice", "amy", "zed"]; // sort=activity&order=desc
+  const rank = (names, activity) =>
+    hasKnownActivity(activity) ? orderOwnersByActivity(names, activity) : names;
+  assert.deepEqual(rank(server, {}), server);
+  assert.deepEqual(pageSlice(rank(server, {}), 2).shown, ["bob", "alice"]);
+  // Once a section reports, the client re-rank applies in the same total order
+  // (known first, the rest — pending or settled-null — trailing by name).
+  assert.deepEqual(
+    rank(server, { alice: "2026-09-11T12:00:00Z" }),
+    ["alice", "amy", "bob", "zed"],
+  );
 });

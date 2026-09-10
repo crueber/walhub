@@ -32,6 +32,7 @@ import { RepoRow } from "./Repos.jsx";
 import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
+  hasKnownActivity,
   orderByActivity,
   orderOwnersByActivity,
   ownerActivity,
@@ -136,7 +137,14 @@ export default function Owners() {
       </section>
       <Show when={getOwners()} fallback={<p class="muted">loading…</p>}>
         {(owners) => {
-          const ordered = orderOwnersByActivity(owners(), getActivity());
+          // Server order first: until a section reports a known time there is
+          // nothing to re-rank with, and re-sorting an all-unknown map would
+          // fall back to name order — discarding the server's activity
+          // ranking before the MAX_OWNERS slice (Forgejo #283 follow-up).
+          const activity = getActivity();
+          const ordered = hasKnownActivity(activity)
+            ? orderOwnersByActivity(owners(), activity)
+            : owners();
           const { shown, extra } = pageSlice(ordered, MAX_OWNERS);
           return (
             <Show
