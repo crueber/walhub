@@ -100,6 +100,32 @@ func TestHTTPOpenTable(t *testing.T) {
 	}
 }
 
+// stableViewETag polls GET …/pulls/1 until the folded ETag repeats (issue
+// #280): the view's mergeable stamp converges via a detached background
+// recompute pass, so a 304 assertion needs a settled token first —
+// asserting on the first read's token races the pass landing in between.
+func stableViewETag(t *testing.T, e *testEnv, lane string) string {
+	t.Helper()
+	prev := ""
+	for i := 0; i < 200; i++ {
+		w := doReq(t, e.h, "GET", lane, lanePath(lane, "/pulls/1"), "", writer())
+		if w.Code != 200 {
+			t.Fatalf("get = %d (%s)", w.Code, w.Body.String())
+		}
+		etag := w.Header().Get("ETag")
+		if etag == "" {
+			t.Fatal("GET pull must carry an ETag")
+		}
+		if etag == prev {
+			return etag
+		}
+		prev = etag
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("ETag never stabilized")
+	return ""
+}
+
 func TestHTTPGetListPut(t *testing.T) {
 	for _, lane := range []string{"api", "browser"} {
 		t.Run("lane="+lane, func(t *testing.T) {
@@ -119,9 +145,9 @@ func TestHTTPGetListPut(t *testing.T) {
 					t.Fatalf("view lacks %s: %v", k, view)
 				}
 			}
-			etag := w.Header().Get("ETag")
-			if etag == "" {
-				t.Fatal("GET pull must carry ETag <head sha>")
+			etag := stableViewETag(t, e, lane)
+			if !strings.Contains(etag, hexSHA(2)) {
+				t.Fatalf("ETag %q lacks the live head sha", etag)
 			}
 			// 304 on If-None-Match.
 			req := httptest.NewRequest("GET", lanePath(lane, "/pulls/1"), nil)
@@ -331,5 +357,66 @@ func TestHTTPAuthMatrix(t *testing.T) {
 	w = doReq(t, e.h, "GET", "api", "/o/r/api/pulls/1", "", auth.Anonymous())
 	if w.Code != 401 {
 		t.Fatalf("anon get = %d", w.Code)
+	}
+}
+
+// TestPullViewMutableCacheTable pins the issue-#280 freshness contract for
+// GET …/pulls/{num}: the mutable-collab class (private, no-cache — no
+// stale-serve window), folded-ETag economics (stale → 200 fresh, fresh →
+// 304), and token movement on thread mutation (a comment flips the ETag so
+// a refresh paints it on the first read — a HeadLive-only token would 304
+// the changed thread, hiding the comment).
+func TestPullViewMutableCacheTable(t *testing.T) {
+	for _, lane := range []string{"api", "browser"} {
+		t.Run("lane="+lane, func(t *testing.T) {
+			e := newTestEnv()
+			seedOpened(t, e)
+			get := func(inm string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest("GET", lanePath(lane, "/pulls/1"), nil)
+				if inm != "" {
+					req.Header.Set("If-None-Match", inm)
+				}
+				e.h.Auth = func(r *http.Request) (auth.Principal, *auth.AuthError) { return writer(), nil }
+				w := httptest.NewRecorder()
+				e.h.Handle(w, req)
+				return w
+			}
+			// The view's mergeable stamp converges via a detached
+			// background pass; settle the token before asserting 304.
+			stable := stableViewETag(t, e, lane)
+			first := get("")
+			if first.Code != 200 {
+				t.Fatalf("get = %d (%s)", first.Code, first.Body.String())
+			}
+			if cc := first.Header().Get("Cache-Control"); cc != ccMutable {
+				t.Fatalf("class: %q, want %q", cc, ccMutable)
+			}
+			if !strings.Contains(stable, hexSHA(2)) {
+				t.Fatalf("ETag %q lacks the live head sha", stable)
+			}
+			if stale := get(`"bogus"`); stale.Code != 200 {
+				t.Fatalf("stale ETag: %d, want 200", stale.Code)
+			}
+			if fresh := get(stable); fresh.Code != 304 {
+				t.Fatalf("fresh ETag: %d, want 304", fresh.Code)
+			}
+			// A comment bumps the thread version → the pre-comment
+			// token is stale now → 200 with the comment on the first
+			// refresh.
+			if w := doReq(t, e.h, "POST", lane, lanePath(lane, "/pulls/1/comments"), `{"body":"nice"}`, writer()); w.Code != 201 {
+				t.Fatalf("comment = %d (%s)", w.Code, w.Body.String())
+			}
+			after := get(stable)
+			if after.Code != 200 {
+				t.Fatalf("post-comment stale ETag: %d, want 200", after.Code)
+			}
+			moved := after.Header().Get("ETag")
+			if moved == stable {
+				t.Fatal("ETag did not move on comment")
+			}
+			if !strings.Contains(after.Body.String(), "nice") {
+				t.Fatalf("post-comment body lacks comment: %s", after.Body.String())
+			}
+		})
 	}
 }

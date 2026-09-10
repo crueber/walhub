@@ -110,15 +110,25 @@ Lane note: every repo-scoped path above exists under both `/{o}/{r}/api/…` and
 Non-repo endpoints have `/api/v1` and `/api-browser/v1` twins, plus `/services/api/…` twins for
 `owners`/`instance`.
 
-## 4. The two cache classes (§9.2 — the central design rule)
+## 4. The three cache classes (§9.2 — the central design rule)
 
 | Class | Headers (exact values) |
 |---|---|
 | **sha-addressed** (full 40/64-hex in the `{sha}`/`{rev}` position): `tree/{sha}/…`, `blob/{sha}/…`, `commits?ref={sha}`, `commit/{sha}` | `Cache-Control: private, max-age=31536000, immutable` |
 | **ref-dependent**: `owners*`, `refs*`, `resolve`, and any tree/blob/commits/commit addressed by a NAME | `Cache-Control: private, max-age=0, stale-while-revalidate=60` + `ETag: "<resolved sha>"` + `If-None-Match` → `304` |
+| **mutable collab** (issue #280): any GET whose resource can change via a direct user action — issue/PR threads (`ETag: "v<version>"`), social counters, single/latest/list releases, the pull view, identity profiles/orgs/teams/invites/access docs | `Cache-Control: private, no-cache` + the existing version ETag + `If-None-Match` → `304` |
 
-- The ETag value is the **quoted resolved sha** (`ETag: "cb38da1…"`), matching a bare double-quoted hex
+- Mutability, not addressability, decides the class: SWR's stale-serve window is for content whose
+  staleness is bounded by ref movement (refs move rarely; seconds-old is fine). User-mutable state
+  revalidates on every read instead — `no-cache` still caches in the browser, and the version ETag
+  still makes unchanged responses 304 with zero body, so only the stale-serve window is lost (which
+  is exactly the #259/#280 flip-flop: refresh 1 painting pre-mutation state while revalidation
+  lands, refresh 2 painting post-mutation state).
+
+- Ref-dependent ETags: the value is the **quoted resolved sha** (`ETag: "cb38da1…"`), matching a bare double-quoted hex
   string in the header; compare `If-None-Match` by stripping quotes and weak prefixes.
+  (Mutable-collab ETags are version tokens — `"v<version>"`, store versions, folded view stamps —
+  compared the same way.)
 - SWR is honored server-side too: an expired-but-cached render MAY be served immediately (it is already
   within the 60 s stale window semantics) while revalidation happens in the background.
 - **Navigation flow (drives every handler):** one ref-dependent call (`resolve` — SWR paints instantly,
@@ -895,3 +905,18 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   surface for no isolation gain. v1 string lists stay untouched. Rationale:
   the explore page orders by most recent commit from the same ONE catalog
   read, and stamps render from the rows with zero per-row fetches.
+- **Third cache class for mutable collab state (Forgejo #280 — amends the §4
+  design rule).** §4 said "two cache classes", both for git content; the
+  collaboration specs then borrowed the SWR class for version-keyed GETs
+  (threads, social, releases, pull views, identity docs), licensing the
+  refresh flip-flop #259 fixed scoped for threads and #280 fixes everywhere:
+  `private, no-cache` + the existing version ETag. The rule's intent is
+  preserved and narrowed — SWR stays exactly where staleness is bounded by
+  ref movement (git-content routes keep byte-identical headers); mutability,
+  not addressability, decides the class. Per-package `ccMutable` constants
+  follow the established per-package `writeCached`/`matchETag` duplication
+  (the #259 `ccThread` precedent); no shared import was added. The pull-view
+  ETag folds head/base live shas + thread/pr versions + the mergeable stamp
+  (a HeadLive-only token would 304 a thread whose comments never moved the
+  head). Client invalidation helpers are unchanged (out of scope — the
+  header contract covers the reload case).

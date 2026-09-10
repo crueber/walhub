@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -200,5 +201,116 @@ func TestOrgsEndpoints(t *testing.T) {
 	}
 	if w := doReq(h, "DELETE", "/api/v1/orgs", ""); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("DELETE orgs = %d", w.Code)
+	}
+}
+
+// TestIdentityMutableCacheTable pins the issue-#280 freshness contract for
+// every identity GET: the mutable-collab class (private, no-cache — no
+// stale-serve window), version-keyed ETag economics where a token exists
+// (stale → 200 fresh, fresh → 304), and token movement on mutation (a
+// post-mutation refresh paints the new state on the first read).
+// Collection/singleton GETs without a version token take the class without
+// an ETag (always 200, never stale).
+func TestIdentityMutableCacheTable(t *testing.T) {
+	s := testService()
+	seedOrg(t, s) // acme org (alice owner), bob member, platform team
+	seedRepo(t, s, "acme", "repo")
+	if _, err := s.EnsureProfile(reqCtx(), "jane@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	adminH := testHandler(s, admin)
+	aliceH := testHandler(s, alice)
+	janeH := testHandler(s, auth.Principal{Name: "jane@example.com", Write: true})
+	get := func(h *Handler, target, inm string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		if inm != "" {
+			r.Header.Set("If-None-Match", inm)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	rows := []struct {
+		name       string
+		target     string
+		etagPrefix string // "" = tokenless (class only, always 200)
+		mutate     func(t *testing.T)
+	}{
+		{"profile", "/api/v1/users/jane%40example.com", "user-v", func(t *testing.T) {
+			t.Helper()
+			if w := doReq(janeH, "PUT", "/api/v1/users/jane%40example.com", `{"display_name":"Jane"}`); w.Code != 200 {
+				t.Fatalf("PUT profile = %d: %s", w.Code, w.Body.String())
+			}
+		}},
+		{"org", "/api/v1/orgs/acme", "org-v", func(t *testing.T) {
+			t.Helper()
+			if w := doReq(aliceH, "PUT", "/api/v1/orgs/acme", `{"display_name":"Acme2"}`); w.Code != 200 {
+				t.Fatalf("PUT org = %d: %s", w.Code, w.Body.String())
+			}
+		}},
+		{"members", "/api/v1/orgs/acme/members", "members-v", func(t *testing.T) {
+			t.Helper()
+			if w := doReq(aliceH, "PUT", "/api/v1/orgs/acme/members/bob%40example.com", `{"role":"owner"}`); w.Code != 200 {
+				t.Fatalf("PUT member = %d: %s", w.Code, w.Body.String())
+			}
+		}},
+		{"team", "/api/v1/orgs/acme/teams/platform", "team-v", func(t *testing.T) {
+			t.Helper()
+			if w := doReq(aliceH, "PUT", "/api/v1/orgs/acme/teams/platform", `{"name":"Plat2"}`); w.Code != 200 {
+				t.Fatalf("PUT team = %d: %s", w.Code, w.Body.String())
+			}
+		}},
+		{"access", "/acme/repo/api/access", "access-v", func(t *testing.T) {
+			t.Helper()
+			w := doReq(adminH, "GET", "/acme/repo/api/access", "")
+			var doc struct {
+				Version int `json:"version"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+				t.Fatal(err)
+			}
+			put := `{"version":` + strconv.Itoa(doc.Version) + `,"visibility":"private","role_bindings":[]}`
+			if w := doReq(adminH, "PUT", "/acme/repo/api/access", put); w.Code != 200 {
+				t.Fatalf("PUT access = %d: %s", w.Code, w.Body.String())
+			}
+		}},
+		{"orgs list", "/api/v1/orgs", "", nil},
+		{"teams list", "/api/v1/orgs/acme/teams", "", nil},
+		{"member single", "/api/v1/orgs/acme/members/bob%40example.com", "", nil},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			first := get(adminH, row.target, "")
+			if first.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d: %s", row.target, first.Code, first.Body.String())
+			}
+			if cc := first.Header().Get("Cache-Control"); cc != ccMutable {
+				t.Fatalf("class: %q, want %q", cc, ccMutable)
+			}
+			etag := first.Header().Get("ETag")
+			if row.etagPrefix == "" {
+				if etag != "" {
+					t.Fatalf("tokenless GET %s carries ETag %q", row.target, etag)
+				}
+				return
+			}
+			if !strings.Contains(etag, row.etagPrefix) {
+				t.Fatalf("ETag %q lacks prefix %q", etag, row.etagPrefix)
+			}
+			if stale := get(adminH, row.target, `"bogus"`); stale.Code != http.StatusOK {
+				t.Fatalf("stale ETag: %d, want 200", stale.Code)
+			}
+			if fresh := get(adminH, row.target, etag); fresh.Code != http.StatusNotModified {
+				t.Fatalf("fresh ETag: %d, want 304", fresh.Code)
+			}
+			row.mutate(t)
+			after := get(adminH, row.target, etag)
+			if after.Code != http.StatusOK {
+				t.Fatalf("post-mutation stale ETag: %d, want 200", after.Code)
+			}
+			if netag := after.Header().Get("ETag"); netag == etag {
+				t.Fatalf("ETag did not move on mutation: %q", netag)
+			}
+		})
 	}
 }

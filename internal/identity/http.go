@@ -153,7 +153,14 @@ func matchETag(header, etag string) bool {
 }
 
 const (
-	ccSWR     = "private, max-age=0, stale-while-revalidate=60"
+	// ccMutable is the mutable-collab freshness contract (issue #280;
+	// docs/go/07_api.md §4 third class): profiles, orgs, members, and
+	// teams mutate via direct user action, so every GET revalidates on
+	// EVERY read instead of serving a stale-while-revalidate window. The
+	// version-keyed ETags keep the revalidation cheap (304 when
+	// unchanged); collection/singleton GETs without a version token take
+	// the class without an ETag (always 200, never stale).
+	ccMutable = "private, no-cache"
 	ccNoStore = "no-store"
 )
 
@@ -226,7 +233,7 @@ func (h *Handler) routeUsers(w http.ResponseWriter, r *http.Request, rest []stri
 			writePlain(w, http.StatusNotFound, "unknown principal")
 			return true
 		}
-		writeCached(w, r, ccSWR, etagOf("user", prof.Version), http.StatusOK, prof)
+		writeCached(w, r, ccMutable, etagOf("user", prof.Version), http.StatusOK, prof)
 		return true
 	case http.MethodPut:
 		if p.Anonymous {
@@ -275,7 +282,7 @@ func (h *Handler) routeOrgs(w http.ResponseWriter, r *http.Request, rest []strin
 				writeErr(w, err)
 				return true
 			}
-			writeCached(w, r, ccSWR, "", http.StatusOK, orgs)
+			writeCached(w, r, ccMutable, "", http.StatusOK, orgs)
 			return true
 		case http.MethodPost:
 			p, aerr := h.principal(r)
@@ -360,7 +367,7 @@ func (h *Handler) routeOrg(w http.ResponseWriter, r *http.Request, org string) b
 			writePlain(w, http.StatusNotFound, "unknown org")
 			return true
 		}
-		writeCached(w, r, ccSWR, etagOf("org", o.Version), http.StatusOK, o)
+		writeCached(w, r, ccMutable, etagOf("org", o.Version), http.StatusOK, o)
 		return true
 	case http.MethodPut, http.MethodDelete:
 		if cerr := h.Svc.CheckOrgOwner(r.Context(), org, p); cerr != nil {
@@ -420,7 +427,7 @@ func (h *Handler) routeMembers(w http.ResponseWriter, r *http.Request, org strin
 			writePlain(w, http.StatusNotFound, "unknown org")
 			return true
 		}
-		writeCached(w, r, ccSWR, etagOf("members", m.Version), http.StatusOK, m)
+		writeCached(w, r, ccMutable, etagOf("members", m.Version), http.StatusOK, m)
 		return true
 	}
 	if len(rest) != 1 {
@@ -448,7 +455,7 @@ func (h *Handler) routeMembers(w http.ResponseWriter, r *http.Request, org strin
 		}
 		for _, e := range m.Members {
 			if normPrincipal(e.Principal) == target {
-				writeCached(w, r, ccSWR, "", http.StatusOK, e)
+				writeCached(w, r, ccMutable, "", http.StatusOK, e)
 				return true
 			}
 		}
@@ -516,7 +523,7 @@ func (h *Handler) routeTeams(w http.ResponseWriter, r *http.Request, org string,
 				writeErr(w, err)
 				return true
 			}
-			writeCached(w, r, ccSWR, "", http.StatusOK, teams)
+			writeCached(w, r, ccMutable, "", http.StatusOK, teams)
 			return true
 		case http.MethodPost:
 			if cerr := h.Svc.CheckOrgOwner(r.Context(), org, p); cerr != nil {
@@ -597,7 +604,7 @@ func (h *Handler) routeTeams(w http.ResponseWriter, r *http.Request, org string,
 			writePlain(w, http.StatusNotFound, "unknown team")
 			return true
 		}
-		writeCached(w, r, ccSWR, etagOf("team", t.Version), http.StatusOK, t)
+		writeCached(w, r, ccMutable, etagOf("team", t.Version), http.StatusOK, t)
 		return true
 	case http.MethodPut, http.MethodDelete:
 		if cerr := h.Svc.CheckOrgOwner(r.Context(), org, p); cerr != nil {

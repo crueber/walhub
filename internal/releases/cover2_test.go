@@ -530,7 +530,7 @@ func TestCover2HandleFalse(t *testing.T) {
 	}
 	// writeCached encode failure.
 	rec := httptest.NewRecorder()
-	writeCached(rec, httptest.NewRequest("GET", "/", nil), ccSWR, "e", 200, func() {})
+	writeCached(rec, httptest.NewRequest("GET", "/", nil), ccMutable, "e", 200, func() {})
 	if rec.Code != 500 {
 		t.Fatalf("cached encode: %d", rec.Code)
 	}

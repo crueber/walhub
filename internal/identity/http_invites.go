@@ -229,7 +229,7 @@ func (h *Handler) routeAccess(w http.ResponseWriter, r *http.Request, owner, rep
 			writeErr(w, err)
 			return true
 		}
-		writeCached(w, r, ccSWR, etagOf("access", doc.Version)+"-"+string(ver), http.StatusOK, accessView(doc))
+		writeCached(w, r, ccMutable, etagOf("access", doc.Version)+"-"+string(ver), http.StatusOK, accessView(doc))
 		return true
 	case http.MethodPut:
 		if cerr := h.Svc.CheckRole(r.Context(), owner, repo, p, RoleAdmin); cerr != nil {

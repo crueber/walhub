@@ -130,8 +130,8 @@ func TestReleasesHTTPCache(t *testing.T) {
 	putJSON(t, x, "v1", map[string]any{"name": "R"}, asWriter())
 
 	rec := do(t, x, "GET", "/o/r/api/releases/v1", nil, asReader("bob"))
-	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "stale-while-revalidate") {
-		t.Fatalf("class: %q", cc)
+	if cc := rec.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("class: %q, want %q", cc, ccMutable)
 	}
 	etag := rec.Header().Get("ETag")
 	if etag == "" {
@@ -346,4 +346,73 @@ func TestPrincipalFallbackAnonymous(t *testing.T) {
 		t.Fatal("nil auth principal should fall back")
 	}
 	var _ = auth.Anonymous
+}
+
+// TestReleasesMutableCacheTable pins the issue-#280 freshness contract for
+// every version-keyed releases GET (single, latest, list): the
+// mutable-collab class (private, no-cache — no stale-serve window),
+// version-token ETag economics (stale → 200 fresh, fresh → 304), and ETag
+// movement on release edit (a post-edit refresh paints the new name on the
+// first read).
+func TestReleasesMutableCacheTable(t *testing.T) {
+	x := newHarness(t)
+	grantWrite(x)
+	x.git.tags["v1"] = strings.Repeat("a", 40)
+	x.git.tags["v2"] = strings.Repeat("b", 40)
+	putJSON(t, x, "v1", map[string]any{"name": "R1"}, asWriter())
+	putJSON(t, x, "v2", map[string]any{"name": "R2"}, asWriter())
+	rows := []struct {
+		name string
+		path string
+	}{
+		{"single", "/o/r/api/releases/v1"},
+		{"latest", "/o/r/api/releases/latest"},
+		{"list", "/o/r/api/releases"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			get := func(inm string) *httptest.ResponseRecorder {
+				h := asReader("bob")
+				if inm != "" {
+					h = mergeHeaders(h, map[string]string{"If-None-Match": inm})
+				}
+				return do(t, x, "GET", row.path, nil, h)
+			}
+			first := get("")
+			if first.Code != 200 {
+				t.Fatalf("GET %s: %d %q", row.path, first.Code, first.Body.String())
+			}
+			if cc := first.Header().Get("Cache-Control"); cc != ccMutable {
+				t.Fatalf("class: %q, want %q", cc, ccMutable)
+			}
+			etag := first.Header().Get("ETag")
+			if etag == "" {
+				t.Fatalf("GET %s must carry a version-token ETag", row.path)
+			}
+			if stale := get(`"bogus"`); stale.Code != 200 {
+				t.Fatalf("stale ETag: %d, want 200", stale.Code)
+			}
+			if fresh := get(etag); fresh.Code != http.StatusNotModified {
+				t.Fatalf("fresh ETag: %d, want 304", fresh.Code)
+			}
+		})
+	}
+	// Release edit flips the single/latest/list tokens: the pre-edit ETags
+	// are stale now → 200 with the new name on the first refresh.
+	single := do(t, x, "GET", "/o/r/api/releases/v1", nil, asReader("bob"))
+	old := single.Header().Get("ETag")
+	if rec := putJSON(t, x, "v1", map[string]any{"name": "R1b"}, asWriter()); rec.Code != 200 {
+		t.Fatalf("edit: %d %q", rec.Code, rec.Body.String())
+	}
+	after := do(t, x, "GET", "/o/r/api/releases/v1", nil,
+		mergeHeaders(asReader("bob"), map[string]string{"If-None-Match": old}))
+	if after.Code != 200 {
+		t.Fatalf("post-edit stale ETag: %d, want 200", after.Code)
+	}
+	if netag := after.Header().Get("ETag"); netag == old {
+		t.Fatalf("ETag did not move on edit: %q", netag)
+	}
+	if !strings.Contains(after.Body.String(), "R1b") {
+		t.Fatalf("post-edit body lacks new name: %s", after.Body.String())
+	}
 }

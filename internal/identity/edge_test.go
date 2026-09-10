@@ -122,7 +122,7 @@ func TestWriteErrMapping(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("If-None-Match", `"e1"`)
-	writeCached(w2, r, ccSWR, "e1", http.StatusOK, map[string]int{"a": 1})
+	writeCached(w2, r, ccMutable, "e1", http.StatusOK, map[string]int{"a": 1})
 	if w2.Code != http.StatusNotModified {
 		t.Errorf("304 = %d", w2.Code)
 	}

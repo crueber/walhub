@@ -24,7 +24,7 @@ export function attachSocial(repo) {
   };
 
   repo.social = {
-    /** Counters + viewer flags: `GET …/social` → `{stars, watchers, forks, viewer}` (SWR+ETag). */
+    /** Counters + viewer flags: `GET …/social` → `{stars, watchers, forks, viewer}` (version-token ETag + `private, no-cache` — issue #280). */
     get: (opts) => client._call(p("/social"), { method: "GET", ...opts }),
   };
 }

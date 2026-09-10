@@ -294,7 +294,8 @@ same handler (P8 shape); a crash drops one inbox entry — the issuer-side list 
 ## 8. API endpoints
 
 Wire conventions per 07 §2: plain-text errors, `[]` not `null`, RFC 3339 UTC, per-segment decoding,
-SWR/ETag or `no-store` cache classes, both lanes everywhere. All registered by the `identity`
+mutable-collab (`private, no-cache` + version ETag where a token exists) or `no-store` cache classes
+(issue #280 — never SWR on mutable state), both lanes everywhere. All registered by the `identity`
 RouteProvider (Seam 1).
 
 ### Top-level (`/api/v1` + `/api-browser/v1` twins)
@@ -303,7 +304,7 @@ RouteProvider (Seam 1).
 |---|---|---|
 | `GET /api/v1/users/{principal}` | any (public read) | → `{profile}`; 404 unknown |
 | `PUT /api/v1/users/{principal}` | self or admin | body = profile → 200 profile; 400 invalid |
-| `GET /api/v1/orgs` | any (SWR) | → sorted `["acme", …]` |
+| `GET /api/v1/orgs` | any (mutable-collab, no version token) | → sorted `["acme", …]` |
 | `POST /api/v1/orgs` | write | `{org, display_name}` → 201 `{org}`; 409 taken; creator becomes owner |
 | `GET/PUT/DELETE /api/v1/orgs/{org}` | read / owner / owner | profile CRUD; 409 on delete with repos |
 | `GET/PUT/DELETE …/members/{principal}` | read / owner / owner | roster ops; last owner removal → 409 |
@@ -434,3 +435,10 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   team membership grant nothing: the profile speaks for the namespace, so only namespace owners
   (plus host admins) write it. The GET carries request-scoped `can_edit` (same rule, probe
   failure degrades to false) so the UI affordance never guesses — client gating stays cosmetic.
+- **Mutable-collab cache class on every identity GET (issue #280).** §8 said SWR/ETag — the wrong
+  call for user-mutable docs (the version ETag revalidated correctly, but SWR's stale-serve
+  window licensed pre-mutation paints across refreshes). Profile/org/members/team/access GETs now
+  serve `private, no-cache` with their version ETags intact; tokenless collection/singleton GETs
+  (orgs/teams lists, single member) take the class without an ETag (always 200, never stale);
+  invite/perms routes were already `no-store`. Rationale: mutability, not addressability, decides
+  the class (07_api.md §4 third class).

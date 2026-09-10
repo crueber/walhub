@@ -28,7 +28,7 @@ export function attachReleases(repo) {
     /** Latest: `GET …/releases/latest[?include_prereleases=1]` (404 when none). */
     latest: (query = {}, opts) =>
       client._call(p(`/releases/latest${qs(query)}`), { method: "GET", ...opts }),
-    /** One release: `GET …/releases/{tag}` (drafts included, ETag + SWR). */
+    /** One release: `GET …/releases/{tag}` (drafts included, version ETag + `private, no-cache` — issue #280). */
     get: (tag, opts) =>
       client._call(p(`/releases/${encodeURIComponent(tag)}`), { method: "GET", ...opts }),
     /** Create-or-update: `PUT …/releases/{tag}` → 201/200 Release (write; unknown tag 404). */

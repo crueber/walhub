@@ -98,8 +98,8 @@ func TestSocialHTTPTable(t *testing.T) {
 	if viewer["starred"] != true || viewer["watching"] != true {
 		t.Fatalf("viewer: %v", viewer)
 	}
-	if cc := rec2.Header().Get("Cache-Control"); !strings.Contains(cc, "stale-while-revalidate") {
-		t.Fatalf("class: %q", cc)
+	if cc := rec2.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("class: %q, want %q", cc, ccMutable)
 	}
 	etag := rec2.Header().Get("ETag")
 	rec3 := do(t, x2, "GET", "/o/r/api/social", nil,
@@ -258,5 +258,72 @@ func TestStarredPagesTable(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSocialMutableCacheTable pins the issue-#280 freshness contract for
+// GET /{o}/{r}/api/social: the mutable-collab class (private, no-cache —
+// no stale-serve window), version-token ETag economics (stale → 200 fresh,
+// fresh → 304), and ETag movement on mutation (unstar flips the token so a
+// refresh can never paint the pre-mutation counts).
+func TestSocialMutableCacheTable(t *testing.T) {
+	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
+	if rec := do(t, x, "PUT", "/o/r/api/star", nil, asUser("jane")); rec.Code != 200 {
+		t.Fatalf("star: %d %q", rec.Code, rec.Body.String())
+	}
+	get := func(inm string) *httptest.ResponseRecorder {
+		h := asUser("jane")
+		if inm != "" {
+			h = mergeHeaders(h, map[string]string{"If-None-Match": inm})
+		}
+		return do(t, x, "GET", "/o/r/api/social", nil, h)
+	}
+	// No conditional read: 200, exact class, version-token ETag, no stale window.
+	first := get("")
+	if first.Code != 200 {
+		t.Fatalf("social: %d %q", first.Code, first.Body.String())
+	}
+	if cc := first.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("class: %q, want %q", cc, ccMutable)
+	}
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("social GET must carry a version-token ETag")
+	}
+	// Stale token → 200 fresh (full body, same class).
+	stale := get(`"0.0.0.stale"`)
+	if stale.Code != 200 {
+		t.Fatalf("stale ETag: %d", stale.Code)
+	}
+	if cc := stale.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("stale class: %q, want %q", cc, ccMutable)
+	}
+	// Fresh token → 304 with an empty body (revalidation stays cheap).
+	fresh := get(etag)
+	if fresh.Code != http.StatusNotModified {
+		t.Fatalf("fresh ETag: %d, want 304", fresh.Code)
+	}
+	if fresh.Body.Len() != 0 {
+		t.Fatalf("304 body: %d bytes", fresh.Body.Len())
+	}
+	// Mutation flips the token: the pre-mutation ETag is now stale → 200
+	// with the post-mutation counts (the #280 flip-flop is gone).
+	if rec := do(t, x, "DELETE", "/o/r/api/star", nil, asUser("jane")); rec.Code != 200 {
+		t.Fatalf("unstar: %d %q", rec.Code, rec.Body.String())
+	}
+	after := get(etag)
+	if after.Code != 200 {
+		t.Fatalf("post-mutation stale ETag: %d, want 200", after.Code)
+	}
+	if netag := after.Header().Get("ETag"); netag == etag {
+		t.Fatalf("ETag did not move on mutation: %q", netag)
+	}
+	var soc map[string]any
+	if err := json.Unmarshal(after.Body.Bytes(), &soc); err != nil {
+		t.Fatal(err)
+	}
+	if soc["stars"] != float64(0) {
+		t.Fatalf("post-unstar counts: %v", soc)
 	}
 }
