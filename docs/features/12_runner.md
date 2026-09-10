@@ -13,7 +13,7 @@ outside the server's trust boundary except for the explicitly trusted R1 slice (
 
 Doc conventions: this is the feature spec (`docs/features/NN_name.md`, next number 12 — this IS the
 feature doc, not `docs/go/` architecture; no new `docs/go/` number is claimed). Numbered decisions
-**D1–D9** below are the reviewable units (the 11_mirror.md R1 (a)/(b) style). Rollout slices
+**D1–D8** below are the reviewable units (the 11_mirror.md R1 (a)/(b) style). Rollout slices
 **R1/R2/R3** (§8) are independently shippable. Dependency analysis (§10) works within law 1 with
 zero amendments; the one reserve amendment is drafted, not proposed.
 
@@ -418,6 +418,8 @@ Open questions (need Chris's call before implementation planning):
   GitHub-compat import story for `.github/workflows/`) vs `.github/workflows/` (compat bait).
 - **Q5.** Log/artifacts retention + caps defaults (§6–§7 numbers are proposals, all `[actions]`
   overridable): are 30 d / 64 MiB / 2 GiB sane for packden's own hosting bill?
+- **Q6.** Workflow file format: YAML-subset hand-roll vs TOML workflows — decided in §10
+  dependency analysis; Chris's call before implementation planning.
 
 ## 10. Testing strategy (per 15_testing.md tiers) + dependency analysis
 
