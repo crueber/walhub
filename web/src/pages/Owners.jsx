@@ -3,8 +3,14 @@
 // (GET /api/v1/owners; per-owner rows from GET
 // /api/v1/owners/{owner}/repos/detailed?sort=activity&order=desc — 07 §8,
 // Forgejo #247: true most-recent-commit order server-side, stabilized
-// client-side by lib/owners.js orderByActivity). Owner sections stay
-// name-proxied (newestFirst — the owners list carries no timestamps).
+// client-side by lib/owners.js orderByActivity). Owner SECTIONS order by
+// most recent commit too (Forgejo #283): each section reports its newest
+// row time (lib/owners.js ownerActivity over the same detailed doc it
+// already fetched — zero extra GETs) and the page re-ranks sections via
+// orderOwnersByActivity as docs land. Owners with no known activity
+// (fetch pending, or no commits) sort last with a deterministic name
+// tiebreak; until every section reports, not-yet-loaded owners keep that
+// trailing name order — first paint may shift once, then settles.
 // The page adds per-section caps (lib/owners.js) and the intro card. Star
 // counts ride the shared `social:{o}/{r}` cache entries (<StarCount>,
 // lib/stars.js) and last-active stamps render from the listing rows
@@ -14,15 +20,16 @@
 // widths). No new endpoint, no new SDK method (issues #117, #137, #142).
 
 import repos from "../../sdk/src/index.js";
-import { For, Show } from "solid-js";
+import { For, Show, createEffect, createSignal } from "solid-js";
 import { A } from "@solidjs/router";
 import { useData } from "../lib/data.js";
 import { RepoRow } from "./Repos.jsx";
 import {
   MAX_OWNERS,
   MAX_REPOS_PER_OWNER,
-  newestFirst,
   orderByActivity,
+  orderOwnersByActivity,
+  ownerActivity,
   pageSlice,
 } from "../lib/owners.js";
 
@@ -31,6 +38,14 @@ function OwnerSection(props) {
   const [getDoc] = useData(`repos:${props.owner}`, () =>
     repos.owners.detailed(props.owner, { sort: "activity", order: "desc" }),
   );
+  // Report this section's newest commit time upward (#283 ordering) — runs
+  // on the doc the section already fetched, so ranking costs zero extra GETs.
+  createEffect(() => {
+    const doc = getDoc();
+    if (doc && typeof props.onActivity === "function") {
+      props.onActivity(props.owner, ownerActivity(doc));
+    }
+  });
   return (
     <section class="py-3">
       <h3 class="text-base font-bold tracking-tight">
@@ -76,6 +91,13 @@ function OwnerSection(props) {
 export default function Owners() {
   const [getOwners] = useData("owners", () => repos.owners.list());
   const [getMe] = useData("me", () => repos.me().catch(() => null));
+  // Per-owner newest-commit times reported by OwnerSections as their
+  // detailed docs land (Forgejo #283). Missing key = fetch pending;
+  // null = settled with no known activity — both sort last.
+  const [getActivity, setActivity] = createSignal({});
+  const reportActivity = (owner, at) => {
+    setActivity((prev) => (prev[owner] === at ? prev : { ...prev, [owner]: at }));
+  };
   const canWrite = () => {
     const me = getMe();
     if (!me) return false;
@@ -107,7 +129,7 @@ export default function Owners() {
       </section>
       <Show when={getOwners()} fallback={<p class="muted">loading…</p>}>
         {(owners) => {
-          const ordered = newestFirst(owners());
+          const ordered = orderOwnersByActivity(owners(), getActivity());
           const { shown, extra } = pageSlice(ordered, MAX_OWNERS);
           return (
             <Show
@@ -115,7 +137,7 @@ export default function Owners() {
               fallback={<p class="muted">no repositories yet — push one, or use the API to create it</p>}
             >
               <div class="divide-y divide-zinc-200 dark:divide-zinc-800">
-                <For each={shown}>{(o) => <OwnerSection owner={o} />}</For>
+                <For each={shown}>{(o) => <OwnerSection owner={o} onActivity={reportActivity} />}</For>
               </div>
               <Show when={extra > 0}>
                 <p class="muted mt-4 text-sm">

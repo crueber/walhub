@@ -7,6 +7,8 @@ import {
   MAX_REPOS_PER_OWNER,
   newestFirst,
   orderByActivity,
+  orderOwnersByActivity,
+  ownerActivity,
   pageSlice,
 } from "../../src/lib/owners.js";
 
@@ -109,4 +111,65 @@ test("orderByActivity composes with pageSlice (slice-after-server-sort)", () => 
   assert.equal(shown.length, 10);
   assert.equal(extra, 2);
   assert.equal(shown[0].name, "r11"); // newest commit survives the cap
+});
+
+// Forgejo #283: owner sections ordered by most-recent-commit repo.
+test("ownerActivity returns the max last_commit_time, null when none known", () => {
+  const doc = {
+    repos: [
+      { name: "b", last_commit_time: "2026-09-09T12:00:00Z" },
+      { name: "a", last_commit_time: "2026-09-10T12:00:00Z" },
+      { name: "c" }, // unknown: skipped
+      { name: "e", last_commit_time: null }, // explicit null: skipped
+    ],
+  };
+  assert.equal(ownerActivity(doc), "2026-09-10T12:00:00Z");
+  assert.equal(ownerActivity(doc.repos), "2026-09-10T12:00:00Z"); // bare rows accepted
+  assert.equal(ownerActivity({ repos: [{ name: "x" }] }), null);
+  assert.equal(ownerActivity({ repos: [] }), null);
+  assert.equal(ownerActivity(undefined), null);
+  assert.equal(ownerActivity(null), null);
+  assert.equal(ownerActivity({}), null);
+});
+
+test("orderOwnersByActivity sorts newest owner first, unknowns last", () => {
+  const names = ["acme", "demo", "jane", "ghost"];
+  const activity = {
+    acme: "2026-09-09T12:00:00Z",
+    demo: "2026-09-10T12:00:00Z",
+    // jane: fetch pending (missing) — last; ghost: settled, no commits (null) — last
+    ghost: null,
+  };
+  assert.deepEqual(orderOwnersByActivity(names, activity), ["demo", "acme", "ghost", "jane"]);
+  assert.deepEqual(names, ["acme", "demo", "jane", "ghost"]); // input untouched
+});
+
+test("orderOwnersByActivity breaks time ties on name, all-unknown is name order", () => {
+  const t = "2026-09-10T12:00:00Z";
+  assert.deepEqual(
+    orderOwnersByActivity(["b", "a", "c"], { b: t, a: t, c: t }),
+    ["a", "b", "c"],
+  );
+  assert.deepEqual(orderOwnersByActivity(["jane", "demo", "acme"], {}), ["acme", "demo", "jane"]);
+  assert.deepEqual(orderOwnersByActivity(["solo"], { solo: t }), ["solo"]);
+  assert.deepEqual(orderOwnersByActivity([], {}), []);
+});
+
+test("orderOwnersByActivity treats non-array/non-object input as empty", () => {
+  assert.deepEqual(orderOwnersByActivity(undefined, {}), []);
+  assert.deepEqual(orderOwnersByActivity(null, {}), []);
+  assert.deepEqual(orderOwnersByActivity("acme", {}), []);
+  assert.deepEqual(orderOwnersByActivity(["b", "a"], undefined), ["a", "b"]);
+  assert.deepEqual(orderOwnersByActivity(["b", "a"], null), ["a", "b"]);
+});
+
+test("orderOwnersByActivity composes with pageSlice (slice-after-rank)", () => {
+  const owners = Array.from({ length: 12 }, (_, i) => `o${i}`);
+  const activity = Object.fromEntries(
+    owners.map((o, i) => [o, `2026-09-${String(i + 1).padStart(2, "0")}T12:00:00Z`]),
+  );
+  const { shown, extra } = pageSlice(orderOwnersByActivity(owners, activity), 10);
+  assert.equal(shown.length, 10);
+  assert.equal(extra, 2);
+  assert.equal(shown[0], "o11"); // most recently committed owner survives the cap
 });
