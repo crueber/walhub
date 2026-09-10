@@ -130,7 +130,7 @@
   /* Floating popovers (issues #37, #115): solid panels — the shared .card
      background is translucent in dark mode and page text would bleed through.
      Every absolutely-positioned .card menu carries one of these classes. */
-  .clone-body, .ref-drop, .tasks-drop, .notif-drop, .reaction-drop, .label-drop, .close-drop {
+  .clone-body, .ref-drop, .tasks-drop, .notif-drop, .reaction-drop, .label-drop, .close-drop, .tag-drop {
     @apply bg-white dark:bg-zinc-900;
   }
 
