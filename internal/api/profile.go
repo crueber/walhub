@@ -183,10 +183,18 @@ func (h *handlers) ownerProfileGet(w http.ResponseWriter, r *http.Request) {
 		out = *doc
 	}
 	p := h.env.PrincipalOf(r)
-	out.CanEdit = defaultCanEdit(p, owner)
-	if !out.CanEdit && h.env.OwnerEdit != nil {
-		if ok, oerr := h.env.OwnerEdit.CanEditOwnerProfile(r.Context(), owner, p); oerr == nil {
-			out.CanEdit = ok
+	// Anonymous principals never edit (the PUT AuthWrite gate 403s them
+	// first), so they never get can_edit — without this, an owner slug
+	// literally named "anonymous" would name-match the anon principal and
+	// advertise an Edit affordance whose save always 403s.
+	if p.Anonymous {
+		out.CanEdit = false
+	} else {
+		out.CanEdit = defaultCanEdit(p, owner)
+		if !out.CanEdit && h.env.OwnerEdit != nil {
+			if ok, oerr := h.env.OwnerEdit.CanEditOwnerProfile(r.Context(), owner, p); oerr == nil {
+				out.CanEdit = ok
+			}
 		}
 	}
 	writeCached(w, r, ccSWR, "", http.StatusOK, out)

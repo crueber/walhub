@@ -37,6 +37,15 @@ func TestOwnerProfileGetEmpty(t *testing.T) {
 	if doc.CanEdit {
 		t.Fatal("anonymous must not get can_edit")
 	}
+	// An owner slug literally named "anonymous" must not name-match the
+	// anonymous principal into can_edit (its PUT still 403s at the
+	// AuthWrite gate — the affordance must not advertise it).
+	w = f.do("GET", "/api/v1/owners/anonymous/profile", nil, nil, nil)
+	var anonDoc OwnerProfile
+	decodeJSON(t, w, &anonDoc)
+	if anonDoc.CanEdit {
+		t.Fatal("anonymous must not get can_edit even on the 'anonymous' namespace")
+	}
 }
 
 func TestOwnerProfileGetInvalidSlug(t *testing.T) {
