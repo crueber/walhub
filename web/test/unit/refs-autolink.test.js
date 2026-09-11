@@ -195,4 +195,6 @@ test("Issue/Pull pages pass owner/repo mdCtx to ThreadTimeline", () => {
   assert.match(pull, /mdCtx=\{\{ owner: ctx\.owner, repo: ctx\.name \}\}/);
   const thread = readSrc("../../src/components/ThreadTimeline.jsx");
   assert.match(thread, /renderBody\(ev\.body \?\? "", props\.mdCtx\)/);
+  const issueNew = readSrc("../../src/pages/IssueNew.jsx");
+  assert.match(issueNew, /renderBody\(getBody\(\), \{ owner: ctx\.owner, repo: ctx\.name \}\)/);
 });
