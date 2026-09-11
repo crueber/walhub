@@ -119,9 +119,10 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 // (501) when the trio is incomplete, and the gated-group 401 path for
 // browser-ish GETs (middleware.go authFailure) so an unauthenticated browser
 // never faces a bare "authentication required" with no path forward. The
-// next target travels in the query string (url-escaped — the only
-// interpolation, so no HTML escaping hazard); sanitizeNext already confined
-// it to a single-leading-slash path at the call sites.
+// next target travels in the query string (url.QueryEscape — the only
+// interpolation, so no HTML escaping hazard even when a call site passes a
+// hostile RequestURI); the enabled /_auth/login flow additionally confines
+// it via sanitizeNext before signing it into state.
 func loginUnavailableHTML(next string) string {
 	if next == "" {
 		next = "/"
