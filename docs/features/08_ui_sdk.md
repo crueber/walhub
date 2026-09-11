@@ -429,6 +429,19 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   in `web/test/unit/issue-invalidation.test.js` (frame→key set, prefix coverage of both
   stale surfaces, mutation-site refetch scoping) alongside the updated `collab-lib.test.js`
   frame-table pin.
+- **Open-count badges next to the Issues/Pulls tabs (2026-09-11, issue #319).** The tab bar
+  badges the open numerators from the shell's shared summary entry (`open_issues`/`open_pulls`
+  ride `GET …/api` — 07 §9.1, zero new requests), rendered only when > 0 via the pure
+  `tabBadge(summary, tabId)` helper (`lib/tabs.js`, headless-tested with the matcher). Badge
+  styling reuses the notification-tray count-pill language (`.tab-badge` in `ui.css`). Live
+  updates, three changes, no new endpoint, no polling, no new deps: (1) the `issue`/`pull`
+  frame→key maps gain `repo:{full}` (invalidate-at-minimum — any mounted stream reconciles
+  the badge); (2) the mutation site reconciles too (`invalidateIssueLists` gains the summary
+  entry for issues, `Pull.jsx` reload gains it for PRs — the #318 pattern: the mutation's own
+  frame may arrive at a page that already unmounted); (3) the server ETag covers the counts
+  (`~c<index-version>` suffix, 07 §9.1 — a close/reopen with no ref move still busts SWR).
+  Headless cover in the extended `repo-tabs.test.js` (badge numerators, hide-at-0) and the
+  updated `collab-lib.test.js` / `issue-invalidation.test.js` frame-table pins.
 
 ## Explicitly out of scope
 

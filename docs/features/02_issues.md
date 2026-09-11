@@ -558,6 +558,14 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   bodies under the #41 ordering guard) and the guarded refetch reconciles
   the guess; one in-flight mutation per (seq, content) disables its
   buttons, so double-clicks never double-fire.
+- **Repo-level open counts are index-first, not list-derived (issue
+  #319).** `OpenCounts` counts open cards by kind (`issue`/`pr`) from the
+  shared P4 index in one exact-key GET — no LIST scan (the caller is the
+  per-page-view summary) and no windowed-list counting (capped at 100).
+  Open cards are never compacted, so the read is exact under the same
+  envelope the lists read under; the returned index version is the summary
+  ETag basis (07 §9.1 `~c` suffix). No read gate: the counts are
+  aggregates and the only caller runs behind the summary's AuthRead gate.
 - **Reactions add through a "+" menu, never an always-visible picker**
   (issue #113): each commented/opened event shows one reaction row where
   its chips appear — summary chips plus a plain "+" trigger (issue #134:

@@ -30,6 +30,7 @@
  * @typedef {{owner: string, name: string, full_name: string, description: string,
  *   head: {name: string, sha: string}|null,
  *   branches: number, tags: number, health: "empty"|"healthy"|"degraded", missing_total?: number,
+ *   open_issues: number, open_pulls: number,
  *   clone_url: string, html_url: string, api_url: string}} RepoInfo
  *
  * @typedef {{missing_total: number, missing: string[], problems: number, repaired_seq: number,

@@ -26,11 +26,17 @@ type summaryBody struct {
 	Placeholder  *PlaceholderInfo `json:"placeholder,omitempty"` // #210 R1 B1: sidecar projection, empty repos only
 	// Mirror is the pull-only mirror projection (Forgejo #240): nil on
 	// non-mirrors (omitempty — never null).
-	Mirror      *MirrorView `json:"mirror,omitempty"`
-	CloneURL    string      `json:"clone_url"`
-	SSHCloneURL string      `json:"ssh_clone_url,omitempty"`
-	HTMLURL     string      `json:"html_url"`
-	APIURL      string      `json:"api_url"`
+	Mirror *MirrorView `json:"mirror,omitempty"`
+	// OpenIssues/OpenPulls are the tab-badge numerators (issue #319):
+	// open kind:"issue" / kind:"pr" cards from the shared P4 index, always
+	// present (0 = none — the badge hides at 0 client-side). Old clients
+	// ignore them (14 §14.12).
+	OpenIssues  int    `json:"open_issues"`
+	OpenPulls   int    `json:"open_pulls"`
+	CloneURL    string `json:"clone_url"`
+	SSHCloneURL string `json:"ssh_clone_url,omitempty"`
+	HTMLURL     string `json:"html_url"`
+	APIURL      string `json:"api_url"`
 }
 
 func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +85,18 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 			mirrorView = &v
 		}
 	}
+	// The open-count projection (Forgejo #319): one exact-key probe behind
+	// the Env hook (nil/absent → zeros, +0 round trips — the hook IS the
+	// feature; 404s are free per law 4). The counts ride the summary so
+	// the tab bar needs zero new requests (law 6: the two-count-endpoints
+	// alternative costs two extra requests per repo view).
+	var counts CollabCounts
+	countsOK := false
+	if h.env.CollabCounts != nil {
+		if c, ok := h.env.CollabCounts(r.Context(), id.Owner, id.Name); ok {
+			counts, countsOK = c, true
+		}
+	}
 	body := summaryBody{
 		Owner:        id.Owner,
 		Name:         id.Name,
@@ -91,6 +109,8 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		MissingTotal: missingTotal,
 		Placeholder:  placeholder,
 		Mirror:       mirrorView,
+		OpenIssues:   counts.OpenIssues,
+		OpenPulls:    counts.OpenPulls,
 		CloneURL:     base + "/" + id.Owner + "/" + id.Name + ".git",
 		SSHCloneURL:  h.env.sshCloneURL(r, id.Owner, id.Name),
 		HTMLURL:      base + "/" + id.Owner + "/" + id.Name,
@@ -120,6 +140,17 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// the mirror projection or the badge/next-sync display goes
 		// stale behind a 304.
 		etag += "~m" + mirrorHash(*mirrorView)
+	}
+	if countsOK {
+		// Same trap once more (issue #319): a close/reopen moves no ref,
+		// so the ETag covers the shared index version or the badges go
+		// stale behind a 304. The class stays SWR (the #235/#240
+		// precedent — coordinated with, not duplicating, the #280
+		// no-cache migration, which covers version-keyed collab GETs;
+		// the summary itself remains ref-dependent git content): the
+		// residual ≤60 s window closes client-side via stream
+		// invalidation of the shared summary entry (08 §4).
+		etag += "~c" + strconv.Itoa(counts.Version)
 	}
 	writeCached(w, r, ccSWR, etag, http.StatusOK, body)
 }

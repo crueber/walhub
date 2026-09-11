@@ -533,6 +533,14 @@ type Env struct {
 	// imports the feature (law 8).
 	MirrorSummary func(ctx context.Context, owner, repo string) (MirrorView, bool)
 
+	// CollabCounts is the repo-level open-count projection (Forgejo #319):
+	// open issues + open PRs from the shared issues/index.json, read
+	// index-first (one exact-key GET; absent index → ok=false). Nil → the
+	// summary carries zero counts with no ETag suffix (instances without
+	// the collab surface wired). Wired by composition (cmd/walhub) so
+	// this package never imports the feature (law 8).
+	CollabCounts func(ctx context.Context, owner, repo string) (CollabCounts, bool)
+
 	// RenderCacheBytes is the rendered-immutable LRU budget
 	// (cache.render_cache_bytes; default 256 MiB — see 07_api.md §14).
 	RenderCacheBytes int64
@@ -595,6 +603,18 @@ type MirrorView struct {
 	LastResult          string `json:"last_result,omitempty"`
 	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
 	Due                 bool   `json:"due"`
+}
+
+// CollabCounts is the repo-level open-count projection on the repo summary
+// (Forgejo #319): the tab-badge numerators. Version is the shared P4 index
+// version (bumped on every card upsert by either collab writer) — the
+// summary ETag suffix that busts the SWR cache on a close/reopen with no
+// ref move (the #235/#240 suffix precedent). The wire carries the counts
+// only; the version rides the ETag.
+type CollabCounts struct {
+	OpenIssues int `json:"open_issues"`
+	OpenPulls  int `json:"open_pulls"`
+	Version    int `json:"-"`
 }
 
 // --- request context ---------------------------------------------------------

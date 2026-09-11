@@ -334,10 +334,15 @@ export function invalidatePrefix(prefix) {
  * `milestones:{full}` counts. invalidate() on an uncached key is a
  * silent no-op, so calling this when no list page was ever mounted is
  * free. Callers still invalidate their own thread key separately.
+ *
+ * Issue #319: the shell's shared `repo:{full}` summary entry also
+ * reconciles here — it carries the open_issues badge numerator, which a
+ * close/reopen moves with no ref move.
  */
 export function invalidateIssueLists(full) {
   invalidatePrefix(`issues:${full}:`);
   invalidate(`milestones:${full}`);
+  invalidate(`repo:${full}`);
 }
 
 // --- 08 §4 invalidation-storm coalescing ------------------------------------

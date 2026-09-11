@@ -101,7 +101,7 @@ const routes = [
   ["POST", "/{o}/{r}/api/webhooks/{id}/ping", "test delivery → {delivery} (admin)"],
   ["GET", "/{o}/{r}/api/webhooks/{id}/deliveries", "recent deliveries (admin, no-store)"],
   ["GET", "/{o}/{r}/api/collab/stream", "repo activity SSE (read-gated; § Streams)"],
-  ["GET|PUT|DELETE", "/{o}/{r}/api", "repo summary (SWR, +placeholder projection when empty) · create (write; ?placeholder=true) · delete (admin)"],
+  ["GET|PUT|DELETE", "/{o}/{r}/api", "repo summary (SWR, +placeholder projection when empty; open_issues/open_pulls tab-badge counts) · create (write; ?placeholder=true) · delete (admin)"],
   ["GET", "/{o}/{r}/api/refs", "O(1) default-branch head"],
   ["GET", "/{o}/{r}/api/refs/{branches|tags}", "paged ref list (prefix/q/after/n) — SSE dialect available"],
   ["GET", "/{o}/{r}/api/resolve[/{rest}]", "ref/path split → {ref, sha, path, kind} (SWR)"],

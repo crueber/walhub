@@ -507,6 +507,21 @@ created as today, plus the `meta/placeholder.json` sidecar and the eager `access
 — see §9.1.1); without the flag the path is byte-identical to today. `DELETE` (require_admin)
 → `204`.
 
+`open_issues`/`open_pulls` are the tab-badge numerators (issue #319 — additive integers, always
+present, 0 = none; old clients ignore them per 14 §14.12): open kind:`"issue"` / kind:`"pr"`
+cards from the shared `issues/index.json`, read index-first behind the `Env.CollabCounts` hook
+(one exact-key GET — probe, don't list, law 4; absent index → zeros with the byte-identical
+ETag, so pre-collab repos are untouched). Riding the summary costs zero new client requests
+(the tab bar already holds the shared summary signal; the two-count-endpoints alternative
+costs two extra requests per repo view) at +1 server-side probe per summary — off the law-6
+budgeted paths (push/sync/checkpoint never call here, so their sim budgets hold unchanged).
+`ETag` covers the counts with the `~c<index-version>` suffix: the shared index version bumps
+on every card upsert by either collab writer, so a close/reopen with no ref move still busts
+SWR (same trap as `~degraded`/`~d`). The class stays SWR — coordinated with, not duplicating,
+the #280 no-cache migration (version-keyed collab GETs moved; the summary itself remains
+ref-dependent git content): the residual ≤60 s window closes client-side via stream
+invalidation of the shared summary entry (08 §4).
+
 ### 9.1.1 Explicit create — `POST /api/v1/repos` (+ `/api-browser/v1` twin; issue #210)
 
 The discoverable create action (the `PUT` lane root is undiscoverable — no UI, no SDK method
@@ -1058,3 +1073,19 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   fallback branch). Rationale: the issue's preferred rail (counts nearly free) with the sound
   source (ghost parity with the #295 acceptance rule) — the page sums the field over the
   uncapped payload (12_web_ui.md), never a capped slice and never a per-owner listing walk.
+- **Tab-badge open counts ride the summary (Forgejo #319).** `GET …/api` gains always-present
+  `open_issues`/`open_pulls` (14 §14.12 field rule — no new endpoint, both lanes + SDK
+  passthrough carry them for free; the two-count-endpoints alternative costs two extra requests
+  per repo view for one badge, rejected). Source is the shared `issues/index.json` read
+  index-first behind the `Env.CollabCounts` hook (the `MirrorSummary` shape — api never imports
+  the feature, law 8; one exact-key GET serves both numerators since issues + pulls share the
+  index object; absent index → zeros with the byte-identical ETag). Deliberately NOT a
+  windowed-list count (`{issues, more}` caps at 100) and NOT a LIST scan (the summary is a
+  per-page-view path — probe, don't list, law 4; open cards are never compacted, so the index
+  read is exact under the same envelope the lists read under). `ETag` gains the
+  `~c<index-version>` suffix (same trap as `~degraded`/`~d`: close/reopen moves no ref). The
+  class stays SWR — coordinated with, not duplicating, the #280 no-cache migration: the
+  summary itself remains ref-dependent git content, and the residual ≤60 s window closes
+  client-side (08 §4 stream invalidation of the shared summary entry + mutation-site
+  reconcile, the #318 pattern). Rationale: zero new client requests with a version-keyed
+  ETag — the cheapest correct source, with the staleness story stated instead of silent.

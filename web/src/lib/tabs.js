@@ -49,3 +49,18 @@ export function activeTab(pathname) {
   if (segs.length < 3) return "code"; // /:owner, /:owner/:name, or /
   return SECTION_TABS[segs[2].toLowerCase()] ?? "code";
 }
+
+/**
+ * tabBadge(summary, tabId) → number: the open-count badge numerator for a
+ * repo tab (issue #319). The summary carries open_issues/open_pulls from
+ * the shared P4 index; only the Issues and Pulls tabs badge. Returns 0
+ * for every other tab, for missing/loading summaries, and for servers
+ * that predate the fields — the tab render hides the badge at 0 (GitHub
+ * semantics: no zero badges).
+ */
+export function tabBadge(summary, tabId) {
+  if (!summary) return 0;
+  if (tabId === "issues") return Math.max(0, summary.open_issues ?? 0);
+  if (tabId === "pulls") return Math.max(0, summary.open_pulls ?? 0);
+  return 0;
+}
