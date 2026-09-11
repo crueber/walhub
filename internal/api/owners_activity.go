@@ -6,11 +6,13 @@
 //     activity-ordered (this is what fixes the >50-owner cap: the server
 //     ranks over ALL owners before the client slices);
 //   - GET /api/v1/owners/detailed?sort=&order= → {owners: [{name,
-//     repo_count, last_commit_sha|null, last_commit_time|null}]} object rows
-//     carrying the per-owner max (max over the owner's repos; null when the
-//     owner has no commits) plus the manifest-gated live-repo count
-//     (Forgejo #307 — the instance repo-total rail, ghost-filtered like
-//     liveRepos), triple twins + discovery + SDK, the #248 detailed precedent.
+//     is_org, repo_count, last_commit_sha|null, last_commit_time|null}]}
+//     object rows carrying the org marker (Forgejo #348 — one OrgLister
+//     call, fail-open) plus the per-owner max (max over the owner's repos;
+//     null when the owner has no commits) plus the manifest-gated
+//     live-repo count (Forgejo #307 — the instance repo-total rail,
+//     ghost-filtered like liveRepos), triple twins + discovery + SDK,
+//     the #248 detailed precedent.
 //
 // Both read the aggregate catalog in ONE exact-key GET regardless of owner
 // count (law 6; probe, don't list — law 4); the rollup itself is derived at
@@ -47,6 +49,12 @@ func splitRepoID(id string) (owner, name string, ok bool) {
 // empty, mirroring RepoSizeRow).
 type OwnerActivityRow struct {
 	Name string `json:"name"`
+	// IsOrg marks org-owned namespaces (Forgejo #348 — the explore
+	// badge rail: the UI links org rows to the org profile instead of
+	// a bare repo list). Always present (never null): false for users
+	// and for instances without the identity surface wired. Old
+	// clients ignore it (14 §14.12).
+	IsOrg bool `json:"is_org"`
 	// RepoCount is the owner's live-repo count (Forgejo #307 — the instance
 	// repo-total rail: the page sums this field over the uncapped payload,
 	// never a capped slice and never a per-owner listing walk). Always
@@ -180,9 +188,20 @@ func (h *handlers) ownersDetailed(w http.ResponseWriter, r *http.Request) {
 		mapViewErr(w, err)
 		return
 	}
+	// Forgejo #348: the org set behind one OrgLister call (nil → no
+	// orgs; error → fail open to all-false — display metadata must
+	// never fail the listing, the CollabCounts precedent).
+	isOrg := map[string]bool{}
+	if h.env.Orgs != nil {
+		if names, lerr := h.env.Orgs.ListOrgs(r.Context()); lerr == nil {
+			for _, n := range names {
+				isOrg[n] = true
+			}
+		}
+	}
 	out := make([]OwnerActivityRow, 0, len(names))
 	for _, n := range sizecatalog.SortOwners(names, rollups, sortKey, order) {
-		row := OwnerActivityRow{Name: n, RepoCount: counts[n]}
+		row := OwnerActivityRow{Name: n, IsOrg: isOrg[n], RepoCount: counts[n]}
 		if rl, ok := rollups[n]; ok && rl.LastCommitTime != "" {
 			ct := rl.LastCommitTime
 			row.LastCommitTime = &ct

@@ -48,6 +48,23 @@ function ProfileTab(props) {
           {seed(o())}
           <section class="card p-4">
             <h3 class="mb-2 font-semibold">Profile</h3>
+            {/* Forgejo #348: non-owners see the profile read-only (the
+                server still 403s mutations — client gating is
+                cosmetic-on-top, same canManage as the Manage link). */}
+            <Show
+              when={props.canManage()}
+              fallback={
+                <>
+                  <p class="muted text-sm">read-only — org owner required to edit the profile.</p>
+                  <Show when={o().display_name}>
+                    <p class="mt-2 text-sm"><span class="muted">display name:</span> {o().display_name}</p>
+                  </Show>
+                  <Show when={o().description}>
+                    <p class="mt-1 text-sm"><span class="muted">description:</span> {o().description}</p>
+                  </Show>
+                </>
+              }
+            >
             <div class="flex max-w-lg flex-col gap-2">
               <label class="text-sm">
                 <span class="muted block text-xs">display name</span>
@@ -61,8 +78,9 @@ function ProfileTab(props) {
                 <button type="button" class="btn px-3 py-1" onClick={save}>save profile</button>
               </div>
               <Show when={getNote()}><p class="text-sm text-amber-700 dark:text-amber-300">{getNote()}</p></Show>
-              <p class="muted text-xs">created <DateTime value={o().created_at} /> · updated <DateTime value={o().updated_at} /></p>
             </div>
+            </Show>
+            <p class="muted mt-2 text-xs">created <DateTime value={o().created_at} /> · updated <DateTime value={o().updated_at} /></p>
           </section>
         </>
       )}
@@ -120,6 +138,9 @@ function MembersTab(props) {
   return (
     <section class="card p-4">
       <h3 class="mb-2 font-semibold">Members</h3>
+      <Show when={!props.canManage()}>
+        <p class="muted mb-2 text-sm">read-only — org owner required to add, re-role, or remove members.</p>
+      </Show>
       <Show when={getRoster()} fallback={<p class="muted">loading…</p>}>
         {(m) => (
           <div class="overflow-x-auto">
@@ -131,6 +152,7 @@ function MembersTab(props) {
                     <tr>
                       <td><code class="font-mono text-xs">{row.principal}</code></td>
                       <td>
+                        <Show when={props.canManage()} fallback={<span class="text-sm">{row.role}</span>}>
                         <select
                           class="input"
                           value={row.role}
@@ -138,9 +160,12 @@ function MembersTab(props) {
                         >
                           <For each={ORG_ROLES}>{(r) => <option value={r}>{r}</option>}</For>
                         </select>
+                        </Show>
                       </td>
                       <td>
+                        <Show when={props.canManage()}>
                         <button type="button" class="btn px-2 py-1" onClick={() => remove(row.principal)}>remove</button>
+                        </Show>
                       </td>
                     </tr>
                   )}
@@ -150,6 +175,7 @@ function MembersTab(props) {
           </div>
         )}
       </Show>
+      <Show when={props.canManage()}>
       <div class="mt-3 flex flex-wrap items-end gap-2">
         <label class="text-sm">
           <span class="muted block text-xs">email</span>
@@ -163,6 +189,7 @@ function MembersTab(props) {
         </label>
         <button type="button" class="btn px-3 py-1" onClick={add}>add member</button>
       </div>
+      </Show>
       <Show when={getNote()}><p class="mt-2 text-sm text-amber-700 dark:text-amber-300">{getNote()}</p></Show>
     </section>
   );
@@ -233,6 +260,9 @@ function TeamsTab(props) {
   return (
     <section class="card p-4">
       <h3 class="mb-2 font-semibold">Teams</h3>
+      <Show when={!props.canManage()}>
+        <p class="muted mb-2 text-sm">read-only — org owner required to create teams or edit membership.</p>
+      </Show>
       <Show when={getTeams()} fallback={<p class="muted">loading…</p>}>
         {(list) => (
           <Show when={(list() ?? []).length > 0} fallback={<p class="muted text-sm">no teams yet.</p>}>
@@ -243,18 +273,23 @@ function TeamsTab(props) {
                     <div class="flex flex-wrap items-baseline gap-2">
                       <strong class="font-mono text-sm">{t.slug}</strong>
                       <span class="muted text-xs">{t.name ?? ""}</span>
+                      <Show when={props.canManage()}>
                       <button type="button" class="btn ml-auto px-2 py-1" onClick={() => removeTeam(t.slug)}>delete team</button>
+                      </Show>
                     </div>
                     <ul class="mt-2 flex flex-col gap-1">
                       <For each={t.members ?? []}>
                         {(m) => (
                           <li class="flex items-center gap-2 text-sm">
                             <code class="font-mono text-xs">{m}</code>
+                            <Show when={props.canManage()}>
                             <button type="button" class="btn px-2 py-0.5" onClick={() => removeMember(t.slug, m)}>remove</button>
+                            </Show>
                           </li>
                         )}
                       </For>
                     </ul>
+                    <Show when={props.canManage()}>
                     <div class="mt-2 flex flex-wrap items-end gap-2">
                       <input
                         class="input font-mono text-xs"
@@ -265,6 +300,7 @@ function TeamsTab(props) {
                       />
                       <button type="button" class="btn px-2 py-1" onClick={() => addMember(t.slug)}>add</button>
                     </div>
+                    </Show>
                   </div>
                 )}
               </For>
@@ -272,6 +308,7 @@ function TeamsTab(props) {
           </Show>
         )}
       </Show>
+      <Show when={props.canManage()}>
       <div class="mt-3 flex flex-wrap items-end gap-2">
         <label class="text-sm">
           <span class="muted block text-xs">slug</span>
@@ -283,6 +320,7 @@ function TeamsTab(props) {
         </label>
         <button type="button" class="btn px-3 py-1" onClick={create}>create team</button>
       </div>
+      </Show>
       <Show when={getNote()}><p class="mt-2 text-sm text-amber-700 dark:text-amber-300">{getNote()}</p></Show>
     </section>
   );
@@ -331,6 +369,9 @@ function InvitesTab(props) {
   return (
     <section class="card p-4">
       <h3 class="mb-2 font-semibold">Invitations</h3>
+      <Show when={!props.canManage()}>
+        <p class="muted mb-2 text-sm">read-only — org owner required to invite or cancel.</p>
+      </Show>
       <Show when={getInvs()} fallback={<p class="muted">loading…</p>}>
         {(list) => (
           <Show when={(list() ?? []).length > 0} fallback={<p class="muted text-sm">no pending invitations.</p>}>
@@ -344,7 +385,7 @@ function InvitesTab(props) {
                         <td><code class="font-mono text-xs">{inv.subject}</code></td>
                         <td>{inv.role}</td>
                         <td><code class="font-mono text-xs">{inv.invited_by}</code></td>
-                        <td><button type="button" class="btn px-2 py-1" onClick={() => cancel(inv.id)}>cancel</button></td>
+                        <td><Show when={props.canManage()}><button type="button" class="btn px-2 py-1" onClick={() => cancel(inv.id)}>cancel</button></Show></td>
                       </tr>
                     )}
                   </For>
@@ -354,6 +395,7 @@ function InvitesTab(props) {
           </Show>
         )}
       </Show>
+      <Show when={props.canManage()}>
       <div class="mt-3 flex flex-wrap items-end gap-2">
         <label class="text-sm">
           <span class="muted block text-xs">email</span>
@@ -367,6 +409,7 @@ function InvitesTab(props) {
         </label>
         <button type="button" class="btn px-3 py-1" onClick={invite}>invite</button>
       </div>
+      </Show>
       <Show when={getLink()}>
         <p class="mt-2 text-sm">accept link: <code class="font-mono text-xs">{getLink()}</code></p>
       </Show>
@@ -379,12 +422,25 @@ export default function Org() {
   const params = useParams();
   const org = () => (params.org ?? "").toLowerCase();
   const [getTab, setTab] = createSignal("Profile");
+  // Forgejo #348: owner-only management, discoverable. canManage keys on
+  // the org-slug owner profile's can_edit (server-authoritative: org
+  // owner or host admin via the OwnerEditor seam — the same gate as the
+  // "Manage organization" link on /:org). Non-owners get read-only tabs
+  // instead of 403 forms; the server still 403s mutations.
+  const [getProfile] = useData(
+    () => `profile:${org()}`,
+    () => repos.owners.profile(org()).catch(() => null)
+  );
+  const canManage = () => !!getProfile()?.can_edit;
 
   return (
     <div class="mx-auto max-w-6xl px-4 py-4">
       <h2 class="mb-1 text-lg font-semibold">
         <span class="muted font-normal">org</span> {org()}
       </h2>
+      <Show when={getProfile() && !canManage()}>
+        <p class="muted mb-3 text-sm">read-only — org owner required to make changes.</p>
+      </Show>
       <nav class="subtabs mb-4 flex flex-wrap gap-1.5" aria-label="organization sections">
         <For each={TABS}>
           {(t) => (
@@ -402,10 +458,10 @@ export default function Org() {
         </For>
       </nav>
       <div>
-        <Show when={getTab() === "Profile"}><ProfileTab org={org()} /></Show>
-        <Show when={getTab() === "Members"}><MembersTab org={org()} /></Show>
-        <Show when={getTab() === "Teams"}><TeamsTab org={org()} /></Show>
-        <Show when={getTab() === "Invitations"}><InvitesTab org={org()} /></Show>
+        <Show when={getTab() === "Profile"}><ProfileTab org={org()} canManage={canManage} /></Show>
+        <Show when={getTab() === "Members"}><MembersTab org={org()} canManage={canManage} /></Show>
+        <Show when={getTab() === "Teams"}><TeamsTab org={org()} canManage={canManage} /></Show>
+        <Show when={getTab() === "Invitations"}><InvitesTab org={org()} canManage={canManage} /></Show>
       </div>
     </div>
   );

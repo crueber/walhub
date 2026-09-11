@@ -442,3 +442,13 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   (orgs/teams lists, single member) take the class without an ETag (always 200, never stale);
   invite/perms routes were already `no-store`. Rationale: mutability, not addressability, decides
   the class (07_api.md §4 third class).
+- **Org marker on `owners/detailed` via the `OrgLister` seam (Forgejo #348).** The core
+  `owners/detailed` rows gain `is_org` from `Env.Orgs.ListOrgs` (one call per listing —
+  law 6; nil seam → all false; list error fails open to all-false, display metadata never
+  fails the listing). `*identity.Service` satisfies the seam with its existing `ListOrgs`
+  (compiler-checked in `cmd/walhub` composition, no new service method). Rationale: the
+  explore page must distinguish org namespaces from users without a per-owner probe
+  fan-out — same law-8 hook shape as `OwnerEdit`/`RepoVisibility` (core never imports
+  identity). Server mutation gates are untouched (`CheckOrgOwner` still 403s non-owners);
+  the UI's read-only views and Manage affordances key on the org-slug profile's
+  `can_edit` (cosmetic-on-top, 12_web_ui.md).
