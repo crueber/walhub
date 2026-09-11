@@ -36,6 +36,7 @@ const mirrorLoopInterval = time.Minute
 // skipped then).
 func newMirrorService(st store.ObjectStore, reg *wal.Registry, cfg *config.Config, apiEnv *api.Env) (*mirror.Service, *mirror.Handler) {
 	mirror.RegisterKind(mirror.KindMirrorSync)
+	mirror.RegisterKind(mirror.KindMirrorHeal)
 	api.RegisterExposed(mirror.ExposedTemplates...)
 	svc := mirror.New(mirror.Deps{
 		Store:     st,
@@ -47,6 +48,10 @@ func newMirrorService(st store.ObjectStore, reg *wal.Registry, cfg *config.Confi
 		// flows (one gate, one clock — no new config section).
 		CloneTimeout: time.Duration(cfg.Import.CloneTimeout),
 		GitTimeout:   time.Duration(cfg.Import.GitTimeout),
+		// The servability probe is patient background work (issue
+		// #320): it joins the serve materialization up to the
+		// materialize body cap, not the per-request serve wait.
+		ProbeTimeout: time.Duration(cfg.Server.ServeMaterializeTimeout),
 		AllowPrivate: cfg.Import.AllowPrivateNetworks,
 		Allowlist:    cfg.Import.URLAllowlist,
 		AllowFile:    cfg.Import.AllowFileURLs,
@@ -71,18 +76,35 @@ func newMirrorService(st store.ObjectStore, reg *wal.Registry, cfg *config.Confi
 				return api.MirrorView{}, false
 			}
 			v := mirror.ViewOf(doc, time.Now())
-			return api.MirrorView{
-				UpstreamURL:         v.UpstreamURL,
-				Schedule:            v.Schedule,
-				NextSyncAt:          v.NextSyncAt,
-				LastSyncedAt:        v.LastSyncedAt,
-				LastResult:          v.LastResult,
-				ConsecutiveFailures: v.ConsecutiveFailures,
-				Due:                 v.Due,
-			}, true
+			// Serve-health truth (issue #320): when the objects are
+			// unservable, the projection says so instead of
+			// advertising the stale last_result — one exact-key probe
+			// beside the mirror.json load (404s are free). The summary
+			// derives health: degraded from this field (+0 round trips
+			// there) and the ETag covers it via mirrorHash.
+			degraded, _ := mirror.ServeDegraded(ctx, st, owner, repo)
+			return mirrorViewOf(v, degraded), true
 		}
 	}
 	return svc, h
+}
+
+// mirrorViewOf maps the feature read model onto the wire projection
+// (pure: the hook's I/O stays inline above; the field mapping —
+// including the #320 degraded_reason verdict — is pinned by unit
+// test without touching kind registration, which panics on
+// duplicates and belongs to buildCollab alone in this binary).
+func mirrorViewOf(v mirror.View, degradedReason string) api.MirrorView {
+	return api.MirrorView{
+		UpstreamURL:         v.UpstreamURL,
+		Schedule:            v.Schedule,
+		NextSyncAt:          v.NextSyncAt,
+		LastSyncedAt:        v.LastSyncedAt,
+		LastResult:          v.LastResult,
+		ConsecutiveFailures: v.ConsecutiveFailures,
+		Due:                 v.Due,
+		DegradedReason:      degradedReason,
+	}
 }
 
 // chainMirror fronts the core mux with the mirror surface (Seam 1);

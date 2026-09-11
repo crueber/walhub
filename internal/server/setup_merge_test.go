@@ -440,6 +440,46 @@ func TestSetupTreeLogKeyRoundTrip(t *testing.T) {
 	}
 }
 
+// Issue #320: the server.serve_sync_timeout /
+// server.serve_materialize_timeout FIELDS examples validate on
+// POST /api/v1/setup/test and round-trip through PUT /api/v1/setup with
+// effect (the bounded serve materialization: per-request wait + body cap).
+func TestSetupServeTimeoutKeysRoundTrip(t *testing.T) {
+	dataDir := t.TempDir()
+	s, _ := setupMergeServer(t, dataDir)
+	s.boot.Mode = "normal"
+
+	for k, v := range map[string]string{
+		"server.serve_sync_timeout":        "45s",
+		"server.serve_materialize_timeout": "10m",
+	} {
+		body, _ := json.Marshal(map[string]any{"overrides": map[string]any{k: v}})
+		req := httptest.NewRequest("POST", "/api/v1/setup/test", strings.NewReader(string(body)))
+		rec := httptest.NewRecorder()
+		s.setupTest(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup/test %s=%s = %d %s, want 200", k, v, rec.Code, rec.Body.String())
+		}
+	}
+	payload, _ := json.Marshal(map[string]any{"overrides": map[string]any{
+		"server.serve_sync_timeout":        "30s",
+		"server.serve_materialize_timeout": "5m",
+	}})
+	if code, resp := putSetup(t, s, string(payload)); code != http.StatusOK {
+		t.Fatalf("put serve timeouts = %d %v", code, resp)
+	}
+	after, err := config.LoadSetupBase(dataDir, s.boot.ConfigPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Duration(after.Server.ServeSyncTimeout) != 30*time.Second {
+		t.Fatalf("serve_sync_timeout not persisted: %v", after.Server.ServeSyncTimeout)
+	}
+	if time.Duration(after.Server.ServeMaterializeTimeout) != 5*time.Minute {
+		t.Fatalf("serve_materialize_timeout not persisted: %v", after.Server.ServeMaterializeTimeout)
+	}
+}
+
 // The setup surface is open at ANY time while auth mode is "none" — first
 // run, normal running mode, and setup-only mode alike — with no credential.
 func TestSetupOpenWheneverAuthNone(t *testing.T) {

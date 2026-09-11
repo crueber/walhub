@@ -51,6 +51,8 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.max_concurrent_per_repo` | `64` | per-repo git semaphore |
 | `server.request_timeout` | `"1h"` | documented cap |
 | `server.drain_timeout` | `"20s"` | phase-2 drain: in-flight requests finish; new work refused |
+| `server.serve_sync_timeout` | `"45s"` | how long a serve-level Sync waits for pack materialization (packMu + materialize join); exceeded → 503 + degraded marker while the body keeps warming the cache (issue #320; 05 §5.2) |
+| `server.serve_materialize_timeout` | `"10m"` | cap on one detached materialize body; must comfortably exceed `serve_sync_timeout` (issue #320; 05 §5.2) |
 | `server.max_push_bytes` | `"64GiB"` | largest accepted push |
 | `server.max_tree_log` | `200` | per-entry tree-date walk cap: commits walked per tree listing (07_api.md §9.4, issue #301) |
 | `server.roles` | `[]` | `serve` / `maintain` (implies compact+bundle) / `events`; empty = all |
@@ -515,3 +517,9 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
 - **D4 — `filesystem` added to `store.backend`** (`s3|gcs|memory|filesystem`, §2 note † and §5 rule 5): keys map to paths under `store.root`, first-run default `<data-dir>/store`. 03_store_backends.md owns the backend semantics; this doc owns the key, its validation, and the default.
 - **Feature 10 amendment (2026-09-04, docs/features/10):** additive `[import]` section (`clone_timeout`, `git_timeout`, `max_bytes`, `max_refs`, `max_concurrent`, `allow_private_networks`, `url_allowlist`, `allow_file_urls`) + the `import --url` CLI row in the §6.2 table (§6.2, same change, law 12). Rationale: 14 §14.12 — new sections/keys are additive; existing keys never change meaning.
 - **D1 — dependency budget** (restated where it touches this doc): exactly `github.com/go-chi/chi/v5`, `github.com/BurntSushi/toml`, `golang.org/x/net`. TOML stays the config file format and BurntSushi/toml stays the parser — no format migration was entertained.
+- **NEW (2026-09-11) — `server.serve_sync_timeout` / `server.serve_materialize_timeout` (#320):**
+  the serve pack phase finally has deadlines (wait 45s / body cap 10m; non-positive falls back to
+  the defaults — there is no unbounded serve wait to configure by accident). Rationale: without
+  them one stalled materialize wedged every object-level request past the proxy (504) while refs
+  stayed instant; the wait must sit under typical proxy 60s timeouts and the body cap comfortably
+  above the wait (per-request patience vs per-body-of-work patience are different bounds).

@@ -595,6 +595,12 @@ func mapAccessErr(w http.ResponseWriter, aerr *auth.AuthError) {
 // next_sync_at ("" when due now) and the due flag. Absent (nil) on
 // non-mirrors — never null-vs-missing ambiguity: the field is
 // omitempty.
+//
+// DegradedReason carries the serve-health verdict (issue #320): when the
+// repo's objects are currently unservable, the last serve failure's
+// reason, so the projection agrees with the summary health field instead
+// of advertising a stale "ok". Empty when servable. Old clients ignore
+// it (14 §14.12).
 type MirrorView struct {
 	UpstreamURL         string `json:"upstream_url"`
 	Schedule            string `json:"schedule"`
@@ -603,6 +609,7 @@ type MirrorView struct {
 	LastResult          string `json:"last_result,omitempty"`
 	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
 	Due                 bool   `json:"due"`
+	DegradedReason      string `json:"degraded_reason,omitempty"`
 }
 
 // CollabCounts is the repo-level open-count projection on the repo summary

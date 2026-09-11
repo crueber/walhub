@@ -151,6 +151,22 @@ func notFoundOr(err error) error {
 	return err
 }
 
+// probeServeHealth reads the serve-health sidecar for one repo
+// (issue #320): the serve path's own failure record, sticky until a
+// later serve re-proves servability. Exact-key probe, never a LIST
+// (law 4); absent/unreadable → ("", false). Lives in this file because
+// only it (and recipes.go) may import internal/wal (07_api.md §1).
+func probeServeHealth(ctx context.Context, st store.ObjectStore, id git.RepoId) (string, bool) {
+	if st == nil {
+		return "", false
+	}
+	doc, ok := wal.LoadServeHealth(ctx, st, id.Owner, id.Name)
+	if !ok || doc == nil {
+		return "", false
+	}
+	return doc.Reason, true
+}
+
 // snapshot returns the parsed ref state after a refs sync.
 func (v *walView) snapshot(ctx context.Context, id git.RepoId) (*git.LocalRepo, *git.RefSnapshot, uint64, error) {
 	repo, rev, err := v.localView(ctx, id, SyncRefs)

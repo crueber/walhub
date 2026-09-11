@@ -209,12 +209,19 @@ Algorithm (per sync):
 
 **3. Packs** (only `SyncServe` and above). Under `packMu` (never held together with `syncMu` — refs requests must never queue behind a multi-GB materialization): `checkFits` (sum of plan sizes vs budget; over → `ErrTooLarge`, surfaced as HTTP 503 with the bundle-uri fix text per 07), then run a `materialize` **task** (§5.8) that downloads and reconciles, then refresh the local repo (`git` per 04). The whole phase is one task; concurrent callers join the running task (single-flight on `(repo, "materialize")`, 13_concurrency.md) rather than stacking.
 
+The pack phase is **bounded** (issue #320 — the mirror-wedge fix): `packMu` acquisition and the materialize join/leader-wait run under `server.serve_sync_timeout` (default 45s, under typical proxy 60s timeouts). Exceeding it fails the Sync with `WalErrTimeout` and marks the `meta/serve-health.json` sidecar (§5.2.1) — the request answers 503 + degraded instead of hanging past the proxy — while the detached materialize body keeps warming the cache in the background. The body itself is capped by `server.serve_materialize_timeout` (default 10m, comfortably above the wait bound): a hung store GET cannot wedge the repo past that bound, and the next serve or heal attempt starts a fresh body that resumes at file granularity (completed `.pack` files persist; `*.tmp` orphans are swept at body start). A client disconnect (parent ctx canceled, bound not fired) is not a serve failure and marks nothing. Levels below Serve never touch `packMu` and are never bounded by this timeout. The publish funnel's pre-commit `Sync(LevelServe)` (§5.3) rides the same bound: a stalled store now fails a push fast (503 + marked) instead of hanging it.
+
+#### 5.2.1 Serve-health sidecar (`meta/serve-health.json`)
+
+The serve path's own sticky failure record: `{"version":1,"status":"degraded","reason":R,"at":RFC3339,"attempts"?:N,"last_heal_at"?:RFC3339}` (`internal/wal/servehealth.go`; key in 02/03 key layout). Writers: `RepoHandle.Sync` marks its own pack-phase failures (detached bounded best-effort write, never failing the serve) and clears on success — but only when that handle previously failed (in-handle atomic flag, so the common case pays zero store round trips); the mirror sync/heal loop writes probe and heal outcomes. Overwrite-always, last writer wins. Readers (summary health per 07 §9.1, mirror projection per `docs/features/11_mirror.md`) treat present-and-parseable as degraded. The marker is **sticky until re-proven** — no TTL: a quiet-but-broken repo cannot age back to healthy without a successful serve-level sync, probe, or heal deleting it (fail closed; demand traffic re-proves on first use). `attempts`/`last_heal_at` are the heal loop's backoff state, preserved across demand-side marks.
+
 **4. ReadGuard.** `rw.RLock()`; return the guard to the caller. Dropping it is the caller's job (`defer g.Release()`).
 
 #### Concurrency
 
 - Hazards: (a) refs syncs serializing behind pack materialization — avoidance: `packMu` is never held while `syncMu` is held, and materialization runs as a joinable task, off request goroutines when the caller passes a bounded worker pool (13); (b) two syncs racing on `packed-refs` — avoidance: the entire refs phase is inside `syncMu`, try-lock-first so queue time is observable; (c) delta fetch stalling on one slow segment — avoidance: all overlapping segments fetched in parallel with a 16-chunk semaphore and a per-request context; (d) partial-frame decode races — avoidance: segments are immutable objects; decode is pure; no lock is held during decode.
 - The 16-goroutine fetch uses `errgroup`-style semantics hand-rolled (13: bounded goroutine group with first-error propagation); each goroutine owns its GET's context and there is nothing to close.
+- The serve wedge (issue #320) and its fix: one stalled materialize body used to wedge every later object-level request — the body runs on the registry-lifetime task ctx (a disconnecting client never cancels it), and every later `Sync(Serve)` either queued on `packMu` or joined the same task with a deadline-free request ctx, while refs-level syncs (no `packMu`) stayed instant. Avoidance now: the wait is bounded (`serve_sync_timeout`), the body is capped (`serve_materialize_timeout`), failures mark the sidecar (§5.2.1) instead of hanging, and no lock is ever held across the marking store call (it runs after `packMu` release on a detached bounded ctx). Lock order is unchanged (`syncMu → packMu → rw`, try-write-only writers).
 
 ## 5.3 Publish path (§6.3)
 
@@ -477,3 +484,16 @@ Background prefetch (from §6.2): after a refs-only sync, if `wal.prefetch_packs
   honestly record nulls instead of preserving — preservation is the sweep's
   job (it already reads). Group-commit takes the last non-nil hint in batch
   order (deterministic, later push wins).
+- **NEW (2026-09-11) — bounded serve materialization + serve-health sidecar (#320):**
+  the serve pack phase (`packMu` + the `(repo,"materialize")` single-flight +
+  striped downloads) had no deadline at any layer while the task body ran on
+  the registry-lifetime ctx, so one stalled materialize wedged every later
+  object-level request (refs stayed instant — they never touch `packMu`) and
+  the repo kept reporting healthy. Now `server.serve_sync_timeout` (default
+  45s) bounds the wait (`WalErrTimeout` → HTTP 503 + `meta/serve-health.json`
+  mark), `server.serve_materialize_timeout` (default 10m) caps the detached
+  body, and the marker is sticky-until-reproven (§5.2.1). Root cause stated
+  plainly: unbounded work (no deadline + orphaned leader + single-flight
+  fan-in), NOT cache-dir churn (the present-check resume is sound; no
+  teardown was added). Non-positive config falls back to the defaults — there
+  is no unbounded serve wait to configure by accident.

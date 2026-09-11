@@ -154,6 +154,10 @@ const (
 	WalErrRetry
 	WalErrTooLarge
 	WalErrIo
+	// WalErrTimeout marks a bounded wait that fired (issue #320: the
+	// serve-sync wait or the materialize body cap). Never a not-found:
+	// every mapper falls through to 503/degraded for it.
+	WalErrTimeout
 )
 
 func (e *WalError) Error() string {
@@ -166,6 +170,8 @@ func (e *WalError) Error() string {
 		return "pack set too large for this instance: " + e.Detail
 	case WalErrRetry:
 		return fmt.Sprintf("CAS retries exhausted (%s)", e.Detail)
+	case WalErrTimeout:
+		return "serve timed out: " + e.Detail
 	case WalErrCorrupt:
 		return "corrupt: " + e.Detail
 	default:
