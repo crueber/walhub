@@ -108,7 +108,10 @@ GET …/tasks/{id}               → TaskRecord JSON, or SSE attach with `Accept
 Lane note: every repo-scoped path above exists under both `/{o}/{r}/api/…` and
 `/{o}/{r}/api-browser/…` (same handlers; browser lane sends `credentials: include` for cross-origin).
 Non-repo endpoints have `/api/v1` and `/api-browser/v1` twins, plus `/services/api/…` twins for
-`owners`/`instance`.
+`owners`/`instance` — with one deliberate carve-out: the self-service SSH-key surface
+(`GET`/`POST`/`DELETE /api/v1/ssh-keys`, 17_ssh.md §3) is token-lane-only and has no
+`/api-browser/v1` twin. Nothing consumes twins there — the `/keys` page fetches the `/api/v1`
+routes directly — so twins would widen the browser-lane (cookie) surface for no consumer.
 
 ## 4. The three cache classes (§9.2 — the central design rule)
 
@@ -1101,6 +1104,13 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   client-side (08 §4 stream invalidation of the shared summary entry + mutation-site
   reconcile, the #318 pattern). Rationale: zero new client requests with a version-keyed
   ETag — the cheapest correct source, with the staleness story stated instead of silent.
+- **Self-service ssh-keys are token-lane-only (Forgejo #339).** The §3 lane note claimed
+  `/api-browser/v1` twins for every non-repo endpoint, but `GET`/`POST`/`DELETE
+  `/api/v1/ssh-keys` (`internal/api/routes.go`) never had browser-lane twins — 17_ssh.md §3
+  and 11_config_cli.md name only the `/api/v1` routes and the `/keys` page fetches them
+  directly. Doc-clarity fix only: the lane note now carves ssh-keys out as token-lane-only
+  instead of adding twins (no consumer; twins would widen the browser-lane surface for
+  nothing). No wire or behavior change.
 - **Serve-health degraded source + `mirror.degraded_reason` (issue #320, 2026-09-11).**
   The summary `health: degraded` now has two sources: the cached `fsck.pb` report (a hit
   short-circuits) and the serve-health sidecar `meta/serve-health.json` (05 §5.2.1) — direct
