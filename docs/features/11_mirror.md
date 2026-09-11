@@ -83,6 +83,44 @@ audit). The single operator-scoped env token was considered and rejected
   (recorded WITHOUT touching the failure counter: policy, not outage;
   the refusal repeats every round until handled) — plus the manual
   `force` resync escape hatch (bypasses ff-only AND backoff).
+- **Post-publish servability probe (issue #320)**: a sync that publishes
+  refs the instance cannot serve is NOT a successful sync. After a
+  publish carrying ref moves, the fire joins the serve materialization
+  with a background budget (`ProbeTimeout`, wired from
+  `server.serve_materialize_timeout` — patient, unlike a request's
+  `serve_sync_timeout` wait) and then proves one object readable at the
+  new head (`git cat-file -e`, 04 §12). Pass → `succeed` (and any stale
+  serve-health marker is cleared); fail → the degraded outcome
+  (`consecutive_failures` + backoff, serve-health marker written,
+  task terminal failed — the refs stay published and the next fire
+  retries). No-op fires (nothing moved) never probe: they attest nothing
+  new, so the prior verdict stands — and a cold-cache first materialize
+  can never flap a healthy mirror. Only timeouts re-join within the
+  budget; any other error is an immediate verdict.
+
+## 3.1 Self-heal (issue #320)
+
+A degraded mirror re-materializes automatically, with backoff, until it
+flips back to healthy — no operator action. The loop's non-due branch
+checks the serve-health marker: marked + heal-due (never healed, or the
+`15m × 2^(n-1)`/24h-capped backoff since the last heal attempt elapsed)
+fires a `mirror-heal` task (own Seam 5 kind, same single-flight +
+registration contract; fire-and-forget so one slow heal never stalls
+the enumeration of other mirrors). The body re-drives exactly what a
+demand request would — `Sync(LevelServe)` with the patient probe budget
+plus the object check — deliberately WITHOUT tearing down cache-dir
+state: the diagnosed wedge is unbounded work (no deadline), not corrupt
+local state (the present-check resume is sound), so deletion would be
+data-loss-adjacent without addressing the mechanism. Pass → the marker
+is deleted (healthy again, and the summary/`mirror` projection flip
+with it); fail → the marker refreshes (`attempts+1`, anchored now) and
+the task narrates. Heals never take the sync lease (no clone, nothing
+to arbitrate — overlapping heals join) and never touch the mirror doc
+(`consecutive_failures`/`last_result` stay the sync's story alone);
+retries are rate-bounded, never count-capped, so recovery never needs
+an operator. Due mirrors skip the heal in the same round (their sync
+carries its own probe; a no-op sync leaves the marker for the next
+round, one minute out).
 
 ## 4. Push refusal (R1 (c))
 
@@ -130,6 +168,13 @@ POST   /api/v1/repos/mirrors (+ /api-browser/v1 twin) → {source_url, owner, na
   behind an `api.Env.MirrorSummary` hook (the ReadGate/OrgGate shape —
   api never imports the feature); nil hook → no field, no probe. The
   ETag covers it (`~m` suffix, the #235 `~d` precedent).
+- **Serve-health truth (issue #320)**: the hook probes
+  `meta/serve-health.json` beside its `mirror.json` load and fills
+  `degraded_reason` (additive omitempty wire field; old clients ignore)
+  while objects are unservable — the projection agrees with the summary
+  `health` field (which derives `degraded` from it, +0 extra round
+  trips) instead of advertising a stale `last_result: "ok"`. Covered by
+  `~m`, so the flip busts the SWR cache.
 - Discovery lists ONLY the top-level twin (`api.RegisterExposed`, the
   import precedent); repo-lane routes stay out (the 01/02/03/C2 rule).
 - Strict JSON (unknown fields 400, fail closed); plain-text errors;
@@ -157,10 +202,15 @@ POST   /api/v1/repos/mirrors (+ /api-browser/v1 twin) → {source_url, owner, na
 
 ## 7. Round trips (measured — EVIDENCE.md #240)
 
-First sync of a 2-commit fixture (memory backend, real git): 22 store
+First sync of a 2-commit fixture (memory backend, real git): 24 store
 ops, 0 LIST (lease 4 + sidecar 5 + import-claim probe 1 + packs 3 +
-manifest/log 5 + probes). No-op fire: 11 ops, zero pack/manifest/log
-writes (converge-only). Push: +2 exact-key probes (cold 10 / warm 9
+manifest/log 5 + probes, of which +2 are the #320 post-publish probe: one
+conditional manifest GET on the warm serving copy — packs are already
+installed by ingest, so zero downloads — plus one blind marker-clear
+DELETE). The summary hook pays one serve-health probe beside its
+`mirror.json` load (both exact-key, never LIST). No-op fire: 11 ops,
+zero pack/manifest/log writes (converge-only — no probe: the prior
+verdict stands). Push: +2 exact-key probes (cold 10 / warm 9
 bucket ops for the budget pushes). Summary: +1 probe only when the hook
 is set (SWR-cached + ETag'd).
 
@@ -224,3 +274,15 @@ see §6).
   only surfaces it, adding no client fetches (no per-row summary fetch)
   and no new endpoint; the server adds bounded-parallel sidecar probes
   (request count, no sequential depth — see 07_api.md).
+- **(h) Probe-gated success + self-healing serves (2026-09-11, #320).**
+  `last_result: "ok"` now means "refs synced AND objects servable": the
+  post-publish servability probe (Sync + `cat-file -e` at the new head,
+  background budget) gates success, and a wedged state records the
+  degraded outcome instead. Heals re-drive Sync+probe with backoff and
+  never tear down cache-dir state — the diagnosed wedge is unbounded
+  work (no deadline on the serve materialization; refs stay instant
+  because they never touch `packMu`), not corrupt local state, so
+  deletion would be data-loss-adjacent without addressing the mechanism.
+  No-op fires never probe (the prior verdict stands). Rationale: a sync
+  that publishes refs the instance cannot serve is not successful, and
+  recovery must not need an operator.

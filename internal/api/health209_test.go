@@ -548,8 +548,10 @@ func (s *countStore) totalGets() int {
 }
 
 // TestSummaryOverviewRoundTrips pins the R1-B1 cost class per endpoint:
-// empty summary +0, non-empty summary +1, overview +1 — all exact-key probes,
-// and the law-6 budgeted engine paths (push/sync/checkpoint) never call here.
+// empty summary +0, non-empty summary +2 (fsck.pb + serve-health — the
+// #320 probe rides the same cost class as the #209 one), overview +1 —
+// all exact-key probes, and the law-6 budgeted engine paths
+// (push/sync/checkpoint) never call here.
 func TestSummaryOverviewRoundTrips(t *testing.T) {
 	id := git.RepoId{Owner: "demo", Name: "walgit"}
 	fsckKey := id.StorePrefix() + store.Fsck
@@ -574,25 +576,32 @@ func TestSummaryOverviewRoundTrips(t *testing.T) {
 		t.Fatalf("empty summary must skip the fsck.pb probe, got %d", n)
 	}
 
-	// Healthy summary, never audited: exactly the fsck probe miss added —
-	// the placeholder sidecar is never probed for non-empty repos (R1 B1:
-	// real repos pay +0).
+	// Healthy summary, never audited: the fsck probe miss plus the
+	// serve-health probe miss (issue #320 — same R1-B1 cost class as
+	// the #209 probe: exact-key, off the law-6 budgeted paths). The
+	// placeholder sidecar is never probed for non-empty repos (real
+	// repos pay +0 there).
 	f.view.summaries["demo/walgit"] = SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1}
 	healthyBefore := cs.totalGets()
 	if w := f.req("GET", "/demo/walgit/api"); w.Code != 200 {
 		t.Fatalf("healthy summary = %d", w.Code)
 	}
-	if d := cs.totalGets() - healthyBefore; d != 1 {
-		t.Fatalf("healthy summary issued %d GETs, want exactly the fsck.pb probe", d)
+	if d := cs.totalGets() - healthyBefore; d != 2 {
+		t.Fatalf("healthy summary issued %d GETs, want fsck.pb + serve-health probes", d)
 	}
 	if n := cs.gets[fsckKey]; n != 1 {
 		t.Fatalf("healthy summary fsck probes = %d, want 1", n)
+	}
+	serveKey := id.StorePrefix() + store.ServeHealthKeySuffix
+	if n := cs.gets[serveKey]; n != 1 {
+		t.Fatalf("healthy summary serve-health probes = %d, want 1", n)
 	}
 	if n := cs.gets[id.StorePrefix()+PlaceholderKeySuffix]; n != 1 {
 		t.Fatalf("healthy summary must not probe the sidecar (real pays +0), probes = %v", cs.gets)
 	}
 
-	// Degraded summary: exactly the probe hit (no second read).
+	// Degraded summary: exactly the probe hit (no second read) — the
+	// fsck verdict short-circuits the serve-health probe.
 	putFsck(t, f, id, &proto.FsckReport{MissingTotal: 2, Missing: []string{"a", "b"}, At: fsckTs(time.Now())})
 	before := cs.totalGets()
 	if w := f.req("GET", "/demo/walgit/api"); w.Code != 200 {
@@ -600,6 +609,9 @@ func TestSummaryOverviewRoundTrips(t *testing.T) {
 	}
 	if d := cs.totalGets() - before; d != 1 {
 		t.Fatalf("degraded summary issued %d GETs, want 1", d)
+	}
+	if n := cs.gets[serveKey]; n != 1 {
+		t.Fatalf("fsck-degraded summary must skip the serve-health probe, probes = %v", cs.gets)
 	}
 
 	// Overview: exactly one probe whether the report exists or not.

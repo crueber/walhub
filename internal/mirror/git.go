@@ -199,6 +199,24 @@ func (r *Runner) MergeBaseIsAncestor(ctx context.Context, dir, old, new string) 
 	return false, err
 }
 
+// ProbeObject checks one object exists in dir (04 §12, issue #320):
+//
+//	git --git-dir=<dir> cat-file -e <oid>
+//
+// Exit 0 = present; exit 1/128 = missing/corrupt (an error carrying the
+// bounded stderr — the servability probe treats any error as
+// unservable). The oid is a hex object id from our own ref enumeration
+// (never upstream free-text beyond the S2 scrub at the call site).
+func (r *Runner) ProbeObject(ctx context.Context, dir, oid string) error {
+	cctx, cancel := context.WithTimeout(ctx, r.GitTimeout)
+	defer cancel()
+	_, errText, err := r.collect(cctx, dir, []string{"cat-file", "-e", oid}, nil)
+	if err != nil {
+		return fmt.Errorf("cat-file -e: %v: %s", err, scrubText(errText))
+	}
+	return nil
+}
+
 func isExitError(err error, target **exec.ExitError) bool {
 	for err != nil {
 		if e, ok := err.(*exec.ExitError); ok {

@@ -51,21 +51,39 @@ type Auth struct {
 // --- Server ---
 
 type Server struct {
-	Listen                string    `toml:"listen"` // default "127.0.0.1:8080"; first run "0.0.0.0:8080"
-	HTTP2                 bool      `toml:"http2"`
-	MaxConcurrentRequests int       `toml:"max_concurrent_requests"`
-	MaxConcurrentPerRepo  int       `toml:"max_concurrent_per_repo"`
-	RequestTimeout        Duration  `toml:"request_timeout"`
-	DrainTimeout          Duration  `toml:"drain_timeout"`
-	MaxPushBytes          ByteSize  `toml:"max_push_bytes"`
-	MaxTreeLog            int       `toml:"max_tree_log"` // per-entry tree-date walk cap (§9.4; default 200)
-	Roles                 []string  `toml:"roles"`        // serve | maintain | events; empty = all
-	AutoCreateOnPush      bool      `toml:"auto_create_on_push"`
-	AccelRedirect         bool      `toml:"accel_redirect"`
-	PublicURL             string    `toml:"public_url"`
-	CorsOrigins           []string  `toml:"cors_origins"`
-	Auth                  Auth      `toml:"auth"`
-	SSH                   ServerSSH `toml:"ssh"`
+	Listen                string   `toml:"listen"` // default "127.0.0.1:8080"; first run "0.0.0.0:8080"
+	HTTP2                 bool     `toml:"http2"`
+	MaxConcurrentRequests int      `toml:"max_concurrent_requests"`
+	MaxConcurrentPerRepo  int      `toml:"max_concurrent_per_repo"`
+	RequestTimeout        Duration `toml:"request_timeout"`
+	DrainTimeout          Duration `toml:"drain_timeout"`
+	// ServeSyncTimeout bounds how long a serve-level Sync WAITS for pack
+	// materialization (packMu acquisition + the (repo,materialize)
+	// single-flight join/leader wait — issue #320). Exceeded → the Sync
+	// fails with a timeout (HTTP 503 + degraded marker) while the
+	// detached materialize body keeps warming the cache in the
+	// background. Refs-level syncs never touch packMu and are
+	// unaffected. Default 45s (under typical proxy 60s timeouts);
+	// non-positive falls back to the default (there is no unbounded
+	// serve wait).
+	ServeSyncTimeout Duration `toml:"serve_sync_timeout"`
+	// ServeMaterializeTimeout caps one materialize BODY (the detached
+	// single-flight task all serve syncs join — issue #320). A hung
+	// store GET cannot wedge the repo past this bound; the next serve
+	// or heal attempt starts a fresh body and resumes at file
+	// granularity. Default 10m; non-positive falls back to the
+	// default. Must comfortably exceed ServeSyncTimeout (the wait bound
+	// is per request; this bound is per body of work).
+	ServeMaterializeTimeout Duration  `toml:"serve_materialize_timeout"`
+	MaxPushBytes            ByteSize  `toml:"max_push_bytes"`
+	MaxTreeLog              int       `toml:"max_tree_log"` // per-entry tree-date walk cap (§9.4; default 200)
+	Roles                   []string  `toml:"roles"`        // serve | maintain | events; empty = all
+	AutoCreateOnPush        bool      `toml:"auto_create_on_push"`
+	AccelRedirect           bool      `toml:"accel_redirect"`
+	PublicURL               string    `toml:"public_url"`
+	CorsOrigins             []string  `toml:"cors_origins"`
+	Auth                    Auth      `toml:"auth"`
+	SSH                     ServerSSH `toml:"ssh"`
 }
 
 // --- Server SSH (17_ssh.md) ---
@@ -307,14 +325,16 @@ type Config struct {
 func Defaults() *Config {
 	return &Config{
 		Server: Server{
-			Listen:                "127.0.0.1:8080",
-			HTTP2:                 true,
-			MaxConcurrentRequests: 512,
-			MaxConcurrentPerRepo:  64,
-			RequestTimeout:        Duration(time.Hour),
-			DrainTimeout:          Duration(20 * time.Second),
-			MaxPushBytes:          64 << 30,
-			MaxTreeLog:            200,
+			Listen:                  "127.0.0.1:8080",
+			HTTP2:                   true,
+			MaxConcurrentRequests:   512,
+			MaxConcurrentPerRepo:    64,
+			RequestTimeout:          Duration(time.Hour),
+			DrainTimeout:            Duration(20 * time.Second),
+			ServeSyncTimeout:        Duration(45 * time.Second),
+			ServeMaterializeTimeout: Duration(10 * time.Minute),
+			MaxPushBytes:            64 << 30,
+			MaxTreeLog:              200,
 			Auth: Auth{
 				Mode:           "none",
 				AnonymousRead:  true,

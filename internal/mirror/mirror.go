@@ -11,6 +11,7 @@ import (
 
 	"git.packden.us/crueber/walhub/internal/bundle"
 	"git.packden.us/crueber/walhub/internal/store"
+	"git.packden.us/crueber/walhub/internal/wal"
 )
 
 // KindMirrorSync is the Seam 5 task kind: one value, registered once
@@ -291,11 +292,17 @@ func SetSchedule(ctx context.Context, st store.ObjectStore, owner, name, preset 
 type View struct {
 	UpstreamURL         string `json:"upstream_url"`
 	Schedule            string `json:"schedule"`
-	NextSyncAt          string `json:"next_sync_at"`
+	NextSyncAt          string `json:"next_sync_at,omitempty"`
 	LastSyncedAt        string `json:"last_synced_at,omitempty"`
 	LastResult          string `json:"last_result,omitempty"`
 	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
 	Due                 bool   `json:"due"`
+	// DegradedReason carries the serve-health verdict (issue #320):
+	// the last serve failure's reason while the repo's objects are
+	// unservable, "" when servable. Filled by the summary hook (which
+	// probes the sidecar), never stored — like NextSyncAt, derived at
+	// read. Additive wire field (omitempty); old clients ignore it.
+	DegradedReason string `json:"degraded_reason,omitempty"`
 }
 
 // ViewOf builds the read model (pure: one function the summary
@@ -315,4 +322,16 @@ func ViewOf(doc *MirrorDoc, now time.Time) View {
 		}
 	}
 	return v
+}
+
+// ServeDegraded reports the serve-health verdict for one repo (issue
+// #320): the last serve failure's reason while its objects are
+// unservable. False when no marker is present — the summary hook fills
+// View.DegradedReason from this (one exact-key probe; 404s are free).
+func ServeDegraded(ctx context.Context, st store.ObjectStore, owner, name string) (reason string, ok bool) {
+	doc, found := wal.LoadServeHealth(ctx, st, owner, name)
+	if !found || doc == nil {
+		return "", false
+	}
+	return doc.Reason, true
 }

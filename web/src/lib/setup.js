@@ -204,6 +204,8 @@ export const FIELDS = [
   { key: "server.max_concurrent_per_repo", type: "int", min: 1, ex: "32", advanced: true },
   { key: "server.request_timeout", type: "duration", ex: "1h", advanced: true },
   { key: "server.drain_timeout", type: "duration", ex: "30s", advanced: true },
+  { key: "server.serve_sync_timeout", type: "duration", ex: "45s", advanced: true, note: "serve wait for pack materialization; exceeded answers 503 + degraded (issue #320)" },
+  { key: "server.serve_materialize_timeout", type: "duration", ex: "10m", advanced: true, note: "cap on one materialize body; must comfortably exceed serve_sync_timeout (issue #320)" },
   { key: "server.max_push_bytes", type: "size", ex: "2GiB" },
   { key: "server.max_tree_log", type: "int", min: 1, ex: "200", advanced: true, note: "per-entry tree-date walk cap (commits walked per listing)" },
   { key: "server.roles", type: "list", enum: ["serve", "maintain", "events"], ex: "serve, maintain" },

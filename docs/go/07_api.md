@@ -484,11 +484,19 @@ override); `api_url` = the `/api` lane URL; SWR + `ETag: "<head sha>"`. `PUT` he
 while `overview.health.status ∈ ok|degraded|error` below describes the WAL dashboard; the two
 names do not mix): `empty` (unborn — no resolvable head, zero branches/tags; derived from the
 manifest + ref counts the summary already holds, **zero new store round trips**), `healthy`, or
-`degraded` (refs present and the cached `fsck.pb` report lists missing objects). `missing_total`
-rides `degraded` only (the authoritative count from the report; absent otherwise). The degraded
-override costs **one conditional GET** (`fsck.pb` exact-key probe) on non-empty summaries only —
-empty repos skip the probe (branch on data in hand); the law-6 budgeted paths (push ≤ 5, warm
-refs 1, checkpoint 4) never call here, so their sim budgets hold unchanged. `ETag` covers the
+`degraded` (refs present AND (the cached `fsck.pb` report lists missing objects
+OR the serve-health sidecar `meta/serve-health.json` is present — issue #320:
+the serve path's own sticky failure record, §5.2.1 of 05)). `missing_total`
+rides `degraded` only (the authoritative count from the fsck report; absent
+otherwise — a serve-health degrade carries no count). The degraded
+overrides cost **exact-key probes** on non-empty summaries only —
+empty repos skip both probes (branch on data in hand): the `fsck.pb` probe
+first (a hit short-circuits), then serve-health — directly (one GET) for
+non-mirrors, or via the mirror hook's `degraded_reason` verdict for mirrors
+(+0 extra GETs there: the hook already probed beside its `mirror.json`
+load). Non-empty summaries therefore pay at most +2 GETs; the law-6 budgeted
+paths (push ≤ 5, warm refs 1, checkpoint 4) never call here, so their sim
+budgets hold unchanged. `ETag` covers the
 health field: `"<head sha>"` (`""` when unborn, as before), suffixed `~degraded` when degraded —
 without the suffix a revalidating client would 304 on the same head sha and keep showing
 `healthy` after damage lands.
@@ -975,7 +983,11 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   hook (the ReadGate/OrgGate shape — this package never imports the feature);
   the ETag covers it (`~m` suffix, the #235 `~d` precedent) so outcome-only
   changes never 304. Strict JSON (unknown fields 400); tokens ride the POST
-  bodies memory-only (`secret_set` presence-only in task params).
+  bodies memory-only (`secret_set` presence-only in task params). Issue #320
+  adds `degraded_reason` (omitempty, old clients ignore): the hook's
+  serve-health verdict, so the projection agrees with the summary `health`
+  field instead of advertising a stale `ok` — covered by `~m` too, and the
+  summary derives `health: degraded` from it with +0 extra round trips.
 - **Size-detailed listing (Forgejo #248, R1 B2 — new alongside v1).**
   `GET /api/v1/owners/{owner}/repos/detailed` (+ `/api-browser/v1` +
   `/services/api` twins, discovery `endpoints[]`, SDK `owners.detailed`) is
@@ -1089,3 +1101,12 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
   client-side (08 §4 stream invalidation of the shared summary entry + mutation-site
   reconcile, the #318 pattern). Rationale: zero new client requests with a version-keyed
   ETag — the cheapest correct source, with the staleness story stated instead of silent.
+- **Serve-health degraded source + `mirror.degraded_reason` (issue #320, 2026-09-11).**
+  The summary `health: degraded` now has two sources: the cached `fsck.pb` report (a hit
+  short-circuits) and the serve-health sidecar `meta/serve-health.json` (05 §5.2.1) — direct
+  probe for non-mirrors, the mirror hook's `degraded_reason` verdict for mirrors (+0 extra
+  GETs there). Cost change, stated plainly: healthy non-mirror summaries pay +2 exact-key
+  GETs instead of +1 (same R1-B1 cost class, off the law-6 budgeted paths — not a hot-path
+  regression). `mirrorHash` covers `degraded_reason` so the flip busts the SWR cache.
+  Rationale: an unhealthy repo reporting `healthy`/`ok` with no recovery is the contract
+  failure of #320; there is no cheaper read path to the serve verdict.

@@ -18,6 +18,7 @@ package mirror
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,6 +73,16 @@ type Service struct {
 	allowlist    []string
 	allowFile    bool
 	maxBytes     int64
+
+	// probeTimeout bounds one servability probe's Sync+object join loop
+	// (issue #320; the probe is patient background work, unlike a
+	// request's serve_sync_timeout wait). Zero → the engine's default
+	// materialize cap (composition wires server.serve_materialize_timeout).
+	probeTimeout time.Duration
+	// probe runs the post-publish servability probe (h + head oid). A
+	// func field (the `now` clock precedent): tests substitute failure
+	// and hang shapes; production always uses probeServe.
+	probe func(ctx context.Context, h *wal.RepoHandle, oid string) error
 }
 
 // Deps wires a Service. Store/Reg are required; GitBinary falls back
@@ -86,6 +97,11 @@ type Deps struct {
 
 	CloneTimeout time.Duration
 	GitTimeout   time.Duration
+
+	// ProbeTimeout bounds one servability probe (issue #320): the
+	// post-publish Sync+object join loop. Zero → the engine's default
+	// materialize cap (composition wires server.serve_materialize_timeout).
+	ProbeTimeout time.Duration
 
 	AllowPrivate bool
 	Allowlist    []string
@@ -103,7 +119,7 @@ func New(d Deps) *Service {
 	if host == "" {
 		host = "unknown"
 	}
-	return &Service{
+	s := &Service{
 		store:        d.Store,
 		reg:          d.Reg,
 		git:          NewRunner(d.GitBinary, d.CacheDir, d.CloneTimeout, d.GitTimeout),
@@ -113,7 +129,13 @@ func New(d Deps) *Service {
 		allowlist:    d.Allowlist,
 		allowFile:    d.AllowFile,
 		maxBytes:     d.MaxBytes,
+		probeTimeout: d.ProbeTimeout,
 	}
+	if s.probeTimeout <= 0 {
+		s.probeTimeout = wal.DefaultServeMaterializeTimeout
+	}
+	s.probe = s.probeServe
+	return s
 }
 
 // SyncNow spawns (or joins, via the (repo,mirror-sync) single-flight)
@@ -405,6 +427,21 @@ func (s *Service) runSync(ctx context.Context, task *wal.Task, owner, name, toke
 		return s.fail(ctx, owner, name, now, task, fmt.Sprintf("publish refs: %v (safe to retry)", scrubText(perr.Error())))
 	}
 	task.Notice(fmt.Sprintf("mirror sync %s: published %d ref(s)%s", target, moved, refusedSuffix(refused)))
+	// Servability probe (issue #320): a sync that publishes refs the
+	// instance cannot serve is not a successful sync — last_result must
+	// not say "ok". The probe joins the serve materialization with a
+	// background budget (probeTimeout, patient — unlike a request's
+	// serve_sync_timeout wait) and then proves one object readable at
+	// the new head. Failure records the degraded outcome (failure
+	// counter + backoff, serve-health marker) and fails the task; the
+	// refs stay published and the next fire retries.
+	if perr := s.probe(ctx, h, probeOid(kept, headTarget)); perr != nil {
+		reason := "servability probe: " + scrubText(wal.ShortErr(perr))
+		markServeDegraded(s.store, owner, name, reason)
+		task.Notice(fmt.Sprintf("mirror sync %s: published %d ref(s) but %s", target, moved, reason))
+		return s.fail(ctx, owner, name, now, task, reason)
+	}
+	clearServeHealth(s.store, owner, name)
 	return s.succeed(ctx, owner, name, now)
 }
 
@@ -413,6 +450,74 @@ func refusedSuffix(refused []string) string {
 		return ""
 	}
 	return fmt.Sprintf("; %d rewound ref(s) refused", len(refused))
+}
+
+// --- servability probe (issue #320) -------------------------------------------
+
+// probeOid selects the object the post-publish probe proves readable:
+// the HEAD target's tip when published, else the first published oid,
+// else "" (nothing published provable — an empty probe passes on the
+// Sync alone).
+func probeOid(kept []repoimport.Ref, headTarget string) string {
+	for _, r := range kept {
+		if r.Name == headTarget && r.Oid != "" {
+			return r.Oid
+		}
+	}
+	for _, r := range kept {
+		if r.Oid != "" {
+			return r.Oid
+		}
+	}
+	return ""
+}
+
+// isServeTimeout reports a bounded-serve-wait expiry (the engine's
+// WalErrTimeout): the materialize body may still be progressing in the
+// background, so the probe re-joins while its budget lasts. Any other
+// error is a verdict — returned immediately.
+func isServeTimeout(err error) bool {
+	var we *wal.WalError
+	return errors.As(err, &we) && we.Kind == wal.WalErrTimeout
+}
+
+// probeServe joins the serve materialization with a background budget
+// and proves one object readable. Each h.Sync waits at most
+// serve_sync_timeout (the engine bound); timeouts re-join while the
+// probe budget (probeTimeout) lasts, so a slow-but-progressing cold
+// materialize still passes without flapping. The object check verdict
+// is terminal (a missing object will not appear on retry). Never hangs
+// past the budget: the last timeout (or verdict) is returned.
+func (s *Service) probeServe(ctx context.Context, h *wal.RepoHandle, oid string) error {
+	deadline := time.Now().Add(s.probeTimeout)
+	for {
+		g, err := h.Sync(ctx, wal.LevelServe)
+		if err == nil {
+			oerr := s.probeObject(ctx, h, oid)
+			g.Release()
+			return oerr
+		}
+		if !probeRetry(err, time.Now(), deadline) {
+			return err
+		}
+	}
+}
+
+// probeRetry reports whether a failed Sync attempt is worth re-joining:
+// only a serve-wait timeout inside the probe budget. Every other error
+// (corrupt packs, canceled caller, missing store) is a verdict.
+func probeRetry(err error, now, deadline time.Time) bool {
+	return isServeTimeout(err) && now.Before(deadline)
+}
+
+// probeObject proves one object readable in the serving copy (the
+// "one blob fetch at head" shape): "" oid (nothing published) passes
+// on the Sync alone.
+func (s *Service) probeObject(ctx context.Context, h *wal.RepoHandle, oid string) error {
+	if oid == "" {
+		return nil
+	}
+	return s.git.ProbeObject(ctx, h.Dir(), oid)
 }
 
 // succeed records the success outcome (clears the failure counter,
@@ -756,6 +861,12 @@ func (s *Service) round(ctx context.Context, maintain func(string) bool) {
 			continue // probe-absent or unreadable: skip (no LIST, one cheap probe per repo)
 		}
 		if !Due(doc, now) {
+			// Not due — but a serve-health marker means the mirror is
+			// degraded: fire the self-heal when its backoff elapses
+			// (heal.go). Due mirrors skip the heal here: their sync
+			// carries its own post-publish probe, and a no-op sync
+			// leaves the marker for the next round (one minute out).
+			s.maybeHeal(ctx, owner, name, now)
 			continue
 		}
 		if _, serr := s.SyncNow(ctx, owner, name, "", false); serr != nil && ctx.Err() == nil {
@@ -764,6 +875,28 @@ func (s *Service) round(ctx context.Context, maintain func(string) bool) {
 			_ = serr
 		}
 	}
+}
+
+// maybeHeal fires one heal task for a marked repo whose backoff
+// elapsed (issue #320, heal.go). Fire-and-forget: the heal is long
+// patient work and must not stall the enumeration of other mirrors;
+// the (repo,mirror-heal) single-flight joins overlapping fires and
+// the task narrates itself regardless of listeners. SyncNow is NOT
+// reused: a heal is not a sync (no lease, no clone, no mirror-doc
+// touch) — only the task table is shared.
+func (s *Service) maybeHeal(ctx context.Context, owner, name string, now time.Time) {
+	doc, ok := wal.LoadServeHealth(ctx, s.store, owner, name)
+	if !ok || doc == nil || !healDue(doc, now) {
+		return
+	}
+	target := owner + "/" + name
+	go func() {
+		_, _ = s.reg.Tasks().Run(ctx, target, KindMirrorHeal,
+			map[string]string{"trigger": "serve-degraded"},
+			func(tctx context.Context, task *wal.Task) error {
+				return s.runHeal(tctx, task, owner, name)
+			})
+	}()
 }
 
 func splitRepo(repo string) (owner, name string, ok bool) {

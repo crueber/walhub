@@ -6,6 +6,7 @@ package wal
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -66,11 +67,37 @@ func (h *RepoHandle) reconcilePacks(ctx context.Context, lvl SyncLevel) error {
 		// The whole phase is one task; concurrent callers join it (§5.8). Run
 		// never propagates fn's error (joiners reuse the outcome), so the
 		// record is checked explicitly.
+		//
+		// The body runs on the registry-lifetime task ctx, NOT the caller's:
+		// a request giving up (serve_sync_timeout at the Sync layer) leaves
+		// the body warming the cache for the next joiner. The body itself is
+		// capped by server.serve_materialize_timeout (issue #320): a hung
+		// store GET cannot wedge the repo past that bound, so the next
+		// serve or heal attempt starts a fresh body and resumes at file
+		// granularity.
+		bodyCap := h.reg.vals.serveMaterializeTimeout
+		if bodyCap <= 0 {
+			bodyCap = DefaultServeMaterializeTimeout
+		}
 		rec, err := h.reg.tasks.Run(ctx, h.ID, "materialize", map[string]string{"level": lvl.String()},
 			func(tctx context.Context, t *Task) error {
-				return h.materialize(tctx, t, m, lvl)
+				bctx, cancel := context.WithTimeout(tctx, bodyCap)
+				defer cancel()
+				if berr := h.materialize(bctx, t, m, lvl); berr != nil {
+					if bctx.Err() == context.DeadlineExceeded && tctx.Err() == nil {
+						return &WalError{Kind: WalErrTimeout, Detail: "materialize body exceeded its cap: objects not servable"}
+					}
+					return berr
+				}
+				return nil
 			})
 		if err != nil {
+			// A body-cap timeout explains itself — pass it through so
+			// the 503 names the bound instead of the CAS ladder.
+			var we *WalError
+			if errors.As(err, &we) && we.Kind == WalErrTimeout {
+				return err
+			}
 			return &WalError{Kind: WalErrRetry, Detail: "materialize failed: " + err.Error(), Wrapped: err}
 		}
 		if rec != nil && rec.OK != nil && !*rec.OK {
@@ -91,6 +118,12 @@ func (h *RepoHandle) materialize(ctx context.Context, t *Task, m *pbManifest, lv
 	if err := os.MkdirAll(packDir, 0o755); err != nil {
 		return &WalError{Kind: WalErrIo, Detail: packDir, Wrapped: err}
 	}
+	// Drop orphaned .tmp files from bodies killed mid-download (a timed-out
+	// body leaves dst+".tmp" behind; without this, repeated timeouts
+	// accumulate one orphan per attempt). Safe: the (repo,materialize)
+	// single-flight admits exactly one body per repo, and every .tmp
+	// under this dir is written tmp+rename by this phase alone.
+	sweepPackTmps(packDir)
 
 	// Missing local packs: one round of downloads, 8-way (13 §4).
 	type need struct {
@@ -302,6 +335,22 @@ func (h *RepoHandle) removeSuperseded() {
 	h.updateState(func(st *RepoState) {
 		st.PendingPackRemovals = stillPending
 	})
+}
+
+// sweepPackTmps removes "*.tmp" leftovers in the pack dir (see
+// materialize). Best-effort: a removal error is ignored — the next
+// download overwrites the same tmp name anyway.
+func sweepPackTmps(packDir string) {
+	entries, err := os.ReadDir(packDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || len(e.Name()) < 5 || e.Name()[len(e.Name())-4:] != ".tmp" {
+			continue
+		}
+		_ = os.Remove(filepath.Join(packDir, e.Name()))
+	}
 }
 
 // localPacks lists the checksum-suffixed files in objects/pack.

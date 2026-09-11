@@ -107,6 +107,21 @@ const MirrorKeySuffix = "meta/mirror.json"
 // MirrorKey returns "repos/<owner>/<name>/meta/mirror.json".
 func MirrorKey(owner, name string) string { return RepoPrefix(owner, name) + MirrorKeySuffix }
 
+// ServeHealthKeySuffix is the repo-relative serve-health sidecar (issue
+// #320): {"version":1,"status":"degraded","reason":R,"at":RFC3339,
+// "attempts"?:N,"last_heal_at"?:RFC3339}. Overwrite-always (last writer
+// wins — writers are the serve path marking its own failures and the
+// mirror heal loop recording its attempts; no CAS ladder, contention is
+// a repeated identical verdict). Sticky until re-proven: only a
+// successful serve-level sync (or a passing mirror probe/heal) deletes
+// it — there is no TTL, so a quiet-but-broken repo cannot age back to
+// healthy without proof. Readers (summary health, mirror projection)
+// treat present-and-parseable as degraded.
+const ServeHealthKeySuffix = "meta/serve-health.json"
+
+// ServeHealthKey returns "repos/<owner>/<name>/meta/serve-health.json".
+func ServeHealthKey(owner, name string) string { return RepoPrefix(owner, name) + ServeHealthKeySuffix }
+
 // MirrorLeaseName returns the bucket-lease name serializing scheduled
 // syncs of one mirror across instances ("mirror-<owner>-<name>"; the key
 // is leases/<name>.pb via LeaseKey). Owner/name never contain slashes

@@ -629,6 +629,7 @@ git --git-dir=<dir> for-each-ref --format=%(objectname) %(*objectname) %(refname
 git --git-dir=<dir> rev-parse --show-object-format
 git index-pack <pack>                                   # ONLY when the source pack lacks a sibling .idx
 git show HEAD:.gitattributes                            # LFS probe (best-effort; unborn HEAD / no file = skip)
+git --git-dir=<dir> cat-file -e <oid>                   # servability probe (issue #320): exit 0 = object present
 ```
 
 Refnames cannot contain spaces (§4.3 validation), so the three
@@ -639,7 +640,11 @@ importer installs each sibling `.idx` into the serving copy BEFORE
 `AddPack` (its internal `LevelServe` Sync needs it locally) and uploads
 it to `wal/<checksum>.idx` create-if-absent after (a fresh instance
 materializes from the store alone). A regenerated index's stray `.keep`
-is swept (same rule as §9).
+is swept (same rule as §9). The mirror sync/heal loop
+(`docs/features/11_mirror.md` §3/§3.1) reuses this section's argv
+(`clone --mirror`, `for-each-ref`, `rev-parse`, `index-pack`) plus
+`merge-base --is-ancestor` (ff rule) and the `cat-file -e` probe above
+(any non-zero exit = unservable — a verdict, never a retry).
 
 ### Concurrency
 
@@ -751,3 +756,7 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   1-char status / path NUL records per commit. Bound: `server.max_tree_log`
   (default 200, validated `>= 1`); failure degrades to undated entries,
   never a tree failure.
+- **Servability probe argv (issue #320, 2026-09-11):** `git --git-dir=<dir> cat-file -e <oid>`
+  (exit 0 = servable) joins §12's argv for the mirror sync/heal loop. Rationale: law 2 pins exact
+  argv — a new spawn needs its doc line in the same change; `-e` (existence only, no output) is
+  the cheapest object proof.

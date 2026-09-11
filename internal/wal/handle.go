@@ -36,6 +36,11 @@ type RepoHandle struct {
 	packMu syncMutex // serializes pack reconciliation; NEVER held with syncMu
 	rw     rw.TryRWMutex
 
+	// serveDegraded gates the serve-health success-clear (servehealth.go):
+	// set when this handle's pack phase fails, cleared when a later
+	// serve succeeds and deletes the sidecar.
+	serveDegraded atomic.Bool
+
 	state   *RepoState
 	stateMu sync.Mutex // guards state file read-modify-write
 
@@ -243,6 +248,17 @@ func (g *ReadGuard) Release() {
 // The refs phase runs under syncMu (try-lock first, measured); the pack phase
 // runs under packMu — syncMu is NEVER held with packMu, so refs requests
 // never queue behind a multi-GB materialization.
+//
+// The pack phase is BOUNDED (issue #320): packMu acquisition and the
+// materialize single-flight join/leader-wait run under a timeout
+// (server.serve_sync_timeout, default 45s). Exceeding it fails the Sync
+// with WalErrTimeout and marks the serve-health sidecar — the request
+// answers 503 + degraded instead of hanging past the proxy — while the
+// detached materialize body keeps warming the cache in the background
+// (capped separately by server.serve_materialize_timeout). A client
+// disconnect (parent ctx canceled, bound not fired) is NOT a serve
+// failure and marks nothing. Levels below LevelServe never touch packMu
+// and are never bounded by this timeout.
 func (h *RepoHandle) Sync(ctx context.Context, lvl SyncLevel) (*ReadGuard, error) {
 	if err := h.syncMu.LockMeasured(ctx, "sync_mutex", h.ID); err != nil {
 		return nil, err
@@ -268,18 +284,59 @@ func (h *RepoHandle) Sync(ctx context.Context, lvl SyncLevel) (*ReadGuard, error
 	}
 
 	if lvl >= LevelServe {
-		if err := h.packMu.LockMeasured(ctx, "pack_mutex", h.ID); err != nil {
-			return nil, err
+		wait := h.reg.vals.serveSyncTimeout
+		if wait <= 0 {
+			wait = DefaultServeSyncTimeout
 		}
-		err := h.reconcilePacks(ctx, lvl)
+		pctx, cancel := context.WithTimeout(ctx, wait)
+		if err := h.packMu.LockMeasured(pctx, "pack_mutex", h.ID); err != nil {
+			cancel()
+			return nil, h.packPhaseError(pctx, ctx, err, "serve sync wait")
+		}
+		err := h.reconcilePacks(pctx, lvl)
 		h.packMu.Unlock()
+		cancel()
 		if err != nil {
-			return nil, err
+			return nil, h.packPhaseError(pctx, ctx, err, "serve sync")
 		}
+		h.clearServeDegraded()
 	}
 
 	h.rw.RLock()
 	return &ReadGuard{h: h}, nil
+}
+
+// packPhaseError maps a pack-phase failure onto the caller's error and
+// the serve-health sidecar (issue #320): our bound firing (pctx deadline
+// exceeded) or any other materialize failure marks degraded; a pure
+// client disconnect (parent canceled, bound not fired) marks nothing.
+func (h *RepoHandle) packPhaseError(pctx, ctx context.Context, err error, what string) error {
+	if pctx.Err() == context.DeadlineExceeded {
+		h.markServeDegraded(what + " timed out: objects not servable")
+		return &WalError{Kind: WalErrTimeout, Detail: what + " timed out: objects not servable"}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err() // client went away — not a serve failure
+	}
+	h.markServeDegraded(ShortErr(err))
+	return err
+}
+
+// ShortErr renders a one-liner for sidecar/task reasons (bounded
+// length, single line — markers are log/UI-visible). Exported for the
+// mirror feature's probe/heal reasons (same bound, one function).
+func ShortErr(err error) string {
+	s := err.Error()
+	for i, c := range s {
+		if c == '\n' || c == '\r' {
+			s = s[:i]
+			break
+		}
+	}
+	if len(s) > 300 {
+		s = s[:300]
+	}
+	return s
 }
 
 // ---- effective config cache (§5.3.3 settings invalidation) ------------------

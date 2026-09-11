@@ -85,6 +85,21 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 			mirrorView = &v
 		}
 	}
+	if health != RepoHealthEmpty && health != RepoHealthDegraded {
+		// Degraded override from the serve-health sidecar (issue #320):
+		// the serve path's own sticky failure record. Mirrors ride the
+		// hook's verdict (it already probed — DegradedReason, +0 extra
+		// round trips here); non-mirrors pay one exact-key probe, the
+		// same cost class as the fsck probe above (this path is off the
+		// law-6 budgeted paths).
+		if mirrorView != nil {
+			if mirrorView.DegradedReason != "" {
+				health = RepoHealthDegraded
+			}
+		} else if _, ok := probeServeHealth(r.Context(), h.env.Store, id); ok {
+			health = RepoHealthDegraded
+		}
+	}
 	// The open-count projection (Forgejo #319): one exact-key probe behind
 	// the Env hook (nil/absent → zeros, +0 round trips — the hook IS the
 	// feature; 404s are free per law 4). The counts ride the summary so
@@ -165,10 +180,13 @@ func descriptionHash(d string) string {
 }
 
 // mirrorHash is the short ETag suffix covering the mirror projection
-// (Forgejo #240): same FNV-1a discipline as descriptionHash.
+// (Forgejo #240): same FNV-1a discipline as descriptionHash. It covers
+// DegradedReason too (issue #320): a serve-health flip changes neither
+// the head sha nor the sync outcome, so without it a revalidating
+// client would 304 and keep showing the stale verdict.
 func mirrorHash(v MirrorView) string {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" + v.LastSyncedAt + "\x00" + v.LastResult))
+	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" + v.LastSyncedAt + "\x00" + v.LastResult + "\x00" + v.DegradedReason))
 	return strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 
