@@ -55,6 +55,7 @@ func TestValidateOIDC(t *testing.T) {
 		c.Server.Auth.AllowedDomains = []string{"example.com"}
 		c.Server.Auth.OAuthClientID = "id"
 		c.Server.Auth.OAuthClientSecret = "secret"
+		c.Server.Auth.SessionSecret = strings.Repeat("x", 32)
 		return c
 	}
 	if _, errs := Validate(base()); len(errs) != 0 {
@@ -87,6 +88,60 @@ func TestValidateOIDC(t *testing.T) {
 	if _, errs := Validate(c); len(errs) != 0 {
 		t.Fatalf("32-byte session_secret must pass: %v", errs)
 	}
+}
+
+// Rule 2b — the browser-login trio (#344): mode=oidc with any of
+// session_secret / oauth_client_id / oauth_client_secret missing fails
+// closed and names the missing key(s) — never a silent boot.
+func TestValidateOIDCTrioMissing(t *testing.T) {
+	base := func() *Config {
+		c := Defaults()
+		c.Server.Auth.Mode = "oidc"
+		c.Server.Auth.AnonymousRead = false
+		c.Server.Auth.AllowedDomains = []string{"example.com"}
+		c.Server.Auth.OAuthClientID = "id"
+		c.Server.Auth.OAuthClientSecret = "secret"
+		c.Server.Auth.SessionSecret = strings.Repeat("x", 32)
+		return c
+	}
+	clear := map[string]func(a *Auth){
+		"server.auth.session_secret":      func(a *Auth) { a.SessionSecret = "" },
+		"server.auth.oauth_client_id":     func(a *Auth) { a.OAuthClientID = "" },
+		"server.auth.oauth_client_secret": func(a *Auth) { a.OAuthClientSecret = "" },
+	}
+	for key, drop := range clear {
+		t.Run("missing "+key, func(t *testing.T) {
+			c := base()
+			drop(&c.Server.Auth)
+			_, errs := Validate(c)
+			errsContain(t, errs, key)
+		})
+	}
+	t.Run("missing all three names all three", func(t *testing.T) {
+		c := base()
+		c.Server.Auth.SessionSecret = ""
+		c.Server.Auth.OAuthClientID = ""
+		c.Server.Auth.OAuthClientSecret = ""
+		_, errs := Validate(c)
+		for _, key := range []string{"server.auth.session_secret", "server.auth.oauth_client_id", "server.auth.oauth_client_secret"} {
+			errsContain(t, errs, key)
+		}
+	})
+	t.Run("non-oidc modes do not require the trio", func(t *testing.T) {
+		for _, mode := range []string{"none", "token"} {
+			c := Defaults()
+			c.Server.Auth.Mode = mode
+			c.Server.Auth.SessionSecret = ""
+			c.Server.Auth.OAuthClientID = ""
+			c.Server.Auth.OAuthClientSecret = ""
+			_, errs := Validate(c)
+			for _, err := range errs {
+				if strings.Contains(err.Error(), "browser-login trio") {
+					t.Fatalf("mode %q must not require the trio: %v", mode, errs)
+				}
+			}
+		}
+	})
 }
 
 // Rule 3 — bundle strategy validation.

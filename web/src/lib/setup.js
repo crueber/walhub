@@ -468,6 +468,12 @@ export function validateSetup(values) {
     const id = get("server.auth.oauth_client_id");
     const secret = get("server.auth.oauth_client_secret");
     if ((id === "") !== (secret === "")) fail("server.auth.oauth_client_id", `server.auth.oauth_client_id and oauth_client_secret must be both set or both unset`);
+    // the browser-login trio (#344, mirrors config.Validate): oidc mode
+    // without all three boots into a dead login state, so each missing key
+    // fails on its own row (naming it) before save.
+    for (const [key, val] of [["server.auth.session_secret", get("server.auth.session_secret")], ["server.auth.oauth_client_id", id], ["server.auth.oauth_client_secret", secret]]) {
+      if (val === "") fail(key, `${key} is required in oidc mode — browser login needs the full trio (session_secret, oauth_client_id, oauth_client_secret)`);
+    }
   }
   const secret = get("server.auth.session_secret");
   if (secret !== "" && secret.length < 32) fail("server.auth.session_secret", `server.auth.session_secret must be ≥ 32 bytes when set`);

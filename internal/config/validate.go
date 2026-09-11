@@ -112,6 +112,24 @@ func checkOIDC(c *Config) []error {
 	if (a.OAuthClientID == "") != (a.OAuthClientSecret == "") {
 		errs = append(errs, fmt.Errorf("server.auth.oauth_client_id and server.auth.oauth_client_secret must be both set or both unset"))
 	}
+	// The browser-login trio (#344): without all three the instance boots
+	// into a dead state — browser login disabled, so every browser GET is a
+	// bare 401 with no login path. Fail closed per law 9, naming the
+	// missing keys. (The pair check above stays for the both-set shape;
+	// the trio check below pins the all-set requirement.)
+	var missing []string
+	if a.SessionSecret == "" {
+		missing = append(missing, "server.auth.session_secret")
+	}
+	if a.OAuthClientID == "" {
+		missing = append(missing, "server.auth.oauth_client_id")
+	}
+	if a.OAuthClientSecret == "" {
+		missing = append(missing, "server.auth.oauth_client_secret")
+	}
+	if len(missing) > 0 {
+		errs = append(errs, fmt.Errorf("auth.mode = \"oidc\" requires the browser-login trio (%s) — browser login is unusable without all three", strings.Join(missing, ", ")))
+	}
 	if a.SessionSecret != "" && len(a.SessionSecret) < 32 {
 		errs = append(errs, fmt.Errorf("server.auth.session_secret must be at least 32 bytes (got %d)", len(a.SessionSecret)))
 	}
