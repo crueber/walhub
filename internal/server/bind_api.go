@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"git.packden.us/crueber/walhub/internal/api"
+	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 )
 
@@ -41,9 +42,13 @@ func (p *apiProvider) Serve(w http.ResponseWriter, r *http.Request) {
 }
 
 // Owners lists owner names from the registry (07_api.md §8: from the STORE,
-// never a disk directory).
+// never a disk directory), visibility-filtered exactly like the
+// /api/v1/owners surface (Forgejo #345): owners with no repo readable by
+// the request caller are omitted, so the /explore text twin never leaks a
+// private-only owner. The principal rides the injected request identity
+// (the explore page is gated, so it is always resolved here).
 func (p *apiProvider) Owners(r *http.Request) ([]string, error) {
-	return p.env.Repos.Owners(r.Context())
+	return p.env.VisibleOwners(r.Context(), p.env.PrincipalOf(r))
 }
 
 // ExtraRoutes is implemented by feature packages' HTTP surfaces
@@ -97,11 +102,31 @@ func (s *Server) ChainExtra(extras ...ExtraRoutes) {
 }
 
 // checkReadGate consults the identity require_read hook (01 §4.1) on read
-// paths, after the flag gate passed. A nil gate allows (legacy behavior,
-// unchanged for instances without the identity surface wired).
+// paths. A nil gate allows (legacy behavior, unchanged for instances
+// without the identity surface wired).
 func (s *Server) checkReadGate(ctx context.Context, owner, repo string, p auth.Principal) *auth.AuthError {
 	if s.readGate == nil {
 		return nil
 	}
 	return s.readGate.CheckRead(ctx, owner, repo, p)
+}
+
+// gateRepoRead enforces the repo read gate on the git/LFS/bundle paths
+// (Forgejo #345): a wired ReadGate is the authority — visibility decides,
+// so anonymous callers reach public repos even with anonymous_read=false
+// — while a nil gate keeps the legacy anonymous_read flag check. Reports
+// through the §4.2 git failure mapping; false = response written.
+func (s *Server) gateRepoRead(w http.ResponseWriter, r *http.Request, svc git.Service, id git.RepoId, p auth.Principal) bool {
+	if s.readGate != nil {
+		if aerr := s.checkReadGate(r.Context(), id.Owner, id.Name, p); aerr != nil {
+			s.gitAuthFailure(w, r, svc, aerr)
+			return false
+		}
+		return true
+	}
+	if aerr := requireRead(p, s.cfg.Server.Auth.AnonymousRead); aerr != nil {
+		s.gitAuthFailure(w, r, svc, aerr)
+		return false
+	}
+	return true
 }

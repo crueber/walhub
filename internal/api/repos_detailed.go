@@ -51,6 +51,11 @@ type RepoSizeRow struct {
 	// label names the upstream). Corrupt-but-present still reports
 	// Mirror=true with no upstream (fail closed).
 	MirrorUpstream string `json:"mirror_upstream,omitempty"`
+	// Visibility is the public/private badge source (Forgejo #345):
+	// "public"|"private" when the identity surface is wired, "" when
+	// it is not (never null — consumers ignore unknown fields, but an
+	// explicit empty reads as "unknown", not "public").
+	Visibility string `json:"visibility"`
 }
 
 // ownerReposDetailed serves the object-row listing with size + activity.
@@ -69,7 +74,10 @@ func (h *handlers) ownerReposDetailed(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := r.PathValue("owner")
 	// 200 {repos:[]} for an unknown owner — never 404 (§8, same as v1).
-	names, err := h.env.Repos.Repos(r.Context(), owner)
+	// Forgejo #345: the candidate names are visibility-filtered BEFORE
+	// the catalog fold, so private rows (names, sizes, activity) never
+	// enter the response.
+	names, err := h.env.VisibleRepos(r.Context(), owner, h.env.PrincipalOf(r))
 	if err != nil {
 		mapViewErr(w, err)
 		return
@@ -127,6 +135,10 @@ func (h *handlers) ownerReposDetailed(w http.ResponseWriter, r *http.Request) {
 	// no mirror state), so the indicator costs no per-row summary
 	// fetch on the client. See fillMirrorFlags for the trip budget.
 	fillMirrorFlags(r.Context(), h.env.Store, owner, out)
+	// Visibility flags ride the same response (Forgejo #345): one
+	// LRU-backed conditional access.json GET per row (usually a version
+	// hit, no body — the same trip the read gate already paid).
+	fillVisibilityFlags(r.Context(), h.env, owner, out)
 	writeCached(w, r, ccSWR, "", http.StatusOK, struct {
 		Repos []RepoSizeRow `json:"repos"`
 	}{Repos: out})
@@ -141,6 +153,40 @@ func parseBytesParam(s string) (*uint64, error) {
 		return nil, err
 	}
 	return &n, nil
+}
+
+// fillVisibilityFlags stamps the visibility spelling onto every listing
+// row (the badge source without a per-row summary fetch).
+//
+// ### Concurrency: one goroutine per row, at most 8 probes in flight;
+// each goroutine writes only its own slice index, so there is no shared
+// mutable state and no lock to order — the fillMirrorFlags shape.
+//
+// Trip budget (law 6): one conditional access.json GET per row behind the
+// access LRU (version hits carry no body); unwired hook → no trips, the
+// field stays "".
+func fillVisibilityFlags(ctx context.Context, env *Env, owner string, out []RepoSizeRow) {
+	if env == nil || env.RepoVisibility == nil || len(out) == 0 {
+		return
+	}
+	const maxInFlight = 8
+	sem := make(chan struct{}, maxInFlight)
+	var wg sync.WaitGroup
+	for i := range out {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if vis, ok := env.RepoVisibility(ctx, owner, out[i].Name); ok {
+				out[i].Visibility = vis
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 // probeMirrorRow reports the mirror flag for one listing row: true iff

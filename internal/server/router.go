@@ -277,14 +277,14 @@ func (s *Server) repoDispatch(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case len(sub) == 0:
-		// UI page route /{owner}/{repo} (gated, GET/HEAD only; PUT/DELETE on
-		// the bare root went to the api seam above).
+		// UI page route /{owner}/{repo} (visibility-gated shell, GET/HEAD
+		// only; PUT/DELETE on the bare root went to the api seam above).
 		if !isUIPageMethod(r) {
 			w.Header().Set("Allow", "GET, HEAD")
 			plainStatus(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		s.gated(s.repoPage(id))(w, r)
+		s.repoPageGated(id)(w, r)
 	case sub[0] == "info" && len(sub) >= 2 && sub[1] == "refs":
 		s.gitInfoRefs(w, r, id)
 	case sub[0] == "git-upload-pack":
@@ -297,7 +297,7 @@ func (s *Server) repoDispatch(w http.ResponseWriter, r *http.Request) {
 		s.bundlesDispatch(w, r, id, sub[1:], hadGit)
 	case len(sub) == 1 && sub[0] == "api" || len(sub) == 1 && sub[0] == "api-browser":
 		// Lane root GET is handled above; fall through to UI check.
-		s.gated(s.repoPage(id))(w, r)
+		s.repoPageGated(id)(w, r)
 	case uiPageRoute(sub[0]):
 		// A repo-subpath byte family shares the page prefix (releases
 		// pages AND release asset bytes both live under /releases/…):
@@ -310,7 +310,7 @@ func (s *Server) repoDispatch(w http.ResponseWriter, r *http.Request) {
 			plainStatus(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		s.gated(s.repoPage(id))(w, r)
+		s.repoPageGated(id)(w, r)
 	default:
 		// Feature repo-subpath families (repo_extra.go, 14.3 note):
 		// release asset bytes live here, outside the api lanes and

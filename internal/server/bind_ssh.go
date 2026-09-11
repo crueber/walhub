@@ -70,7 +70,14 @@ func (s *Server) sshGate(ctx context.Context, id git.RepoId) (func(), error) {
 
 // SSHUploadPack implements sshd.Transport: gates → sync → open → the git
 // layer's upload-pack streaming (protocol v0 or v2 via GIT_PROTOCOL).
-func (s *Server) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
+// The repo read gate runs first (Forgejo #345): private repos refuse
+// key-authenticated callers without read access, exactly like the HTTP
+// upload-pack path (host write/admin flags still pass — P6 step 3).
+func (s *Server) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, sp sshd.Principal, stdin io.Reader, stdout, stderr io.Writer) error {
+	p := auth.Principal{Name: sp.Name, Write: sp.Write, Admin: sp.Admin}
+	if aerr := s.checkReadGate(ctx, id.Owner, id.Name, p); aerr != nil {
+		return errors.New(aerr.Why)
+	}
 	rel, err := s.sshGate(ctx, id)
 	if err != nil {
 		return err

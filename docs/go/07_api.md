@@ -465,6 +465,16 @@ hint*, not an ACL.
   memory_bytes}` (`no-store`) — "this machine" for UI footers: hostname, declared roles, disk mode, CPU
   count, `runtime.NumCPU()` / total memory.
 
+- **Visibility filtering (Forgejo #345 — spec amendment, see Decisions):** every listing above
+  omits repos the caller cannot read (anonymous ⇒ public only; authenticated ⇒ public + their
+  own/org repos; host admin/write ⇒ everything, +0 probes). Owners with no readable repo are
+  absent (never zero-valued); per-owner counts cover visible repos only; the `sort=activity`
+  rollup folds the aggregate catalog AFTER filtering to visible repos, so a private repo's
+  commit time never lifts its owner's row; the repos/detailed rows carry the same `visibility`
+  spelling as the summary (per-row LRU-backed probes, ≤ 8 in flight, like the mirror flags).
+  No private name leaks in any name, count, or aggregate. Nil `Access` (identity unwired) →
+  legacy unfiltered behavior, byte-identical.
+
 ## 9. Reads: summary, refs, resolve
 
 ### 9.1 Repo summary — `GET /{o}/{r}/api` (and `{lane}` root)
@@ -533,6 +543,14 @@ SWR (same trap as `~degraded`/`~d`). The class stays SWR — coordinated with, n
 the #280 no-cache migration (version-keyed collab GETs moved; the summary itself remains
 ref-dependent git content): the residual ≤60 s window closes client-side via stream
 invalidation of the shared summary entry (08 §4).
+
+`visibility` is the public/private badge source (Forgejo #345 — additive `"public"|"private"`,
+always present, `""` when the identity surface is unwired; old clients ignore it per 14
+§14.12): read behind the `Env.RepoVisibility` hook (one LRU-backed conditional `access.json`
+GET — usually a version hit, no body; missing/empty/invalid `access.json` resolves `public`,
+the §10 legacy default, so pre-existing repos badge public). `ETag` covers the field with
+the `~v<visibility>` suffix — a visibility flip moves no ref, so without it a revalidating
+client would 304 and keep showing the stale badge (same trap as `~degraded`/`~d`/`~m`/`~c`).
 
 ### 9.1.1 Explicit create — `POST /api/v1/repos` (+ `/api-browser/v1` twin; issue #210)
 
@@ -858,7 +876,43 @@ no-store admin page, off the law-6 hot paths; the fsck unit itself never runs in
 
 `/api/v1/me` and every write gate read the request principal injected by `internal/server` middleware (`none` mode → `principal:"anonymous"`). Admin gating for `PUT/DELETE policy|settings`, `DELETE` repo: `require_admin`; `POST ops/{op}`: `require_write`; all reads: `require_read` (self-authing). Every `401` carries `WWW-Authenticate: Bearer realm="walgit"` (never Basic); `503` carries `Retry-After: 15`.
 
+**Spec amendment (Forgejo #345): visibility is the read authority for repo-scoped reads.**
+When the identity surface is wired (`Env.Access`), a repo-scoped `AuthRead` route consults
+`CheckRead` BEFORE the `anonymous_read` flag gate: `public` admits the caller (including
+anonymous) even with `anonymous_read=false`; `private` denies (401 anonymous + Bearer, 403
+authenticated-without-read). The flag keeps its meaning for NON-repo surfaces only (owners
+listings, profiles, `/explore`, setup.json, non-repo shells): anonymous there still needs
+`anonymous_read=true`. Denials stay 401/403 rather than 404 by deliberate choice (see
+Decisions): a 404 would break git's credential-erase on dead tokens (law 9, 06 §8.4) and the
+#344 login-page mapping; existence protection for private repos comes from the filtered
+listings (§8), never from the status code. Nil `Access` → legacy flag-only gating.
+
 ## 14. Decisions & deviations from the Rust design
+
+- **Public/private visibility enforced across listings, git, and the UI (Forgejo #345).**
+  Spec amendment, stated explicitly: visibility (`access.json`, public-by-default, missing →
+  public) is the read authority for every repo-scoped read surface (JSON API lanes,
+  smart-HTTP upload-pack, LFS reads, bundle lists, SSH fetch, repo SPA pages); `anonymous_read`
+  keeps only its non-repo meaning (owners/profile/org listings, `/explore`, setup.json,
+  non-repo shells). Rationale: the global flag made every public repo invisible to signed-out
+  users on OIDC instances (`anonymous_read=false`) — per-repo visibility is the only switch
+  with the right granularity. Consequences, all in the same change: (a) listings filter by
+  the caller's read role behind the access LRU (admins/writers bypass with +0 probes; the
+  activity/size aggregates fold the catalog after filtering, so no private name, count, or
+  timestamp leaks); (b) `summaryBody` and the repos/detailed rows carry `visibility`, covered
+  by the `~v` ETag suffix (same trap class as `~degraded`/`~d`/`~m`/`~c`); (c) the UI badges
+  the header + rows and wires create (already sent it), General settings (admin PUT preserving
+  bindings), and the existing Access tab; fork/import-created repos default public (a fork
+  child writes no `access.json`, so reads synthesize public; import preserves an existing
+  doc's visibility and materializes public otherwise). Private-denied reads stay 401
+  (anonymous + Bearer) / 403 (authenticated) rather than 404: git must see a real 401 to
+  erase dead credentials (law 9, 06 §8.4), the #344 browser login page keys on the 401, and
+  the filtered listings — not the status code — are what hide private existence. Permission
+  matrix (surface × visibility × principal): repo reads (API/smart/LFS/bundles/SSH/shell) —
+  public: everyone incl. anonymous; private: bindings (user:/team:), org owners, host
+  write/admin; writes/admin ops — unchanged (authenticated + flags/bindings; anonymous
+  never). Out of scope (explicit): fine-grained org permissions, per-branch/path rules,
+  private-discovery UX.
 
 - **Greedy blob/tree tails (Forgejo #251).** `tree/{rev}[/{path}]` and
   `blob/{rev}/{path}` were single-segment rev routes, so a slashed branch

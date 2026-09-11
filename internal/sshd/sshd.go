@@ -55,8 +55,11 @@ type Principal struct {
 // It carries no HTTP types: both transports meet here.
 type Transport interface {
 	// SSHUploadPack serves clone/fetch; protocol is "version=2" or "" (v0),
-	// forwarded from the client's GIT_PROTOCOL env.
-	SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error
+	// forwarded from the client's GIT_PROTOCOL env. The principal is the
+	// key-authenticated identity; implementations enforce the repo read
+	// gate (private repos refuse callers without read access — the SSH
+	// half of the coarse visibility boundary, 17_ssh.md §3).
+	SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, p Principal, stdin io.Reader, stdout, stderr io.Writer) error
 	// SSHReceivePack serves push; implementations enforce placement, drain,
 	// and max_push_bytes exactly like the HTTP route.
 	SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error
@@ -330,7 +333,7 @@ func (s *Server) exec(ctx context.Context, p Principal, ch gossh.Channel, comman
 	var terr error
 	switch verb {
 	case "git-upload-pack":
-		terr = s.tr.SSHUploadPack(runCtx, id, gitProtocol(ctx), ch, ch, ch.Stderr())
+		terr = s.tr.SSHUploadPack(runCtx, id, gitProtocol(ctx), p, ch, ch, ch.Stderr())
 	case "git-receive-pack":
 		if !p.Write {
 			fmt.Fprint(ch.Stderr(), "walhub: write access required to push\r\n")

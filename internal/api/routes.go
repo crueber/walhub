@@ -219,17 +219,18 @@ func Dispatch(e *Env, w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		r2 := inject(r, lane, id, params)
-		if !e.gate(w, r2, rt.Auth) {
-			return
-		}
-		// The identity require_read hook (01 §4.1): every repo-scoped read
-		// endpoint consults access.json visibility + role resolution after
-		// the flag gate. Nil Access → legacy behavior, unchanged.
+		// The identity require_read hook (01 §4.1) is the read authority
+		// for repo-scoped reads (Forgejo #345): when wired, CheckRead
+		// runs BEFORE the anonymous_read flag gate, so a public verdict
+		// admits the caller even when the flag is false. Nil Access →
+		// legacy behavior, unchanged.
 		if !rt.NonRepo && rt.Auth == AuthRead && e.Access != nil {
 			if aerr := e.Access.CheckRead(r2.Context(), id.Owner, id.Name, e.PrincipalOf(r2)); aerr != nil {
 				mapAccessErr(w, aerr)
 				return
 			}
+		} else if !e.gate(w, r2, rt.Auth) {
+			return
 		}
 		rt.Handler(w, r2)
 		return

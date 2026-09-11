@@ -62,11 +62,7 @@ func (s *Server) lfsAuth(w http.ResponseWriter, r *http.Request, id git.RepoId, 
 			s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
 			return p, false
 		}
-	} else if aerr := requireRead(p, s.cfg.Server.Auth.AnonymousRead); aerr != nil {
-		s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
-		return p, false
-	} else if aerr := s.checkReadGate(r.Context(), id.Owner, id.Name, p); aerr != nil {
-		s.gitAuthFailure(w, r, git.ServiceUploadPack, aerr)
+	} else if !s.gateRepoRead(w, r, git.ServiceUploadPack, id, p) {
 		return p, false
 	}
 	return p, true

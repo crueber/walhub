@@ -142,6 +142,25 @@ func (s *Service) GetAccess(ctx context.Context, owner, repo string) (*AccessDoc
 	return nil, "", fmt.Errorf("identity: unknown GetResult for %s", key)
 }
 
+// RepoVisibility reports the repo's visibility for projections (summary,
+// listing rows — Forgejo #345). It rides the access LRU behind GetAccess
+// (conditional revalidation, no body on a version hit), so projections pay
+// no extra store round trip beyond what the read gate already pays. Missing,
+// empty, or invalid access.json resolves public — the §10 legacy default,
+// exactly like the Resolve fallback the read gate applies — so pre-existing
+// repos never silently read as private. ok=false only when there is no
+// service to ask (nil receiver); callers omit the field then.
+func (s *Service) RepoVisibility(ctx context.Context, owner, repo string) (Visibility, bool) {
+	if s == nil {
+		return "", false
+	}
+	doc, _, err := s.GetAccess(ctx, owner, repo)
+	if err != nil || doc == nil {
+		return VisibilityPublic, true
+	}
+	return doc.Visibility, true
+}
+
 func parseAccess(raw []byte) (*AccessDoc, error) {
 	var f accessFile
 	if err := json.Unmarshal(raw, &f); err != nil {

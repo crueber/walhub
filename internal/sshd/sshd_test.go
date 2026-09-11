@@ -33,9 +33,10 @@ type testTransport struct {
 }
 
 type uploadCall struct {
-	id       git.RepoId
-	protocol string
-	in       string
+	id        git.RepoId
+	protocol  string
+	principal string
+	in        string
 }
 
 type receiveCall struct {
@@ -44,9 +45,9 @@ type receiveCall struct {
 	in        string
 }
 
-func (t *testTransport) SSHUploadPack(_ context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (t *testTransport) SSHUploadPack(_ context.Context, id git.RepoId, protocol string, p Principal, stdin io.Reader, stdout, stderr io.Writer) error {
 	b, _ := io.ReadAll(stdin)
-	t.uploads = append(t.uploads, uploadCall{id: id, protocol: protocol, in: string(b)})
+	t.uploads = append(t.uploads, uploadCall{id: id, protocol: protocol, principal: p.Name, in: string(b)})
 	if t.uploadErr != nil {
 		fmt.Fprint(stderr, "transport failed")
 		return t.uploadErr

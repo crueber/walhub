@@ -39,7 +39,7 @@ func (c *captureTransport) recordProto(p string) {
 	c.protos = append(c.protos, p)
 }
 
-func (c *captureTransport) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (c *captureTransport) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, _ Principal, stdin io.Reader, stdout, stderr io.Writer) error {
 	c.recordProto(protocol)
 	if c.entered != nil {
 		close(c.entered)
@@ -205,7 +205,7 @@ func (q *releaseQueue) releaseOne() {
 	close(ch)
 }
 
-func (q *releaseQueue) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (q *releaseQueue) SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, _ Principal, stdin io.Reader, stdout, stderr io.Writer) error {
 	<-q.hold()
 	fmt.Fprint(stdout, "0000")
 	return nil

@@ -33,10 +33,11 @@ import {
 } from "../lib/profile.js";
 import { renderBody } from "../lib/render-md.js";
 import { mirrorRowBadge } from "../lib/mirror.js";
+import { visibilityBadge } from "../lib/visibility.js";
 import StarCount from "../components/StarCount.jsx";
 import ActivityStamp from "../components/ActivityStamp.jsx";
 
-/** One repo row: link + mirror badge + star count + last-active stamp. Shared with `/`.
+/** One repo row: link + visibility/mirror badges + star count + last-active stamp. Shared with `/`.
  *  Issue #235, explicitly descoped: rows ride the detailed owners listing,
  *  so there is no per-repo summary in hand — showing descriptions here would
  *  cost one summary fetch per row (N round trips for N repos). The repo
@@ -44,10 +45,13 @@ import ActivityStamp from "../components/ActivityStamp.jsx";
  *  activity so the stamp renders without a fetch (Forgejo #247).
  *  `mirror`/`mirrorUpstream` carry the listing's mirror flag (Forgejo #281:
  *  same payload, no extra fetch) so mirror rows render the badge with an
- *  accessible label naming the upstream when known. */
+ *  accessible label naming the upstream when known.
+ *  `visibility` carries the listing row's visibility (Forgejo #345: same
+ *  payload, no extra fetch); unknown renders no badge. */
 export function RepoRow(props) {
   const full = () => `${props.owner}/${props.name}`;
   const badge = () => mirrorRowBadge({ mirror: props.mirror, upstream: props.mirrorUpstream });
+  const vis = () => visibilityBadge({ visibility: props.visibility });
   return (
     <li class="flex flex-wrap items-baseline gap-x-1.5">
       <A
@@ -56,6 +60,11 @@ export function RepoRow(props) {
       >
         {full()}
       </A>
+      <Show when={vis().show}>
+        <span class="pill visibility-badge" role="img" title={vis().title} aria-label={vis().title}>
+          {vis().label}
+        </span>
+      </Show>
       <Show when={badge().show}>
         <span class="pill mirror-badge" role="img" title={badge().title} aria-label={badge().title}>
           {badge().label}
@@ -270,7 +279,7 @@ export default function Repos() {
               >
                 <ul class="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
                   <For each={rows}>
-                    {(row) => <RepoRow owner={owner()} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} mirror={row.mirror} mirrorUpstream={row.mirror_upstream} />}
+                    {(row) => <RepoRow owner={owner()} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} mirror={row.mirror} mirrorUpstream={row.mirror_upstream} visibility={row.visibility} />}
                   </For>
                 </ul>
               </Show>

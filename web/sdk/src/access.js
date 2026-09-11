@@ -33,8 +33,9 @@ export function attachAccess(repo) {
   /**
    * Resolved P6 role for the caller: `GET …/api/permissions` →
    * `{role}` (`{role: null}` when the caller holds no role; anonymous
-   * resolves `read` when anonymous_read admits them). Read-gated; the
-   * server is authoritative (08 §5 — client gating is cosmetic).
+   * resolves `read` on public repos — visibility is the read authority,
+   * Forgejo #345). Read-gated; the server is authoritative
+   * (08 §5 — client gating is cosmetic).
    */
   repo.permissions = (opts) =>
     client._call(p("/permissions"), { method: "GET", ...opts });
