@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/git"
 	web "git.packden.us/crueber/walhub/web"
 )
 
@@ -195,6 +196,32 @@ func (s *Server) ownerPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) repoPage(id interface{ String() string }) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.serveSPA(w, r)
+	}
+}
+
+// repoPageGated serves the repo SPA shell with visibility authority
+// (Forgejo #345): anonymous callers reach PUBLIC repos' pages even with
+// anonymous_read=false (the shell's data rides the now-public repo API
+// reads). Private repos — and auth errors — keep the legacy gated outcome
+// (401, the #344 login page for browsers, the 307 login hop when the OIDC
+// flow is enabled). Non-repo shells (/, /explore, /{owner}) stay gated:
+// anonymous_read keeps its non-repo meaning there.
+func (s *Server) repoPageGated(id git.RepoId) http.HandlerFunc {
+	inner := s.repoPage(id)
+	gated := s.gated(inner)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.readGate != nil && s.authSvc != nil && s.cfg != nil {
+			p, aerr := s.authSvc.Authenticate(r, s.cfg)
+			if aerr == nil {
+				p = s.authSvc.identityForward(r, p)
+				if p.Anonymous && !s.cfg.Server.Auth.AnonymousRead &&
+					s.checkReadGate(r.Context(), id.Owner, id.Name, p) == nil {
+					inner(w, r)
+					return
+				}
+			}
+		}
+		gated(w, r)
 	}
 }
 

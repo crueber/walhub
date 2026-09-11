@@ -31,8 +31,13 @@ type summaryBody struct {
 	// open kind:"issue" / kind:"pr" cards from the shared P4 index, always
 	// present (0 = none — the badge hides at 0 client-side). Old clients
 	// ignore them (14 §14.12).
-	OpenIssues  int    `json:"open_issues"`
-	OpenPulls   int    `json:"open_pulls"`
+	OpenIssues int `json:"open_issues"`
+	OpenPulls  int `json:"open_pulls"`
+	// Visibility is the public/private badge source (Forgejo #345):
+	// "public"|"private" when the identity surface is wired, "" when it
+	// is not (never null — old clients ignore it, 14 §14.12). Missing
+	// access.json resolves public (the §10 legacy default).
+	Visibility  string `json:"visibility"`
 	CloneURL    string `json:"clone_url"`
 	SSHCloneURL string `json:"ssh_clone_url,omitempty"`
 	HTMLURL     string `json:"html_url"`
@@ -112,6 +117,11 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 			counts, countsOK = c, true
 		}
 	}
+	// The visibility projection (Forgejo #345): one LRU-backed
+	// conditional access.json GET (usually a version hit, no body —
+	// the same trip the dispatch read gate already paid). Unwired →
+	// "" (the badge hides, exactly like an absent mirror view).
+	visibility, _ := h.env.repoVisibility(r.Context(), id.Owner, id.Name)
 	body := summaryBody{
 		Owner:        id.Owner,
 		Name:         id.Name,
@@ -126,6 +136,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		Mirror:       mirrorView,
 		OpenIssues:   counts.OpenIssues,
 		OpenPulls:    counts.OpenPulls,
+		Visibility:   visibility,
 		CloneURL:     base + "/" + id.Owner + "/" + id.Name + ".git",
 		SSHCloneURL:  h.env.sshCloneURL(r, id.Owner, id.Name),
 		HTMLURL:      base + "/" + id.Owner + "/" + id.Name,
@@ -166,6 +177,12 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// residual ≤60 s window closes client-side via stream
 		// invalidation of the shared summary entry (08 §4).
 		etag += "~c" + strconv.Itoa(counts.Version)
+	}
+	if visibility != "" {
+		// Same trap once more (Forgejo #345): a visibility flip moves
+		// no ref, so the ETag covers the field or a revalidating
+		// client 304s and keeps showing the stale badge.
+		etag += "~v" + visibility
 	}
 	writeCached(w, r, ccSWR, etag, http.StatusOK, body)
 }

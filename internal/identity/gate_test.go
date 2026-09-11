@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 func TestCheckRead(t *testing.T) {
@@ -47,14 +48,66 @@ func TestCheckRead(t *testing.T) {
 			}
 		}
 	}
-	// Host anonymous_read=false denies anon even on public repos.
+	// Host anonymous_read=false no longer gates public repos (Forgejo
+	// #345): visibility is the read authority for repo surfaces, so an
+	// anonymous caller reaches public repos either way; the flag keeps
+	// its meaning for non-repo surfaces only.
 	s.Cfg.Server.Auth.AnonymousRead = false
-	if aerr := s.CheckRead(ctx, "acme", "pub", anon); aerr == nil || aerr.Kind != auth.ErrUnauthorized {
-		t.Errorf("anon with anonymous_read=false: %v", aerr)
+	if aerr := s.CheckRead(ctx, "acme", "pub", anon); aerr != nil {
+		t.Errorf("anon public with anonymous_read=false: %v", aerr)
+	}
+	// ...private repos still refuse anonymous callers (401, so git
+	// erases the credential) and strangers (403).
+	if aerr := s.CheckRead(ctx, "acme", "priv", anon); aerr == nil || aerr.Kind != auth.ErrUnauthorized {
+		t.Errorf("anon private with anonymous_read=false: %v", aerr)
+	}
+	if aerr := s.CheckRead(ctx, "acme", "priv", stranger); aerr == nil || aerr.Kind != auth.ErrForbidden {
+		t.Errorf("stranger private with anonymous_read=false: %v", aerr)
 	}
 	// ...but an authenticated public reader still passes.
 	if aerr := s.CheckRead(ctx, "acme", "pub", stranger); aerr != nil {
 		t.Errorf("authed public read: %v", aerr)
+	}
+}
+
+func TestRepoVisibility(t *testing.T) {
+	s := testService()
+	ctx := context.Background()
+	mustAccess(t, s, "acme", "priv", VisibilityPrivate, nil)
+	mustAccess(t, s, "acme", "pub", VisibilityPublic, nil)
+	cases := []struct {
+		name  string
+		owner string
+		repo  string
+		want  Visibility
+		ok    bool
+	}{
+		{"private doc", "acme", "priv", VisibilityPrivate, true},
+		{"public doc", "acme", "pub", VisibilityPublic, true},
+		// Missing access.json resolves public (the §10 legacy default),
+		// so pre-existing repos never read as private-by-omission.
+		{"missing resolves public", "acme", "newrepo", VisibilityPublic, true},
+	}
+	for _, tc := range cases {
+		vis, ok := s.RepoVisibility(ctx, tc.owner, tc.repo)
+		if vis != tc.want || ok != tc.ok {
+			t.Errorf("%s: = %q,%v want %q,%v", tc.name, vis, ok, tc.want, tc.ok)
+		}
+	}
+	// Corrupt access.json resolves public too (the Resolve fallback the
+	// read gate applies — projection and gate agree).
+	if _, err := s.Store.Put(ctx, AccessKey("acme", "broken"),
+		store.PutBody{Bytes: []byte("{nope")},
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
+		t.Fatalf("seed corrupt: %v", err)
+	}
+	if vis, ok := s.RepoVisibility(ctx, "acme", "broken"); vis != VisibilityPublic || !ok {
+		t.Errorf("corrupt = %q,%v want public,true", vis, ok)
+	}
+	// Nil service reports unknown (callers omit the field).
+	var nilSvc *Service
+	if _, ok := nilSvc.RepoVisibility(ctx, "acme", "pub"); ok {
+		t.Error("nil service must report ok=false")
 	}
 }
 

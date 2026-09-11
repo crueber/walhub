@@ -105,6 +105,16 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 		apiEnv.OrgGate = c.ident
 		apiEnv.AccessBoot = c.ident
 		apiEnv.OwnerEdit = c.ident // Forgejo #234: org-owner profile edits
+		// Forgejo #345: the summary/listing visibility projection behind
+		// the Env hook (api renders the spelling without importing the
+		// feature, law 8 — the MirrorSummary/CollabCounts shape). One
+		// LRU-backed conditional access.json GET per projection (usually
+		// a version hit, no body); missing access.json resolves public
+		// (the §10 legacy default), so pre-existing repos badge public.
+		apiEnv.RepoVisibility = func(ctx context.Context, owner, repo string) (string, bool) {
+			vis, ok := c.ident.RepoVisibility(ctx, owner, repo)
+			return string(vis), ok
+		}
 		// Explicit create-repo placeholder (Forgejo #210, R1 B2): the
 		// POST /api/v1/repos twin (+ /api-browser/v1 twin) via the
 		// server.ExtraRoutes chain + api.RegisterExposed discovery

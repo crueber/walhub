@@ -495,8 +495,11 @@ type Env struct {
 
 	// Access is the repo read gate (the identity require_read hook,
 	// docs/features/01 §4.1). Nil → legacy flag-only read gating.
-	// When set, every repo-scoped AuthRead route additionally consults
-	// CheckRead after the flag gate passes.
+	// When set, visibility is the read authority for every repo-scoped
+	// AuthRead route (Forgejo #345): CheckRead runs BEFORE the
+	// anonymous_read flag gate and a public verdict admits the caller
+	// even when the flag is false; the flag keeps its meaning for
+	// non-repo surfaces only.
 	Access ReadAccess
 
 	// OrgGate is the org-namespace create gate (Forgejo #210 §3): creation
@@ -540,6 +543,15 @@ type Env struct {
 	// the collab surface wired). Wired by composition (cmd/walhub) so
 	// this package never imports the feature (law 8).
 	CollabCounts func(ctx context.Context, owner, repo string) (CollabCounts, bool)
+
+	// RepoVisibility is the per-repo visibility projection (Forgejo #345):
+	// "public"|"private" for the summary badge and listing rows, ok=false
+	// when unknown. Nil → the projections omit the field (instances
+	// without the identity surface wired). Wired by composition
+	// (cmd/walhub) so this package never imports the feature (law 8).
+	// Missing access.json resolves public (the §10 legacy default), so
+	// pre-existing repos badge public, never private-by-omission.
+	RepoVisibility func(ctx context.Context, owner, repo string) (vis string, ok bool)
 
 	// RenderCacheBytes is the rendered-immutable LRU budget
 	// (cache.render_cache_bytes; default 256 MiB — see 07_api.md §14).

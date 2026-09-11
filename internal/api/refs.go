@@ -15,9 +15,17 @@ func acceptsSSE(r *http.Request) bool {
 
 // open resolves the repo, gates auth, and performs the per-request refs sync
 // (§2 consistency: after a push is acknowledged the next API call on any node
-// reflects it). On failure the response is already written.
+// reflects it). On failure the response is already written. AuthRead applies
+// the same visibility-first rule as dispatch (Forgejo #345): a wired Access
+// gate decides, the anonymous_read flag does not.
 func (h *handlers) open(w http.ResponseWriter, r *http.Request, level AuthLevel) bool {
-	if !h.env.gate(w, r, level) {
+	if level == AuthRead && h.env.Access != nil {
+		id := RepoOf(r)
+		if aerr := h.env.Access.CheckRead(r.Context(), id.Owner, id.Name, h.env.PrincipalOf(r)); aerr != nil {
+			mapAccessErr(w, aerr)
+			return false
+		}
+	} else if !h.env.gate(w, r, level) {
 		return false
 	}
 	if h.env.Repo == nil {

@@ -9,6 +9,7 @@ import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } from "../lib/data.js";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText } from "../lib/clone.js";
 import { formatNextSync } from "../lib/mirror.js";
+import { visibilityBadge } from "../lib/visibility.js";
 import { activeTab, tabBadge } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 import { shortRef, pillHead, pillLabel } from "../lib/ref-pill.js";
@@ -553,6 +554,17 @@ export default function Repo(props) {
                       omitted entirely when unset. Text is escaped by Solid. */}
                   <Show when={s().description}>
                     <span class="repo-description muted text-sm">{s().description}</span>
+                  </Show>
+                  {/* Forgejo #345: public/private badge from the summary
+                      visibility (same payload, no extra fetch — the mirror
+                      badge pattern). Unknown renders nothing. */}
+                  <Show when={visibilityBadge(s()).show}>
+                    <span
+                      class="pill visibility-badge"
+                      title={visibilityBadge(s()).title}
+                    >
+                      {visibilityBadge(s()).label}
+                    </span>
                   </Show>
                   {/* Forgejo #240: pull-only mirror badge + next sync. The
                       summary `mirror` view is the single source (same shape

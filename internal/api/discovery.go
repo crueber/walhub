@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -156,10 +157,39 @@ func (h *handlers) owners(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusServiceUnavailable, "repo registry not configured")
 		return
 	}
-	names, err := h.env.Repos.Owners(r.Context())
-	if err != nil {
-		mapViewErr(w, err)
-		return
+	// Forgejo #345: the flag gate above admits the caller (anonymous only
+	// when anonymous_read is true — the flag's kept non-repo meaning);
+	// the CONTENT is visibility-filtered: owners with no repo readable
+	// by this caller are omitted, so no private repo leaks via
+	// membership. Unfiltered callers (nil Access, host admin/write)
+	// take the legacy Owners() walk, byte-identical trips.
+	p := h.env.PrincipalOf(r)
+	var names []string
+	var allow map[string]map[string]bool // nil when unfiltered
+	if h.env.unfiltered(p) {
+		var err error
+		names, err = h.env.Repos.Owners(r.Context())
+		if err != nil {
+			mapViewErr(w, err)
+			return
+		}
+	} else {
+		byOwner, berr := h.env.VisibleReposByOwner(r.Context(), p)
+		if berr != nil {
+			mapViewErr(w, berr)
+			return
+		}
+		names = make([]string, 0, len(byOwner))
+		allow = make(map[string]map[string]bool, len(byOwner))
+		for owner, repos := range byOwner {
+			names = append(names, owner)
+			set := make(map[string]bool, len(repos))
+			for _, n := range repos {
+				set[n] = true
+			}
+			allow[owner] = set
+		}
+		sort.Strings(names)
 	}
 	// sort=activity orders the frozen []string by the derived per-owner
 	// max-commit rollup (Forgejo #283 — the server ranks over ALL owners
@@ -169,7 +199,7 @@ func (h *handlers) owners(w http.ResponseWriter, r *http.Request) {
 	// catalog degrades to name order; corrupt catalog is a 503 (the bucket
 	// is wrong) — the same contract as ownerReposDetailed.
 	if sortKey, order := ownerSortParams(r); sortKey == "activity" {
-		rollups, rerr := ownerRollups(r, h)
+		rollups, rerr := ownerRollups(r, h, allow)
 		if rerr != nil {
 			mapViewErr(w, rerr)
 			return
@@ -183,8 +213,10 @@ func (h *handlers) ownerRepos(w http.ResponseWriter, r *http.Request) {
 	if !h.env.gate(w, r, AuthRead) {
 		return
 	}
-	// 200 [] for an unknown owner — never 404 (§8).
-	repos, err := h.env.Repos.Repos(r.Context(), r.PathValue("owner"))
+	// 200 [] for an unknown owner — never 404 (§8). Forgejo #345: the
+	// rows are visibility-filtered (anonymous ⇒ public only), so a
+	// private name never leaks through this listing.
+	repos, err := h.env.VisibleRepos(r.Context(), r.PathValue("owner"), h.env.PrincipalOf(r))
 	if err != nil {
 		mapViewErr(w, err)
 		return

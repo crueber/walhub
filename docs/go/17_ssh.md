@@ -97,13 +97,14 @@ host_key_env = ""      # env var NAME holding the private key; overrides host_ke
 // internal/sshd
 type Transport interface {
     SSHUploadPack(ctx context.Context, id git.RepoId, protocol string,
-        stdin io.Reader, stdout, stderr io.Writer) error
+        p Principal, stdin io.Reader, stdout, stderr io.Writer) error
     SSHReceivePack(ctx context.Context, id git.RepoId, principal string,
         stdin io.Reader, stdout, stderr io.Writer) error
 }
 ```
 
-Implemented by `internal/server` (`bind_ssh.go`): gates first with HTTP parity — drain refuses at
+Implemented by `internal/server` (`bind_ssh.go`): the repo read gate first (Forgejo #345 —
+private repos refuse key holders without read access, §17.6), then gates with HTTP parity — drain refuses at
 phase 2 only (§12), placement serves only `pl.Serve` with no-info-serves on lookup errors (§4.3),
 and the per-repo semaphore (`MaxConcurrentPerRepo`) is taken exactly as the HTTP route takes it —
 then the shared pipeline. `pushPipeline` is the transport-agnostic push core used by both the HTTP
@@ -172,6 +173,13 @@ their own). The GHCR image is identical: enable SSH by setting the env var, no r
   The operator's external port (e.g. `12222` through a NAT/container mapping) is configured in
   setup alongside `server.ssh.listen` (the internal bind, e.g. `2222`); the default (0 = the
   listen port) keeps unset behavior identical. Same shape as `public_url`-vs-`listen` for HTTP.
+- **17.6 (2026-09-11) — SSH fetch enforces the repo read gate (Forgejo #345).** `SSHUploadPack`
+  takes the key-authenticated principal and consults the identity `CheckRead` hook BEFORE any
+  transport gate: private repos refuse key holders without read access (host write/admin flags
+  still pass — P6 step 3). SSH has no anonymous (key auth is mandatory), so the public/private
+  split there is member-vs-nonmember only; the push path is unchanged (the exec-layer write
+  check already refused non-writers). Rationale: without it any valid key could clone any
+  private repo — the coarse visibility boundary must hold on both transports.
 
 ### Concurrency
 

@@ -28,7 +28,18 @@ import (
 	"strings"
 
 	"git.packden.us/crueber/walhub/internal/sizecatalog"
+	"git.packden.us/crueber/walhub/internal/store/proto"
 )
+
+// splitRepoID cuts a catalog "owner/name" id (the catalog never invents
+// repos, but a malformed row must not panic the fold — it is skipped).
+func splitRepoID(id string) (owner, name string, ok bool) {
+	owner, name, ok = strings.Cut(id, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", "", false
+	}
+	return owner, name, true
+}
 
 // OwnerActivityRow is one owners/detailed row (additive shape, 14 §14.12
 // field rule: consumers ignore unknown fields; arrays stay [] never null;
@@ -71,7 +82,10 @@ func ownerSortParams(r *http.Request) (sortKey, order string) {
 // Absent catalog → empty rollups (degraded name order / null rows, never an
 // error); corrupt/unreadable → the mapped store error (503 via mapViewErr).
 // Nil store → empty rollups (tests/handlers without a bucket).
-func ownerRollups(r *http.Request, h *handlers) (map[string]sizecatalog.OwnerRollup, error) {
+// allow (Forgejo #345) restricts the fold to repos readable by the caller:
+// map owner → set of visible repo names; nil = no restriction. A private
+// repo's commit time must never lift its owner's activity row.
+func ownerRollups(r *http.Request, h *handlers, allow map[string]map[string]bool) (map[string]sizecatalog.OwnerRollup, error) {
 	rollups := map[string]sizecatalog.OwnerRollup{}
 	if h.env.Store == nil {
 		return rollups, nil
@@ -80,7 +94,34 @@ func ownerRollups(r *http.Request, h *handlers) (map[string]sizecatalog.OwnerRol
 	if err != nil {
 		return nil, err
 	}
+	if allow != nil {
+		cat = filterCatalog(cat, allow)
+	}
 	return sizecatalog.OwnerRollups(cat), nil
+}
+
+// filterCatalog returns a catalog copy holding only allowlisted repos
+// (owner → visible names). The aggregate catalog is shared across owners,
+// so the listing folds its private rows out before deriving maxima.
+func filterCatalog(cat *proto.RepoCatalog, allow map[string]map[string]bool) *proto.RepoCatalog {
+	if cat == nil {
+		return nil
+	}
+	out := *cat
+	out.Entries = out.Entries[:0:0]
+	for _, e := range cat.Entries {
+		if e == nil {
+			continue
+		}
+		owner, name, ok := splitRepoID(e.Repo)
+		if !ok {
+			continue
+		}
+		if allow[owner][name] {
+			out.Entries = append(out.Entries, e)
+		}
+	}
+	return &out
 }
 
 // ownersDetailed serves the per-owner activity rows with the shared
@@ -98,17 +139,43 @@ func (h *handlers) ownersDetailed(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusServiceUnavailable, "repo registry not configured")
 		return
 	}
-	counts, err := h.env.Repos.OwnerRepoCounts(r.Context())
-	if err != nil {
-		mapViewErr(w, err)
-		return
+	// Forgejo #345: membership, counts, and activity all derive from the
+	// repos readable by this caller. Unfiltered callers (nil Access, host
+	// admin/write) keep the single OwnerRepoCounts walk, byte-identical
+	// trips; filtered callers trade one Repos walk per owner (the same
+	// manifest-gated rule, shared with the allowlist below, law 6).
+	p := h.env.PrincipalOf(r)
+	counts := map[string]int{}
+	var allow map[string]map[string]bool
+	if h.env.unfiltered(p) {
+		var err error
+		counts, err = h.env.Repos.OwnerRepoCounts(r.Context())
+		if err != nil {
+			mapViewErr(w, err)
+			return
+		}
+	} else {
+		byOwner, berr := h.env.VisibleReposByOwner(r.Context(), p)
+		if berr != nil {
+			mapViewErr(w, berr)
+			return
+		}
+		allow = make(map[string]map[string]bool, len(byOwner))
+		for owner, repos := range byOwner {
+			counts[owner] = len(repos)
+			set := make(map[string]bool, len(repos))
+			for _, n := range repos {
+				set[n] = true
+			}
+			allow[owner] = set
+		}
 	}
 	names := make([]string, 0, len(counts))
 	for n := range counts {
 		names = append(names, n)
 	}
 	sortKey, order := ownerSortParams(r)
-	rollups, err := ownerRollups(r, h)
+	rollups, err := ownerRollups(r, h, allow)
 	if err != nil {
 		mapViewErr(w, err)
 		return

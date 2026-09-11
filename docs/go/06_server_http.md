@@ -189,14 +189,14 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 | GET | `/{o}/{r}[.git]/bundles/catchup[?filter=]` | same list without the fulls |
 | GET/HEAD | `/{o}/{r}[.git]/bundles/{strategy}/{name}` | the bundle object; full static contract (§5) |
 | GET | `{lane}/refs`, `{lane}/refs/{branches\|tags}`, `{lane}/resolve[/{rest}]`, `{lane}/tree/{rest}`, `{lane}/blob/{rest}[?raw]`, `{lane}/commits`, `{lane}/commit/{sha}` | JSON API (07_api.md; tree/blob tails are greedy — rev may contain slashes, issue #251); `lane` = `/api` or `/api-browser` |
-| GET | `{lane}` | repo summary (SWR + ETag head sha) |
+| GET | `{lane}` | repo summary (SWR + ETag head sha, suffixed for description/health/mirror/counts/visibility) |
 | GET | `{lane}/policy`, `{lane}/settings`, `{lane}/settings/{effective\|history\|describe}`, POST `{lane}/policy/{validate\|dry-run}`, POST `{lane}/settings/validate` | read-level |
 | GET | `{lane}/overview` | WAL dashboard JSON, no-store |
 | GET | `{lane}/ops` | `{available:[OpSpec], recent:[TaskRecord], bundle_strategies}` no-store |
 | GET | `{lane}/tasks`, `{lane}/tasks/{id}` | task list / attach (SSE or JSON) |
 | GET | `/api/v1/me` (+ browser twin) | `{principal, write, anonymous}`, no-store |
 | GET | `/api/v1/authenticate` (+ browser twin) | popup landing page (postMessage `repos:authenticated`) |
-| GET | `/api/v1/owners`, `/api/v1/owners/{owner}/repos` (+ `/services/api/…` twins) | owner listing, SWR |
+| GET | `/api/v1/owners`, `/api/v1/owners/{owner}/repos` (+ `/services/api/…` twins) | owner listing, SWR (visibility-filtered per caller — Forgejo #345) |
 | GET | `/services/api/instance` | instance facts (no-store) |
 | GET | `/_auth/me`, `/_auth/check` | §8.6 |
 
@@ -386,7 +386,8 @@ Then parse: `Bearer <token>` (case-insensitive prefix) or `Basic base64(user:pas
 **`token` mode:**
 ```
 resolved credential?
-├─ none → anonymous (read gated by server.auth.anonymous_read)
+├─ none → anonymous (non-repo reads gated by server.auth.anonymous_read;
+│   repo reads gated by per-repo visibility — Forgejo #345, see Decisions)
 └─ bearer/basic token
    ├─ exact match against resolved static tokens → principal with write/admin flags from config
    │   (token_env env var overrides the literal at startup; empty-resolved entries dropped)
@@ -404,7 +405,12 @@ none? → session cookie walgit_session → verify (§8.5) → authenticated pri
      → else anonymous (or 401 when the endpoint requires auth)
 ```
 
-**Checks:** `require_read`: anonymous && !anonymous_read → 401. `require_write`/`require_admin`: lacking → 403.
+**Checks:** `require_read` on repo-scoped surfaces resolves visibility FIRST (Forgejo #345,
+spec amendment — see Decisions): public ⇒ anonymous admitted even with `anonymous_read=false`;
+private ⇒ 401 anonymous (+ Bearer, so git erases the credential) / 403 authenticated-without-read.
+`anonymous_read` keeps its meaning for NON-repo surfaces (owners listings, `/explore` shell +
+text twin, setup.json, `/` + `/{owner}` shells): anonymous there still needs the flag.
+`require_write`/`require_admin`: lacking → 403 (unchanged).
 
 ### 8.4 ID token verification (hand-rolled JWKS — no external JWT library)
 
@@ -645,6 +651,19 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   the six Decisions entries live in 07_api.md §9.1.1/§14.
 - **NEW (2026-09-05) — server-side TLS removed; termination belongs on the reverse proxy** (Forgejo #165): `server.tls.*` config, cert/key loading, self-signed generation, the TLS listener wrap, `/services/public/ca.pem`, and the `setup.json` `ca_url`/`trust` fields are all gone — the server listens plain HTTP (h2c retained). Rationale: inbound (UI/API/git/SSH) all work behind a TLS-terminating proxy and outbound HTTPS never used the server cert; one fewer crypto surface to own. Residual `server.tls.*` settings fail closed (file rejected at load, env override fatal) with a reverse-proxy pointer. The same change honors `X-Forwarded-Proto` when building absolute URLs (`requestScheme`: proxy header, else the connection), closing the follow-up noted in 12_web_ui.md — no separate issue needed.
 - **NEW (2026-09-11) — OIDC browser login is fail-closed and always has a login entry** (Forgejo #344): config validation refuses `auth.mode = "oidc"` without the full browser-login trio (`server.auth.session_secret` + `server.auth.oauth_client_id` + `server.auth.oauth_client_secret`), naming the missing keys — the previous pair-only check let a partially-configured instance boot into a dead state (every browser GET a bare 401, `/_auth/login` a 501). The §2.2 #8 precondition gap is closed: a browser-ish GET with login disabled answers 401 carrying the rendered login page (working "Log in with OIDC" button + disabled explanation + the `walhub config check` / `/setup` pointers) instead of the bare string; `GET /_auth/login` itself renders the same page (501) for browsers while API clients keep the plain status. Browser-login availability is advertised as `browser_login` + `login_url` in the discovery auth block (`GET /api/v1`) and in `/services/setup.json`, so the SPA renders the login affordance only when it works and `/setup` (client-side trio check in `web/src/lib/setup.js`) warns before save. Rationale (law 9): refuse-to-start was preferred over a degraded boot — a degraded mode that still serves a login page would need its own gate semantics, and #345 (visibility as read authority) already owns the "what can signed-out users read" question; this change only fixes *how a browser gets an identity* under current semantics. Shared gate chain (`Env.gate`, smart-HTTP, LFS, shell `gated()`) untouched in behavior except the login path; bearer/token paths (static tokens work in oidc mode) unaffected.
+- **NEW (2026-09-11) — visibility is the read authority for repo surfaces** (Forgejo #345):
+  §8.3 `require_read` on repo-scoped paths (smart-HTTP upload-pack, LFS reads, bundle lists,
+  the JSON API lanes via 07 §13, SSH fetch via 17.6, repo SPA shells) resolves the identity
+  `CheckRead` hook BEFORE the `anonymous_read` flag: public ⇒ anonymous admitted even with
+  `anonymous_read=false`; private ⇒ 401 anonymous (+ Bearer, so git erases the credential —
+  law 9) / 403 authenticated-without-read. The flag keeps its NON-repo meaning (owners
+  listings, `/explore` shell + text twin, setup.json, `/` + `/{owner}` shells, identity
+  user/org surfaces). The repo shell serves the static SPA to anonymous callers of public
+  repos (its data rides the now-public repo reads); private shells keep the legacy gated
+  outcome, including the #344 login page / 307 hop for browsers — the #344 change is built
+  on, not regressed. Nil read gate → legacy flag-only behavior everywhere. 401/403 (not
+  404) is deliberate: existence protection for private repos comes from the filtered
+  listings (07 §8), never from the status code.
 
 **Divergence (2026-08-31):**
 

@@ -78,14 +78,29 @@ function debounce(fn, ms) {
 function GeneralTab(props) {
   const [getText, setText] = createSignal(null); // null = not yet prefilled
   const [getNote, setNote] = createSignal("");
+  // Forgejo #345: visibility rides access.json (same doc the Access tab
+  // edits) — a triage+ GET seeds the select, an admin PUT saves it with
+  // the bindings preserved. Non-privileged saves surface the 403 in the
+  // note, the same read-mostly behavior as the description save.
+  const [getVis, setVis] = createSignal(null); // null = not yet prefilled
+  const [getVisNote, setVisNote] = createSignal("");
 
   const [getDoc] = useData(`settings:${props.ctx.full}`, () => props.repo.settings.get(), 5000);
+  const [getAccess] = useData(`access:${props.ctx.full}`, () => props.repo.access.get().catch(() => null), 5000);
 
   // Prefill once the settings doc arrives and the editor is still untouched.
   createEffect(() => {
     const doc = getDoc();
     if (doc !== undefined && getText() === null) {
       setText(extractDescription(typeof doc === "string" ? doc : String(doc?.toml ?? "")));
+    }
+  });
+
+  // Prefill the visibility select once the access doc arrives.
+  createEffect(() => {
+    const doc = getAccess();
+    if (doc !== undefined && doc !== null && getVis() === null) {
+      setVis(doc.visibility ?? "public");
     }
   });
 
@@ -109,6 +124,29 @@ function GeneralTab(props) {
     } catch (e) { setNote(String(e.message ?? e)); }
   }
 
+  async function saveVisibility() {
+    const vis = getVis();
+    if (vis !== "public" && vis !== "private") {
+      setVisNote("visibility must be public or private");
+      return;
+    }
+    try {
+      // Re-read for the CAS version + current bindings; the PUT keeps
+      // every binding and flips only the visibility.
+      const doc = await props.repo.access.get();
+      const next = await props.repo.access.put({
+        version: doc?.version ?? 0,
+        visibility: vis,
+        role_bindings: doc?.role_bindings ?? [],
+      });
+      setVisNote(`saved (version ${next.version})`);
+      // Reflect without a full reload: the header badge reads the shared
+      // summary, the Access tab reads the shared access doc.
+      invalidate(`repo:${props.ctx.full}`);
+      invalidate(`access:${props.ctx.full}`);
+    } catch (e) { setVisNote(String(e.message ?? e)); }
+  }
+
   return (
     <section class="card p-4">
       <h3 class="mb-2 font-semibold">General</h3>
@@ -128,6 +166,31 @@ function GeneralTab(props) {
       </div>
       <Show when={getNote()}>
         <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getNote()}</p>
+      </Show>
+      <hr class="my-4 border-current opacity-10" />
+      <h4 class="mb-2 font-semibold">Visibility</h4>
+      <Show when={getAccess() !== undefined} fallback={<p class="muted text-sm">loading…</p>}>
+        <Show when={getAccess()} fallback={<p class="muted text-sm">Sign in with triage role or higher to view visibility.</p>}>
+          <label class="flex items-center gap-2 text-sm">
+            <span class="muted">Who may read this repository:</span>
+            <select
+              class="input"
+              value={getVis() ?? "public"}
+              onChange={(e) => setVis(e.currentTarget.value)}
+              aria-label="Visibility"
+            >
+              <option value="public">public — anyone may read</option>
+              <option value="private">private — members only</option>
+            </select>
+          </label>
+          <p class="muted mt-1 text-xs">Public repositories are readable without an account. Saving requires admin.</p>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={saveVisibility}>Save visibility</button>
+          </div>
+          <Show when={getVisNote()}>
+            <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getVisNote()}</p>
+          </Show>
+        </Show>
       </Show>
     </section>
   );

@@ -54,7 +54,7 @@ func TestSSHTransportSentinelMapping(t *testing.T) {
 		s := sshGateServer(t, c.eng, nil)
 		root := t.TempDir()
 		ctx := context.WithValue(context.Background(), repoRootKey{}, root)
-		err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard)
+		err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard)
 		if !errors.Is(err, c.want) {
 			t.Fatalf("%s: err = %v, want %v", c.name, err, c.want)
 		}
@@ -69,13 +69,13 @@ func TestSSHTransportDrainGate(t *testing.T) {
 
 	// phase 1: HTTP keeps serving — SSH must too (§12 parity)
 	s.Drain().Begin1(drainCtx, context.Background())
-	if err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard); errors.Is(err, sshd.ErrUnavailable) {
+	if err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard); errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("phase-1 upload must still serve: %v", err)
 	}
 
 	// phase 2: new git work refused on both transports
 	s.Drain().Begin2()
-	err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard)
+	err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "draining") {
 		t.Fatalf("drained upload = %v", err)
 	}
@@ -289,7 +289,7 @@ func TestSSHPlacementMaintainOnlyRefused(t *testing.T) {
 	root := t.TempDir()
 	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
 
-	if err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
+	if err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("maintain-only fetch = %v, want unavailable", err)
 	}
 	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
@@ -338,14 +338,14 @@ func TestSSHGateSemAndRepoErr(t *testing.T) {
 	if rel == nil {
 		t.Fatal("test setup: slot must be free")
 	}
-	if err := s.SSHUploadPack(ctx, id, "", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "repository busy") {
+	if err := s.SSHUploadPack(ctx, id, "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "repository busy") {
 		t.Fatalf("busy upload = %v", err)
 	}
 	rel()
 
 	// Repo open error (non-not-found) → unavailable
 	eng.repoErr = errors.New("cache dir gone")
-	if err := s.SSHUploadPack(ctx, id, "", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
+	if err := s.SSHUploadPack(ctx, id, "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("repo error = %v", err)
 	}
 	err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(""), io.Discard, io.Discard)
@@ -358,7 +358,7 @@ func TestSSHPlacementEmptyServedBy(t *testing.T) {
 	eng := &fakeEngine{exists: true, placement: Placement{Serve: false, ServedBy: ""}}
 	s := sshGateServer(t, eng, nil)
 	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
-	err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", strings.NewReader(""), io.Discard, io.Discard)
+	err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "another host") {
 		t.Fatalf("empty served-by = %v", err)
 	}
@@ -377,7 +377,7 @@ func TestSSHGateBusyBranch(t *testing.T) {
 	if rel == nil {
 		t.Fatal("test setup: slot must be free")
 	}
-	err := s.SSHUploadPack(ctx, id, "", strings.NewReader(""), io.Discard, io.Discard)
+	err := s.SSHUploadPack(ctx, id, "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "repository busy") {
 		t.Fatalf("busy = %v", err)
 	}
