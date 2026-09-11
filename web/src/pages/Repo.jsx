@@ -9,7 +9,7 @@ import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } from "../lib/data.js";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText } from "../lib/clone.js";
 import { formatNextSync } from "../lib/mirror.js";
-import { activeTab } from "../lib/tabs.js";
+import { activeTab, tabBadge } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 import { shortRef, pillHead, pillLabel } from "../lib/ref-pill.js";
 export { shortRef };
@@ -603,17 +603,28 @@ export default function Repo(props) {
             affordance on touch layouts. */}
         <nav ref={tabsNav} class="repo-tabs mb-4 flex max-w-full gap-1 overflow-x-auto whitespace-nowrap border-b border-zinc-200 dark:border-zinc-800" aria-label="repository sections">
           <For each={TABS}>
-            {(t) => (
-              <A
-                href={t.href(full())}
-                end={t.id === "code"}
-                class="rounded-t px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": activeTab(location.pathname) === t.id }}
-                aria-current={activeTab(location.pathname) === t.id ? "page" : undefined}
-              >
-                {t.label}
-              </A>
-            )}
+            {(t) => {
+              // Open-count badges (issue #319): the shared summary carries
+              // the numerators, so the tab bar needs no new requests. The
+              // badge renders only when the count is > 0 (tabBadge maps
+              // everything else — other tabs, loading, pre-#319 servers —
+              // to 0).
+              const n = () => tabBadge(getSummary(), t.id);
+              return (
+                <A
+                  href={t.href(full())}
+                  end={t.id === "code"}
+                  class="rounded-t px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                  classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": activeTab(location.pathname) === t.id }}
+                  aria-current={activeTab(location.pathname) === t.id ? "page" : undefined}
+                >
+                  {t.label}
+                  <Show when={n() > 0}>
+                    <span class="tab-badge" aria-label={`${n()} open`}>{n()}</span>
+                  </Show>
+                </A>
+              );
+            }}
           </For>
         </nav>
 

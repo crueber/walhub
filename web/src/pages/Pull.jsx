@@ -569,6 +569,11 @@ export default function Pull() {
   const [getPending, setPending] = createSignal([]);
   const [getFinishing, setFinishing] = createSignal(false);
 
+  // Cross-page reconcile (issue #319, the #318 pattern for PRs): a merge
+  // or close/reopen moves the open_pulls badge numerator with no ref
+  // move, so the shell's shared `repo:{full}` summary entry reconciles at
+  // the mutation site — the mutation's own `pull` frame may arrive at a
+  // page that already unmounted.
   const reload = () => {
     invalidate(key());
     invalidate(reviewsKey());
@@ -576,6 +581,7 @@ export default function Pull() {
     invalidate(requestsKey());
     invalidate(diffKey());
     invalidate(checksKey());
+    invalidate(`repo:${ctx.full}`);
   };
   const reloadReview = () => {
     invalidate(key());

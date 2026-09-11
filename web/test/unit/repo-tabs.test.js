@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { activeTab } from "../../src/lib/tabs.js";
+import { activeTab, tabBadge } from "../../src/lib/tabs.js";
 
 const CODE = [
   "/o/r",
@@ -68,4 +68,28 @@ test("short, unknown, and empty paths fall back to Code", () => {
   for (const path of ["/", "/o", "/o/r/foobar", "/o/r/branches", "/o/r/tags", "", undefined, null]) {
     assert.equal(activeTab(path), "code", String(path));
   }
+});
+
+// Issue #319: open-count badges next to the Issues and Pulls tabs. The
+// tab render shows the badge only when the numerator is > 0 (GitHub
+// semantics: no zero badges) — tabBadge maps everything else to 0.
+
+test("tabBadge returns the open count for issues/pulls tabs", () => {
+  const summary = { open_issues: 3, open_pulls: 1 };
+  assert.equal(tabBadge(summary, "issues"), 3);
+  assert.equal(tabBadge(summary, "pulls"), 1);
+});
+
+test("tabBadge hides at 0: other tabs, missing summary, pre-#319 servers", () => {
+  const summary = { open_issues: 0, open_pulls: 0 };
+  for (const tab of ["code", "commits", "issues", "pulls", "checks", "releases", "settings"]) {
+    assert.equal(tabBadge(summary, tab), 0, tab);
+  }
+  // Loading (undefined), deleted (null), and pre-#319 servers (no fields).
+  for (const s of [undefined, null, {}]) {
+    assert.equal(tabBadge(s, "issues"), 0, String(s));
+    assert.equal(tabBadge(s, "pulls"), 0, String(s));
+  }
+  // Unknown tab ids never badge, even with counts present.
+  assert.equal(tabBadge({ open_issues: 5, open_pulls: 5 }, "wal"), 0);
 });

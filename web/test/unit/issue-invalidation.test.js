@@ -22,12 +22,13 @@ import { prefetchData, invalidateIssueLists } from "../../src/lib/data.js";
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
 
-test("issue frame covers thread key, list prefix, and milestone counts (#318)", () => {
+test("issue frame covers thread key, list prefix, milestone counts, summary (#318, #319)", () => {
   const full = "acme/repo";
   assert.deepEqual(collabKeys(full, { kind: "issue", num: 7 }), [
     `issue:${full}:7`,
     `issues:${full}:*`,
     `milestones:${full}`,
+    `repo:${full}`, // #319: the shell's shared summary (badge numerators)
   ]);
 });
 
@@ -41,16 +42,17 @@ test("issue frame prefix covers both stale surfaces (#318)", () => {
   assert.ok(`issues:${full}:milestone:m1`.startsWith(base));
 });
 
-test("invalidateIssueLists refetches the repo lists + counts only (#318)", async () => {
+test("invalidateIssueLists refetches the repo lists + counts + summary only (#318, #319)", async () => {
   const full = "inv/o";
-  let windowCalls = 0, memberCalls = 0, countsCalls = 0, otherCalls = 0, threadCalls = 0;
+  let windowCalls = 0, memberCalls = 0, countsCalls = 0, otherCalls = 0, threadCalls = 0, summaryCalls = 0;
   prefetchData(`issues:${full}:{"state":""}`, () => Promise.resolve({ n: ++windowCalls }));
   prefetchData(`issues:${full}:milestone:m1`, () => Promise.resolve({ n: ++memberCalls }));
   prefetchData(`milestones:${full}`, () => Promise.resolve({ n: ++countsCalls }));
+  prefetchData(`repo:${full}`, () => Promise.resolve({ n: ++summaryCalls }));
   prefetchData(`issues:inv/other:{"state":""}`, () => Promise.resolve({ n: ++otherCalls }));
   prefetchData(`issue:${full}:7`, () => Promise.resolve({ n: ++threadCalls }));
   await tick();
-  assert.deepEqual([windowCalls, memberCalls, countsCalls, otherCalls, threadCalls], [1, 1, 1, 1, 1]);
+  assert.deepEqual([windowCalls, memberCalls, countsCalls, summaryCalls, otherCalls, threadCalls], [1, 1, 1, 1, 1, 1]);
 
   invalidateIssueLists(full);
   await tick();
@@ -58,6 +60,7 @@ test("invalidateIssueLists refetches the repo lists + counts only (#318)", async
   assert.equal(windowCalls, 2); // Issues.jsx query window refetched
   assert.equal(memberCalls, 2); // MilestoneIssues entry refetched
   assert.equal(countsCalls, 2); // milestone counts refetched
+  assert.equal(summaryCalls, 2); // #319: shared summary (badge) refetched
   assert.equal(otherCalls, 1); // another repo's window untouched
   assert.equal(threadCalls, 1); // thread keys are the caller's own job
 });

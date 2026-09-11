@@ -69,6 +69,11 @@
   .btn-active { @apply border-emerald-600 font-semibold text-emerald-700 dark:border-emerald-500 dark:text-emerald-400; }
   .pill { @apply inline-flex items-center rounded-full border border-zinc-300 bg-zinc-50 px-2.5 py-0.5 text-xs
           dark:border-zinc-700 dark:bg-zinc-800/80; }
+  /* Tab count badge (issue #319): the open-issues / open-pulls numerator
+     next to the Issues/Pulls tabs. Same count-pill language as the
+     notification tray badge (white on emerald-500 reads in both themes,
+     so no dark: variant — like the tray). Hidden at 0 client-side. */
+  .tab-badge { @apply ml-1.5 inline-block min-w-5 rounded-full bg-emerald-500 px-1 text-center text-[11px] font-semibold leading-5 text-white; }
   /* Settings sidebar (issue #123): two clear sections — the standard
      listing plus the Danger Zone in its own danger-styled section. Entries
      are native buttons; the active one carries aria-current="page" (wired

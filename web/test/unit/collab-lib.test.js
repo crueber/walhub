@@ -54,9 +54,9 @@ test("TTL table covers every 08 §6 key with the specified window", () => {
 
 test("collabKeys maps every 08 §4 kind to its cache keys", () => {
   const full = "acme/repo";
-  assert.deepEqual(collabKeys(full, { kind: "issue", num: 3 }), [`issue:${full}:3`, `issues:${full}:*`, `milestones:${full}`]);
+  assert.deepEqual(collabKeys(full, { kind: "issue", num: 3 }), [`issue:${full}:3`, `issues:${full}:*`, `milestones:${full}`, `repo:${full}`]);
   assert.deepEqual(collabKeys(full, { kind: "issue_event", num: 3 }), [`issue:${full}:3`, `events:${full}:3:*`]);
-  assert.deepEqual(collabKeys(full, { kind: "pull", num: 9 }), [`pull:${full}:9`, `pulls:${full}:*`, `pulldiff:${full}:9`]);
+  assert.deepEqual(collabKeys(full, { kind: "pull", num: 9 }), [`pull:${full}:9`, `pulls:${full}:*`, `pulldiff:${full}:9`, `repo:${full}`]);
   assert.deepEqual(collabKeys(full, { kind: "review", num: 9 }), [`pull:${full}:9`, `reviews:${full}:9`]);
   assert.deepEqual(collabKeys(full, { kind: "thread", num: 9, thread_id: "t1" }), [
     `threads:${full}:9`,

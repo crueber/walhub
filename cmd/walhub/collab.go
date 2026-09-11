@@ -121,6 +121,22 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// nil until wireNotifyFanout binds the real emitter below
 	// (best-effort synchronous fan-out contract, P8).
 	c.issuesSvc, c.issuesHandler = newIssuesService(st, c.ident, cfg)
+	// Forgejo #319: the summary open-count projection behind the Env hook
+	// (api renders CollabCounts without importing the feature, law 8 —
+	// the MirrorSummary shape). One shared-index read per summary serves
+	// both numerators (issues + pulls read the same index.json, so the
+	// hook fans out nowhere); absent index → ok=false → zero counts with
+	// the byte-identical ETag. Store errors fail open to absent (display
+	// metadata must never fail the summary).
+	if apiEnv != nil {
+		apiEnv.CollabCounts = func(ctx context.Context, owner, repo string) (api.CollabCounts, bool) {
+			oi, op, ver, ok, err := c.issuesSvc.OpenCounts(ctx, owner, repo)
+			if err != nil || !ok {
+				return api.CollabCounts{}, false
+			}
+			return api.CollabCounts{OpenIssues: oi, OpenPulls: op, Version: ver}, true
+		}
+	}
 	// Wave C1 pulls (docs/features/03): PR threads over the shared
 	// numbering/thread/index family, pr.json sidecars, the stamped
 	// mergeable.json cache, the pull-merge/pull-mergeable/pull-fork

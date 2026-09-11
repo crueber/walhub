@@ -874,6 +874,50 @@ func (s *Service) ListIssues(ctx context.Context, owner, repo string, p auth.Pri
 	return &ListResult{Issues: page, More: more}, nil
 }
 
+// OpenCounts returns the repo-level open counts for the tab badges
+// (Forgejo #319): open kind:"issue" threads and open kind:"pr" threads
+// from the shared P4 index, plus the index version for the summary ETag.
+// One exact-key GET (index.json — probe, don't list, law 4); an absent
+// index → ok=false (a repo that never used issues/PRs carries no counts
+// and no ETag suffix, so its summary stays byte-identical — law 12).
+//
+// The counts are index-first with the same discipline as the list paths:
+// open cards are never compacted (CompactIndex evicts closed_recent
+// only), so every open thread with a card counts exactly; a card missing
+// after the bounded updateIndex give-up (staleness is a performance gap
+// there, repaired on the next mutation) undercounts until then — the same
+// envelope the lists themselves read under. There is deliberately no LIST
+// scan fallback: the caller (the per-page-view summary) must not pay a
+// scan, and the lists already cover the incomplete-index states.
+//
+// No read gate here: the counts are aggregates (no titles), and the only
+// caller runs behind the summary's AuthRead gate.
+func (s *Service) OpenCounts(ctx context.Context, owner, repo string) (openIssues, openPulls, version int, ok bool, err error) {
+	raw, _, gerr := s.getJSON(ctx, IndexKey(owner, repo))
+	if gerr != nil {
+		return 0, 0, 0, false, gerr
+	}
+	if raw == nil {
+		return 0, 0, 0, false, nil
+	}
+	ix, perr := parseIndex(raw)
+	if perr != nil {
+		return 0, 0, 0, false, perr
+	}
+	for _, c := range ix.Open {
+		if c.State != StateOpen {
+			continue
+		}
+		switch c.Kind {
+		case "issue":
+			openIssues++
+		case "pr":
+			openPulls++
+		}
+	}
+	return openIssues, openPulls, ix.Version, true, nil
+}
+
 // loadCounter reads the P2 shared counter (meta/next_num); 0 when absent
 // or unreadable — both mean "not provably complete", the safe direction
 // (the LIST fallback covers the read).

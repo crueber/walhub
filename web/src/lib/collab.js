@@ -45,11 +45,16 @@ export function collabKeys(full, frame) {
       // AND the milestones page's `issues:{full}:milestone:{id}` entries),
       // and the `milestones:{full}` counts (issue #318 — reassignment and
       // close/reopen move counts without touching any milestone object).
-      return [`issue:${full}:${num}`, `issues:${full}:*`, `milestones:${full}`];
+      // `repo:{full}` is the shell's shared summary entry: close/reopen
+      // moves the open_issues badge numerator with no ref move (issue
+      // #319 — invalidate-at-minimum; the refetch reconciles the badge).
+      return [`issue:${full}:${num}`, `issues:${full}:*`, `milestones:${full}`, `repo:${full}`];
     case "issue_event":
       return [`issue:${full}:${num}`, `events:${full}:${num}:*`];
     case "pull":
-      return [`pull:${full}:${num}`, `pulls:${full}:*`, `pulldiff:${full}:${num}`];
+      // Like `issue` above: the `repo:{full}` summary entry carries the
+      // open_pulls badge numerator (issue #319).
+      return [`pull:${full}:${num}`, `pulls:${full}:*`, `pulldiff:${full}:${num}`, `repo:${full}`];
     case "review":
       return [`pull:${full}:${num}`, `reviews:${full}:${num}`];
     case "thread": {
