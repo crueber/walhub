@@ -650,7 +650,9 @@ export default function Pull() {
         <div class="mb-4">
           <ReviewSummaryBar summary={summary()} head={head()} />
         </div>
-        <ThreadTimeline events={getView()?.events ?? []} textFor={eventText} />
+        {/* #340: thread bodies have no file coordinates (relative URLs stay
+            verbatim) but carry the repo — owner/repo feeds the #N/PRN autolinker. */}
+        <ThreadTimeline events={getView()?.events ?? []} textFor={eventText} mdCtx={{ owner: ctx.owner, repo: ctx.name }} />
         <Show when={canComment()}>
           <CommentComposer
             onSubmit={comment}

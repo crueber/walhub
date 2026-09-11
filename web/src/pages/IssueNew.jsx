@@ -90,7 +90,10 @@ export default function IssueNew() {
               placeholder="Steps to reproduce… (markdown; #N links issues)"
             />
           }>
-            <div class="card markdown-body p-3" innerHTML={renderBody(getBody())} />
+            {/* #340: preview carries the repo (no ref/dir, so relative URLs stay
+                verbatim) — #N/PRN autolinks render WYSIWYG, matching the
+                posted body. */}
+            <div class="card markdown-body p-3" innerHTML={renderBody(getBody(), { owner: ctx.owner, repo: ctx.name })} />
           </Show>
         </label>
         <div class="flex items-center justify-between">
