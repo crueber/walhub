@@ -244,6 +244,19 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 		maxRetries = 16
 	}
 	burned := map[uint64]string{} // seq → segment key (batch-local burned list)
+	committedBatch := false
+	// Failure-path GC (Forgejo #338): a failed batch must sweep what IT
+	// burned, or orphan backlogs grow without bound — every later attempt
+	// re-burns them all (300 ms + fault exposure per slot), deaths add
+	// frontier orphans, and at 9 consecutive the ErrCorrupt cap locks ALL
+	// writers out permanently. The sweep shares sweepBurned's recheck-latest
+	// guard (only still-unlisted slots go), so it cannot harm a concurrent
+	// committer; clean failures (nothing burned) are a no-op map lookup.
+	defer func() {
+		if !committedBatch {
+			p.sweepBurned(burned)
+		}
+	}()
 
 	for attempt := 1; ; attempt++ {
 		if attempt > maxRetries {
@@ -439,6 +452,7 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 		}
 		if committed {
 			p.commitLocal(ctx, next, newVersion, entries, burned)
+			committedBatch = true // success-path sweep ran inside commitLocal; the failure defer stands down
 			if statsErr != nil {
 				// Best-effort: the manifest CAS is the commit point (law 4);
 				// a lost sidecar write converges via the next committed
@@ -999,16 +1013,36 @@ func (p *Publisher) commitLocal(ctx context.Context, next *pbManifest, version s
 	p.maybeCheckpoint(entries)
 }
 
-// sweepBurned CAS-deletes the burned segments we recorded (best effort: a
-// crash between burn and sweep leaves an unlisted segment that the next
-// burn pass handles).
+// sweepBurned CAS-deletes the burned segments we recorded — but ONLY those
+// still unlisted in the latest manifest (re-read after our commit). A burn
+// observation ("slot present but head behind") races the slot owner's commit:
+// the owner may commit the burned slot between our burn and our own commit,
+// and the superseding manifests carry its listing forward. Deleting a listed
+// segment corrupts the log ("listed but absent": every later sync fails its
+// tail fetch and writers starve) — found by the sim tier (Forgejo #338).
+// The re-read is one GET on the burn path only (clean pushes never burn), so
+// the §4.8 budgets are unaffected; if the re-read itself fails we sweep
+// nothing — orphans are garbage, never a hazard, and the next burn pass
+// re-probes them (fail-safe direction).
 func (p *Publisher) sweepBurned(burned map[uint64]string) {
 	if len(burned) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(p.h.reg.ctx, 30*time.Second)
 	defer cancel()
+	fresh, err := p.freshHead(ctx)
+	if err != nil || fresh == nil {
+		logWarnf("publish %s: orphan sweep skipped (no fresh manifest: %v)", p.h.ID, err)
+		return
+	}
+	listed := make(map[string]bool, len(fresh.LogSegments))
+	for _, s := range fresh.LogSegments {
+		listed[s.Key] = true
+	}
 	for _, key := range burned {
+		if listed[key] {
+			continue // concurrently committed after our burn: keep
+		}
 		meta, err := p.h.reg.st.Head(ctx, p.h.repoKey(key))
 		if err != nil || meta == nil {
 			continue

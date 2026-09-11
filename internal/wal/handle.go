@@ -157,8 +157,19 @@ func (h *RepoHandle) freshenManifest(ctx context.Context) error {
 		return &WalError{Kind: WalErrCorrupt, Detail: key, Wrapped: err}
 	}
 	// Monotonic revision guard (rule 5.0.4): a stale cached read from after
-	// our own publish is discarded — only the freshness stamp moves.
+	// our own publish is discarded — the held ref view never regresses. The
+	// version token is adopted here ONLY when the held token is empty
+	// (Forgejo #338): a wiped ("") token — e.g. after a casLanded
+	// version-recovery HEAD failure — recovered nowhere else would spin the
+	// CAS ladder forever (PutCreate-412 → restart-without-sync →
+	// PutCreate-412). Same rev implies same commit implies same bytes, so
+	// adopting into an empty slot cannot regress anything; a held token is
+	// never overwritten by a rejected read (its version belongs to the held
+	// snapshot, and doctored or versionless reads must not leak in).
 	if m.Revision <= h.heldRev {
+		if h.version == "" && version != "" {
+			h.version = version
+		}
 		h.freshAt = time.Now()
 		return nil
 	}

@@ -302,7 +302,8 @@ Log seqs are NOT dense. Full sequence on slot-claim 412:
 1. Fresh manifest read: `head_seq ≥ our seq` → the commit landed → re-sync, restart the ladder.
 2. Else HEAD the slot: absent → retry the Create.
 3. Present → sleep 100 ms, probe again, ×3 total → **burn**: record the seq in the batch's burned list, `seq+1`, start a new segment, retry the claim. Cap 8 consecutive burns → `ErrCorrupt` (operator alarm: something is deeply wrong, likely a stuck writer or clock skew).
-4. After OUR commit → CAS-delete the burned segments we recorded ("sweep").
+4. After OUR commit → CAS-delete the burned segments we recorded ("sweep") — but ONLY those still unlisted in the latest manifest, re-read after our commit (one GET on the burn path; clean pushes never burn, so budgets are unaffected). A burn observation ("slot present but head behind") races the slot owner's commit: the owner may commit the burned slot between our burn and our own commit, and superseding manifests carry its listing forward — deleting a listed segment corrupts the log ("listed but absent": every later sync fails its tail fetch and writers starve). Found by the sim tier (Forgejo #338); if the re-read fails the sweep is skipped (fail-safe: orphans are garbage, the next burn pass re-probes).
+4b. After OUR batch FAILS → sweep what IT burned, under the same recheck-latest guard (Forgejo #338). Otherwise orphan backlogs grow without bound: every later attempt re-burns them all (300 ms + fault exposure per slot), failed attempts add frontier orphans, and at 9 consecutive burns the ErrCorrupt cap locks every writer out permanently (liveness death spiral). Clean failures (nothing burned) skip via the empty map, so the happy path pays nothing.
 5. After OUR CAS-412 → delete exactly our segment.
 6. After an ambiguous CAS error → delete nothing.
 
@@ -497,3 +498,38 @@ Background prefetch (from §6.2): after a refs-only sync, if `wal.prefetch_packs
   fan-in), NOT cache-dir churn (the present-check resume is sound; no
   teardown was added). Non-positive config falls back to the defaults — there
   is no unbounded serve wait to configure by accident.
+
+- **NEW (2026-09-11) — orphan sweep rechecks the latest manifest (Forgejo #338).**
+  Step 4 above used to CAS-delete every recorded burn unconditionally; a burn
+  observation races the slot owner's commit, so a burned slot can be
+  concurrently committed — and the superseding manifests carry its listing
+  forward. Sweeping it deleted a live, listed segment ("listed but absent":
+  every later sync fails its tail fetch and writers starve). `sweepBurned`
+  now re-reads the manifest after our commit and deletes only burned slots
+  still unlisted there; a failed re-read skips the sweep (fail-safe:
+  orphans are garbage). The sim tier found it (`TestSim_SafetyThenLiveness`
+  corrupted truth in most runs at `Chaos(0.05)`);
+  `TestSweepBurned_KeepsConcurrentlyCommittedSegments` pins the fix
+  deterministically. No wire or budget shape changed (one GET, burn path only).
+  A companion fix in the same change sweeps what a FAILED batch burned
+  (step 4b): without it orphan backlogs grow without bound under sustained
+  faults — every later attempt re-burns them all while deaths add frontier
+  orphans, ending at the ErrCorrupt cap with all writers locked out
+  (`TestPublish_FailedBatchSweepsItsBurns` pins it; clean failures pay
+  nothing via the empty map).
+
+- **NEW (2026-09-11) — freshen adopts the version token on guard-reject
+  only into an empty slot (Forgejo #338).** A `casLanded` version-recovery
+  HEAD failure commits with an empty version token; the old guard then
+  rejected every same-rev freshness read without touching the token, so the
+  wiped token never recovered — every later CAS degraded to `PutCreate`-412
+  while the CAS-412 path restarts without re-syncing, spinning the ladder
+  to exhaustion deterministically (every push thereafter fails; the sim's
+  pusher spins 200 attempts and gives up). `freshenManifest` now adopts a
+  non-empty token on guard-reject when the held token is empty (same rev
+  implies same commit implies same bytes — nothing to regress — and a held
+  token is never overwritten by a rejected read, so doctored reads cannot
+  leak in). The wipe heals on the next sync;
+  `TestPublish_WipedVersionTokenHealsOnFreshen` pins it (fails
+  deterministically without the adopt). No wire or budget shape changed
+  (same GETs, one conditional assignment).

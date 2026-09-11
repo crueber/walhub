@@ -13,6 +13,7 @@ import (
 
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/store"
+	"git.packden.us/crueber/walhub/internal/store/fault"
 	"git.packden.us/crueber/walhub/internal/store/proto"
 )
 
@@ -352,5 +353,140 @@ func TestPublishCompact_AdvancesSeqUploadsPackUpdatesManifest(t *testing.T) {
 	}
 	if m3.HeadSeq != m2.HeadSeq+1 {
 		t.Fatalf("SETTINGS did not advance head: %d vs %d", m3.HeadSeq, m2.HeadSeq+1)
+	}
+}
+
+func TestSweepBurned_KeepsConcurrentlyCommittedSegments(t *testing.T) {
+	// The sim race (Forgejo #338): a burner records slot S (Create-412 +
+	// head-behind + HEAD-present against an in-flight claim), the slot owner
+	// commits S, the burner commits on top and sweeps. The sweep must keep
+	// the now-listed S and delete only genuine (unlisted) orphans.
+	r, st := newTestRegistry(t)
+	ctx := context.Background()
+	h, err := r.Create(ctx, "acme/api", git.Sha1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oid0 := strings.Repeat("a", 40)
+	res, err := h.Publish(ctx, PublishRequest{Txn: refTxn("refs/heads/main", git.Sha1.ZeroHex(), oid0)})
+	if err != nil || res.Seq != 1 {
+		t.Fatalf("setup push: %+v %v", res, err)
+	}
+	m, _ := h.ManifestSnapshot()
+	if len(m.LogSegments) != 1 {
+		t.Fatalf("segments = %+v, want one", m.LogSegments)
+	}
+	listedKey := m.LogSegments[0].Key // "log/0000000000000001.pb"
+
+	// A genuine orphan: body present, never listed.
+	orphanKey := store.LogSegmentKey(9)
+	if _, err := store.PutBytes(ctx, st, h.repoKey(orphanKey), []byte("orphan"),
+		store.PutOptions{Mode: store.PutCreate}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.ensurePublisher()
+	h.pub.sweepBurned(map[uint64]string{1: listedKey, 9: orphanKey})
+
+	if ok, err := store.Exists(ctx, st, h.repoKey(listedKey)); err != nil || !ok {
+		t.Fatalf("sweep deleted the listed segment %s (exists=%v err=%v)", listedKey, ok, err)
+	}
+	if ok, err := store.Exists(ctx, st, h.repoKey(orphanKey)); err != nil || ok {
+		t.Fatalf("sweep kept the unlisted orphan %s (exists=%v err=%v)", orphanKey, ok, err)
+	}
+}
+
+func TestPublish_FailedBatchSweepsItsBurns(t *testing.T) {
+	// Failure-path GC (Forgejo #338): a batch that burns orphan slots and
+	// then fails must sweep what IT burned. Otherwise orphan backlogs grow
+	// without bound — every later attempt re-burns them all (300 ms + fault
+	// exposure per slot), deaths add frontier orphans, and at 9 consecutive
+	// the ErrCorrupt cap locks every writer out permanently (liveness death
+	// spiral, found by TestSim_SafetyThenLiveness).
+	truth := store.NewMemory()
+	link := fault.New(truth, "t", 1)
+	cfg := testConfig(t)
+	cfg.WAL.CASMaxRetries = 1
+	r := NewRegistry(context.Background(), link, cfg)
+	defer r.Close()
+	ctx := context.Background()
+	h, err := r.Create(ctx, "acme/api", git.Sha1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Plant consecutive orphans above head 0 (bypassing the link: no faults).
+	for _, seq := range []uint64{1, 2, 3} {
+		if _, err := store.PutBytes(ctx, truth, "repos/acme/api/"+store.LogSegmentKey(seq),
+			[]byte("orphan"), store.PutOptions{Mode: store.PutCreate}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// From here the manifest CAS always loses (fake 412, manifest keys
+	// only — log slot ops behave normally).
+	link.Set(fault.Plan{PCASFail: 1.0}.WithOnly("manifest.pb"))
+
+	// The push burns 1,2,3, claims 4, loses the CAS, exhausts the 1-attempt
+	// ladder and fails — then the failure defer must sweep the burns.
+	res, err := h.Publish(ctx, PublishRequest{
+		Txn:    refTxn("refs/heads/main", git.Sha1.ZeroHex(), strings.Repeat("a", 40)),
+		Synced: true,
+	})
+	if err == nil || res.Seq != 0 {
+		t.Fatalf("doomed push: res=%+v err=%v (want batch failure, no seq)", res, err)
+	}
+	// The failure-path sweep runs in runBatch's return defer — after the
+	// reply — so poll (it always runs; the test must not race it).
+	deadline := time.Now().Add(10 * time.Second)
+	for _, seq := range []uint64{1, 2, 3, 4} {
+		key := "repos/acme/api/" + store.LogSegmentKey(seq)
+		for {
+			ok, herr := store.Exists(ctx, truth, key)
+			if herr != nil {
+				t.Fatalf("slot %d HEAD: %v", seq, herr)
+			}
+			if !ok {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("slot %d not swept after failed batch", seq)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	m, _ := h.ManifestSnapshot()
+	if m.HeadSeq != 0 {
+		t.Fatalf("truth moved under a failed batch: head=%d", m.HeadSeq)
+	}
+}
+
+func TestPublish_WipedVersionTokenHealsOnFreshen(t *testing.T) {
+	// Forgejo #338: a wiped version token ("" — e.g. after a casLanded
+	// version-recovery HEAD failure) must heal on the next freshen. The
+	// revision guard rejects the same-rev manifest but must still adopt its
+	// token (same rev = same commit = same bytes). Without the adopt, every
+	// later CAS degrades to PutCreate-412 and the ladder spins to exhaustion
+	// deterministically — no faults needed, no Sync ever re-runs on the
+	// CAS-412 path to save it.
+	r, _ := newTestRegistry(t)
+	ctx := context.Background()
+	h, err := r.Create(ctx, "acme/api", git.Sha1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oid0 := strings.Repeat("a", 40)
+	if _, err := h.Publish(ctx, PublishRequest{
+		Txn: refTxn("refs/heads/main", git.Sha1.ZeroHex(), oid0),
+	}); err != nil {
+		t.Fatalf("setup push: %v", err)
+	}
+	h.version = "" // simulate the wipe (white-box: casLanded HEAD failure)
+	res, err := h.Publish(ctx, PublishRequest{
+		Txn: refTxn("refs/heads/main", oid0, strings.Repeat("b", 40)),
+	})
+	if err != nil || res.Seq != 2 {
+		t.Fatalf("post-wipe push: res=%+v err=%v (want commit at seq 2)", res, err)
+	}
+	if h.version == "" {
+		t.Fatal("version token still wiped after a successful freshen")
 	}
 }
