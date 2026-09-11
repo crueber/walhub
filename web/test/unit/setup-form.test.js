@@ -126,7 +126,13 @@ test("unknown keys are a validation error, not a silent drop", () => {
 // --- §5 rule 2: oidc ---------------------------------------------------------------
 
 test("oidc requires anonymous_read=false (default true fails when unset)", () => {
-  const base = { "server.auth.mode": "oidc", "server.auth.allowed_domains": "acme.com" };
+  const base = {
+    "server.auth.mode": "oidc",
+    "server.auth.allowed_domains": "acme.com",
+    "server.auth.session_secret": "0123456789abcdef0123456789abcdef",
+    "server.auth.oauth_client_id": "id",
+    "server.auth.oauth_client_secret": "sec",
+  };
   assert.ok(messages(base, "server.auth.anonymous_read").length === 1);
   assert.deepEqual(fatals({ ...base, "server.auth.anonymous_read": "false" }), []);
   assert.ok(messages({ ...base, "server.auth.anonymous_read": "true" }, "server.auth.anonymous_read").length === 1);
@@ -135,13 +141,25 @@ test("oidc requires anonymous_read=false (default true fails when unset)", () =>
 test("oidc requires a non-empty allowlist", () => {
   assert.ok(messages({ "server.auth.mode": "oidc", "server.auth.anonymous_read": "false" }, "server.auth.allowed_domains").length === 1);
   assert.deepEqual(
-    fatals({ "server.auth.mode": "oidc", "server.auth.anonymous_read": "false", "server.auth.allowed_emails": "a@b.c" }),
+    fatals({
+      "server.auth.mode": "oidc",
+      "server.auth.anonymous_read": "false",
+      "server.auth.allowed_emails": "a@b.c",
+      "server.auth.session_secret": "0123456789abcdef0123456789abcdef",
+      "server.auth.oauth_client_id": "id",
+      "server.auth.oauth_client_secret": "sec",
+    }),
     []);
 });
 
-test("oauth client id/secret are both-or-neither", () => {
-  const base = { "server.auth.mode": "oidc", "server.auth.anonymous_read": "false", "server.auth.allowed_domains": "a.com" };
-  assert.ok(messages({ ...base, "server.auth.oauth_client_id": "id" }, "server.auth.oauth_client_id").length === 1);
+test("oauth client id/secret travel with the trio (each missing key fails on its own row)", () => {
+  const base = {
+    "server.auth.mode": "oidc",
+    "server.auth.anonymous_read": "false",
+    "server.auth.allowed_domains": "a.com",
+    "server.auth.session_secret": "0123456789abcdef0123456789abcdef",
+  };
+  assert.ok(messages({ ...base, "server.auth.oauth_client_id": "id" }, "server.auth.oauth_client_secret").length === 1);
   assert.deepEqual(fatals({ ...base, "server.auth.oauth_client_id": "id", "server.auth.oauth_client_secret": "sec" }), []);
 });
 

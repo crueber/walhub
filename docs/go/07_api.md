@@ -357,7 +357,8 @@ The discovery document:
   "browser_base": "/api/v1",
   "sdk": "/repos.js",
   "auth": {"bearer": true, "setup": "/services/setup.json", "browser": "/api-browser/v1",
-            "authenticate": "/api/v1/authenticate"},
+            "authenticate": "/api/v1/authenticate",
+            "browser_login": true, "login_url": "/_auth/login"},
   "endpoints": [
     "/api/v1/me",
     "/api/v1/owners",

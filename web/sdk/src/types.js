@@ -55,7 +55,8 @@
  * @typedef {{hostname: string, running: TaskRecord[], recent: TaskRecord[]}} TasksList
  *
  * @typedef {{version: number, base: string, browser_base: string, sdk: string,
- *   auth: {bearer: boolean, setup: string, browser: string, authenticate: string},
+ *   auth: {bearer: boolean, setup: string, browser: string, authenticate: string,
+ *     browser_login: boolean, login_url: string},
  *   endpoints: string[]}} Discovery
  *
  * @typedef {{principal: string, write: boolean, anonymous: boolean}} Me

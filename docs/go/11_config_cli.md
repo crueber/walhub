@@ -329,7 +329,7 @@ $ walhub repo settings set acme/monorepo --file /tmp/settings.toml -m "bundle al
 Each rule is a named function in `internal/config/validate.go`; the list is the contract:
 
 1. **none-mode loopback (DIVERGENCE — warn, not fail).** When `server.auth.mode = "none"` and `server.listen` is NOT on a loopback address (127.0.0.0/8, `::1`, or `localhost` host), startup logs a loud warning — `auth.mode=none on non-loopback listen <addr>; anyone who can reach this port can read and write every repository — set server.auth.mode = "token" (or oidc) and restart` — and continues. The Rust rule (fail-closed, exit 2) is **superseded by divergence**: zero-config first runs bind `0.0.0.0` with auth `none` by design (§2.3), and an operator who sets an explicit file keeps the freedom to do the same, warned. `config check` reports it as a warning, exit 0.
-2. **oidc allowlist.** `mode = "oidc"` requires `server.auth.anonymous_read = false` AND at least one of `allowed_domains` / `allowed_emails` non-empty. `oauth_client_id` and `oauth_client_secret` must be both set or both unset. `session_secret`, when set, MUST be ≥ 32 bytes.
+2. **oidc allowlist + browser-login trio.** `mode = "oidc"` requires `server.auth.anonymous_read = false` AND at least one of `allowed_domains` / `allowed_emails` non-empty. `oauth_client_id` and `oauth_client_secret` must be both set or both unset, AND all three of `session_secret` / `oauth_client_id` / `oauth_client_secret` must be non-empty (the browser-login trio, #344 — a partially-configured OIDC instance previously booted into a dead login state, so the missing keys are named in the error). `session_secret`, when set, MUST be ≥ 32 bytes.
 3. **bundle strategy validation.** For each `[[bundles.strategy]]`:
    - `kind = "incremental"` requires `base` naming an earlier-declared strategy's `name` (unknown or later-declared base → error);
    - a whole chain shares one `filter`: a strategy and its transitive base chain MUST declare identical `filter` values (absent = none);
@@ -523,3 +523,9 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
   them one stalled materialize wedged every object-level request past the proxy (504) while refs
   stayed instant; the wait must sit under typical proxy 60s timeouts and the body cap comfortably
   above the wait (per-request patience vs per-body-of-work patience are different bounds).
+- **NEW (2026-09-11) — oidc validation requires the browser-login trio (#344):** §5 rule 2
+  additionally refuses `auth.mode = "oidc"` when any of `server.auth.session_secret` /
+  `oauth_client_id` / `oauth_client_secret` is empty, naming the missing keys. Rationale (law 9):
+  the old pair-only check let a partially-configured instance boot into a dead login state
+  (browser login disabled ⇒ every browser GET a bare 401, `/_auth/login` a 501); refuse-to-start
+  was preferred over a degraded boot (see 06_server_http.md §14 for the login-page half).

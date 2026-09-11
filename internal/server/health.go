@@ -261,6 +261,15 @@ func (s *Server) setupJSON(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Server.Auth.Mode == "oidc" {
 		body["token_url"] = base + "/_auth/tokens"
 	}
+	// #344: advertise the browser-login entry so /setup can warn when OIDC
+	// is selected without a working flow, and so clients can render the
+	// login button only when it works.
+	if s.authSvc.BrowserLoginEnabled() {
+		body["browser_login"] = true
+		body["login_url"] = base + "/_auth/login"
+	} else {
+		body["browser_login"] = false
+	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSONBody(w, http.StatusOK, body)
 }

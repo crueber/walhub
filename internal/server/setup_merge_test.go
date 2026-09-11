@@ -125,13 +125,14 @@ func TestSetupTestValidatesMergedConfig(t *testing.T) {
 	base.Server.Auth.AllowedDomains = []string{"example.com"}
 	base.Server.Auth.OAuthClientID = "walhub"
 	base.Server.Auth.OAuthClientSecret = "s3cret"
+	base.Server.Auth.SessionSecret = strings.Repeat("x", 32) // trio complete (#344)
 	if err := config.SaveSetup(base, dataDir); err != nil {
 		t.Fatal(err)
 	}
 	s, _ := setupMergeServer(t, dataDir)
 	t.Setenv("WALHUB_SETUP_TOKEN", "setup-tok")
 
-	// mode=oidc alone is only valid because the FILE supplies issuer/secret.
+	// mode=oidc alone is only valid because the FILE supplies the trio.
 	req := httptest.NewRequest("POST", "/api/v1/setup/test?token=setup-tok",
 		strings.NewReader(`{"overrides": {"server.auth.mode": "oidc"}}`))
 	rec := httptest.NewRecorder()

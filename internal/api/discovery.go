@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/sizecatalog"
 )
 
@@ -18,6 +19,37 @@ type discoveryAuth struct {
 	Setup        string `json:"setup"`
 	Browser      string `json:"browser"`
 	Authenticate string `json:"authenticate"`
+	// BrowserLogin advertises the #344 login entry: true when the instance
+	// can start the OIDC browser flow (mode=oidc + the session/client
+	// trio), so the SPA renders the "Log in with OIDC" button only when it
+	// works. LoginURL is the flow entry (/_auth/login); empty when
+	// BrowserLogin is false.
+	BrowserLogin bool   `json:"browser_login"`
+	LoginURL     string `json:"login_url"`
+}
+
+// browserLoginEnabled mirrors the server's BrowserLoginEnabled gate
+// (mode oidc + session secret + client id + client secret) over the shared
+// config shape — this package must not import internal/server (law 8), so
+// the three-line predicate lives here too. Validation (config.Validate)
+// refuses mode=oidc without the trio, so false here on an oidc instance
+// means a legacy config that predates the refusal.
+func browserLoginEnabled(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	a := cfg.Server.Auth
+	return a.Mode == "oidc" && a.SessionSecret != "" &&
+		a.OAuthClientID != "" && a.OAuthClientSecret != ""
+}
+
+// loginURLFor is the flow entry advertised alongside BrowserLogin: the
+// /_auth/login path when the browser flow can start, else empty.
+func loginURLFor(cfg *config.Config) string {
+	if !browserLoginEnabled(cfg) {
+		return ""
+	}
+	return "/_auth/login"
 }
 
 // discoveryEndpoints derives the capability list from the route table so it
@@ -93,6 +125,8 @@ func (h *handlers) discovery(w http.ResponseWriter, r *http.Request) {
 			Setup:        "/services/setup.json",
 			Browser:      "/api-browser/v1",
 			Authenticate: "/api/v1/authenticate",
+			BrowserLogin: browserLoginEnabled(h.env.Cfg),
+			LoginURL:     loginURLFor(h.env.Cfg),
 		},
 		Endpoints: discoveryEndpoints(),
 	})

@@ -501,8 +501,9 @@ func (s *Server) maybeRefreshSession(w http.ResponseWriter, r *http.Request, p a
 // route group (SPA shell, /_ui/*, /services/setup.json, /metrics, and the
 // owner/repo UI pages reached through the wildcard; §3.1). On failure: a
 // browser-ish GET without Authorization and browser login enabled → 307
-// /_auth/login?next=…; else the mapped status with a plain-text body naming
-// the setup command.
+// /_auth/login?next=…; a browser-ish GET without Authorization with login
+// disabled → 401 carrying the rendered login page (#344); else the mapped
+// status with a plain-text body naming the setup command.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, aerr := s.authSvc.Authenticate(r, s.cfg)
@@ -538,6 +539,18 @@ func (s *Server) authFailure(w http.ResponseWriter, r *http.Request, aerr *auth.
 			r.Header.Get("Authorization") == "" && s.authSvc.BrowserLoginEnabled() {
 			http.Redirect(w, r, "/_auth/login?next="+r.URL.RequestURI(),
 				http.StatusTemporaryRedirect)
+			return
+		}
+		// #344: an unauthenticated browser with login disabled must still
+		// get something usable — the rendered login page (with the disabled
+		// explanation), not a bare 401. Status stays 401 and the Bearer
+		// challenge stays, so API clients see no behavior change.
+		if r.Method == http.MethodGet && browserLooks(r) &&
+			r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="walgit"`)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(loginUnavailableHTML(r.URL.RequestURI())))
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="walgit"`)

@@ -76,6 +76,16 @@ func sanitizeNext(next string) string {
 // PKCE.
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.authSvc.BrowserLoginEnabled() {
+		// #344: the 501 string must not be the end-user experience — a
+		// browser gets the rendered login page (with the disabled
+		// explanation); API clients keep the plain status.
+		if browserLooks(r) {
+			next := sanitizeNext(r.URL.Query().Get("next"))
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(loginUnavailableHTML(next)))
+			return
+		}
 		plainStatus(w, http.StatusNotImplemented, "browser login is not enabled")
 		return
 	}
@@ -100,6 +110,37 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	target := disc.AuthEndpoint + "?" + q.Encode()
 	w.Header().Set("Location", target)
 	w.WriteHeader(http.StatusFound)
+}
+
+// loginUnavailableHTML renders the #344 login entry page: a working
+// "Log in with OIDC" button (GET /_auth/login?next=…, which starts the
+// provider flow whenever browser login is enabled) plus a clear explanation
+// for the disabled state. Served in two places: GET /_auth/login itself
+// (501) when the trio is incomplete, and the gated-group 401 path for
+// browser-ish GETs (middleware.go authFailure) so an unauthenticated browser
+// never faces a bare "authentication required" with no path forward. The
+// next target travels in the query string (url-escaped — the only
+// interpolation, so no HTML escaping hazard); sanitizeNext already confined
+// it to a single-leading-slash path at the call sites.
+func loginUnavailableHTML(next string) string {
+	if next == "" {
+		next = "/"
+	}
+	loginURL := "/_auth/login?next=" + url.QueryEscape(next)
+	return `<!doctype html><html><head><title>walhub — log in</title></head><body>
+<h1>Log in with OIDC</h1>
+<p>Browser login is not enabled on this instance: the server's OIDC
+configuration is incomplete (it needs <code>server.auth.session_secret</code>,
+<code>server.auth.oauth_client_id</code> and
+<code>server.auth.oauth_client_secret</code> alongside
+<code>auth.mode = "oidc"</code>). The button below starts the sign-in flow
+and works as soon as an administrator completes that configuration and
+restarts the server.</p>
+<p><a href="` + loginURL + `"><button>Log in with OIDC</button></a></p>
+<p>If you are the administrator: run <code>walhub config check</code> (it
+names the missing keys) or open <code>/setup</code> — the OIDC section
+flags the incomplete trio before you save.</p>
+</body></html>`
 }
 
 // authRedirectURI is {public_url}/_auth/callback; loopback origins use
