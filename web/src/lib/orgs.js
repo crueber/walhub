@@ -6,8 +6,10 @@
 // edit affordances (the owner-profile GET carries `can_edit`, true for org
 // owners via the OwnerEditor seam); these helpers only shape client state:
 // create-form validation mirroring identity.ValidOrg (`^[a-z0-9-]{1,39}$`),
-// the create body, the owners/detailed is_org badge predicate, and the
-// roster-role lookup behind the settings read-only gate.
+// the create body, and the owners/detailed is_org badge predicate. (The
+// settings read-only gate keys on the org-slug owner profile's `can_edit`
+// — server-authoritative via the OwnerEditor seam — never on a local
+// roster lookup.)
 
 /** Org slug rule, mirroring identity.ValidOrg (lowercase, 1–39 chars). */
 export const ORG_NAME_RE = /^[a-z0-9-]{1,39}$/;
@@ -53,26 +55,4 @@ export function orgCreateBody(form) {
  */
 export function isOrgRow(row) {
   return !!row && row.is_org === true;
-}
-
-/**
- * myOrgRole(roster, principal) → "owner" | "member" | null. Looks up the
- * caller's role in a members.json doc ({members: [{principal, role}]});
- * case-insensitive on the principal (the server normalizes the same
- * way). Unknown principals, missing rosters, and unknown role
- * spellings are null — the settings page gates to read-only, never to
- * a 403 form.
- */
-export function myOrgRole(roster, principal) {
-  const want = String(principal ?? "").trim().toLowerCase();
-  const members =
-    roster && Array.isArray(roster.members) ? roster.members : [];
-  if (!want) return null;
-  for (const m of members) {
-    if (!m || typeof m !== "object") continue;
-    if (String(m.principal ?? "").trim().toLowerCase() !== want) continue;
-    if (m.role === "owner" || m.role === "member") return m.role;
-    return null;
-  }
-  return null;
 }

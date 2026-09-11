@@ -1,12 +1,10 @@
 // web/test/unit/orgs.test.js — org helpers (Forgejo #348): create-form
-// validation mirroring identity.ValidOrg, the create body, the
-// owners/detailed is_org badge predicate, and the roster-role lookup
-// behind the settings read-only gate.
+// validation mirroring identity.ValidOrg, the create body, and the
+// owners/detailed is_org badge predicate.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isOrgRow,
-  myOrgRole,
   orgCreateBody,
   validateOrgName,
 } from "../../src/lib/orgs.js";
@@ -62,26 +60,4 @@ test("isOrgRow reads the server is_org bit, legacy-tolerant", () => {
   assert.equal(isOrgRow({ name: "n", is_org: 1 }), false); // strict bit
   assert.equal(isOrgRow(null), false);
   assert.equal(isOrgRow(undefined), false);
-});
-
-test("myOrgRole resolves owner/member/null", () => {
-  const roster = {
-    members: [
-      { principal: "alice@example.com", role: "owner" },
-      { principal: "bob@example.com", role: "member" },
-    ],
-  };
-  assert.equal(myOrgRole(roster, "alice@example.com"), "owner");
-  assert.equal(myOrgRole(roster, "ALICE@EXAMPLE.COM"), "owner"); // case-insensitive
-  assert.equal(myOrgRole(roster, "  bob@example.com "), "member");
-  assert.equal(myOrgRole(roster, "mallory@example.com"), null);
-  assert.equal(myOrgRole(roster, ""), null);
-  assert.equal(myOrgRole(null, "alice@example.com"), null);
-  assert.equal(myOrgRole({}, "alice@example.com"), null);
-  assert.equal(myOrgRole({ members: null }, "alice@example.com"), null);
-});
-
-test("myOrgRole rejects unknown role spellings", () => {
-  const roster = { members: [{ principal: "a@b.c", role: "admin" }] };
-  assert.equal(myOrgRole(roster, "a@b.c"), null);
 });
