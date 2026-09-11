@@ -44,3 +44,37 @@ export function milestonePatch(current, id) {
   if ((current ?? null) === want) return null;
   return { milestone: want };
 }
+
+/**
+ * splitMilestones(milestones) → {open, closed}: the page-shape split
+ * for the milestones page (issue #314). Open milestones render as full
+ * cards (heading + progress + issues + View/Close/Delete footer);
+ * closed ones collapse to a single line (linked title + Reopen +
+ * counts). Order is preserved within each group; null-safe
+ * (null/undefined → both empty). Unknown states stay open (fail
+ * visible, never vanish a milestone into the collapsed section).
+ */
+export function splitMilestones(milestones) {
+  const open = [];
+  const closed = [];
+  for (const m of milestones ?? []) (m?.state === "closed" ? closed : open).push(m);
+  return { open, closed };
+}
+
+/**
+ * milestoneFilterHref(full, id) → string: the issue-list URL filtered
+ * to one milestone (`?milestone=<id>`). Shared by the open-card "View
+ * N issues" button and the closed-row title link so both affordances
+ * land on the same server-side filter.
+ */
+export function milestoneFilterHref(full, id) {
+  return `/${full}/issues?milestone=${encodeURIComponent(id)}`;
+}
+
+/**
+ * milestoneTotal(m) → number: open + closed issue counts for the
+ * "View N issues" label. Missing counts read as 0.
+ */
+export function milestoneTotal(m) {
+  return (m?.open_issues ?? 0) + (m?.closed_issues ?? 0);
+}

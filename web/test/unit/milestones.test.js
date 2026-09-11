@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { milestoneTitle, milestoneDisplay, milestonePatch } from "../../src/lib/milestones.js";
+import { milestoneTitle, milestoneDisplay, milestonePatch, splitMilestones, milestoneFilterHref, milestoneTotal } from "../../src/lib/milestones.js";
 
 const SET = [
   { id: "000001", title: "v1.1" },
@@ -51,4 +51,38 @@ test("milestonePatch returns null for no-ops (skip the round trip)", () => {
   assert.equal(milestonePatch(null, null), null);
   assert.equal(milestonePatch(undefined, null), null);
   assert.equal(milestonePatch("000001", "000001"), null);
+});
+
+test("splitMilestones separates open cards from collapsed closed rows (issue #314)", () => {
+  const set = [
+    { id: "000001", title: "v1.1", state: "open" },
+    { id: "000002", title: "v1.0", state: "closed" },
+    { id: "000003", title: "v1.2", state: "open" },
+  ];
+  const { open, closed } = splitMilestones(set);
+  assert.deepEqual(open.map((m) => m.id), ["000001", "000003"]);
+  assert.deepEqual(closed.map((m) => m.id), ["000002"]);
+});
+
+test("splitMilestones is null-safe and keeps unknown states visible", () => {
+  assert.deepEqual(splitMilestones(undefined), { open: [], closed: [] });
+  assert.deepEqual(splitMilestones(null), { open: [], closed: [] });
+  assert.deepEqual(splitMilestones([]), { open: [], closed: [] });
+  // Unknown state fails visible in the open section, never silently collapsed.
+  const { open, closed } = splitMilestones([{ id: "000001", state: "archived" }]);
+  assert.equal(open.length, 1);
+  assert.equal(closed.length, 0);
+});
+
+test("milestoneFilterHref builds the shared issue-filter URL (issue #314)", () => {
+  assert.equal(milestoneFilterHref("o/r", "000001"), "/o/r/issues?milestone=000001");
+  // Same helper feeds the View button and the closed-row title link.
+  assert.equal(milestoneFilterHref("o/r", "ab cd"), "/o/r/issues?milestone=ab%20cd");
+});
+
+test("milestoneTotal sums open + closed for the View label (issue #314)", () => {
+  assert.equal(milestoneTotal({ open_issues: 2, closed_issues: 3 }), 5);
+  assert.equal(milestoneTotal({ open_issues: 0, closed_issues: 0 }), 0);
+  assert.equal(milestoneTotal({}), 0);
+  assert.equal(milestoneTotal(null), 0);
 });
