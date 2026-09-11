@@ -596,7 +596,7 @@ export default function Pull() {
   const head = () => getView()?.head_live_sha ?? pr()?.head?.sha ?? "";
   // Head checks (05 §9): the combined view + per-context rows for the
   // live head sha, and the required-checks advisory (union of
-  // require_checks over policy rules matching the base ref — exact-ref
+  // require_checks over policy rules matching the base branch — exact-ref
   // match client-side; the merge task decides server-side). The pill
   // updates on reload; live `check` frames will refresh it once the repo
   // collaboration stream lands (06/08 own that endpoint).
@@ -715,12 +715,17 @@ export default function Pull() {
           <h2 class="mb-2 text-sm font-semibold">Mergeability</h2>
           <p class="text-sm">{mergeableText(mergeable())}</p>
           <Show when={!getView()?.head_ref_ok}>
-            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">head ref pending — push first.</p>
+            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">From branch pending — push first.</p>
           </Show>
           <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
             base {pr()?.base?.ref} @ {(pr()?.base?.sha ?? "").slice(0, 12)}
             <br />
             head {pr()?.head?.ref} @ {(pr()?.head?.sha ?? "").slice(0, 12)}
+            {/* Forgejo #328: cross-repo PRs name the fork holding the head. */}
+            <Show when={pr()?.fork?.repo}>
+              <br />
+              from {pr()?.fork?.repo}
+            </Show>
           </p>
           <div class="mt-2 flex gap-2 text-xs">
             <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/commits`}>commits</A>
