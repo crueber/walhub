@@ -10,6 +10,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { sortByNumDesc } from "../lib/sort.js";
+import { resolveIssueState, issueListState } from "../lib/issueState.js";
 import { TTL } from "../lib/collab.js";
 import { labelColorMap } from "../lib/labels.js";
 import { LabelChip } from "../components/LabelPicker.jsx";
@@ -28,8 +29,14 @@ export default function Issues() {
   const [search, setSearch] = useSearchParams();
   const [getAfter, setAfter] = createSignal(0);
 
+  // State default is open-only (#323): an absent ?state= param resolves to
+  // "open"; the explicit both-choice is ?state=all (URL-honest,
+  // shareable), sent on the wire as an omitted param (the list endpoint
+  // accepts open|closed|absent only). The select binds the RESOLVED value
+  // so a bare visit visibly reads "open". Milestone-filtered landings
+  // (?milestone=, no state) inherit the open default — deliberate (#323).
   const query = () => ({
-    state: search.state || "",
+    state: issueListState(resolveIssueState(search.state)),
     labels: search.labels || "",
     assignee: search.assignee || "",
     milestone: search.milestone || "",
@@ -86,10 +93,10 @@ export default function Issues() {
           State
           <select
             class="input"
-            value={search.state || ""}
+            value={resolveIssueState(search.state)}
             onChange={(e) => setFilter("state", e.target.value)}
           >
-            <option value="">open + closed</option>
+            <option value="all">open + closed</option>
             <option value="open">open</option>
             <option value="closed">closed</option>
           </select>

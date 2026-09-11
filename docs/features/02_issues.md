@@ -579,7 +579,20 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   click close, ArrowUp/Down/Home/End move, global :focus-visible ring,
   dark+light zinc trigger tones with the menu rows on the shared
   chip/card classes); the thread timeline keeps its generic `actionsFor`
-  slot for other surfaces.
+   slot for other surfaces.
+- **Issues list defaults to open-only (issue #323, 2026-09-11).** A bare
+  visit to `/:o/:r/issues` (no `?state=`) shows open issues only; the State
+  select binds the RESOLVED value so it visibly reads "open". The explicit
+  both-choice is `?state=all` in the URL (shareable/refreshable) and is
+  sent on the wire as an OMITTED state param — the issues list endpoint
+  accepts only `open|closed|absent` (absent = both), so `all` never reaches
+  the server and no backend change was needed (contrast the milestones
+  endpoint, which accepts `all` natively). A legacy empty `?state=` still
+  reads as both. Resolution lives in `web/src/lib/issueState.js`
+  (`resolveIssueState`/`issueListState`, `node --test`). Milestone-filtered
+  landings (`?milestone=`, #314) inherit the open default — deliberate,
+  matching GitHub. `Pulls.jsx` is intentionally untouched (flagged as a
+  follow-up decision, not an oversight).
 
 ## Explicitly out of scope
 
