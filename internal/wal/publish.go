@@ -250,8 +250,13 @@ func (p *Publisher) runBatch(ctx context.Context, batch []*publishJob) {
 	// re-burns them all (300 ms + fault exposure per slot), deaths add
 	// frontier orphans, and at 9 consecutive the ErrCorrupt cap locks ALL
 	// writers out permanently. The sweep shares sweepBurned's recheck-latest
-	// guard (only still-unlisted slots go), so it cannot harm a concurrent
-	// committer; clean failures (nothing burned) are a no-op map lookup.
+	// guard (only still-unlisted slots go), which narrows the burn/commit
+	// race to the recheck→delete window: a slot whose owner commits it
+	// exactly inside that window can still be deleted (check-then-act, same
+	// accepted class as the §20.9 S3 conditional delete) — what the guard
+	// does eliminate is deleting segments that were already listed at
+	// recheck time, the corruption the sim kept hitting. Clean failures
+	// (nothing burned) are a no-op map lookup.
 	defer func() {
 		if !committedBatch {
 			p.sweepBurned(burned)
