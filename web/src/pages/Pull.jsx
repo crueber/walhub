@@ -721,6 +721,11 @@ export default function Pull() {
             base {pr()?.base?.ref} @ {(pr()?.base?.sha ?? "").slice(0, 12)}
             <br />
             head {pr()?.head?.ref} @ {(pr()?.head?.sha ?? "").slice(0, 12)}
+            {/* Forgejo #328: cross-repo PRs name the fork holding the head. */}
+            <Show when={pr()?.fork?.repo}>
+              <br />
+              from {pr()?.fork?.repo}
+            </Show>
           </p>
           <div class="mt-2 flex gap-2 text-xs">
             <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/commits`}>commits</A>
