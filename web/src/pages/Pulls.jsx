@@ -10,6 +10,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, invalidate } from "../lib/data.js";
 import { sortByNumDesc } from "../lib/sort.js";
+import { resolvePullState, pullListState } from "../lib/pullState.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -19,8 +20,13 @@ export default function Pulls() {
   const [search, setSearch] = useSearchParams();
   const [getAfter, setAfter] = createSignal(0);
 
+  // State default is open-only (#332, mirroring #323 for issues): an absent
+  // ?state= param resolves to "open" (so the open tab highlights on a bare
+  // visit); the explicit both-choice is ?state=all (URL-honest,
+  // shareable), sent on the wire as an omitted param (the list endpoint
+  // accepts open|closed|absent only). The tabs bind the RESOLVED value.
   const query = () => ({
-    state: search.state || "",
+    state: pullListState(resolvePullState(search.state)),
     base: search.base || "",
     head: search.head || "",
     n: 50,
@@ -50,7 +56,7 @@ export default function Pulls() {
     return `/${ctx.full}/pulls/new${qs ? `?${qs}` : ""}`;
   };
 
-  const emptyTitle = () => (search.state === "closed" ? "No closed pull requests" : "No pull requests");
+  const emptyTitle = () => (resolvePullState(search.state) === "closed" ? "No closed pull requests" : "No pull requests");
   const emptyHint = () =>
     search.base || search.head
       ? `Nothing matches${search.base ? ` base ${search.base}` : ""}${search.head ? ` head ${search.head}` : ""} — clear the filters or open one from these refs.`
@@ -61,17 +67,24 @@ export default function Pulls() {
       <div class="mb-3 flex items-center gap-2">
         <button
           type="button"
-          class={`btn px-2 py-1 ${!search.state ? "btn-active" : ""}`}
-          onClick={() => setFilter("state", "")}
+          class={`btn px-2 py-1 ${resolvePullState(search.state) === "open" ? "btn-active" : ""}`}
+          onClick={() => setFilter("state", "open")}
         >
           open
         </button>
         <button
           type="button"
-          class={`btn px-2 py-1 ${search.state === "closed" ? "btn-active" : ""}`}
+          class={`btn px-2 py-1 ${resolvePullState(search.state) === "closed" ? "btn-active" : ""}`}
           onClick={() => setFilter("state", "closed")}
         >
           closed
+        </button>
+        <button
+          type="button"
+          class={`btn px-2 py-1 ${resolvePullState(search.state) === "all" ? "btn-active" : ""}`}
+          onClick={() => setFilter("state", "all")}
+        >
+          all
         </button>
         <button type="button" class="btn ml-auto px-2 py-1" onClick={reload}>
           refresh
