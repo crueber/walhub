@@ -626,8 +626,27 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   submit posts the resolved 6-hex unchanged (no backend change, law 6
   unaffected). The popover reuses the audited `.label-drop` panel class
   (opaque + 390px viewport-bound per #278 — no new CSS) with LabelPicker
-  idioms (native buttons, outside-click/Esc close, `onCleanup`); dark +
-  light share the treatment, dark default.
+   idioms (native buttons, outside-click/Esc close, `onCleanup`); dark +
+   light share the treatment, dark default.
+- **Label picker row grid (issue #334, 2026-09-11).** The #324 pack names
+  ("good first issue", "help wanted") wrapped mid-name in the picker's flat
+  flex rows and descriptions truncated at ragged widths. Rows are now a
+  three-column grid `[check+dot] [name] [description]`
+  (`grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]`): the name never wraps
+  (nowrap, ellipsis past its half) and the description truncates at a
+  consistent width (`min-w-0`), so every row aligns; the row title carries
+  the full name + description. The panel widens `w-64` → `w-80` (320px —
+  inside the #278 `100vw - 1rem` bound, so 390px needs no shrink) with the
+  `label-drop card` hook untouched (opaque + viewport-bound, no new CSS).
+  Menu semantics unchanged (menuitemcheckbox, aria-checked, busy-disable,
+  outside-click/Esc, native-button keyboard); no backend, SDK, or API
+  change; no new deps. Headless cover: `web/test/unit/label-picker-rows.test.js`
+  (source assertions + 390px arithmetic); `vite build` green. The
+  MilestonePicker was checked for the same fragility: its rows are a single
+  text span (no description column), so wrapped titles cannot ragged-shift a
+  sibling column — left as is, no change. Browser proof (both themes, 390px,
+  zero console errors) is open: the shared-daemon network guard blocks
+  private/loopback targets, no private daemon per workspace rules.
 
 ## Explicitly out of scope
 

@@ -7,7 +7,13 @@
 // and surfaces 403s in the error tray). Applied labels render inline
 // as chips (LabelChip, owned by the page); the `+` button opens a
 // dropdown listing ALL repo label options as menuitemcheckbox rows, so
-// adding a label never requires leaving the thread. Keyboard: the
+// adding a label never requires leaving the thread. Rows are a
+// three-column grid [check+dot] [name] [description] (issue #334):
+// the name never wraps (nowrap, ellipsis-truncated past its half) and
+// the description truncates at a consistent width (min-w-0), so every
+// row aligns; the row title carries the full name + description.
+// The panel is w-80 so multi-word pack names ("good first issue") fit,
+// still inside the #278 viewport bound. Keyboard: the
 // trigger and every row are native <button>s (Tab/Enter/Space free);
 // Esc closes the menu and restores focus to the trigger; a pointer
 // click outside closes it. Colors work in dark + light via the shared
@@ -89,7 +95,7 @@ export default function LabelPicker(props) {
         <span aria-hidden="true">+</span>
       </button>
       <Show when={getOpen()}>
-        <div class="label-drop scroll-slim card absolute right-0 z-30 mt-1 max-h-72 w-64 overflow-y-auto p-1" role="menu" aria-label="Issue labels">
+        <div class="label-drop scroll-slim card absolute right-0 z-30 mt-1 max-h-72 w-80 overflow-y-auto p-1" role="menu" aria-label="Issue labels">
           <For each={props.all ?? []} fallback={<p class="muted px-2 py-1 text-xs">no labels in this repo yet</p>}>
             {(l) => {
               const on = () => appliedSet().has(String(l.name).toLowerCase());
@@ -100,22 +106,23 @@ export default function LabelPicker(props) {
                   role="menuitemcheckbox"
                   aria-checked={on() ? "true" : "false"}
                   aria-label={`${on() ? "remove" : "apply"} label ${l.name}`}
-                  title={`${on() ? "remove" : "apply"} ${l.name}`}
+                  title={`${on() ? "remove" : "apply"} ${l.name}${l.description ? ` — ${l.description}` : ""}`}
                   disabled={isBusy()}
-                  class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-zinc-800"
+                  class="grid w-full grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-zinc-800"
                   onClick={() => props.onToggle?.(l.name)}
                 >
-                  <span class="inline-block w-4 shrink-0 text-center" aria-hidden="true">
-                    {on() ? "✓" : ""}
+                  <span class="flex shrink-0 items-center gap-2" aria-hidden="true">
+                    <span class="inline-block w-4 text-center">
+                      {on() ? "✓" : ""}
+                    </span>
+                    <span
+                      class="inline-block h-3 w-3 rounded-full border border-zinc-300 dark:border-zinc-700"
+                      style={{ "background-color": `#${l.color}` }}
+                    />
                   </span>
-                  <span
-                    class="inline-block h-3 w-3 shrink-0 rounded-full border border-zinc-300 dark:border-zinc-700"
-                    style={{ "background-color": `#${l.color}` }}
-                    aria-hidden="true"
-                  />
-                  <span class="font-medium">{l.name}</span>
+                  <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">{l.name}</span>
                   <Show when={l.description}>
-                    <span class="muted truncate text-xs">{l.description}</span>
+                    <span class="muted min-w-0 truncate text-xs">{l.description}</span>
                   </Show>
                 </button>
               );
