@@ -12,7 +12,7 @@
 // path — the backend is ready, the composer just never sent one).
 // Reachability note: same-repo unreachable heads 422 ("head commit not
 // reachable — push first"); cross-fork unreachable heads open fine with
-// HeadPublished=false (fork-local head, the PR page shows "head ref
+// HeadPublished=false (fork-local head, the PR page shows "From branch
 // pending — push first"). So the "unreachable" UI error is the same-repo
 // 422 surfaced inline, direction-mapped, never a bare status code.
 

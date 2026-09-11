@@ -161,6 +161,14 @@ test("composer speaks From/To in the UI, never base/head display copy", () => {
   }
 });
 
+test("PR page pending-head copy speaks From, never head/base ref", () => {
+  const s = fs.readFileSync(new URL("../../src/pages/Pull.jsx", import.meta.url), "utf8");
+  assert.ok(s.includes("From branch pending"), "pending-head line uses From terminology");
+  for (const banned of ["head ref pending", "Head ref", "Base ref", "base ref", "head ref"]) {
+    assert.ok(!s.includes(banned), `no display copy "${banned}"`);
+  }
+});
+
 test("composer keeps the frozen wire keys and deep-link params", () => {
   const s = pullNew();
   assert.ok(s.includes("base_ref"), "wire base_ref kept");
