@@ -74,7 +74,7 @@ export default function Pulls() {
         </button>
         <button
           type="button"
-          class={`btn px-2 py-1 ${search.state === "closed" ? "btn-active" : ""}`}
+          class={`btn px-2 py-1 ${resolvePullState(search.state) === "closed" ? "btn-active" : ""}`}
           onClick={() => setFilter("state", "closed")}
         >
           closed
