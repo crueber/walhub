@@ -612,6 +612,22 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   its labels sees it again — accepted) and the buttons render for everyone
   exactly like the create form (no new client gating invented — the server
   403s non-triage per request). No route-provider seam touched (law 8).
+- **Label color picker (issue #325, 2026-09-11).** The `/:o/:r/labels` create
+  form's bare 6-hex input is a `LabelColorPicker` (`web/src/components/`,
+  reusable by a future edit flow): a trigger button (current-color swatch +
+  hex, `.input` styling) opens a preset popover — 8 swatches from
+  `LABEL_COLOR_PRESETS` in `web/src/lib/label-colors.js` (classic GitHub
+  hues, `d73a4a` first preserving the form's default; pure helpers
+  `isValidLabelColor`/`isPresetLabelColor`, `node --test`) — plus a
+  "Custom hex…" row revealing the original pattern-validated free-text
+  input. A live preview dot beside the input reuses the exact list-row
+  swatch rendering (inline `background-color`, neutral while invalid —
+  never a broken preview); presets fill the same parent color signal, so
+  submit posts the resolved 6-hex unchanged (no backend change, law 6
+  unaffected). The popover reuses the audited `.label-drop` panel class
+  (opaque + 390px viewport-bound per #278 — no new CSS) with LabelPicker
+  idioms (native buttons, outside-click/Esc close, `onCleanup`); dark +
+  light share the treatment, dark default.
 
 ## Explicitly out of scope
 
