@@ -356,6 +356,18 @@ every call goes through the SDK).
   (live head/base shas + thread/pr versions + mergeable stamp; 07_api.md §4 third class). The diff
   stays SWR with no ETag (patch bytes change only via ref movement). Rationale: mutability, not
   addressability, decides the class.
+- **Pulls list defaults to open-only (issue #332, 2026-09-11).** A bare
+  visit to `/:o/:r/pulls` (no `?state=`) shows open pull requests only; the
+  tab bar binds the RESOLVED value so it visibly highlights "open". The
+  explicit both-choice is `?state=all` in the URL (shareable/refreshable,
+  third "all" tab) and is sent on the wire as an OMITTED state param — the
+  pulls list endpoint accepts only `open|closed|absent` (absent = both), so
+  `all` never reaches the server and no backend change was needed
+  (`ListPRs` empty-state still returns both by contract, which is exactly
+  what the wire-omitted both-choice relies on). A legacy empty `?state=`
+  still reads as both. Resolution lives in `web/src/lib/pullState.js`
+  (`resolvePullState`/`pullListState`, `node --test`) — a mirror of 02's
+  `issueState.js` (issue #323).
 
 ## Explicitly out of scope
 
