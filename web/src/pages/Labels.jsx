@@ -6,6 +6,7 @@ import { createSignal, For, Show } from "solid-js";
 import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { LABEL_PACKS, missingFromPack } from "../lib/label-packs.js";
+import LabelColorPicker from "../components/LabelColorPicker.jsx";
 
 export default function Labels() {
   const ctx = useRepo();
@@ -153,14 +154,7 @@ export default function Labels() {
             placeholder="bug"
             aria-label="label name"
           />
-          <input
-            class="input w-28"
-            value={getColor()}
-            onInput={(e) => setColor(e.target.value)}
-            pattern="[0-9a-fA-F]{6}"
-            title="6-hex RGB without #"
-            aria-label="label color"
-          />
+          <LabelColorPicker color={getColor()} onChange={setColor} />
           <button type="submit" class="btn primary" disabled={getBusy()}>
             Create
           </button>
