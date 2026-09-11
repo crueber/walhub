@@ -417,6 +417,10 @@ export default function Issue() {
               <ThreadTimeline
                 events={events()}
                 textFor={(ev) => eventText(ev, getMilestoneSet())}
+                // #340: thread bodies carry no file coordinates (no ref/dir,
+                // so relative URLs stay verbatim) but DO carry the repo —
+                // owner/repo is what the #N/PRN autolinker needs for hrefs.
+                mdCtx={{ owner: ctx.owner, repo: ctx.name }}
                 summaryFor={(ev) => {
                   // The ONLY reaction surface (#113): one row per comment
                   // in/near where its reactions appear — summary chips plus

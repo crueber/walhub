@@ -3,7 +3,8 @@
 // only innerHTML gate: marked passes raw HTML (incl. <script>) and
 // javascript: URIs straight through, so renderBody MUST NOT be bypassed.
 // DOMPurify needs a DOM, so this module exposes two entry points:
-//   renderMarkdownHtml(src, ctx?) — marked layer + relative-URL resolution;
+//   renderMarkdownHtml(src, ctx?) — marked layer + relative-URL resolution
+//     (#182/#185) + issue/PR ref autolinks (#340, needs ctx.owner/ctx.repo);
 //     Node-importable, covered by node --test (headless-testable logic per
 //     D-WEB-4).
 //   renderBody(src, ctx?) — full pipeline; browser-only, throws without a DOM.
@@ -166,9 +167,115 @@ export function resolveMarkdownUrls(html, ctx) {
   return rewriteAttr(rewriteAttr(html, MD_IMG_RE, ctx, true), MD_LINK_RE, ctx, false);
 }
 
+// --- issue/PR reference autolinks (Forgejo #340) --------------------------------
+// Comment and issue/PR bodies link `#N → /{o}/{r}/issues/N` and `PRN` (any case
+// of the two letters PR) `→ /{o}/{r}/pull/N`. Tight scope, deliberately:
+//
+//   boundary-delimited only — the char before the ref must be the start of
+//     text or a non-word char (whitespace, punctuation), and the digit run
+//     must end at a boundary too. x#3, #3x, #3abc, xPR3, PR3x, PR3abc do not
+//     link; (#3), #3,, #3., trailing end-of-text do. #3.2 does not link (a
+//     `.` followed by a digit continues the run — a version number, not a
+//     ref); #3. (sentence end) does. #x3 / #-3 never match (# must be followed
+//     directly by a digit). A heading marker never matches: `### c` is `#s
+//     + space`, and `# 3 days` is `# + space + 3`, neither `# + digit`.
+//   `&` is excluded from the leading boundary so HTML entities marked emits
+//     (`&#39;`, `&quot;` — `#`/`;`-adjacent digit runs) are never corrupted.
+//   code spans, fenced blocks, existing markdown links, and marked-autolinked
+//     URLs (incl. https://x/#frag) are exempt by construction: this pass runs
+//     over marked's HTML and skips the contents of <a>/<code>/<pre> (plus
+//     <script>/<style>), so `[see #3](x)`, `` `#3` ``, and fenced `#3` pass
+//     through untouched and URL fragments are never double-processed.
+//   ordering: runs AFTER resolveMarkdownUrls (same call, below) so the
+//     resolver — which rewrites every leading-"/" href — never sees the
+//     freshly minted /{o}/{r}/issues|pull/N hrefs and can never mangle them
+//     into blob/tree URLs. The pass only ADDS anchors; it never rewrites an
+//     existing href/src, so the #182/#185 matrix is unaffected.
+//   original text preserved (pr3 links as "pr3"); leading zeros link as
+//     written with a NUMERIC href (#003 → /issues/3 — zeros stripped by
+//     regex, not Number(), so absurd digit runs never become "1e+30").
+//   dead refs still link (GitHub behavior — the 404 is honest; the pipeline
+//     is synchronous/headless so no existence check per ref).
+//   sanitizer: generated anchors carry a plain relative href — inside the
+//     DOMPurify allowlist already (a + href, relative kept). No config change.
+//
+// linkifyRefText is the plain-text core, exported for reuse: the commit-body
+// linkifier (linkifyBody, diff.js) is a separate surface, OUT OF SCOPE for
+// #340 (flagged follow-up) — when it grows #N/PRN links it should call this.
+
+const REF_RE = /(?<![A-Za-z0-9_&])(#\d+|[Pp][Rr]\d+)(?![A-Za-z0-9_]|\.[0-9])/g;
+
+function escAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** linkifyRefText(segment, base) → segment with #N/PRN refs as anchors (pure, Node-safe). */
+export function linkifyRefText(segment, base) {
+  return String(segment).replace(REF_RE, (ref) => {
+    const pr = ref[0] !== "#";
+    const digits = pr ? ref.slice(2) : ref.slice(1);
+    const num = digits.replace(/^0+(?=\d)/, ""); // numeric href, text as written
+    const href = pr ? `${base}/pull/${num}` : `${base}/issues/${num}`;
+    return `<a href="${escAttr(href)}">${ref}</a>`;
+  });
+}
+
+// Tags whose content is never ref-scanned (a: marked links/autolinks/URLs;
+// code/pre: spans + fences; script/style: dropped by the gate anyway).
+const SKIP_RE = /^(?:a|code|pre|script|style)$/i;
+
+/** linkifyIssueRefs(html, ctx) → HTML with #N/PRN refs linked (pure, Node-safe). */
+export function linkifyIssueRefs(html, ctx) {
+  if (html == null) return html;
+  if (!ctx || !ctx.owner || !ctx.repo) return String(html);
+  const base = `/${ctx.owner}/${ctx.repo}`;
+  const src = String(html);
+  let out = "";
+  let depth = 0; // >0 while inside a skip element
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    if (src[i] !== "<") {
+      const j = src.indexOf("<", i);
+      const end = j === -1 ? n : j;
+      const text = src.slice(i, end);
+      out += depth > 0 ? text : linkifyRefText(text, base);
+      i = end;
+      continue;
+    }
+    // A tag: scan to the closing ">" honoring single/double quotes so a ">"
+    // inside an attribute value never ends the tag early.
+    let j = i + 1;
+    let quote = null;
+    while (j < n) {
+      const c = src[j];
+      if (quote) {
+        if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === ">") {
+        break;
+      }
+      j++;
+    }
+    const tag = src.slice(i, j < n ? j + 1 : n);
+    const m = /^<\/?\s*([A-Za-z0-9]+)/.exec(tag);
+    if (m && SKIP_RE.test(m[1])) {
+      const selfClosing = /\/>\s*$/.test(tag);
+      if (!selfClosing) {
+        if (tag[1] === "/") depth = Math.max(0, depth - 1);
+        else depth++;
+      }
+    }
+    out += tag;
+    i = j < n ? j + 1 : n;
+  }
+  return out;
+}
+
 /** renderMarkdownHtml(src, ctx?) → unsanitized HTML string (marked GFM layer). Never trusted raw. */
 export function renderMarkdownHtml(src, ctx) {
-  return resolveMarkdownUrls(marked.parse(String(src ?? "")), ctx);
+  return linkifyIssueRefs(resolveMarkdownUrls(marked.parse(String(src ?? "")), ctx), ctx);
 }
 
 /** renderBody(src, ctx?) → HTML safe for innerHTML (marked + resolve + pinned DOMPurify). Browser-only. */
