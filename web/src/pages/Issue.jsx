@@ -10,7 +10,7 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
-import { useData, invalidate, patchCached, reportError } from "../lib/data.js";
+import { useData, invalidate, invalidateIssueLists, patchCached, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { toggleLabel, labelColorMap } from "../lib/labels.js";
 import { milestoneDisplay, milestonePatch } from "../lib/milestones.js";
@@ -105,6 +105,18 @@ export default function Issue() {
     invalidate(key());
   };
 
+  // Cross-page reconcile (issue #318): the promise cache is global
+  // across client-side navigations, so every thread mutation
+  // invalidates the repo-wide list windows + milestone counts AT the
+  // mutation site — the mutation's own SSE frame may arrive at a page
+  // that already unmounted (or never invalidate another page's cache
+  // at all). The thread key still reconciles pinned-key style (#146).
+  const afterMutation = (n, ck) => {
+    if (num() === n) reload();
+    else invalidate(ck);
+    invalidateIssueLists(ctx.full);
+  };
+
   const thread = () => getView()?.thread;
   const summary = () => thread()?.reaction_summary ?? {};
   // Wire-order assembly (newest-first at every layer: the view holds
@@ -128,8 +140,7 @@ export default function Issue() {
     const n = num();
     const ck = key();
     await ctx.repoClient.issues.comment(n, body);
-    if (num() === n) reload();
-    else invalidate(ck);
+    afterMutation(n, ck);
   };
 
   const commentAndClose = async (body, reason) => {
@@ -147,8 +158,7 @@ export default function Issue() {
       await ctx.repoClient.issues.comment(n, body);
     }
     await ctx.repoClient.issues.patch(n, closePatch(reason));
-    if (num() === n) reload();
-    else invalidate(ck);
+    afterMutation(n, ck);
   };
 
   // Explicit-reason close (#109): the composer chooser supplies
@@ -157,8 +167,7 @@ export default function Issue() {
     const n = num();
     const ck = key();
     await ctx.repoClient.issues.patch(n, closePatch(reason));
-    if (num() === n) reload();
-    else invalidate(ck);
+    afterMutation(n, ck);
   };
 
   // One in-flight reaction mutation per (seq, content): the plus-menu
@@ -212,8 +221,7 @@ export default function Issue() {
       } catch (err) {
         reportError(err, "issue-react");
       }
-      if (num() === n) reload();
-      else invalidate(ck);
+      afterMutation(n, ck);
     });
 
   // Summary chips toggle (#36): remove when the clicker already reacted,
@@ -242,8 +250,7 @@ export default function Issue() {
           reportError(err, "issue-react");
         }
       }
-      if (num() === n) reload();
-      else invalidate(ck);
+      afterMutation(n, ck);
     });
 
   const patch = async (fields) => {
@@ -251,8 +258,7 @@ export default function Issue() {
     const ck = key();
     try {
       await ctx.repoClient.issues.patch(n, fields);
-      if (num() === n) reload();
-      else invalidate(ck);
+      afterMutation(n, ck);
     } catch (err) {
       reportError(err, "issue-patch");
     }
@@ -280,8 +286,7 @@ export default function Issue() {
     } catch (err) {
       reportError(err, "issue-labels");
     }
-    if (num() === n) reload();
-    else invalidate(ck);
+    afterMutation(n, ck);
     setLabelBusy((prev) => {
       const nx = new Set(prev);
       nx.delete(k);
@@ -311,8 +316,7 @@ export default function Issue() {
     } catch (err) {
       reportError(err, "issue-milestone");
     }
-    if (num() === n) reload();
-    else invalidate(ck);
+    afterMutation(n, ck);
     setMilestoneBusy(false);
   };
 
@@ -368,7 +372,13 @@ export default function Issue() {
   // The ONE repo collaboration stream (08 §4): one connection for this
   // page, capped reconnect; matching issue frames invalidate (coalesced)
   // — the header refetch (with its newest events page) is the backfill.
-  useCollabStream(() => ctx.full, ctx.repoClient, ["issue", "issue_event"], (frame) => Number(frame.num) === Number(num()));
+  // No accept filter (issue #318): the frame→key map is self-scoping —
+  // `issue:{full}:{num}` names the frame's own thread, so other issues'
+  // frames can never refetch THIS thread — while the shared
+  // `issues:{full}:*` / `milestones:{full}` prefixes MUST invalidate on
+  // every frame or other issues' mutations leave this tab's list caches
+  // stale. Filtering by num gated the shared invalidation too.
+  useCollabStream(() => ctx.full, ctx.repoClient, ["issue", "issue_event"]);
 
   return (
     <div class="issue-page grid gap-4 md:grid-cols-[1fr_16rem]">

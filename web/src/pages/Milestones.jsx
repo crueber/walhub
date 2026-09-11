@@ -4,7 +4,8 @@
 // milestone lists and links its issues via the existing server-side
 // `milestone=` list filter — no client-side filtering of the world).
 // Writes are triage-gated; delete 409s while open issues reference the
-// milestone. Refetches after every save.
+// milestone. Refetches after every save; `issue` SSE frames invalidate
+// the linked-issue windows and counts while mounted (issue #318).
 //
 // Layout (issue #314): open milestones render as full cards — plain
 // title heading + state chip + counts, progress bar, <MilestoneIssues>
@@ -20,6 +21,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { useCollabStream } from "../components/collab.jsx";
 import { splitMilestones, milestoneFilterHref, milestoneTotal } from "../lib/milestones.js";
 
 // MilestoneIssues — the linked-issue list for one milestone (02 §7
@@ -62,6 +64,14 @@ export default function Milestones() {
   const [getBusy, setBusy] = createSignal(false);
 
   const reload = () => invalidate(key());
+
+  // Live membership (issue #318): issue-side mutations (milestone
+  // reassignment, close/reopen) change this page's inline
+  // MilestoneIssues windows and open/closed counts without touching any
+  // milestone object — so this page subscribes to `issue` frames (no
+  // accept filter: every frame's shared `issues:{full}:*` /
+  // `milestones:{full}` prefixes must invalidate, Issues.jsx pattern).
+  useCollabStream(() => ctx.full, ctx.repoClient, ["issue"]);
 
   const create = async (e) => {
     e.preventDefault();
