@@ -96,6 +96,15 @@ type OrgGate interface {
 	IsOrgMember(ctx context.Context, org, principal string) (exists, member bool, err error)
 }
 
+// OrgLister lists org names for the owners/detailed is_org marker
+// (Forgejo #348, Env.Orgs). Composition injects the identity service;
+// nil → every row renders is_org=false. A list error fails open to
+// all-false (display metadata must never fail the listing).
+type OrgLister interface {
+	// ListOrgs reports every org name, sorted.
+	ListOrgs(ctx context.Context) ([]string, error)
+}
+
 // AccessBootstrap materializes the eager access.json default at placeholder
 // creation (01 §10 synthesized default, eagerly written). Create-wins,
 // adopt-don't-overwrite (412 = someone raced us — adopt, never overwrite).

@@ -50,6 +50,7 @@ import {
   ownerActivity,
   pageSlice,
 } from "../lib/owners.js";
+import { isOrgRow } from "../lib/orgs.js";
 
 /** One owner's section: heading + capped repo list (own `repos:{owner}` cache key, shared with /:owner). */
 function OwnerSection(props) {
@@ -70,6 +71,14 @@ function OwnerSection(props) {
         <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}`}>
           {props.owner}
         </A>
+        {/* Forgejo #348: org namespaces badge so visitors can tell orgs
+            from users (the row rides owners/detailed is_org — same
+            payload, no extra fetch, #281 mirror-badge pattern). */}
+        <Show when={props.isOrg}>
+          <span class="pill org-badge ml-2" role="img" title="organization" aria-label="organization">
+            org
+          </span>
+        </Show>
         <Show when={getDoc()}>
           {(doc) => (
             <span class="muted ml-2 text-xs font-normal">
@@ -137,6 +146,11 @@ export default function Owners() {
             <A class="btn primary px-3 py-1" href="/new">
               New repository
             </A>
+            {/* Forgejo #348: the create-org entry point — same gate as
+                the repo CTA (logged-in writer), lands in /:org/settings. */}
+            <A class="btn px-3 py-1" href="/orgs/new">
+              New organization
+            </A>
           </Show>
           <A class="btn px-3 py-1" href="/import">
             Import repository
@@ -182,6 +196,9 @@ export default function Owners() {
             ? orderOwnersByActivity(ranked, activity)
             : ranked;
           const { shown, extra } = pageSlice(ordered, MAX_OWNERS);
+          // Forgejo #348: org badge set from the same payload rows
+          // (is_org rides owners/detailed — zero extra GETs).
+          const orgNames = new Set(rows.filter(isOrgRow).map((r) => r.name));
           return (
             <Show
               when={shown.length > 0}
@@ -194,7 +211,7 @@ export default function Owners() {
               }
             >
               <div class="divide-y divide-zinc-200 dark:divide-zinc-800">
-                <For each={shown}>{(o) => <OwnerSection owner={o} onActivity={reportActivity} />}</For>
+                <For each={shown}>{(o) => <OwnerSection owner={o} isOrg={orgNames.has(o)} onActivity={reportActivity} />}</For>
               </div>
               <Show when={extra > 0}>
                 <p class="muted mt-4 text-sm">

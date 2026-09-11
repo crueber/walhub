@@ -527,6 +527,17 @@ type Env struct {
 	// in (this package never imports it — law 8).
 	OwnerEdit OwnerEditor
 
+	// Orgs marks org-owned namespaces on the owners/detailed listing
+	// (Forgejo #348): ListOrgs reports every org name; ownersDetailed
+	// renders is_org per row from that set in ONE call regardless of
+	// owner count (law 6 — no per-owner probe fan-out). Nil → every row
+	// renders is_org=false (instances without the identity surface
+	// wired). A list error fails open to all-false (display metadata
+	// must never fail the listing — the CollabCounts precedent). Wired
+	// by composition (cmd/walhub) so this package never imports the
+	// feature (law 8).
+	Orgs OrgLister
+
 	// MirrorSummary is the pull-only mirror projection (Forgejo #240):
 	// non-nil + true → the summary carries the mirror view (upstream
 	// URL, schedule, computed next fire, last outcome). Nil → no

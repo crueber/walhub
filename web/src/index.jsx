@@ -41,6 +41,7 @@ import Milestones from "./pages/Milestones.jsx";
 import Wal from "./pages/Wal.jsx";
 import Settings from "./pages/Settings.jsx";
 import Org from "./pages/Org.jsx";
+import OrgNew from "./pages/OrgNew.jsx";
 import Apidocs from "./pages/Apidocs.jsx";
 import Setup from "./pages/Setup.jsx";
 import Keys from "./pages/Keys.jsx";
@@ -59,6 +60,10 @@ render(
       <Route path="/api" component={Apidocs} />
       <Route path="/keys" component={Keys} />
       <Route path="/notifications" component={Notifications} />
+      {/* Static before dynamic: /orgs/new must not fall into /:owner/:name
+          (Forgejo #348 — the shell serves it either way, but the router
+          must resolve the create form, never a repo named orgs/new). */}
+      <Route path="/orgs/new" component={OrgNew} />
       <Route path="/:owner" component={Repos} />
       <Route path="/:org/settings" component={Org} />
       <Route path="/:owner/teams/:slug" component={Team} />

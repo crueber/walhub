@@ -415,7 +415,9 @@ hint*, not an ACL.
   an unknown owner (never 404).
 - `GET /api/v1/owners/detailed[?sort=&order=]` (Forgejo #283 — NEW alongside v1, triple twins
   `/api/v1` + `/api-browser/v1` + `/services/api`, discovery-listed, SDK `owners.listDetailed`) →
-  `{owners: [{name, repo_count, last_commit_sha|null, last_commit_time|null}]}` (`[]` never null;
+  `{owners: [{name, is_org, repo_count, last_commit_sha|null, last_commit_time|null}]}` (`[]` never null;
+  `is_org` (Forgejo #348) is the org-namespace marker — always present, never null (false for
+  users and for instances without identity wired);
   `repo_count` (Forgejo #307) is the owner's manifest-gated live-repo count — always present,
   never null (membership implies ≥1 live repo), ghost-filtered exactly like `liveRepos`;
   the instance repo total is the sum over the uncapped payload;
@@ -1166,6 +1168,16 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   directly. Doc-clarity fix only: the lane note now carves ssh-keys out as token-lane-only
   instead of adding twins (no consumer; twins would widen the browser-lane surface for
   nothing). No wire or behavior change.
+- **Org marker rides `owners/detailed` as `is_org` (Forgejo #348).** Each row gains one
+  always-present `is_org` bool (14 §14.12 field rule — no new endpoint, no new discovery
+  template, all three twins + SDK rows carry it for free; old clients ignore it). Source
+  is the `Env.Orgs` `OrgLister` seam behind one `ListOrgs` call per listing regardless of
+  owner count (law 6 — deliberately NOT N per-owner probes, and NOT the #283 catalog
+  aggregate, which knows repos but not org namespaces; api never imports identity,
+  law 8 — the `MirrorSummary`/`CollabCounts` shape). Nil seam → all false (instances
+  without identity wired); a list error fails open to all-false (display metadata must
+  never fail the listing — the `CollabCounts` precedent). Rationale: the explore page
+  badges org rows and links them to the org profile with zero extra GETs (12_web_ui.md).
 - **Serve-health degraded source + `mirror.degraded_reason` (issue #320, 2026-09-11).**
   The summary `health: degraded` now has two sources: the cached `fsck.pb` report (a hit
   short-circuits) and the serve-health sidecar `meta/serve-health.json` (05 §5.2.1) — direct

@@ -99,12 +99,14 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	var _ api.OrgGate = c.ident
 	var _ api.AccessBootstrap = c.ident
 	var _ api.OwnerEditor = c.ident
+	var _ api.OrgLister = c.ident
 	if apiEnv != nil {
 		apiEnv.Access = c.ident
 		apiEnv.GroupExpander = c.ident.PolicyExpander()
 		apiEnv.OrgGate = c.ident
 		apiEnv.AccessBoot = c.ident
 		apiEnv.OwnerEdit = c.ident // Forgejo #234: org-owner profile edits
+		apiEnv.Orgs = c.ident      // Forgejo #348: owners/detailed is_org marker
 		// Forgejo #345: the summary/listing visibility projection behind
 		// the Env hook (api renders the spelling without importing the
 		// feature, law 8 — the MirrorSummary/CollabCounts shape). One

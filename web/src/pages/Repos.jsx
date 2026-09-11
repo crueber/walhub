@@ -210,6 +210,15 @@ export default function Repos() {
     () => `profile:${owner()}`,
     () => repos.owners.profile(owner()).catch(() => emptyProfile(owner()))
   );
+  // Forgejo #348: the public org profile. orgs.get resolves null for
+  // non-org owners (404 → null, never a tray), so this is one extra GET
+  // exactly when the owner MIGHT be an org — users render unchanged.
+  // Private repos stay hidden by the server (#345 visibility filtering
+  // on the detailed listing below), never by the client.
+  const [getOrg] = useData(
+    () => `org:${owner()}`,
+    () => repos.orgs.get(owner()).catch(() => null)
+  );
   const [getEditing, setEditing] = createSignal(false);
   // Writers-only New button (mirrors require_write so the button never
   // promises what POST /api/v1/repos refuses): hidden for anonymous
@@ -223,17 +232,47 @@ export default function Repos() {
   };
   const profile = () => getProfile() ?? emptyProfile(owner());
   const displayName = () => profile().display_name || owner();
+  // Forgejo #348: org landing. The org header (badge + org display name
+  // + description) renders above the repo list when the owner is an org,
+  // mirroring #234's owner-profile shape. "Manage" appears only when the
+  // server says the viewer may edit (profile can_edit: org owner or host
+  // admin via the OwnerEditor seam — the client never decides).
+  const isOrg = () => getOrg() != null;
+  const orgName = () => getOrg()?.display_name || owner();
+  const canManage = () => isOrg() && !!getProfile()?.can_edit;
   return (
     <div class="repos-page">
       <div class="mb-1 flex items-center justify-between">
-        <h2 class="text-xl font-semibold">{displayName()}</h2>
+        <h2 class="text-xl font-semibold">
+          {isOrg() ? orgName() : displayName()}
+          <Show when={isOrg()}>
+            <span class="pill org-badge ml-2 align-middle text-xs font-normal" role="img" title="organization" aria-label="organization">
+              org
+            </span>
+          </Show>
+        </h2>
         <Show when={canWrite()}>
           <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
             New repository
           </A>
         </Show>
       </div>
-      <Show when={profile().display_name}>
+      <Show when={isOrg()}>
+        <p class="muted text-sm">@{owner()}</p>
+      </Show>
+      <Show when={isOrg() && getOrg()?.description}>
+        <p class="mt-1 text-sm">{getOrg().description}</p>
+      </Show>
+      <Show when={canManage()}>
+        <p class="mt-3">
+          <A class="btn px-3 py-1" href={`/${owner()}/settings`}>
+            Manage organization
+          </A>
+        </p>
+      </Show>
+      {/* The org block above already renders @{owner}; the user-profile
+          handle renders only for non-org owners (no double handle). */}
+      <Show when={profile().display_name && !isOrg()}>
         <p class="muted text-sm">@{owner()}</p>
       </Show>
       <Show when={profile().location || profile().timezone}>
@@ -289,8 +328,13 @@ export default function Repos() {
       </Show>
       <p class="muted mt-4 text-xs">
         <A class="hover:underline" href={`/import?owner=${encodeURIComponent(owner())}`}>import into {owner()}</A>
-        {' · '}
-        <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
+        {/* Forgejo #348: the settings link is an org-owner affordance
+            (same canManage gate as the header button above); user
+            namespaces never had an org settings page to link to. */}
+        <Show when={canManage()}>
+          {' · '}
+          <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
+        </Show>
       </p>
     </div>
   );
