@@ -19,7 +19,7 @@ Test framework: stdlib `testing` only. No testify, no gomock (dependency policy,
 | race | `make race` → `go test -race -short -count=1 ./...` | full fast tier under the race detector (§6) | zero races |
 | cover | `make cover` | per-package statement coverage of every `internal/...` package, ≥ 95% fail-under (§7) | CI-enforced; new code lands with tests (D7) |
 | web | `make test-web` → `node --test web/test/unit/*.test.js` | headless JS logic tests + fetch-based server smoke (§6.5) | zero npm dependencies; wired into `make test` and CI |
-| slow | `make test-slow` → `go test -run 'Slow' -count=1 ./...` | `TestSlow*` soaks: 20 k-ref push, 466 k-ref refs render, long bundle chains | nightly-ish; never in fast |
+| slow | no recipe yet (no `TestSlow*` soak tests exist; see D8) | `TestSlow*` soaks when they land: 20 k-ref push, 466 k-ref refs render, long bundle chains | nightly-ish; never in fast |
 
 Rules carried over verbatim from §17:
 - **Never run the whole test tree unbounded.** Every recipe is wrapped in a watchdog. The Makefile resolves `timeout` (GNU coreutils) and falls back to `gtimeout` (macOS); neither present → run unwrapped with a warning, never hang a contributor's session (the `T5`/`T15` variables in §7).
@@ -173,24 +173,31 @@ Hazard: `Hang` means a goroutine that never returns; a black-holed link leaks a 
 
 ## 4. Sim scenarios (`internal/sim`)
 
-One test file per scenario, all prefixed `TestSim_`, all hermetic, all seeded. Harness: a `Cluster` of N instances sharing one truth store and one repo; each instance = walhub server internals + its own FaultStore link; `AddInstance(tweak)`, `Restart(i)` (fresh process state, same link), `RestartKeepDisk(i)` (persistent cache dir survives). A `Pusher` does real receive-pack-style pushes through the instance's git layer with a bounded timeout.
+Landed (Forgejo #338): the sim tier is real — `internal/sim` implements the
+harness (Cluster of N instances over one memory truth store, one FaultStore
+link per instance, crash-boundary wrappers, retrying pusher, truth oracle)
+and eleven of the twelve scenarios below as `TestSim_` tests grouped by theme
+(`safety_test.go`, `budgets_test.go`, `liveness_test.go`, `seeds_test.go`;
+harness unit tests in `harness_test.go` run in the fast tier). All `TestSim_`
+tests skip in `-short` mode (`if testing.Short() { t.Skip }`) so `make test`
+stays under a minute; `make sim` runs them with a generous `-timeout`. The
+twelfth scenario and two nuances are documented gaps (G1/G2/G3 in the
+`internal/sim` package doc and D8 below) — stated here, not silently dropped.
 
-| Go test | Ported from | What it proves |
-|---|---|---|
-| `TestSim_SafetyThenLiveness` | `sim_safety_then_liveness` (seeded) | N pushers × M pushes under `Chaos(rate)` faults: **exactly one winner per competing transaction**, no lost commits, every instance converges to the truth refs; `checkTruth` + liveness checks after faults are healed |
-| `TestSim_OrphanedLogSegmentDoesNotBlockWriters` | `liveness_orphaned_log_segment_does_not_block_writers` | crash between the log-segment PUT and the manifest CAS → the segment is an orphan; later writers **burn past its seq** (§6.4), a later commit sweeps it; writers never block on it |
-| `TestSim_AfterALostCASResponse` | `liveness_after_a_lost_cas_response` | `errAfter` on the manifest CAS → the write may have landed; the writer re-reads fresh ("cas_landed") and treats "my segment is listed" as committed; no duplicate seq, no lost ref |
-| `TestSim_StaleInstanceCannotStarveTheCore` | `liveness_stale_instance_cannot_starve_the_core` | a replica under `staleForever` keeps answering 304; the monotonic revision guard makes a stale manifest read **after a local publish ignored**; the core (other instances) still commits |
-| `TestSim_ConcurrentPushersExactlyOneWinner` | `Pusher::push_once` races in `sim_safety_then_liveness` | K instances push conflicting ref updates simultaneously; the truth manifest ends with exactly one manifest revision per CAS and every loser observes the winner's version (412 → re-sync) |
-| `TestSim_ReaderWriterReadGuardDuringCompaction` | `liveness_leaked_read_guard_pins_cache_until_drop` | a clone holds the pack-cache **ReadGuard** while compaction removes packs → compaction proceeds (try-write rule: writers never block on a reader lock, they retry); a leaked guard pins the cache only until drop, never deadlocks |
-| `TestSim_BaseRebuildResumesAfterKillBetweenAnyTwoPhases` | `base_rebuild_resumes_after_a_kill_between_any_two_phases` | kill the rebuild between any two phases (`copied → repacked → history_pack → commit_graph`); resume continues from the marker iff `manifest.head_seq == started_head_seq`, else restarts; across all attempts **exactly one `git repack` runs** |
-| `TestSim_DrainInterruptsRunningUnit` | drain hooks (§6.8) + `sim_task_ownership_under_concurrency_and_owner_crash` | SIGTERM phase 1 interrupts the running maintenance unit; the dropped task records failure 503 "interrupted: instance shut down; will be retried by the next pass"; the next pass retries it; serving stays up through phase 1 |
-| `TestSim_CheckpointWriterCrashIsInvisibleAndRepaired` | `sim_checkpoint_writer_crash_is_invisible_and_repaired` | panic-once during checkpoint writes leaves garbage keyed by seq that is never a hazard; the next writer checkpoints idempotently |
-| `TestSim_BlackHoledInstanceIsInvisibleToTheCore` | `liveness_black_holed_instance_is_invisible_to_the_core` | a black-holed link never wedges the core or leases: lease steal after `expires_at + 2s` works, compaction proceeds, the partition heals or the instance is restarted |
-| `TestSim_HealthyRequestRoundTripBudgets` | `healthy_request_round_trip_budgets` | the §4.8 budgets, counted at the transport layer via the FaultStore link stats (below) |
-| `TestSim_LivenessUnderRandomSeeds` | `WALGIT_SIM_SEED(S)` plural | loops seeds (default set: 22 and neighbors; `WALHUB_SIM_SEED` / `WALHUB_SIM_SEEDS` override) through `SafetyThenLiveness` — the randomized consistency proof |
-
-All sim tests skip in `-short` mode (`if testing.Short() { t.Skip }`) so `make test` stays under a minute; `make sim` runs them with a generous `-timeout`.
+| Go test | Ported from | What it proves | Status |
+|---|---|---|---|
+| `TestSim_SafetyThenLiveness` | `sim_safety_then_liveness` (seeded) | N pushers × M pushes under `Chaos(rate)` faults: **exactly one winner per competing transaction**, no lost commits, every instance converges to the truth refs; `checkTruth` + liveness checks after faults are healed | landed |
+| `TestSim_OrphanedLogSegmentDoesNotBlockWriters` | `liveness_orphaned_log_segment_does_not_block_writers` | crash between the log-segment PUT and the manifest CAS → the segment is an orphan; later writers **burn past its seq** (§6.4), a later commit sweeps it; writers never block on it | landed |
+| `TestSim_AfterALostCASResponse` | `liveness_after_a_lost_cas_response` | `errAfter` on the manifest CAS → the write may have landed; the writer re-reads fresh ("cas_landed") and treats "my segment is listed" as committed; no duplicate seq, no lost ref | landed |
+| `TestSim_StaleInstanceCannotStarveTheCore` | `liveness_stale_instance_cannot_starve_the_core` | a replica under `staleForever` keeps answering 304; the monotonic revision guard makes a stale manifest read **after a local publish ignored**; the core (other instances) still commits | landed |
+| `TestSim_ConcurrentPushersExactlyOneWinner` | `Pusher::push_once` races in `sim_safety_then_liveness` | K instances push conflicting ref updates simultaneously; the truth manifest ends with exactly one manifest revision per CAS and every loser observes the winner's version (412 → re-sync) | landed |
+| `TestSim_ReaderWriterReadGuardDuringCompaction` | `liveness_leaked_read_guard_pins_cache_until_drop` | a clone holds the pack-cache **ReadGuard** while compaction removes packs → compaction proceeds (try-write rule: writers never block on a reader lock, they retry); a leaked guard pins the cache only until drop, never deadlocks | landed (try-write rule pinned against the real `rw.TryRWMutex` + the dual-direction liveness proof; pack removal itself stays in `internal/maintain`, outside the sim seam) |
+| `TestSim_BaseRebuildResumesAfterKillBetweenAnyTwoPhases` | `base_rebuild_resumes_after_a_kill_between_any_two_phases` | kill the rebuild between any two phases (`copied → repacked → history_pack → commit_graph`); resume continues from the marker iff `manifest.head_seq == started_head_seq`, else restarts; across all attempts **exactly one `git repack` runs** | **gap G1**: not landed — killing between phases needs an injection hook in the maintain phase machine that does not exist; resume is unit-covered in `internal/maintain` (`rebuild_test.go`) |
+| `TestSim_DrainInterruptsRunningUnit` | drain hooks (§6.8) + `sim_task_ownership_under_concurrency_and_owner_crash` | SIGTERM phase 1 interrupts the running maintenance unit; the dropped task records failure 503 "interrupted: instance shut down; will be retried by the next pass"; the next pass retries it; serving stays up through phase 1 | landed at the hook level (drain cancels the running unit with the exact 503, refused restarts); **gap G3**: the SIGTERM delivery path itself belongs to e2e, not the sim |
+| `TestSim_CheckpointWriterCrashIsInvisibleAndRepaired` | `sim_checkpoint_writer_crash_is_invisible_and_repaired` | panic-once during checkpoint writes leaves garbage keyed by seq that is never a hazard; the next writer checkpoints idempotently | landed with **gap G2**: the crash is invisible and repaired by progress, but a retry at the SAME head is not idempotent (round-1 re-Create 412s — hard-pinned in the test) |
+| `TestSim_BlackHoledInstanceIsInvisibleToTheCore` | `liveness_black_holed_instance_is_invisible_to_the_core` | a black-holed link never wedges the core or leases: lease steal after `expires_at + 2s` works, compaction proceeds, the partition heals or the instance is restarted | landed (lease steal over a healthy link + hung-into-deadline on the partitioned link + heal/restart convergence) |
+| `TestSim_HealthyRequestRoundTripBudgets` | `healthy_request_round_trip_budgets` | the §4.8 budgets, counted at the transport layer via the FaultStore link stats (below) | landed |
+| `TestSim_LivenessUnderRandomSeeds` | `WALGIT_SIM_SEED(S)` plural | loops seeds (default set: 22 and neighbors; `WALHUB_SIM_SEED` / `WALHUB_SIM_SEEDS` override) through `SafetyThenLiveness` — the randomized consistency proof | landed |
 
 ### 4.1 Budget assertions (counted at the transport layer)
 
@@ -198,10 +205,23 @@ All sim tests skip in `-short` mode (`if testing.Short() { t.Skip }`) so `make t
 
 | Operation | Assertion | Budget source (§4.8) |
 |---|---|---|
-| push (per batch, already synced) | `ops ≤ 6` (5 if already synced; ref-only/settings batches carry no packs and write no sidecar) | freshness GET → (pack PUTs ∥ log PUT ∥ size-sidecar PUT) → manifest CAS; the sidecar PUT adds total ops only, zero sequential trips (R1 B1, Forgejo #248) |
+| push (per batch) | `ops ≤ 6` (5 if already synced; settings-only batches skip the sidecar) | freshness GET → (pack PUTs ∥ log PUT ∥ size-sidecar PUT) → manifest CAS; the sidecar PUT adds total ops only, zero sequential trips (R1 B1, Forgejo #248) |
 | warm refs sync | `ops ≤ 1` | 1 conditional GET (0 within freshness TTL) |
 | cold refs sync (one tail) | `ops ≤ 2` | manifest GET → (checkpoint refs ∥ tail) |
 | checkpoint | `ops ≤ 4` | freshness GET → (refs PUT ∥ checkpoint PUT) → manifest CAS; provenance times come from what the writer already applied, **never a log GET** (the 2026-08-22 regression was 6 requests — this assertion is the regression fence) |
+
+Reconciliation with AGENTS.md law 6 ("push ≤ 5 requests") and the Rust §4.8
+model ("push ≤ 5, 4 if already synced"): both count freshness GET → (pack
+PUTs ∥ log PUT) → manifest CAS. The Go publish path adds exactly one op on
+top — the `meta/stats.json` sidecar PUT, which runs IN PARALLEL with the
+manifest CAS (+1 total op, +0 sequential trips). So the asserted bound is
+Rust 5/4 + 1 sidecar = **6/5 with sequential depth unchanged** — law 6's
+intent (defend the depth) is intact, and the with-pack budget case pins the
+bound exactly (freshness + pack + idx + log + sidecar + CAS = 6; 5 synced).
+Note the correction: ref-only (pack-less) batches DO write the sidecar —
+only settings-only batches skip it (see `batchWritesSidecar` in
+`internal/wal/publish.go`); the sidecar write is best-effort (a lost sidecar
+PUT never fails the push — the maintainer sweep backfills).
 
 Counting rule: read `Stats.Ops` immediately before and after the awaited op on the **acting instance's link only**; background maintenance on other instances does not count against this instance. Failure messages include the measured count, the budget, and `dumpTraces` output.
 
@@ -338,51 +358,42 @@ race: ## full fast tier under the race detector
 
 cover: ## coverage gate: >= 95% statements, every internal/... package (§7.1)
 	@mkdir -p .cover && rm -f .cover/*.out
-	@fail=0; for pkg in $(INT_PKGS); do \
-	  prof=".cover/$$(echo $$pkg | tr '/' '-').out"; \
-	  $(T5) go test -short -count=1 -coverprofile="$$prof" $$pkg || exit 1; \
-	  go run ./internal/devtools/covergate -min 95 -profile "$$prof" -pkg "$$pkg" || fail=1; \
-	done; exit $$fail
+	@pkgs=$$(go list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./internal/... | grep -v devtools | grep -v "/e2e"); \
+	for p in $$pkgs; do \
+		name=$$(echo $$p | sed 's|git.packden.us/crueber/walhub/internal/||; s|/|_|g'); \
+		$(GO) test -count=1 -coverprofile=.cover/$$name.out "$$p" || exit 1; \
+	done
+	$(GO) run ./internal/devtools/covergate -dir .cover -min 95
 
-test-slow: ## soaks: 20k-ref push, 466k-ref render, ...
-	$(T15) go test -run 'Slow' -count=1 ./...
-
-sim: ## the consistency proof (fault injection); seeded
-	$(T15) go test -count=1 -timeout 15m ./internal/sim/...
+sim: ## the consistency proof (fault injection) + round-trip budgets; seeded
+	$(T15) $(GO) test -count=1 -timeout 15m ./internal/sim/...
 
 contract: ## ONE suite against every always-run backend (memory + filesystem)
-	$(T5) go test -count=1 -run 'TestContract_(Memory|Filesystem)' ./internal/store/contract/...
+	$(GO) test -count=1 ./internal/store/ -run TestContract
 contract-fs: ## filesystem backend only (D4)
-	$(T5) go test -count=1 -run 'TestContract_Filesystem' ./internal/store/contract/...
+	$(GO) test -count=1 ./internal/store/ -run TestContract_Filesystem
 
-contract-s3: ## env-gated: ONE suite against rustfs (starts it if not answering)
-	$(MAKE) dev-store
-	WALHUB_TEST_S3_ENDPOINT=http://127.0.0.1:9000 AWS_ACCESS_KEY_ID=walgit-dev AWS_SECRET_ACCESS_KEY=walgit-dev-secret \
-	$(T5) go test -count=1 -run 'TestContract_S3' ./internal/store/contract/...
-contract-gcs: ## env-gated: GCS JSON-API backend
-	test -n "$$WALHUB_TEST_GCS_BUCKET" || (echo "set WALHUB_TEST_GCS_BUCKET"; exit 1)
-	$(T5) go test -count=1 -run 'TestContract_GCS' ./internal/store/contract/...
+contract-s3: ## store contract against rustfs (make dev-store first)
+	WALHUB_TEST_S3_ENDPOINT=http://127.0.0.1:9000 $(GO) test -count=1 ./internal/store/ -run TestContractS3
+contract-gcs: ## store contract against a real GCS bucket
+	WALHUB_TEST_GCS_BUCKET=$${WALHUB_TEST_GCS_BUCKET:?set WALHUB_TEST_GCS_BUCKET} $(GO) test -count=1 ./internal/store/ -run TestContractGCS
 
-e2e: ## real git + bootstrap lifecycle (§5.2, §5.3) against live servers; ~50 s
-	$(T15) tests/e2e.sh
-image: ## container image (16_packaging.md)
-	docker build -t walhub:dev .
+e2e: ## smart-HTTP end-to-end against the real git binary
+	$(T15) $(GO) test -count=1 ./internal/e2e/...
+image: ## build the OCI image
+	docker build -t walhub .
 
-dev: ## one-box dev run: rustfs up, build, serve on :8080 with zero-config defaults
-	$(MAKE) dev-store
-	go build -o bin/walhub ./cmd/walhub
-	./bin/walhub serve
-dev-store: ## rustfs (S3-compatible) on :9000, fixed dev keys, bucket created
+dev-store: ## start rustfs (S3-compatible) for bucket-contract tests
 	docker compose up -d rustfs
 dev-store-stop:
 	docker compose down
-clean:
-	rm -rf bin .cover && find . -name '*.test' -delete
-ci: ## what CI runs, in order (fast first, proof last)
-	$(MAKE) vet test race cover contract e2e
+clean: ## remove build artifacts
+	rm -rf $(BINARY) .cover web/dist
+	mkdir -p web/dist && touch web/dist/.keep
+ci: vet test race cover contract sim e2e ## everything that must be green before a merge
 ```
 
-Normative notes: the old `lint` target is `vet` (same three commands); the old `dev-local` recipe became `make dev`, which needs no `--config` because a bare serve boots with the D5 zero-config defaults — export the rustfs dev creds (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` as in `contract-s3`) before `dev` when the store backend is S3. `test-web` runs `node --test web/test/unit/*.test.js` (§6.5) and is part of `make test` — a Go-only green build is not green. S3/GCS contract targets stay env-gated; memory + filesystem (`contract`) never skip. `cover` discovers packages via `go list ./internal/...`, so every collaboration package (identity, issues, pulls, review, checks, notify, releases, social) is gated at ≥ 95% with no target change — the 09 integration added no new tier, only new suites inside the existing ones (§5.4) plus the `cmd/`-side push fence (outside the gate by §7.1). The `sim` tier has no package yet (`internal/sim` does not exist); until it lands, `e2e` is the end-to-end proof `ci` runs.
+Normative notes: the old `lint` target is `vet` (same three commands). `test-web` runs `node --test web/test/unit/*.test.js` (§6.5) and is part of `make test` — a Go-only green build is not green. S3/GCS contract targets stay env-gated; memory + filesystem (`contract`) never skip. `cover` discovers packages via `go list ./internal/...`, so every collaboration package (identity, issues, pulls, review, checks, notify, releases, social) is gated at ≥ 95% with no target change — the 09 integration added no new tier, only new suites inside the existing ones (§5.4) plus the `cmd/`-side push fence (outside the gate by §7.1). The `sim` tier landed in `internal/sim` (D8) and runs in `ci` between `contract` and `e2e` — fast first, proof last.
 
 ### 7.1 The coverage gate (Divergence D7)
 
@@ -420,8 +431,29 @@ The rewrite copies CODE behavior (§20); each of these gets an explicit assertio
 
 **Divergence (2026-08-31):**
 
-- **D3 — Make replaces just.** Every dev/CI entry point is a Make target (§7: `build`, `fmt`, `vet`, `test`, `race`, `cover`, `test-slow`, `sim`, `contract`, `contract-fs`, `contract-s3`, `contract-gcs`, `e2e`, `image`, `dev`, `dev-store`, `dev-store-stop`, `clean`, `ci`); the justfile is deleted. The old `lint` target is renamed `vet` (supersedes the `just lint` wording above; commands unchanged), and `just dev-local` becomes `make dev`. Rationale: make is ubiquitous — no extra tool to install for a first contribution — and the watchdog/watch-what-you-run semantics port one-to-one.
+- **D3 — Make replaces just.** Every dev/CI entry point is a Make target (§7: `build`, `fmt`, `vet`, `test`, `test-go`, `test-web`, `race`, `cover`, `sim`, `contract`, `contract-fs`, `contract-s3`, `contract-gcs`, `e2e`, `image`, `dev-store`, `dev-store-stop`, `clean`, `ci`, `help`, `web`, `landing-gifs` — exactly the `.PHONY` list in the Makefile); the justfile is deleted. The old `lint` target is renamed `vet` (supersedes the `just lint` wording above; commands unchanged). Rationale: make is ubiquitous — no extra tool to install for a first contribution — and the watchdog/watch-what-you-run semantics port one-to-one.
 - **D7 — Coverage gate.** `make cover` enforces **≥ 95% statement coverage on every `internal/...` package** (`cmd/` excluded), via per-package `-coverprofile` + the `covergate` checker (§7.1), CI-gated. Review bar is near 100%: new code lands with tests — table-driven `httptest` for every handler. This is new (the Rust spec had no coverage gate); it does not supersede any prior decision.
 - **D4 — Filesystem store joins the contract suite as an always-run backend.** `TestContract_Filesystem` runs wherever `TestContract_Memory` runs, no env needed; S3 and GCS stay env-gated (`WALHUB_TEST_S3_ENDPOINT`, `WALHUB_TEST_GCS_BUCKET`) and CI exercises S3 via the rustfs container. Supplements (does not supersede) the `TestContract_LeaseSteal` decision — the suite's "one suite, every backend" rule now has four backends, two of them unconditional.
 - **D2 — Web/JS tests without a test framework (amended; frontend stack per D-WEB-6).** The JS tier is `node --test` over headless pure-ESM logic modules plus fetch-based smoke tests (§6.5), wired into `make test` and `ci`; tests import source (`sdk/src/*.js`, `src/lib/*.js`) and need no build — the builds (`make web`: vite SPA + esbuild `dist/repos.js`) produce only shipped artifacts. Amended when the user directed a build step for the modular SDK (2026-08-31, second pass); the D-WEB-6 SolidJS + Tailwind port (2026-09-02, DEVIATIONS.md) keeps this tier unchanged — no test framework, no TypeScript.
 - **D5/D6 — Bootstrap and setup lifecycle is e2e-tested.** Four scenarios (§5.3: no-config defaults boot; invalid-config setup-only 503s; setup save → restart → normal; setup API auth matrix incl. `WALHUB_SETUP_TOKEN`) run in `make e2e` and CI. New; no prior decision affected.
+- **D8 — Sim tier lands; D3 target list corrected (Forgejo #338, 2026-09-11).**
+  `internal/sim` implements the §4 harness and eleven of the twelve scenarios
+  (gaps G1/G2/G3 stated in the package doc: no kill hook exists in the
+  maintain phase machine; same-head checkpoint retry deterministically
+  reports the round-1 re-Create 412; SIGTERM delivery belongs to e2e). `make
+  sim` runs it (`go test -count=1 -timeout 15m ./internal/sim/...`) and `ci`
+  chains it between `contract` and `e2e`, closing the AGENTS.md law-6 loop
+  (budgets now actually asserted). D3's list is corrected to the actual
+  `.PHONY` set: `sim` and `contract-fs` gain real recipes;   `test-slow` and
+  `dev` are dropped (no `TestSlow*` tests exist; a one-box `dev` run needs
+  the docker-backed store, out of scope for the Make surface) — a no-op
+  recipe that matches nothing is worse than an honest list. §4.1's push bound
+  (`ops ≤ 6`, 5 synced) is reconciled with law 6 / Rust §4.8 (5/4): the +1 is
+  exactly the parallel #248 sidecar PUT, sequential depth unchanged; the
+  ref-only parenthetical is corrected (ref-only batches DO write the
+  sidecar — only settings-only batches skip it). Landing the proof also
+  fixed three wal liveness bugs the sim exposed (all in `internal/wal`,
+  each regression-pinned, doc 05 amended in the same change): the orphan
+  sweep deleting concurrently-committed segments, unbounded orphan-backlog
+  growth on failed batches (failure-path sweep), and the wiped version token
+  never healing on guard-reject (token adopt). No prior decision affected.

@@ -43,6 +43,12 @@ cover: ## coverage gate: >= 95% statements, every internal/... package (per-leaf
 contract: ## store contract suite: memory + filesystem (always run)
 	$(GO) test -count=1 ./internal/store/ -run TestContract
 
+contract-fs: ## store contract suite: filesystem backend only
+	$(GO) test -count=1 ./internal/store/ -run TestContract_Filesystem
+
+sim: ## fault-injection consistency proof + round-trip budgets (seeded; skips in -short)
+	$(T15) $(GO) test -count=1 -timeout 15m ./internal/sim/...
+
 contract-s3: ## store contract against rustfs (make dev-store first)
 	WALHUB_TEST_S3_ENDPOINT=http://127.0.0.1:9000 $(GO) test -count=1 ./internal/store/ -run TestContractS3
 
@@ -68,9 +74,9 @@ clean: ## remove build artifacts
 	rm -rf $(BINARY) .cover web/dist
 	mkdir -p web/dist && touch web/dist/.keep
 
-ci: vet test race cover contract e2e ## everything that must be green before a merge (09: contract + e2e gate the collab seams too)
+ci: vet test race cover contract sim e2e ## everything that must be green before a merge (09: contract + e2e gate the collab seams too)
 
 help: ## show targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: web build fmt vet test test-go test-web race cover sim contract contract-s3 contract-gcs e2e image dev-store dev-store-stop clean ci help landing-gifs
+.PHONY: web build fmt vet test test-go test-web race cover sim contract contract-fs contract-s3 contract-gcs e2e image dev-store dev-store-stop clean ci help landing-gifs
