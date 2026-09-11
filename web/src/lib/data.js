@@ -323,6 +323,23 @@ export function invalidatePrefix(prefix) {
   for (const key of keys) invalidate(key);
 }
 
+/**
+ * invalidateIssueLists(full) — the mutation-site reconcile for thread
+ * mutations (issue #318). The promise cache is GLOBAL across Solid-router
+ * navigations (one module-level Map), so a PATCH on the issue page must
+ * invalidate the repo-wide list surfaces directly instead of relying on
+ * the SSE round-trip through a page that may unmount mid-navigation:
+ * every `issues:{full}:*` window (Issues.jsx query windows AND the
+ * milestones page's `issues:{full}:milestone:{id}` entries) plus the
+ * `milestones:{full}` counts. invalidate() on an uncached key is a
+ * silent no-op, so calling this when no list page was ever mounted is
+ * free. Callers still invalidate their own thread key separately.
+ */
+export function invalidateIssueLists(full) {
+  invalidatePrefix(`issues:${full}:`);
+  invalidate(`milestones:${full}`);
+}
+
 // --- 08 §4 invalidation-storm coalescing ------------------------------------
 // A burst of collab frames (CI posting 30 check runs) MUST coalesce:
 // keys are collected into a set and invalidated once per tick. Background

@@ -40,7 +40,12 @@ export function collabKeys(full, frame) {
   const num = frame?.num;
   switch (kind) {
     case "issue":
-      return [`issue:${full}:${num}`, `issues:${full}:*`];
+      // Milestone membership lives in three places: the thread header,
+      // every `issues:{full}:*` list window (the Issues.jsx query windows
+      // AND the milestones page's `issues:{full}:milestone:{id}` entries),
+      // and the `milestones:{full}` counts (issue #318 — reassignment and
+      // close/reopen move counts without touching any milestone object).
+      return [`issue:${full}:${num}`, `issues:${full}:*`, `milestones:${full}`];
     case "issue_event":
       return [`issue:${full}:${num}`, `events:${full}:${num}:*`];
     case "pull":

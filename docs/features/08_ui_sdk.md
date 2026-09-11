@@ -398,18 +398,37 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   shared `social:{o}/{r}` 30 s §6 key — single-flighted, non-blocking (muted `(…)` placeholder),
   worst case bounded by the #117 caps. No new endpoint, no new SDK method, no new deps.
 - **Split-button close controls (2026-09-10, issue #311).** The #109 chooser menus (open the menu,
-  then pick a reason — no one-click path) become GitHub-pattern split buttons: primary segment
-  closes immediately as `completed` (the API default made explicit via `CLOSE_COMPLETED`; the menu
-  therefore offers the not-planned alternate ONLY — the button IS the completed path), ▾ segment
-  toggles the upward menu. Same for Comment-and-Close (primary posts the body, empty body just
-  closes, then closes as completed). Both segments + menu share one root: a document click outside
-  it dismisses (RefPicker/ReactionMenu pattern, removed in `onCleanup`), clicks on ▾ itself just
-  toggle (inside the boundary, never close-then-reopen), Escape refocuses the toggle, Tab-out
-  dismisses. All three controls in each split menu (primary, ▾, item) disable from the
-  composer's `getBusy()` guard (single-flight, no double-close), as the chooser menus did.
-  No backend change — `state_reason` vocabulary unchanged. Headless cover in
-  `web/test/unit/split-close.test.js` (source-text state-machine pins, same convention as
-  `clone-outside-close.test.js`); no new deps.
+   then pick a reason — no one-click path) become GitHub-pattern split buttons: primary segment
+   closes immediately as `completed` (the API default made explicit via `CLOSE_COMPLETED`; the menu
+   therefore offers the not-planned alternate ONLY — the button IS the completed path), ▾ segment
+   toggles the upward menu. Same for Comment-and-Close (primary posts the body, empty body just
+   closes, then closes as completed). Both segments + menu share one root: a document click outside
+   it dismisses (RefPicker/ReactionMenu pattern, removed in `onCleanup`), clicks on ▾ itself just
+   toggle (inside the boundary, never close-then-reopen), Escape refocuses the toggle, Tab-out
+   dismisses. All three controls in each split menu (primary, ▾, item) disable from the
+   composer's `getBusy()` guard (single-flight, no double-close), as the chooser menus did.
+   No backend change — `state_reason` vocabulary unchanged. Headless cover in
+   `web/test/unit/split-close.test.js` (source-text state-machine pins, same convention as
+   `clone-outside-close.test.js`); no new deps.
+- **Cross-page cache invalidation for thread mutations (2026-09-11, issue #318).** Milestone
+  reassignment showed stale membership in milestone-filtered lists until reload: the promise
+  cache is global across Solid-router navigations, but invalidation rode the per-page SSE
+  subscription — the issue page's `accept` (num-match) filter gated the shared
+  `issues:{full}:*` invalidation too, and the milestones page subscribed to no `issue`
+  frames at all. Three changes, no new endpoint, no polling, no new deps: (1) the issue
+  page reconciles every thread mutation at the mutation site via
+  `invalidateIssueLists(full)` (`data.js`: the `issues:{full}:` prefix — Issues.jsx query
+  windows AND `issues:{full}:milestone:{id}` entries — plus `milestones:{full}` counts;
+  uncached keys are silent no-ops); (2) the milestones page subscribes to `issue` frames
+  so its inline lists + counts self-heal while mounted (remote actors included); (3) the
+  `issue` frame→key map gains `milestones:{full}` (reassignment/close move counts without
+  touching any milestone object) and the issue page drops its `accept` filter — per-key
+  invalidation is already self-scoping (`issue:{full}:{num}` names the frame's own
+  thread), so the filter only ever suppressed shared-prefix invalidation. The pull pages
+  keep their num filters (same latent pattern — follow-up, not this fix). Headless cover
+  in `web/test/unit/issue-invalidation.test.js` (frame→key set, prefix coverage of both
+  stale surfaces, mutation-site refetch scoping) alongside the updated `collab-lib.test.js`
+  frame-table pin.
 
 ## Explicitly out of scope
 
