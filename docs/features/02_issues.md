@@ -593,6 +593,25 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   landings (`?milestone=`, #314) inherit the open default — deliberate,
   matching GitHub. `Pulls.jsx` is intentionally untouched (flagged as a
   follow-up decision, not an oversight).
+- **Empty-labels pack chooser (issue #324, 2026-09-11).** A repo with zero
+  labels offers two one-click packs on `/:o/:r/labels` — GitHub defaults
+  (8 labels, live-verified against the GitHub labels API; the classic
+  `documentation` entry is NOT among GitHub's current defaults, so the pack
+  omits it rather than shipping a stale memory) and GitLab's "Generate a
+  default set of labels" set (8 labels — names from the GitLab docs, colors
+  from `lib/gitlab/issues_labels.rb` @ master; GitLab generates no
+  descriptions, so those entries carry none). Pack constants live in
+  `web/src/lib/label-packs.js` (pure constants + `missingFromPack`,
+  `node --test`). One click fires sequential `labels.create` calls through
+  the existing one-per-request endpoint (option (a) from the issue: 8
+  requests, human-rate, triage enforced per request server-side — no bulk
+  endpoint, no backend change, law 6 unaffected); existing names are skipped
+  case-insensitively, per-label failures report into the error tray while
+  the rest of the pack keeps going, and the reload shows what landed. The
+  chooser renders only when `labels.length === 0` (a repo that deletes all
+  its labels sees it again — accepted) and the buttons render for everyone
+  exactly like the create form (no new client gating invented — the server
+  403s non-triage per request). No route-provider seam touched (law 8).
 
 ## Explicitly out of scope
 
