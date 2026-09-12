@@ -4,7 +4,10 @@
 // action row), avatar right (h-24 circle with Regenerate/Remove grouped
 // beneath it) — instead of #390's orphan justify-end avatar row floating
 // above a header row that knew nothing about it (#403: the orphan CTA row
-// above the header joined Edit profile in the grouped row under the bio). Layout only: every gate (Edit = server can_edit,
+// above the header joined Edit profile in the grouped row under the bio;
+// #413: the New-repository CTA left the header entirely for the
+// Repositories toolbar, leaving Edit profile alone in the action row).
+// Layout only: every gate (Edit = server can_edit,
 // Regenerate/Remove = self-only, #376 invalidation, org path #359) is
 // asserted unchanged. Orgs keep their own header untouched. No DOM:
 // JSX pinned as source text, mirroring header-narrow.test.js /
@@ -72,18 +75,20 @@ test("avatar column renders for self even without an avatar (Regenerate opts bac
   assert.ok(REPOS.includes('invalidate("me")'), "navbar avatar invalidation untouched");
 });
 
-test("grouped action row: New repository + Edit profile under the bio (#403)", () => {
+test("action row carries Edit profile only; New repository moved to the toolbar (#413)", () => {
   const userShow = block(REPOS, "<Show when={!isOrg()}>", "<h3");
   const grid = userShow.indexOf("profile-header");
-  const cta = userShow.indexOf("New repository");
-  assert.ok(cta !== -1 && cta > grid, "CTA renders inside the header grid, not above it");
+  assert.ok(grid !== -1, "profile header grid exists");
   assert.ok(!userShow.slice(0, grid).includes("New repository"), "no orphan CTA row exists above the header");
   assert.ok(!userShow.slice(0, grid).includes("justify-end"), "no orphan right-aligned row above the header");
   const row = block(REPOS, "mt-3 flex flex-wrap gap-2", "profile-avatar");
-  assert.ok(row.includes("New repository"), "New repository lives in the grouped action row");
-  assert.ok(row.includes("Edit profile"), "Edit profile lives in the grouped action row");
-  assert.ok(row.indexOf("New repository") < row.indexOf("Edit profile"), "New repository leads, Edit profile follows");
-  assert.ok(row.includes("btn primary"), "CTA keeps primary styling");
+  assert.ok(!row.includes("New repository"), "New repository left the header action row for the toolbar");
+  assert.ok(row.includes("Edit profile"), "Edit profile stays in the action row");
+  assert.ok(row.includes("getProfile()?.can_edit"), "Edit gate unchanged (server can_edit, client never decides)");
+  const toolbar = block(REPOS, "repos-toolbar", "</div>");
+  assert.ok(toolbar.includes("New repository"), "New repository renders once, in the Repositories toolbar");
+  assert.ok(toolbar.includes("btn primary"), "CTA keeps primary styling");
+  assert.ok(toolbar.includes("<Show when={canWrite()}>"), "CTA keeps the canWrite gate");
 });
 
 test("light + dark share the treatment", () => {
@@ -91,14 +96,16 @@ test("light + dark share the treatment", () => {
   assert.ok(REPOS.includes("dark:ring-zinc-600"), "dark ring on the avatar");
 });
 
-test("org header untouched (#359): title-row avatar, badge, org-doc fields", () => {
-  const org = block(REPOS, "<Show when={isOrg()}>", "<h3");
+test("org header untouched (#359) except the CTA move (#413): title-row avatar, badge, org-doc fields", () => {
+  const org = block(REPOS, "<Show when={isOrg()}>", "repos-toolbar");
   assert.ok(org.includes("<OrgAvatar"), "org avatar still in the title row");
   assert.ok(org.includes("size={36}"), "org avatar keeps its own size");
   assert.ok(org.includes("org-badge"), "org badge kept");
   assert.ok(org.includes("{orgName()}"), "org display name kept");
   assert.ok(org.includes("<h2"), "org keeps the h2 title row (only the user header promotes to h1)");
-  assert.ok(org.includes("New repository"), "org keeps its own CTA in the title row");
+  assert.ok(!org.includes("New repository"), "org title row no longer carries the CTA (it lives in the shared toolbar)");
+  assert.ok(!org.includes('<div class="mb-1 flex items-center justify-between">'), "title row drops the two-child spread wrapper (single child)");
+  assert.ok(org.includes('<h2 class="mb-1 flex items-center gap-2 text-xl font-semibold">'), "title row is now just the h2");
   assert.ok(org.includes("Manage organization"), "Manage affordance kept with its canManage gate");
   assert.ok(org.includes("renderBody(getOrg().bio_markdown)"), "org bio still reads the org doc, not the owner profile");
   assert.ok(!org.includes("profile-header"), "the composed user grid never renders for orgs");

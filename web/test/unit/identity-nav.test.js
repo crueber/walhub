@@ -271,18 +271,21 @@ test("IdentityMenu #390: initials fallback keeps the same circle shape", () => {
   assert.ok(fb.includes("ring-1"), "fallback shares the ring treatment");
 });
 
-test("Repos #395/#403: profile header is one composed block, actions grouped under the bio", () => {
+test("Repos #395/#403/#413: profile header is one composed block, New repository in the toolbar", () => {
   const REPOS = srcOf("../../src/pages/Repos.jsx");
   assert.ok(REPOS.includes("h-24 w-24"), "avatar at 96px (>= 72px)");
   assert.ok(REPOS.includes("profile-header"), "identity + avatar share one composed header block");
-  // The orphans are gone (#403): no standalone justify-end row above the
-  // header — New repository groups with Edit profile in one action row
-  // under the bio inside the grid.
+  // The orphans are gone (#403) and the CTA left the header (#413): no
+  // standalone justify-end row above the header — Edit profile alone in
+  // the action row under the bio, New repository right-anchored in the
+  // Repositories toolbar below.
   assert.ok(!REPOS.includes("mb-3 flex justify-end"), "no orphan action row above the header");
   assert.ok(!REPOS.includes("flex justify-end"), "no right-aligned orphan row anywhere on the user header");
   const grid = REPOS.indexOf('<div class="profile-header');
-  const cta = REPOS.indexOf(">\n                  New repository", grid);
-  assert.ok(grid !== -1 && cta !== -1, "the New-repository CTA renders inside the composed header grid");
+  assert.ok(grid !== -1, "the composed header grid exists");
+  const headerEnd = REPOS.indexOf("getEditing()", grid);
+  const cta = REPOS.indexOf("New repository");
+  assert.ok(cta !== -1 && cta > headerEnd, "the New-repository CTA renders below the header, in the toolbar");
   const large = REPOS.indexOf("h-24 w-24");
   assert.ok(grid < large, "the large avatar renders inside the composed header grid");
   assert.ok(REPOS.includes("ring-zinc-300"), "ring treatment consistent with the navbar");
