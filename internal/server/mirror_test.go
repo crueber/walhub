@@ -14,6 +14,7 @@ import (
 
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
+	"git.packden.us/crueber/walhub/internal/sshd"
 )
 
 func mirrorGuardServer(t *testing.T, eng *fakeEngine, guard func(ctx context.Context, id git.RepoId) bool) *Server {
@@ -142,7 +143,7 @@ func TestMirrorSSHAdvertRefusal(t *testing.T) {
 	// Refusal precedes the advertisement: stdout stays empty (a client
 	// that read an advertisement would hang waiting to send).
 	var out strings.Builder
-	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), &out, io.Discard)
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), &out, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), MirrorRefusal) {
 		t.Fatalf("err = %v, want mirror refusal", err)
 	}

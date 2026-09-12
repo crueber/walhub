@@ -114,13 +114,22 @@ func (s *Server) gitInfoRefs(w http.ResponseWriter, r *http.Request, id git.Repo
 		return
 	}
 	p = s.authSvc.identityForward(r, p)
+	createOnPush := false
 	if svc == git.ServiceUploadPack {
 		if !s.gateRepoRead(w, r, svc, id, p) {
 			return
 		}
-	} else if aerr := requireWrite(p); aerr != nil {
-		s.gitAuthFailure(w, r, svc, aerr)
-		return
+	} else {
+		// Forgejo #347: the repo-scoped push rule (pushgate.go)
+		// replaces the host-flag requireWrite at this position; a
+		// denied write still proceeds when auto-create is on and the
+		// repo is missing and the #346 admission passes. The Sync
+		// below doubles as the existence signal for the create branch.
+		createOnPush = s.engine != nil && s.engine.AutoCreate(r.Context(), id)
+		if aerr := s.gatePush(r.Context(), id, p, createOnPush); aerr != nil {
+			s.gitAuthFailure(w, r, svc, aerr)
+			return
+		}
 	}
 	// Mirror refusal at discovery (Forgejo #240, R1 (c)): a pull-only
 	// mirror answers receive-pack info/refs with 403 plain text — for
@@ -144,9 +153,17 @@ func (s *Server) gitInfoRefs(w http.ResponseWriter, r *http.Request, id git.Repo
 	}
 	v2 := git.ProtocolVersion(r.Header.Get("Git-Protocol")) == 2
 	if aerr := s.engine.Sync(r.Context(), id, wal.LevelRefs); aerr != nil {
-		if isNotFound(aerr) && svc == git.ServiceReceivePack && s.engine.AutoCreate(r.Context(), id) {
+		if isNotFound(aerr) && svc == git.ServiceReceivePack && createOnPush {
 			// auto_create_on_push (§3.4/§4.3): an unborn repo advertises an
 			// empty receive-pack ref list instead of 404 — the push creates it.
+			// Forgejo #347: the #346 admission already passed at the gate
+			// above (gatePush probes the same missing signal); re-check it
+			// here so the creating open below is always admission-covered,
+			// even across the race between the gate probe and this Sync.
+			if aerr := s.checkPushCreate(r.Context(), id.Owner, p); aerr != nil {
+				s.gitAuthFailure(w, r, svc, aerr)
+				return
+			}
 			if repo, cerr := s.engine.Repo(r.Context(), id, true, git.Sha1); cerr == nil {
 				if advert, aerr := s.layer.Advertisement(repo, svc, v2, s.Version()); aerr == nil {
 					gitHeaders(w, svcContentType(svc))
@@ -261,10 +278,11 @@ func (s *Server) gitService(w http.ResponseWriter, r *http.Request, id git.RepoI
 		if !s.gateRepoRead(w, r, svc, id, p) {
 			return
 		}
-	} else if aerr := requireWrite(p); aerr != nil {
-		s.gitAuthFailure(w, r, svc, aerr)
-		return
 	}
+	// Receive-pack is gated inside receivePack (Forgejo #347: the
+	// repo-scoped push rule + auto-create admission), the single site
+	// covering both the direct and broker-fallback entries — so no
+	// host-flag requireWrite here.
 	if !s.placementOK(w, r, id, svc) {
 		return
 	}
@@ -340,14 +358,25 @@ func (s *Server) forwardToBroker(ctx context.Context, r *http.Request, body []by
 	return http.DefaultClient.Do(req)
 }
 
-// receivePack implements the push path: parse commands → ingest the pack →
-// connectivity → engine.Publish; .git suffix + placement + drain gates run
-// before any sync work (§4.3).
+// receivePack implements the push path: gate → parse commands → ingest the
+// pack → connectivity → engine.Publish; .git suffix + placement + drain gates
+// run before any sync work (§4.3). The push gate below is the single
+// receive-pack admission site on HTTP (Forgejo #347): both the direct and
+// the broker-fallback entries land in receivePackLocal through here.
 func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, id git.RepoId, p auth.Principal) {
 	// Loop guard: a request the broker already forwarded is refused here.
 	if r.Header.Get("X-Walgit-Forwarded") != "" && s.cfg.WAL.PushBrokerURL != "" {
 		s.metrics.Counter("walgit_push_refused_total", "pushes refused").Inc("reason", "loop")
 		plainStatus(w, http.StatusBadRequest, "forwarded push loop refused")
+		return
+	}
+
+	// Forgejo #347: repo-scoped write rule, with the missing +
+	// auto-create + #346-admission escape (pushgate.go). Denied before any
+	// forward or sync work; the §4.2 mapping reports it.
+	createOn := s.cfg.Server.AutoCreateOnPush || (s.engine != nil && s.engine.AutoCreate(r.Context(), id))
+	if aerr := s.gatePush(r.Context(), id, p, createOn); aerr != nil {
+		s.gitAuthFailure(w, r, git.ServiceReceivePack, aerr)
 		return
 	}
 
@@ -395,11 +424,21 @@ func (s *Server) receivePackForward(w http.ResponseWriter, r *http.Request, id g
 	s.receivePackLocal(w, r, id, p)
 }
 
-// receivePackLocal runs the HTTP push path: read the (possibly gzipped)
-// body, parse the framed request, then hand it to the shared push pipeline
-// (§17) — HTTP maps the pre-pipeline errors onto statuses; git-wire
-// refusals are already on the wire via the pipeline.
+// receivePackLocal runs the HTTP push path: gate, read the (possibly
+// gzipped) body, parse the framed request, then hand it to the shared push
+// pipeline (§17) — HTTP maps the pre-pipeline errors onto statuses; git-wire
+// refusals are already on the wire via the pipeline. The gate repeats the
+// receivePack rule (Forgejo #347): this function also serves the
+// broker-fallback entry, so every creating open below is admission-covered
+// no matter which entry admitted first (the repeat costs store reads only
+// on cold auto-create pushes — human-rate — and short-circuits to zero on
+// the admin/legacy paths).
 func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git.RepoId, p auth.Principal) {
+	create := s.cfg.Server.AutoCreateOnPush || s.engine.AutoCreate(r.Context(), id)
+	if aerr := s.gatePush(r.Context(), id, p, create); aerr != nil {
+		s.gitAuthFailure(w, r, git.ServiceReceivePack, aerr)
+		return
+	}
 	body, ok := s.bodyReader(w, r)
 	if !ok {
 		return
@@ -414,7 +453,6 @@ func (s *Server) receivePackLocal(w http.ResponseWriter, r *http.Request, id git
 		plainStatus(w, http.StatusRequestEntityTooLarge, "push exceeds max_push_bytes")
 		return
 	}
-	create := s.cfg.Server.AutoCreateOnPush || s.engine.AutoCreate(r.Context(), id)
 	repo, rerr := s.engine.Repo(r.Context(), id, create, git.Sha1)
 	if rerr != nil {
 		if isNotFound(rerr) {

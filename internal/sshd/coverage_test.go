@@ -54,7 +54,7 @@ func (c *captureTransport) SSHUploadPack(ctx context.Context, id git.RepoId, pro
 	return nil
 }
 
-func (c *captureTransport) SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (c *captureTransport) SSHReceivePack(ctx context.Context, id git.RepoId, p Principal, stdin io.Reader, stdout, stderr io.Writer) error {
 	return nil
 }
 
@@ -211,7 +211,7 @@ func (q *releaseQueue) SSHUploadPack(ctx context.Context, id git.RepoId, protoco
 	return nil
 }
 
-func (q *releaseQueue) SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (q *releaseQueue) SSHReceivePack(ctx context.Context, id git.RepoId, p Principal, stdin io.Reader, stdout, stderr io.Writer) error {
 	return nil
 }
 

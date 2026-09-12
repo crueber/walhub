@@ -79,7 +79,7 @@ func TestSSHTransportDrainGate(t *testing.T) {
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "draining") {
 		t.Fatalf("drained upload = %v", err)
 	}
-	err = s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard)
+	err = s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) || !strings.Contains(err.Error(), "draining") {
 		t.Fatalf("drained receive = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestSSHReceivePackPushPipeline(t *testing.T) {
 
 	var out strings.Builder
 	id := mustRepoID(t, "o/r")
-	if err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+	if err := s.SSHReceivePack(ctx, id, sshd.Principal{Name: "ada", Write: true}, strings.NewReader(string(body)), &out, io.Discard); err != nil {
 		t.Fatalf("receive: %v", err)
 	}
 	if !strings.Contains(out.String(), "unpack ok") {
@@ -118,7 +118,7 @@ func TestSSHReceivePackNotFound(t *testing.T) {
 	s := sshGateServer(t, eng, nil)
 	root := t.TempDir()
 	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
-	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard)
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrNotFound) {
 		t.Fatalf("receive not-found = %v", err)
 	}
@@ -210,7 +210,7 @@ func TestSSHReceivePackOverMaxPushBytes(t *testing.T) {
 	body = append(body, pack.Bytes()...)
 
 	var out strings.Builder
-	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(string(body)), &out, io.Discard); err != nil {
 		t.Fatalf("over-cap receive must report on the wire, not error: %v", err)
 	}
 	wire := out.String()
@@ -241,7 +241,7 @@ func TestSSHCommandSectionOverCap(t *testing.T) {
 	body = append(body, git.Flush()...)
 	body = append(body, []byte("PACK")...) // pack bytes never reached
 	var out strings.Builder
-	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(string(body)), &out, io.Discard); err != nil {
 		t.Fatalf("command-cap hit must report on the wire, not error: %v", err)
 	}
 	wire := out.String()
@@ -269,7 +269,7 @@ func TestSSHCommandsConsumeWholeCap(t *testing.T) {
 	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
 	body := append(append([]byte{}, cmds...), []byte("PACK\x00\x00\x00\x02")...)
 	var out strings.Builder
-	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(string(body)), &out, io.Discard); err != nil {
 		t.Fatalf("zero-remaining push must refuse on the wire, not error: %v", err)
 	}
 	wire := out.String()
@@ -292,7 +292,7 @@ func TestSSHPlacementMaintainOnlyRefused(t *testing.T) {
 	if err := s.SSHUploadPack(ctx, mustRepoID(t, "o/r"), "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("maintain-only fetch = %v, want unavailable", err)
 	}
-	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
+	if err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("maintain-only push = %v, want unavailable", err)
 	}
 }
@@ -320,7 +320,7 @@ func TestSSHReceivePackMalformedCommand(t *testing.T) {
 	s := sshGateServer(t, eng, nil)
 	root := t.TempDir()
 	ctx := context.WithValue(context.Background(), repoRootKey{}, root)
-	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader("zzzz"), io.Discard, io.Discard)
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader("zzzz"), io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "malformed push request") {
 		t.Fatalf("malformed command = %v", err)
 	}
@@ -348,7 +348,7 @@ func TestSSHGateSemAndRepoErr(t *testing.T) {
 	if err := s.SSHUploadPack(ctx, id, "", sshd.Principal{Name: "ada"}, strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("repo error = %v", err)
 	}
-	err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(""), io.Discard, io.Discard)
+	err := s.SSHReceivePack(ctx, id, sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("receive repo error = %v", err)
 	}
@@ -403,7 +403,7 @@ func TestSSHReceivePackAdvertisementAndCountingPaths(t *testing.T) {
 	oid := "1111111111111111111111111111111111111111"
 	body := git.Pkt(oid + " " + zero + " refs/heads/main\x00report-status\n")
 	body = append(body, git.Flush()...)
-	if err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+	if err := s.SSHReceivePack(ctx, id, sshd.Principal{Name: "ada", Write: true}, strings.NewReader(string(body)), &out, io.Discard); err != nil {
 		t.Fatalf("receive = %v", err)
 	}
 	if !strings.Contains(out.String(), "unpack ok") {
@@ -442,7 +442,7 @@ func TestSSHAdvertisementErrorIsUnavailable(t *testing.T) {
 	}}
 	s := sshGateServer(t, eng, func(c *config.Config) { c.Server.MaxPushBytes = 4096 })
 	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
-	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard)
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("vanished repo must fail")
 	}

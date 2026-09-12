@@ -854,7 +854,7 @@ func TestSSHReceivePackClientWentAway(t *testing.T) {
 	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
 	// The client disconnects mid-advertisement → a clean transport error
 	// naming the disconnect (no hang, no panic).
-	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), errWriter{}, io.Discard)
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), errWriter{}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "client went away") {
 		t.Fatalf("went-away = %v", err)
 	}
@@ -865,7 +865,7 @@ func TestSSHReceivePackBadAdvertisement(t *testing.T) {
 	ctx := context.WithValue(context.Background(), repoRootKey{}, t.TempDir())
 	// A broken serving copy fails the advertisement → unavailable (the
 	// client retries elsewhere; nothing half-written).
-	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), "ada", strings.NewReader(""), io.Discard, io.Discard)
+	err := s.SSHReceivePack(ctx, mustRepoID(t, "o/r"), sshd.Principal{Name: "ada", Write: true}, strings.NewReader(""), io.Discard, io.Discard)
 	if !errors.Is(err, sshd.ErrUnavailable) {
 		t.Fatalf("bad advertisement = %v, want ErrUnavailable", err)
 	}

@@ -52,6 +52,11 @@ type Server struct {
 	// readGate is the identity require_read hook (01 §4.1); nil → legacy.
 	readGate ReadGate
 
+	// pushGate is the identity repo-scoped push hook (Forgejo #347:
+	// CheckPush for existing repos, CheckCreateOwner for auto-create);
+	// nil → legacy host-flag gating (pushgate.go).
+	pushGate PushGate
+
 	// mirrorGuard is the pull-only mirror predicate (Forgejo #240):
 	// non-nil + true → every client push is refused (admins included)
 	// at discovery (403), at the push funnel (per-ref ng), and at the
@@ -108,6 +113,9 @@ type Options struct {
 	// ReadGate is the identity require_read hook (01 §4.1); nil → legacy
 	// flag-only read gating on the git/LFS read paths.
 	ReadGate ReadGate
+	// PushGate is the identity repo-scoped push hook (Forgejo #347);
+	// nil → legacy host-flag gating on the git push paths.
+	PushGate PushGate
 	// MirrorGuard is the pull-only mirror predicate (Forgejo #240);
 	// nil → no mirror refusals (legacy behavior).
 	MirrorGuard func(ctx context.Context, id git.RepoId) bool
@@ -168,6 +176,7 @@ func New(o Options) *Server {
 	registerInventory(s.metrics)
 	s.authSvc = NewAuthService(&o.Config.Server.Auth, o.Now)
 	s.readGate = o.ReadGate
+	s.pushGate = o.PushGate
 	s.mirrorGuard = o.MirrorGuard
 	s.placeholderHints = o.PlaceholderHints
 	return s

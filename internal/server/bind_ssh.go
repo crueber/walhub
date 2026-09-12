@@ -90,26 +90,38 @@ func (s *Server) SSHUploadPack(ctx context.Context, id git.RepoId, protocol stri
 	return s.layer.UploadPackSSH(ctx, repo, stdin, stdout, protocol)
 }
 
-// SSHReceivePack implements sshd.Transport: gates → streaming parse of the
+// SSHReceivePack implements sshd.Transport: gate → streaming parse of the
 // command section → IngestStream (the pack is consumed while the client
 // waits) → connectivity → publish → report. Mirrors receivePackLocal (§3.3)
 // without body framing: git send-pack never closes its side before the
 // report, so nothing here reads the channel to EOF.
-func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error {
+//
+// The push gate (Forgejo #347) runs first: the repo-scoped write rule for
+// existing repos, the #346 admission for pushes that would auto-create —
+// the identical rule the HTTP path enforces (pushgate.go), with denials
+// surfaced as stderr text + exit 1 via the session handler.
+//
+// Write/Admin are deliberately left unset on the pipeline principal below:
+// the key's rights were resolved at auth time (KeyLookup →
+// PrincipalForName) and enforced by the gate above, while Publish takes
+// only the NAME. A future change that reads p.Write/p.Admin there would
+// silently deny every SSH push, so the flags stay visibly unset
+// (17_ssh.md §3). The gate itself consults repo access through the
+// principal NAME (plus the host-admin bypass) — never the connection flags.
+func (s *Server) SSHReceivePack(ctx context.Context, id git.RepoId, sp sshd.Principal, stdin io.Reader, stdout, stderr io.Writer) error {
 	rel, err := s.sshGate(ctx, id)
 	if err != nil {
 		return err
 	}
 	defer rel()
-	// Write/Admin are deliberately left unset on this principal: the key's
-	// rights are resolved at auth time (KeyLookup → PrincipalForName) and
-	// enforced pre-dispatch by the sshd exec gate, while Publish below takes
-	// only the NAME. A future change that reads p.Write/p.Admin here would
-	// silently deny every SSH push, so the flags stay visibly unset
-	// (17_ssh.md §3).
-	p := auth.Principal{Name: principal}
+	p := auth.Principal{Name: sp.Name, Write: sp.Write, Admin: sp.Admin}
+	create := s.cfg.Server.AutoCreateOnPush || (s.engine != nil && s.engine.AutoCreate(ctx, id))
+	if aerr := s.gatePush(ctx, id, p, create); aerr != nil {
+		return errors.New(aerr.Why)
+	}
+	// The pipeline principal carries the name only (see above).
+	p = auth.Principal{Name: sp.Name}
 
-	create := s.cfg.Server.AutoCreateOnPush || s.engine.AutoCreate(ctx, id)
 	repo, rerr := s.engine.Repo(ctx, id, create, git.Sha1)
 	if rerr != nil {
 		if isNotFound(rerr) {

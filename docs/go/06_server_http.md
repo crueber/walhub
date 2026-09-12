@@ -178,9 +178,9 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 
 | Method | Path | Notes |
 |---|---|---|
-| GET/HEAD | `/{o}/{r}[.git]/info/refs?service=` | `git-upload-pack` → require_read; `git-receive-pack` → require_write; unknown service → 400; `Git-Protocol` header selects v0/v2 |
+| GET/HEAD | `/{o}/{r}[.git]/info/refs?service=` | `git-upload-pack` → require_read; `git-receive-pack` → repo-scoped push rule (§4.4); unknown service → 400; `Git-Protocol` header selects v0/v2 |
 | POST | `/{o}/{r}[.git]/git-upload-pack` | v0 or v2 fetch; gzip request body accepted |
-| POST | `/{o}/{r}[.git]/git-receive-pack` | **requires the `.git` suffix**; placement+drain gates; optional broker forward (§4.3) |
+| POST | `/{o}/{r}[.git]/git-receive-pack` | **requires the `.git` suffix**; placement+drain gates; push gate (§4.4) before any forward/sync work; optional broker forward (§4.3) |
 | GET/HEAD | `/{o}/{r}[.git]/info/lfs/objects/{oid}` | static contract (§5); upstream read-through (`?size=` honored) |
 | PUT | `/{o}/{r}[.git]/info/lfs/objects/{oid}` | require_write; size+sha256 verified; `lfs.max_object_bytes` cap |
 | POST | `/{o}/{r}[.git]/info/lfs/objects/batch` | LFS batch API (`application/vnd.git-lfs+json`) |
@@ -306,6 +306,46 @@ Placement/drain gates run **before any sync work**:
 
 Hazard: per-repo git concurrency and body buffering. Avoidance (13_concurrency.md is the playbook): the per-repo semaphore (`server.max_concurrent_per_repo`) is taken **inside handlers** with `TryAcquire` → 503 `Retry-After: 15` when full, never a blocking wait from a request goroutine. The broker-forward buffer uses a bounded reader (≤ `wal.push_broker_buffer_bytes`) with a spill-to-deny above it. Upstream `git` subprocesses get `ctx`-bound lifetimes: client disconnect cancels the context, which kills the child (see 04_git.md for the process-owner pattern).
 
+### 4.4 Repo-scoped push rule (Forgejo #347)
+
+The host-wide `write` flag is NOT the push gate. At receive-pack dispatch —
+discovery (`info/refs?service=git-receive-pack`) and body
+(`git-receive-pack`, direct and broker-fallback entries) — the server
+enforces one shared rule via the `PushGate` seam (`internal/server`
+defines it, `internal/identity` implements it, `cmd/walhub` wires it —
+the `ReadGate` shape, law 8):
+
+- **Existing repo:** `CheckPush` — host admin passes (zero store reads,
+  so auth-none and the push-budget fast path cost nothing); anonymous →
+  401 (real 401, law 9); self-namespace (owner segment equals the
+  principal name — the #346 self rule, mirrored, covering slug
+  namespaces that carry no `user:<owner>` binding) passes; otherwise P6
+  resolution over the principal NAME with host flags stripped must reach
+  `write` (org-owner role, team/explicit binding). Anything else → 403
+  naming the repo and the required relationship
+  (`write access to "o/r" requires the repo owner, owning-org
+  membership, or an explicit write binding`), reported through the §4.2
+  mapping (200+pkt ERR when all four conditions hold, else 403/401).
+- **Missing repo + auto-create on:** the #346 admission
+  (`CheckCreateOwner` on the owner segment — self / member org / host
+  admin; 401 / 403 naming the allowed owners / 503) decides BEFORE any
+  namespace write. A denied write on an existing repo never reaches
+  admission; a denied admission never creates. Missing + auto-create
+  off → 404 as before.
+- The Sync probe that distinguishes "denied on existing" from
+  "missing, try admission" runs on the deny path only (law 6).
+- Nil gate → legacy behavior (host-flag `requireWrite`, open
+  auto-create), unchanged for instances without the identity surface.
+
+#### Concurrency (push gate)
+
+Hazard: role check racing a demotion (a just-revoked writer pushes).
+Avoidance: the gate reads `access.json` fresh (conditional GET,
+control-plane, sub-second — the sanctioned class, 13 §2.2) at dispatch;
+a push in flight when bindings change completes under the bindings it
+started with (the 01 §4 accepted rule). No lock is held across any store
+call.
+
 ## 5. Static object serving (§8.5) — one code path
 
 One code path for every immutable byte (bundles, LFS objects, anything immutable):
@@ -410,7 +450,8 @@ spec amendment — see Decisions): public ⇒ anonymous admitted even with `anon
 private ⇒ 401 anonymous (+ Bearer, so git erases the credential) / 403 authenticated-without-read.
 `anonymous_read` keeps its meaning for NON-repo surfaces (owners listings, `/explore` shell +
 text twin, setup.json, `/` + `/{owner}` shells): anonymous there still needs the flag.
-`require_write`/`require_admin`: lacking → 403 (unchanged).
+`require_write`/`require_admin`: lacking → 403 (unchanged) — except the git push paths, which
+enforce the repo-scoped push rule (§4.4), not the host flag.
 
 ### 8.4 ID token verification (hand-rolled JWKS — no external JWT library)
 
@@ -664,6 +705,17 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   on, not regressed. Nil read gate → legacy flag-only behavior everywhere. 401/403 (not
   404) is deliberate: existence protection for private repos comes from the filtered
   listings (07 §8), never from the status code.
+- **NEW (2026-09-12) — repo-scoped push rule, host write flag retired as the push gate** (Forgejo #347):
+  §4.4 replaces `require_write` on the git push paths (discovery + body, §3 table) with the
+  `PushGate` seam: `CheckPush` for existing repos (owner — including the slug-namespace self
+  rule mirrored from #346 — / owning-org-attached / explicitly bound / host admin; anonymous
+  401, foreign 403 naming the repo and the required relationship, §4.2-mapped), `CheckCreateOwner`
+  verbatim for pushes that would auto-create (same 401/403/503 shape as explicit create — a
+  foreign-owner squat dies at admission, before any namespace write). The missing/admission
+  probe runs on the deny path only (law 6); the admin bypass short-circuits with zero store
+  reads, so the push-budget test passes unmodified with the gate wired (auth-none). Nil gate →
+  legacy host-flag behavior. SSH enforces the identical rule (17.7); upload-pack/read paths
+  are untouched (#345 semantics stand, including the host-flag read pass).
 
 **Divergence (2026-08-31):**
 
