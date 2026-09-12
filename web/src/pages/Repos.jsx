@@ -21,7 +21,7 @@
 // the same component.
 
 import repos from "../../sdk/src/index.js";
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, createEffect, For, Show } from "solid-js";
 import { useParams, A } from "@solidjs/router";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { orderByActivity } from "../lib/owners.js";
@@ -32,6 +32,7 @@ import {
   profileSaveBody,
 } from "../lib/profile.js";
 import { renderBody } from "../lib/render-md.js";
+import { initAutogrow, growTextarea } from "../lib/autogrow.js";
 import { OrgAvatar } from "./Org.jsx";
 import { mirrorRowBadge } from "../lib/mirror.js";
 import { visibilityBadge } from "../lib/visibility.js";
@@ -88,6 +89,11 @@ function ProfileForm(props) {
   const [getSaving, setSaving] = createSignal(false);
   const [getNote, setNote] = createSignal("");
   const zones = timeZones();
+  // Forgejo #419: bio auto-grow (shared lib/autogrow.js — also used by the
+  // org profile form in Org.jsx). The ref callback records the rows="6"
+  // height as the floor; the effect refits on every bio change (typing,
+  // paste, seeded value) so the caret line stays visible, capped at 50vh.
+  let bioRef;
 
   const save = async () => {
     setSaving(true);
@@ -111,6 +117,14 @@ function ProfileForm(props) {
       setSaving(false);
     }
   };
+
+  // Refit after mount and on every bio change (the onInput grow above
+  // covers keystrokes; this covers the seeded value and programmatic
+  // sets — refit is idempotent so both firing is harmless).
+  createEffect(() => {
+    getBio();
+    if (bioRef) growTextarea(bioRef);
+  });
 
   return (
     <form
@@ -170,10 +184,17 @@ function ProfileForm(props) {
         </label>
         <textarea
           id="profile-bio"
+          ref={(el) => {
+            bioRef = el;
+            initAutogrow(el);
+          }}
           class="input w-full font-mono text-sm"
           rows="6"
           value={getBio()}
-          onInput={(e) => setBio(e.currentTarget.value)}
+          onInput={(e) => {
+            setBio(e.currentTarget.value);
+            growTextarea(e.currentTarget);
+          }}
           placeholder="A few lines about this owner…"
         />
         <Show when={getBio()}>

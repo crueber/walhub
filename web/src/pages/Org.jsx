@@ -13,6 +13,7 @@ import { isInviteExpired, invitePageLink } from "../lib/invites.js";
 import { mergeOrgActivity } from "../lib/orgs.js";
 import { timeZones } from "../lib/timezone.js";
 import { normalizeOrgProfile, orgSaveBody } from "../lib/org-profile.js";
+import { initAutogrow, growTextarea } from "../lib/autogrow.js";
 import { renderBody } from "../lib/render-md.js";
 import { DangerConfirm } from "./Settings.jsx";
 
@@ -62,6 +63,11 @@ function ProfileTab(props) {
   const [getSeeded, setSeeded] = createSignal(false);
   const [getAvatarNote, setAvatarNote] = createSignal("");
   const zones = timeZones();
+  // Forgejo #419: bio auto-grow — same shared helper as the owner profile
+  // form in Repos.jsx. The ref records the rows="5" height as the floor;
+  // the effect below refits on every bio change (typing, paste, async
+  // seed), capped at 50vh (see lib/autogrow.js).
+  let bioRef;
 
   const seedAll = (o) => {
     if (o && !getSeeded()) {
@@ -131,6 +137,14 @@ function ProfileTab(props) {
       setAvatarNote(String(err?.message ?? err));
     }
   };
+
+  // Refit after mount and on every bio change (the onInput grow above
+  // covers keystrokes; this covers the async seed — refit is idempotent
+  // so both firing is harmless).
+  createEffect(() => {
+    getBio();
+    if (bioRef) growTextarea(bioRef);
+  });
 
   return (
     <Show when={getOrg()} fallback={<p class="muted">loading…</p>}>
@@ -213,7 +227,20 @@ function ProfileTab(props) {
               </div>
               <label class="text-sm">
                 <span class="muted block text-xs">bio (markdown)</span>
-                <textarea class="input w-full font-mono text-sm" rows="5" value={getBio()} onInput={(e) => setBio(e.currentTarget.value)} placeholder="A few lines about this organization…" />
+                <textarea
+                  ref={(el) => {
+                    bioRef = el;
+                    initAutogrow(el);
+                  }}
+                  class="input w-full font-mono text-sm"
+                  rows="5"
+                  value={getBio()}
+                  onInput={(e) => {
+                    setBio(e.currentTarget.value);
+                    growTextarea(e.currentTarget);
+                  }}
+                  placeholder="A few lines about this organization…"
+                />
               </label>
               <Show when={getBio()}>
                 <p class="muted text-xs">Preview</p>
