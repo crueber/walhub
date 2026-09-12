@@ -23,6 +23,10 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
+// errDenied is the canned transport-side push refusal: the server push
+// gate's deny shape (names the repo + the required relationship).
+var errDenied = errors.New(`write access to "acme/repo" requires the repo owner, owning-org membership, or an explicit write binding`)
+
 // testTransport records dispatch calls and serves canned responses.
 type testTransport struct {
 	uploads   []uploadCall
@@ -56,9 +60,9 @@ func (t *testTransport) SSHUploadPack(_ context.Context, id git.RepoId, protocol
 	return nil
 }
 
-func (t *testTransport) SSHReceivePack(_ context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (t *testTransport) SSHReceivePack(_ context.Context, id git.RepoId, p Principal, stdin io.Reader, stdout, stderr io.Writer) error {
 	b, _ := io.ReadAll(stdin)
-	t.receives = append(t.receives, receiveCall{id: id, principal: principal, in: string(b)})
+	t.receives = append(t.receives, receiveCall{id: id, principal: p.Name, in: string(b)})
 	if t.recvErr != nil {
 		fmt.Fprint(stderr, "transport failed")
 		return t.recvErr
@@ -261,15 +265,27 @@ func TestExecDispatchAndAuth(t *testing.T) {
 		t.Fatalf("receive call = %+v", tr.receives[0])
 	}
 
-	// read-only principal: fetch ok, push refused
+	// Forgejo #347: the exec layer no longer refuses pushes on the
+	// host-wide write flag — every receive-pack dispatches and the
+	// transport (the server's repo-scoped push gate) decides. A key
+	// without the flag still reaches the transport here.
 	ro := dialTestClient(t, addr, roSigner)
 	if _, _, code = runExec(t, ro, "git-upload-pack '/acme/repo.git'"); code != 0 {
 		t.Fatal("read-only key must fetch")
 	}
-	_, errText, code = runExec(t, ro, "git-receive-pack '/acme/repo.git'")
-	if code == 0 || !strings.Contains(errText, "write access required") {
-		t.Fatalf("read-only push = %q %d, want write-access refusal", errText, code)
+	if out, _, code = runExec(t, ro, "git-receive-pack '/acme/repo.git'"); code != 0 || out != "0000" {
+		t.Fatalf("receive-pack must dispatch regardless of host flags = %q %d", out, code)
 	}
+	if len(tr.receives) != 2 || tr.receives[1].principal != "robot" {
+		t.Fatalf("receive call = %+v", tr.receives[1])
+	}
+	// A transport-side refusal surfaces as stderr text + exit 1.
+	tr.recvErr = errDenied
+	if _, errText, code = runExec(t, ro, "git-receive-pack '/acme/repo.git'"); code == 0 ||
+		!strings.Contains(errText, "write access to") {
+		t.Fatalf("transport refusal = %q %d, want named stderr refusal", errText, code)
+	}
+	tr.recvErr = nil
 
 	// unknown verb + injection attempts are refused before any transport call
 	n := len(tr.uploads) + len(tr.receives)

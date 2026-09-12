@@ -158,6 +158,10 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		Log:       log,
 		Notifier:  wake,
 		ReadGate:  readGateOf(ident),
+		// Forgejo #347: the repo-scoped push gate (CheckPush for
+		// existing repos, CheckCreateOwner for auto-create) over the
+		// same identity service (nil in setup-only → legacy gating).
+		PushGate: pushGateOf(ident),
 		// Forgejo #240: the pull-only refusal predicate over the same
 		// store (nil in setup-only — no push paths exist there).
 		MirrorGuard: mirrorGuardOf(st),
@@ -308,6 +312,18 @@ func readGateOf(ident *identity.Service) server.ReadGate {
 	if ident == nil {
 		return nil
 	}
+	return ident
+}
+
+// pushGateOf adapts the identity service to the server PushGate seam
+// (Forgejo #347: nil in setup-only mode → legacy host-flag push gating).
+// The compiler pins the contract: *identity.Service must satisfy both
+// CheckPush and CheckCreateOwner.
+func pushGateOf(ident *identity.Service) server.PushGate {
+	if ident == nil {
+		return nil
+	}
+	var _ server.PushGate = ident
 	return ident
 }
 

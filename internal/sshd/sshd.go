@@ -60,9 +60,14 @@ type Transport interface {
 	// gate (private repos refuse callers without read access — the SSH
 	// half of the coarse visibility boundary, 17_ssh.md §3).
 	SSHUploadPack(ctx context.Context, id git.RepoId, protocol string, p Principal, stdin io.Reader, stdout, stderr io.Writer) error
-	// SSHReceivePack serves push; implementations enforce placement, drain,
-	// and max_push_bytes exactly like the HTTP route.
-	SSHReceivePack(ctx context.Context, id git.RepoId, principal string, stdin io.Reader, stdout, stderr io.Writer) error
+	// SSHReceivePack serves push; implementations enforce the repo-scoped
+	// push rule (Forgejo #347 — owner / owning-org-attached / explicitly
+	// bound / host admin, never the host write flag alone) and
+	// auto-create admission exactly like the HTTP route, plus placement,
+	// drain, and max_push_bytes. The full principal (name + admin) rides
+	// along because the repo-scoped check consults repo access, not
+	// connection flags (17_ssh.md §3).
+	SSHReceivePack(ctx context.Context, id git.RepoId, p Principal, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 // KeyEntry is the resolved identity for one public key: the principal and
@@ -335,12 +340,12 @@ func (s *Server) exec(ctx context.Context, p Principal, ch gossh.Channel, comman
 	case "git-upload-pack":
 		terr = s.tr.SSHUploadPack(runCtx, id, gitProtocol(ctx), p, ch, ch, ch.Stderr())
 	case "git-receive-pack":
-		if !p.Write {
-			fmt.Fprint(ch.Stderr(), "walhub: write access required to push\r\n")
-			exit(1)
-			return
-		}
-		terr = s.tr.SSHReceivePack(runCtx, id, p.Name, ch, ch, ch.Stderr())
+		// No host-flag pre-check here (Forgejo #347): the key's
+		// host-wide write flag is NOT the push gate — the transport
+		// enforces the repo-scoped rule at dispatch (owner /
+		// owning-org-attached / explicitly bound / host admin), so
+		// every receive-pack dispatches and the transport decides.
+		terr = s.tr.SSHReceivePack(runCtx, id, p, ch, ch, ch.Stderr())
 	}
 	if terr != nil {
 		if runCtx.Err() != nil {

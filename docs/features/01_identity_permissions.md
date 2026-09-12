@@ -244,6 +244,32 @@ binding fails subject validation); none-mode materializes a visibility-only doc 
 read-time synthesis with the existing flag-driven grants. Policy/templates are NOT evaluated at
 create (policy gates pushes; owner-scoped templates are a documented future).
 
+### 5.3 Repo-scoped push rule (issue #347)
+
+The §5 matrix's "Push refs" row is enforced by `(*Service).CheckPush` — P6
+resolution with the host `write` flag STRIPPED (Resolve step 3 would
+otherwise re-grant the exact host-wide write this rule retires):
+
+- host `admin` passes without touching the store (auth-none `anon`
+  carries it — zero-config pushes and the push-budget fast path cost
+  zero reads); anonymous → `401` (law 9);
+- self-namespace (owner segment equals the principal name — the §5.2
+  self rule, mirrored: slug namespaces carry no `user:<owner>` binding,
+  so without this a slug user could create under their name yet never
+  push to it) passes;
+- otherwise the principal's resolved role over their NAME alone must
+  reach `write` (org-owner role, team/explicit binding); anything else →
+  `403` naming the repo and the required relationship.
+
+`CheckPush` covers EXISTING repos only; pushes that would auto-create
+gate the owner segment through `CheckCreateOwner` (§5.2, verbatim reuse —
+same 401/403/503 shape) first. Both transports (smart HTTP, SSH)
+enforce the identical rule at receive-pack dispatch through the server
+`PushGate` seam (core defines the seam, this package implements it —
+the `ReadGate` shape, law 8); nil seam → legacy host-flag gating.
+`CheckRole` is unchanged (its flag-aware contract serves the API
+surfaces); the push path never calls it with host flags set.
+
 ## 6. Policy engine integration (Seam 3 amendment)
 
 `policy.json` stays the frozen envelope; effects are untouched. The amendment is to **group member
@@ -437,6 +463,16 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   let any host-writer squat any unclaimed prefix or another user's namespace. The `OrgGate`/
   `IsOrgMember` seam is replaced by `CreateOwnerGate`/`CheckCreateOwner` (+ `MemberOrgs` for
   the 403 message) in the same change — no alias, no shim.
+- **Repo-scoped push rule (issue #347, §5.3):** the §5 "Push refs" row is enforced by
+  `CheckPush` — P6 minus the host-write grant (flags stripped; admin bypass and 401/403
+  shapes kept), plus the §5.2 self rule mirrored so slug namespaces stay pushable by
+  their owners. Existing repos gate on `CheckPush`; would-be-created repos gate the
+  owner segment on `CheckCreateOwner` first (same rule as explicit create — no fork).
+  Both transports enforce it at receive-pack dispatch through the server `PushGate`
+  seam (nil → legacy host-flag gating); `CheckRole` keeps its flag-aware contract for
+  the API surfaces. Rationale: the host-wide write flag let any writer-key push to ANY
+  repo and auto-create under foreign namespaces — the flag is authentication-adjacent
+  (who holds a credential), never authorization (who may write THIS repo).
 - **Explicit-create org gate + eager access default (issue #210, §5.2, R1 B5/S2 — gate
   part SUPERSEDED by #346 above):** creation
   under an org prefix requires membership (403 only on proven non-membership; unclaimed prefixes

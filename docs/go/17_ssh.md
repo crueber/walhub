@@ -84,8 +84,12 @@ host_key_env = ""      # env var NAME holding the private key; overrides host_ke
   mode-aware like every other auth path: `none` → the anon-all principal (anyone may register a
   key; pushes ride the anon rights); `oidc` → the same admission and write/admin rules browser
   login applies to that email; `token` → the aggregate of the principal's static tokens (a
-  principal whose credentials are gone is denied at lookup). The resolved write flag gates
-  receive-pack in the exec dispatch; the transport receives only the principal NAME.
+  principal whose credentials are gone is denied at lookup). The exec dispatch does NOT gate
+  receive-pack on the resolved write flag (Forgejo #347 — a host-wide flag is not a repo-scoped
+  gate); every receive-pack dispatches and the transport enforces the repo-scoped push rule
+  (§4, 06 §4.4) through the principal name plus the host-admin bypass. Write/Admin stay
+  deliberately unset on the pipeline principal (`bind_ssh.go`): the gate consults repo access,
+  never the connection flags.
 - Self-service is `GET|POST|DELETE /api/v1/ssh-keys` (read-gated identity API, `06_api.md`) and
   the `/keys` page in the SPA: a no-write principal can register a read-only key — its rights
   are still whatever its principal has, evaluated per connection at auth time.
@@ -98,7 +102,7 @@ host_key_env = ""      # env var NAME holding the private key; overrides host_ke
 type Transport interface {
     SSHUploadPack(ctx context.Context, id git.RepoId, protocol string,
         p Principal, stdin io.Reader, stdout, stderr io.Writer) error
-    SSHReceivePack(ctx context.Context, id git.RepoId, principal string,
+    SSHReceivePack(ctx context.Context, id git.RepoId, p Principal,
         stdin io.Reader, stdout, stderr io.Writer) error
 }
 ```
@@ -107,6 +111,8 @@ Implemented by `internal/server` (`bind_ssh.go`): the repo read gate first (Forg
 private repos refuse key holders without read access, §17.6), then gates with HTTP parity — drain refuses at
 phase 2 only (§12), placement serves only `pl.Serve` with no-info-serves on lookup errors (§4.3),
 and the per-repo semaphore (`MaxConcurrentPerRepo`) is taken exactly as the HTTP route takes it —
+then the repo-scoped push gate for receive-pack (Forgejo #347 — `CheckPush` on existing repos,
+`CheckCreateOwner` admission on pushes that would auto-create; the 06 §4.4 rule verbatim) —
 then the shared pipeline. `pushPipeline` is the transport-agnostic push core used by both the HTTP
 handler and SSH; HTTP maps pre-pipeline errors onto 4xx/5xx statuses, SSH maps them onto stderr
 text and exit code 1. Sentinel errors (`sshd.ErrNotFound`, `ErrUnavailable`) are the mapping
@@ -139,12 +145,16 @@ both on the wire (band-2 + unpack ng) over SSH, as 413 over HTTP.
 
 - `internal/sshd/sshd_test.go`: `SplitCommand` table (quoting, escapes, unterminated), command
   table (verbs, `.git`, leading `/`, injection attempts, extra words), auth matrix over a real
-  loopback handshake (accepted key reaches the transport with the right RepoId/protocol; read-only
-  principal cannot push; unknown key fails the handshake), transport-error → stderr mapping, host
-  key generation persistence.
+  loopback handshake (accepted key reaches the transport with the right RepoId/protocol; every
+  receive-pack dispatches regardless of host flags — the transport gates, Forgejo #347;
+  transport refusals surface as stderr text + exit 1; unknown key fails the handshake),
+  transport-error → stderr mapping, host key generation persistence.
 - `internal/server/bind_ssh_test.go`: real `git clone` / `git push` over `ssh://127.0.0.1:<random>`
   with a generated client key and `GIT_SSH_COMMAND` — push → clone → second push → log assertions,
   plus a read-only key clone-then-refused-push case.
+- `internal/server/pushguard_test.go` + `pushguard_e2e_test.go` (Forgejo #347): the push-guardrail
+  matrix on both transports (owner / org member / bound / host-write-only foreigner / anonymous /
+  admin × existing repo, auto-create admitted/denied) plus real-git end-to-end over HTTP and SSH.
 
 ## 8. Deployment
 
@@ -180,6 +190,18 @@ their own). The GHCR image is identical: enable SSH by setting the env var, no r
   split there is member-vs-nonmember only; the push path is unchanged (the exec-layer write
   check already refused non-writers). Rationale: without it any valid key could clone any
   private repo — the coarse visibility boundary must hold on both transports.
+- **17.7 (2026-09-12) — SSH push enforces the repo-scoped push rule (Forgejo #347).** The
+  exec-layer host-write pre-check is REMOVED: every `git-receive-pack` dispatches, and
+  `SSHReceivePack` enforces the 06 §4.4 rule verbatim (`CheckPush` on existing repos,
+  `CheckCreateOwner` admission on pushes that would auto-create) after the sshGate
+  (drain/placement/semaphore) and before the repo open. The Transport signature changes
+  from `principal string` to the full `sshd.Principal` (name + admin — the gate consults
+  repo access through the name with the host-admin bypass, never the connection flags);
+  Write/Admin stay unset on the pipeline principal exactly as before (§3 constraint
+  honored, not removed). Denials surface as stderr text naming the repo and the required
+  relationship + exit 1. Rationale: the host-wide flag let any writer-key push to any
+  repo (including foreign namespaces) and auto-create under them — the exec check was
+  the hole, so the check moved to the repo-scoped gate both transports share.
 
 ### Concurrency
 

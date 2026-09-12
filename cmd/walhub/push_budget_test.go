@@ -196,6 +196,11 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 		CacheRoot: cfg.Cache.Dir,
 		Boot:      server.BootState{Mode: "defaults"},
 		ReadGate:  readGateOf(collab.ident),
+		// Forgejo #347: the push gate rides the same live identity
+		// service — in auth-none mode every CheckPush/CheckCreateOwner
+		// short-circuits on the admin bypass with zero store reads, so
+		// the collab bounds below also pin the gate's hot-path cost.
+		PushGate: pushGateOf(collab.ident),
 		// Forgejo #240: the production refusal predicate (same store).
 		// Each push revalidates it (probe, don't cache — a repo that
 		// just became a mirror must refuse the next push).

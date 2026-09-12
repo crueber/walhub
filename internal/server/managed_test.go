@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"git.packden.us/crueber/walhub/internal/git"
+	"git.packden.us/crueber/walhub/internal/sshd"
 )
 
 // Server-managed refs (docs/features/03 §3: refs/pull/**) are refused in
@@ -29,7 +30,7 @@ func TestPushPipelineManagedRefs(t *testing.T) {
 
 		var out strings.Builder
 		id := mustRepoID(t, "o/r")
-		if err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+		if err := s.SSHReceivePack(ctx, id, sshd.Principal{Name: "ada", Write: true}, strings.NewReader(string(body)), &out, io.Discard); err != nil {
 			t.Fatalf("receive: %v", err)
 		}
 		report := out.String()
@@ -56,7 +57,7 @@ func TestPushPipelineManagedRefs(t *testing.T) {
 
 		var out strings.Builder
 		id := mustRepoID(t, "o/r")
-		if err := s.SSHReceivePack(ctx, id, "ada", strings.NewReader(string(body)), &out, io.Discard); err != nil {
+		if err := s.SSHReceivePack(ctx, id, sshd.Principal{Name: "ada", Write: true}, strings.NewReader(string(body)), &out, io.Discard); err != nil {
 			t.Fatalf("receive: %v", err)
 		}
 		report := out.String()
