@@ -33,9 +33,10 @@ import {
 } from "../lib/mirror.js";
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
+import VisSelect from "../components/VisSelect.jsx";
 import AccessTab from "./Access.jsx";
 import Wal from "./Wal.jsx";
-import { isVisibility, visibilityOptions } from "../lib/visibility.js";
+import { isVisibility } from "../lib/visibility.js";
 import { saveVisibilityOnly, reseedVisibility, friendlyAccessError } from "../lib/accessSave.js";
 import { docVisibility, reseed as reseedVisTrack, rebase as rebaseVisTrack, isDirty as isVisTrackDirty } from "../lib/visibilityReseed.js";
 import { shouldFetchTeams } from "../lib/access.js";
@@ -220,16 +221,15 @@ function GeneralTab(props) {
           <label class="flex items-center gap-2 text-sm">
             <span class="muted">Who may read this repository:</span>
             {/* Forgejo #394: unseeded (loading) is a blank disabled select,
-                never a public-looking default — value "" matches no option. */}
-            <select
-              class="input"
-              value={getVis() ?? ""}
+                never a public-looking default — value "" matches no option.
+                Forgejo #410: the control is the shared VisSelect (real <For>
+                render path over identity-stable options). */}
+            <VisSelect
+              value={getVis()}
               disabled={getVis() === null}
-              onChange={(e) => setVis(e.currentTarget.value)}
-              aria-label="Visibility"
-            >
-              <For each={visibilityOptions(isOrg())}>{(o) => <option value={o.value}>{o.label}</option>}</For>
-            </select>
+              onChange={setVis}
+              isOrg={isOrg()}
+            />
           </label>
           <Show when={getVis() === null}>
             <p class="muted mt-1 text-xs">loading current visibility…</p>

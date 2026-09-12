@@ -46,13 +46,43 @@ export function isVisibility(v) {
  * offer "private — org members only" (the org-vs-user verdict rides the
  * #348 owner-kind marker — `orgs.get` resolving vs 404ing). The old
  * "members only" label is gone.
+ *
+ * Forgejo #410: the arrays AND row objects are hoisted constants, so
+ * repeated calls return identical references. Solid's <For> diffs by
+ * reference identity (mapArray keeps rows whose items are ===), so a
+ * fresh array of fresh objects on every call rebuilt every <option>
+ * node whenever the owner-kind signal re-fired — and with the select's
+ * value signal unchanged the control fell back to the first option
+ * (public). Stable identity keeps the populated selector settled on
+ * the server value. Deep-equal shape is unchanged.
  */
+const PUBLIC_OPTION = Object.freeze({
+  value: "public",
+  label: "public — anyone may read",
+});
+const AUTHENTICATED_OPTION = Object.freeze({
+  value: "authenticated",
+  label: "private — logged in only",
+});
+const PRIVATE_USER_OPTION = Object.freeze({
+  value: "private",
+  label: "private — owner only",
+});
+const PRIVATE_ORG_OPTION = Object.freeze({
+  value: "private",
+  label: "private — org members only",
+});
+const USER_OPTIONS = Object.freeze([
+  PUBLIC_OPTION,
+  AUTHENTICATED_OPTION,
+  PRIVATE_USER_OPTION,
+]);
+const ORG_OPTIONS = Object.freeze([
+  PUBLIC_OPTION,
+  AUTHENTICATED_OPTION,
+  PRIVATE_ORG_OPTION,
+]);
+
 export function visibilityOptions(isOrg) {
-  return [
-    { value: "public", label: "public — anyone may read" },
-    { value: "authenticated", label: "private — logged in only" },
-    isOrg
-      ? { value: "private", label: "private — org members only" }
-      : { value: "private", label: "private — owner only" },
-  ];
+  return isOrg ? ORG_OPTIONS : USER_OPTIONS;
 }
