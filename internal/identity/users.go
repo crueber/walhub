@@ -150,10 +150,27 @@ func (s *Service) ResolveUsername(ctx context.Context, email string) (string, er
 		u := &UserDoc{Version: 1, Username: cand, Email: email, CreatedAt: now}
 		if _, perr := store.PutBytes(ctx, s.Store, UserKey(cand), encodeUserDoc(u),
 			store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); perr != nil {
-			if store.IsPreconditionFailed(perr) {
-				continue // lost the race — re-read the winner next pass
+			if !store.IsPreconditionFailed(perr) {
+				return "", perr
 			}
-			return "", perr
+			// Lost the race for cand: re-read the winner IN THIS
+			// PASS (not the next suffix — the winner holds THIS
+			// name). Same email → adopt it (repair the alias);
+			// foreign email → next suffix. Without the re-read,
+			// two concurrent first-logins for one email would
+			// claim two usernames (split identity).
+			raw, _, rerr := store.GetBytes(ctx, s.Store, UserKey(cand), store.GetOptions{})
+			if rerr != nil {
+				if store.IsNotFound(rerr) {
+					continue
+				}
+				return "", rerr
+			}
+			if w, werr := parseUserDoc(raw); werr == nil && normPrincipal(w.Email) == email {
+				s.ensureAlias(ctx, email, cand)
+				return normPrincipal(w.Username), nil
+			}
+			continue
 		}
 		s.ensureAlias(ctx, email, cand)
 		return cand, nil

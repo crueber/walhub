@@ -10,8 +10,10 @@ package identity
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
+	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 )
@@ -188,5 +190,43 @@ func TestUsernameKeysAreAdditive(t *testing.T) {
 	}
 	if ProfileKey("crueber") != "users/crueber/profile.json" {
 		t.Errorf("username profile key = %q", ProfileKey("crueber"))
+	}
+}
+
+// TestResolveUsernameConcurrentFirstLogin pins the CAS race: two
+// sessions racing first-login for ONE email must converge on ONE
+// username (the PutCreate loser re-reads the winner in the same pass
+// and adopts it — never claims the next suffix). Repeated to force the
+// interleave; a split is exactly one username per user lost.
+func TestResolveUsernameConcurrentFirstLogin(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		st := store.NewMemory()
+		s1 := New(st, config.Defaults())
+		s2 := New(st, config.Defaults())
+		s1.Now = testClock
+		s2.Now = testClock
+		start := make(chan struct{})
+		var w sync.WaitGroup
+		got := make([]string, 2)
+		errs := make([]error, 2)
+		w.Add(2)
+		go func() {
+			defer w.Done()
+			<-start
+			got[0], errs[0] = s1.ResolveUsername(context.Background(), "race@example.com")
+		}()
+		go func() {
+			defer w.Done()
+			<-start
+			got[1], errs[1] = s2.ResolveUsername(context.Background(), "race@example.com")
+		}()
+		close(start)
+		w.Wait()
+		if errs[0] != nil || errs[1] != nil {
+			t.Fatalf("iter %d errs: %v %v", i, errs[0], errs[1])
+		}
+		if got[0] != got[1] {
+			t.Fatalf("iter %d split identity: %q vs %q", i, got[0], got[1])
+		}
 	}
 }
