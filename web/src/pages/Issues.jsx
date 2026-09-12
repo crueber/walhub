@@ -13,6 +13,7 @@ import { sortByNumDesc } from "../lib/sort.js";
 import { resolveIssueState, issueListState } from "../lib/issueState.js";
 import { TTL } from "../lib/collab.js";
 import { labelColorMap } from "../lib/labels.js";
+import { milestoneDisplay, milestoneFilterHref } from "../lib/milestones.js";
 import { LabelChip } from "../components/LabelPicker.jsx";
 import DateTime from "../components/DateTime.jsx";
 import { useCollabStream } from "../components/collab.jsx";
@@ -54,6 +55,14 @@ export default function Issues() {
   // page picker). Unknown names render as bare chips (02 §3.1).
   const [getLabelSet] = useData(() => `labels:${ctx.full}`, () => ctx.repoClient.labels.list(), TTL.labels);
   const colorMap = () => labelColorMap(getLabelSet()?.labels);
+
+  // Milestone titles for the row chips (issue #380): the index rows
+  // carry the stored id only (02 §3.2 projection), so titles resolve
+  // through the cached `milestones:{o}/{r}` set (30 s TTL, one shared
+  // entry with the thread page sidebar). Rows render before it loads —
+  // milestoneDisplay's pending state renders a placeholder, never a
+  // bare-id flash.
+  const [getMilestoneSet] = useData(() => `milestones:${ctx.full}`, () => ctx.repoClient.milestones.list(), TTL.milestones);
 
   // Live list: any `issue` frame invalidates the list windows (coalesced).
   useCollabStream(() => ctx.full, ctx.repoClient, ["issue"]);
@@ -159,7 +168,11 @@ export default function Issues() {
                   // closed gets one), label chips inline right of the title.
                   // Truncation safety: the title truncates (min-w-0 +
                   // max-w-full) and chips wrap, so long titles + many
-                  // labels wrap sanely instead of overflowing.
+                  // labels wrap sanely instead of overflowing. The
+                  // right-aligned meta reads comment count (bubble icon,
+                  // #380) → milestone chip (only when set) → updated time;
+                  // the milestone chip truncates (max-w + title tooltip,
+                  // same #334 safety as the title).
                   <li class="border-t border-zinc-200 py-3 first:border-t-0 first:pt-0 dark:border-zinc-800">
                     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <A
@@ -177,7 +190,34 @@ export default function Issues() {
                         </span>
                       </Show>
                       <span class="ml-auto shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
-                        {issue.comment_count} comments · <DateTime value={issue.updated_at} />
+                        <span title={`${issue.comment_count} comments`} aria-label={`${issue.comment_count} comments`}>
+                          <span aria-hidden="true">💬 </span>
+                          {issue.comment_count}
+                        </span>
+                        <Show when={issue.milestone != null}>
+                          {" · "}
+                          {(() => {
+                            // The title waits on the page-owned milestone
+                            // set — a placeholder, never the bare id, until
+                            // the set settles (deleted ids still fall back
+                            // to the bare id via milestoneDisplay's unknown
+                            // path, same self-heal as the sidebar).
+                            const d = () => milestoneDisplay(getMilestoneSet()?.milestones, issue.milestone);
+                            return (
+                              <Show when={!d().pending} fallback={<span class="muted">…</span>}>
+                                <A
+                                  class="chip max-w-40 truncate align-bottom"
+                                  href={milestoneFilterHref(ctx.full, issue.milestone)}
+                                  title={`issues on milestone ${d().text}`}
+                                >
+                                  {d().text}
+                                </A>
+                              </Show>
+                            );
+                          })()}
+                        </Show>
+                        {" · "}
+                        <DateTime value={issue.updated_at} />
                       </span>
                     </div>
                   </li>
