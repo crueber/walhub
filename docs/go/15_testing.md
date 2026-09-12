@@ -489,3 +489,19 @@ The rewrite copies CODE behavior (§20); each of these gets an explicit assertio
   the test contract instead. Rationale: every one of these pinned
   scheduling or randomness instead of behavior, and each fix is
   deterministic without weakening the assertion.
+- **Self-deadlocking SSH limiter test, Forgejo #409 (2026-09-12).**
+  `TestMaxSessionsRefuses` (internal/sshd) launched the slot-holder
+  session in a bare goroutine and immediately ran the session meant to
+  be refused, so the scheduler decided which exec won the single slot;
+  when the wrong one won, the test's own fake transport parked on a
+  channel only the test's continuation could close — a self-deadlock
+  that consumed the full 10-minute package timeout in CI. Test-only
+  fix, no production change (the select/default limiter was already
+  correct): the transport is built with `entered` and the test waits
+  on it before offering the second exec (deterministic slot-holder);
+  teardown closes the block AND the client session (each wait joined
+  against a 5 s budget with a named failure); the sibling
+  poll-with-deadline idiom is reused, never fixed sleeps. Rule
+  restated: a test must never block on a channel only its own
+  continuation can close — every such wait gets its own short
+  deadline with a message naming the stuck wait.
