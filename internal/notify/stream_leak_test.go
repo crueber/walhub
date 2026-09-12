@@ -31,6 +31,28 @@ func awaitGoroutines(t *testing.T, base int, what string) {
 	}
 }
 
+// awaitGoroutinesUp polls until at least n goroutines exist (or the
+// deadline hits). A `go` statement's goroutine is not guaranteed
+// countable the instant the statement returns, so an immediate
+// NumGoroutine assertion pins scheduling, not behavior — under CI load
+// the spawned keepalives had not all started when counted (Forgejo
+// #397: "expected >= 8 goroutines after attach, got 7"). Same
+// poll-don't-sleep treatment as #178.
+func awaitGoroutinesUp(t *testing.T, n int, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := runtime.NumGoroutine(); got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: goroutines still %d, want >= %d after 5s",
+				what, runtime.NumGoroutine(), n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestSSEWriterKeepaliveExitsOnClose(t *testing.T) {
 	const streams = 5
 	base := runtime.NumGoroutine()
@@ -43,9 +65,7 @@ func TestSSEWriterKeepaliveExitsOnClose(t *testing.T) {
 		}
 		writers = append(writers, w)
 	}
-	if got := runtime.NumGoroutine(); got < base+streams {
-		t.Fatalf("expected >= %d goroutines after attach, got %d", base+streams, got)
-	}
+	awaitGoroutinesUp(t, base+streams, "keepalive goroutines after attach")
 	// The handler path: defer s.close() on disconnect.
 	for _, w := range writers {
 		w.close()
@@ -62,9 +82,7 @@ func TestSSEWriterKeepaliveExitsOnContextCancel(t *testing.T) {
 		t.Fatal("recorder must flush")
 	}
 	defer w.close()
-	if got := runtime.NumGoroutine(); got < base+1 {
-		t.Fatalf("expected >= %d goroutines after attach, got %d", base+1, got)
-	}
+	awaitGoroutinesUp(t, base+1, "keepalive goroutine after attach")
 	cancel()
 	awaitGoroutines(t, base, "keepalive goroutine leaked after ctx cancel")
 }

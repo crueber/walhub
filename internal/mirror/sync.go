@@ -54,6 +54,17 @@ func RegisterKind(name string) {
 	kinds[name] = true
 }
 
+// ResetKindsForTest clears the kind registry. Test-only: the registry
+// is process-global and write-only (composition registers once per
+// process), so without a reset every -count=N re-run of a registering
+// test trips the duplicate panic outside its recover (Forgejo #397).
+// Production keeps the panic-on-duplicate contract above.
+func ResetKindsForTest() {
+	kindsMu.Lock()
+	defer kindsMu.Unlock()
+	kinds = map[string]bool{}
+}
+
 // Service owns the mirror-sync surface: the task spawn (SyncNow,
 // shared by the loop, the manual endpoint, and the create-from-URL
 // first sync) and the scheduled loop (RunLoop).

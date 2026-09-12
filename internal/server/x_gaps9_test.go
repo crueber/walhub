@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,32 @@ import (
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 )
+
+// tamperWireMAC returns a wire with a deterministically corrupted MAC:
+// the MAC part is decoded, a payload bit is flipped, and it is
+// re-encoded. Substituting trailing base64url characters instead is NOT
+// a reliable tamper — the MAC is 32 bytes, so the last character's low
+// bits are padding in decoded space, and a substitution there can decode
+// to the identical MAC (Forgejo #397: "tampered mac" verified clean
+// whenever the minted MAC's last sextet top bits matched the substitute
+// — ~1/16 of minted tokens; "tampered token must be invalid" hit the
+// same way at ~1/256). Flipping a decoded bit guarantees mismatch while
+// keeping the wire well-formed, so the expectation stays "invalid
+// token", never "malformed".
+func tamperWireMAC(t *testing.T, wire string) string {
+	t.Helper()
+	body := strings.TrimPrefix(wire, tokenPrefix)
+	parts := strings.Split(body, ".")
+	if len(parts) != 2 {
+		t.Fatalf("tamperWireMAC needs a payload.mac wire, got %q", wire)
+	}
+	mac, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || len(mac) == 0 {
+		t.Fatalf("tamperWireMAC undecodable mac: %v", err)
+	}
+	mac[0] ^= 0xFF
+	return tokenPrefix + parts[0] + "." + base64.RawURLEncoding.EncodeToString(mac)
+}
 
 // --- OIDC: wgtPrincipal + Authenticate ---------------------------------------
 
@@ -108,7 +135,7 @@ func TestVerifyTokenWireNegatives(t *testing.T) {
 		{"bad mac b64", "wgt_" + b64url([]byte("a\nb\nc\nd")) + ".!!!", auth.ErrInvalid, "malformed"},
 		{"short payload", "wgt_" + b64url([]byte("a\nb")) + "." + macOf("a\nb"), auth.ErrInvalid, "malformed"},
 		{"unknown kind", "wgt_" + b64url([]byte("x\ny\nz\ntoken\nq")) + "." + macOf("x\ny\nz\ntoken\nq"), auth.ErrInvalid, "malformed"},
-		{"tampered mac", valid.Wire[:len(valid.Wire)-1] + "A", auth.ErrInvalid, "invalid token"},
+		{"tampered mac", tamperWireMAC(t, valid.Wire), auth.ErrInvalid, "invalid token"},
 		{"expired", "wgt_" + b64url([]byte(expiredPayload)) + "." + macOf(expiredPayload), auth.ErrInvalid, "expired"},
 	}
 	for _, tc := range cases {

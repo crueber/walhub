@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -52,6 +53,16 @@ func TestBeginOnMirrorIs409(t *testing.T) {
 	}
 	if res == nil || res.TaskID == "" {
 		t.Fatalf("res = %+v", res)
+	}
+	// Join the background drive before returning: it clones into
+	// cfg.Cache.Dir (a t.TempDir), and an import still cloning while
+	// TempDir cleanup runs RemoveAll fails the test with "directory not
+	// empty" under CI load (Forgejo #397). The source is an empty dir,
+	// never a git repo, so the terminal outcome is deterministically an
+	// error — the clone cannot succeed on any git version.
+	o := awaitDone(t, svc, res.TaskID, 60*time.Second)
+	if o.Err == nil {
+		t.Fatalf("empty-dir import should fail, got %+v", o)
 	}
 }
 
