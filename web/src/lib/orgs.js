@@ -58,6 +58,28 @@ export function isOrgRow(row) {
 }
 
 /**
+ * mergeOrgActivity(existing, incoming) → newest-first deduped events.
+ * Live frames and older pages merge by `seq` (server seqs are unique and
+ * monotonic): live-prepend and paging-append are the same merge, so the
+ * tab never double-renders an event seen on both paths (Forgejo #364).
+ * Headless-testable: pure array merge, no Solid, no DOM.
+ */
+export function mergeOrgActivity(existing, incoming) {
+  const base = Array.isArray(existing) ? existing : [];
+  const extra = Array.isArray(incoming) ? incoming : [];
+  const seen = new Set();
+  const out = [];
+  for (const e of base.concat(extra)) {
+    const seq = e?.seq;
+    if (seq == null || seen.has(seq)) continue;
+    seen.add(seq);
+    out.push(e);
+  }
+  out.sort((a, b) => (b?.seq ?? 0) - (a?.seq ?? 0));
+  return out;
+}
+
+/**
  * isValidOwnerPart(name) → whether name is usable as a repo owner segment.
  * Mirrors git.validPart for the owner half of ParseRepoId (ASCII
  * [A-Za-z0-9._-], 1–100 chars, no leading dot, not ".."): Forgejo #370 —

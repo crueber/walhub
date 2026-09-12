@@ -125,3 +125,21 @@ test("allowedOwners filters non-owner-segment options (Forgejo #370)", async () 
   };
   assert.deepEqual(await allowedOwners(weird, "bob"), ["bob", "acme", "solo"]);
 });
+
+test("mergeOrgActivity dedups by seq, newest-first (live + paging share one merge)", async () => {
+  const { mergeOrgActivity } = await import("../../src/lib/orgs.js");
+  const page = [{ seq: 5 }, { seq: 4 }, { seq: 3 }];
+  const older = [{ seq: 2 }, { seq: 1 }];
+  assert.deepEqual(
+    mergeOrgActivity(page, older).map((e) => e.seq),
+    [5, 4, 3, 2, 1],
+  );
+  // Live-prepended frame already present in the next page: no duplicate.
+  assert.deepEqual(
+    mergeOrgActivity([{ seq: 6 }, ...page], [{ seq: 6 }, ...page, ...older]).map((e) => e.seq),
+    [6, 5, 4, 3, 2, 1],
+  );
+  // Non-arrays and seq-less rows degrade to []/dropped, never throw.
+  assert.deepEqual(mergeOrgActivity(null, undefined), []);
+  assert.deepEqual(mergeOrgActivity([{ seq: 1 }, null, {}], [{ seq: 1 }]).map((e) => e.seq), [1]);
+});

@@ -252,6 +252,7 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 	// (never a LIST, never a sidecar read).
 	mirrorProbes := 0
 	statsPuts := 0
+	orgBirthProbes := 0
 	for k, n := range cs.coll {
 		if isMirrorProbe(k) {
 			mirrorProbes += n
@@ -261,6 +262,17 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 			statsPuts += n
 			continue
 		}
+		// Forgejo #364 bound: the repo-birth org-existence probe
+		// (exact-key get on orgs/<owner>/org.json — one per repo birth,
+		// cold pushes only; warm pushes never birth). The wal registry
+		// is the single birth choke for API creates, push
+		// auto-creates, and imports, and the org activity log needs
+		// the org/user decision exactly there; the spelling pre-check
+		// is free (local) and this GET is the only store cost.
+		if isOrgBirthProbe(k) {
+			orgBirthProbes += n
+			continue
+		}
 		t.Errorf("collab key touched on push fast path: %s x%d", k, n)
 	}
 	if mirrorProbes > 6 {
@@ -268,6 +280,9 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 	}
 	if statsPuts > 4 {
 		t.Errorf("size sidecar writes = %d, want ≤ 4 (1 per committed publish + slack)", statsPuts)
+	}
+	if orgBirthProbes > 1 {
+		t.Errorf("org birth probes = %d, want ≤ 1 (1 per repo birth; this test births once)", orgBirthProbes)
 	}
 	if warmOps == 0 {
 		t.Fatal("no store ops counted — the decorator is bypassed, measurement void")
@@ -302,4 +317,20 @@ func isSizeSidecarWrite(opKey string) bool {
 		return false
 	}
 	return strings.HasSuffix(key, "/meta/stats.json")
+}
+
+// isOrgBirthProbe reports the Forgejo #364 birth-path read (the third
+// sanctioned collab touch on the push path): an exact-key GET of the
+// org profile deciding org-vs-user at a repo birth. Reads on it are the
+// ONLY covered shape — a birth for an existing org additionally appends
+// org-log objects, which this test never triggers (e2e is not an org).
+func isOrgBirthProbe(opKey string) bool {
+	op, key, ok := strings.Cut(opKey, " ")
+	if !ok {
+		return false
+	}
+	if op != "get" {
+		return false
+	}
+	return strings.HasSuffix(key, "/org.json") && strings.HasPrefix(key, "orgs/")
 }

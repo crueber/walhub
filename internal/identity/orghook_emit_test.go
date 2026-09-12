@@ -61,10 +61,16 @@ func TestOrgEventMemberLifecycle(t *testing.T) {
 	s, l := emitService()
 	ctx := context.Background()
 	mustEmitOrg(t, s, ctx)
-	// CreateOrg itself is not a membership transition: silence.
-	if len(l.events) != 0 {
-		t.Fatalf("CreateOrg emitted %+v", l.events)
+	// Fresh CreateOrg is a birth: exactly one org_created carrying the
+	// creator (Forgejo #364). The membership assertions below start
+	// from a drained log.
+	if got := l.actions(); !equalStrings(got, []string{"org_created"}) {
+		t.Fatalf("CreateOrg actions = %v", got)
 	}
+	if l.events[0].actor != "alice@example.com" {
+		t.Fatalf("org_created actor = %q, want the creator", l.events[0].actor)
+	}
+	l.events = nil
 	if _, err := s.SetMember(ctx, "acme", "bob@example.com", OrgMember); err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +103,17 @@ func TestOrgEventTeamLifecycle(t *testing.T) {
 	s, l := emitService()
 	ctx := context.Background()
 	mustEmitOrg(t, s, ctx)
+	l.events = nil // the org_created birth (covered in member lifecycle)
 	if _, err := s.CreateTeam(ctx, "acme", "devs", "Devs", ""); err != nil {
 		t.Fatal(err)
+	}
+	// PutTeam renames the team: one team_updated (Forgejo #364).
+	if _, err := s.PutTeam(ctx, "acme", "devs", "Developers", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Unknown team edits fail and emit nothing.
+	if _, err := s.PutTeam(ctx, "acme", "nope", "N", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("PutTeam unknown = %v", err)
 	}
 	if _, err := s.SetTeamMember(ctx, "acme", "devs", "bob@example.com"); err != nil {
 		t.Fatal(err)
@@ -117,7 +132,7 @@ func TestOrgEventTeamLifecycle(t *testing.T) {
 	if err := s.DeleteTeam(ctx, "acme", "devs"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"team_created", "team_member_added", "team_member_removed", "team_deleted"}
+	want := []string{"team_created", "team_updated", "team_member_added", "team_member_removed", "team_deleted"}
 	if got := l.actions(); !equalStrings(got, want) {
 		t.Fatalf("actions = %v, want %v", got, want)
 	}
@@ -127,6 +142,7 @@ func TestOrgEventInviteLifecycle(t *testing.T) {
 	s, l := emitService()
 	ctx := context.Background()
 	mustEmitOrg(t, s, ctx)
+	l.events = nil // the org_created birth (covered in member lifecycle)
 	inv, err := s.CreateOrgInvite(ctx, "acme", "carol@example.com", string(OrgMember), "alice@example.com", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +199,50 @@ func TestOrgEventInviteLifecycle(t *testing.T) {
 	}
 	if len(l.actions()) != 7 {
 		t.Fatalf("unknown cancel emitted: %v", l.actions())
+	}
+}
+
+func TestOrgEventOrgLifecycle(t *testing.T) {
+	s, l := emitService()
+	ctx := context.Background()
+	// Fresh birth emits org_created with the creator as actor.
+	if _, err := s.CreateOrg(ctx, "acme", "Acme", "", "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.actions(); !equalStrings(got, []string{"org_created"}) {
+		t.Fatalf("actions = %v", got)
+	}
+	// Idempotent re-create by the owner is a resume, not a birth: silent.
+	if _, err := s.CreateOrg(ctx, "acme", "Acme", "", "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	// Conflicting create by a stranger 409s and emits nothing.
+	if _, err := s.CreateOrg(ctx, "acme", "Acme", "", "mallory@example.com"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CreateOrg conflict = %v", err)
+	}
+	if got := l.actions(); !equalStrings(got, []string{"org_created"}) {
+		t.Fatalf("resume/conflict emitted: %v", got)
+	}
+	// Profile edits emit org_updated (system actor — no actor parameter).
+	if _, err := s.PutOrg(ctx, "acme", OrgEdit{DisplayName: "Acme Inc"}); err != nil {
+		t.Fatal(err)
+	}
+	// Unknown-org edits fail and emit nothing.
+	if _, err := s.PutOrg(ctx, "ghost", OrgEdit{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("PutOrg unknown = %v", err)
+	}
+	// Delete emits org_deleted before the objects go.
+	if err := s.DeleteOrg(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"org_created", "org_updated", "org_deleted"}
+	if got := l.actions(); !equalStrings(got, want) {
+		t.Fatalf("actions = %v, want %v", got, want)
+	}
+	for _, e := range l.events {
+		if e.org != "acme" || e.title == "" {
+			t.Fatalf("event = %+v", e)
+		}
 	}
 }
 

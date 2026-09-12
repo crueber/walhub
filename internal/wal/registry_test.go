@@ -131,3 +131,38 @@ func TestRegistry_OpenWithoutManifest(t *testing.T) {
 		t.Fatal("open of unknown repo succeeded")
 	}
 }
+
+// TestRegistry_OnCreateFiresOncePerBirth pins the Forgejo #364 birth
+// observer: exactly one call with the repo id on a fresh create, silence
+// on duplicate creates (412 losers), opens, and invalid ids — and a nil
+// observer never panics.
+func TestRegistry_OnCreateFiresOncePerBirth(t *testing.T) {
+	r, _ := newTestRegistry(t)
+	ctx := context.Background()
+	var got []string
+	r.OnCreate = func(_ context.Context, id string) { got = append(got, id) }
+
+	if _, err := r.Create(ctx, "acme/api", git.Sha1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Duplicate create races the winner: 412, no second birth.
+	if _, err := r.Create(ctx, "acme/api", git.Sha1); err == nil {
+		t.Fatal("duplicate create succeeded")
+	}
+	// Opens and invalid ids never fire.
+	if _, err := r.Open(ctx, "acme/api"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := r.Create(ctx, "bad id!", git.Sha1); err == nil {
+		t.Fatal("invalid create succeeded")
+	}
+	if len(got) != 1 || got[0] != "acme/api" {
+		t.Fatalf("OnCreate calls = %v, want [acme/api]", got)
+	}
+
+	// Nil observer: births still succeed.
+	r2, _ := newTestRegistry(t)
+	if _, err := r2.Create(ctx, "acme/other", git.Sha1); err != nil {
+		t.Fatalf("create without observer: %v", err)
+	}
+}

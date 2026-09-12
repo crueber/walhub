@@ -1,7 +1,10 @@
 /**
  * Orgs client group (features/01 §8–§9): orgs, members, teams, org invites.
- * `client.orgs.*` over `/api/v1/orgs[/…]` (both lanes), incl. org webhooks.
+ * `client.orgs.*` over `/api/v1/orgs[/…]` (both lanes), incl. org webhooks
+ * and the org activity surface (Forgejo #364).
  */
+import { readSse } from "./sse.js";
+import { ReposError } from "./errors.js";
 
 const enc = encodeURIComponent;
 
@@ -185,6 +188,39 @@ export function attachOrgs(client) {
         }),
       /** Cancel (owner). */
       cancel: (org, id, opts) => call(orgPath(org, `/invitations/${enc(id)}`), { method: "DELETE", ...opts }),
+    },
+
+    activity: {
+      /**
+       * Org activity page: `GET …/activity?n=&after=` → `{events, more}`
+       * (owner; newest-first; `after` is an exclusive seq cursor).
+       */
+      list: (org, query = {}, opts) => {
+        const qs = new URLSearchParams();
+        if (query?.n != null) qs.set("n", String(query.n));
+        if (query?.after != null) qs.set("after", String(query.after));
+        const suf = qs.size ? `/activity?${qs}` : "/activity";
+        return call(orgPath(org, suf), { method: "GET", ...opts });
+      },
+      /**
+       * Live org activity: `GET …/activity/stream` (SSE). Calls `onEvent`
+       * per `org_activity` frame. Honors `opts.signal` (the primary
+       * cancel path) and returns a cancellation function (the
+       * notifications.stream contract).
+       */
+      stream: async (org, onEvent, opts = {}) => {
+        const controller = client._controller(opts?.signal);
+        const req = client._request(orgPath(org, "/activity/stream"), {
+          headers: { Accept: "text/event-stream" },
+          sse: false,
+        });
+        const res = await client._send(req, controller);
+        if (!res.ok) throw new ReposError(res.status, `stream failed`, req.url);
+        readSse(res, (frame) => {
+          if (frame?.event === "org_activity") onEvent?.(frame.data);
+        }, { signal: controller.signal }).catch(() => {});
+        return () => controller.abort();
+      },
     },
   };
 }

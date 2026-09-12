@@ -685,8 +685,8 @@ func (s *Service) sweepFanoutRepo(ctx context.Context, owner, repo, key string) 
 
 // --- notify-retention ----------------------------------------------------------------------
 
-// RunRetention runs one §9 pass: per-user tray compaction + collab-events
-// floor. Races with live fan-out resolve by CAS: a lost race defers that
+// RunRetention runs one §9 pass: per-user tray compaction +
+// collab-events floor + org-event-log floor. Races with live fan-out resolve by CAS: a lost race defers that
 // user/repo to the next pass. Deleting a read notification under an open
 // tray page is harmless (404 → the UI drops the row).
 func (s *Service) RunRetention(ctx context.Context) {
@@ -713,6 +713,17 @@ func (s *Service) RunRetention(ctx context.Context) {
 			s.retainRepoEvents(ctx, owner, repo, now)
 			return nil
 		})
+	})
+	// Forgejo #364: the org event logs compact on the same pass (one
+	// orghook_state GET + bounded probes per org — maintainer pass,
+	// never a git hot path).
+	_ = s.Store.ListPrefixes(ctx, "orgs/", func(orgSlash string) error {
+		org := strings.TrimSuffix(strings.TrimPrefix(orgSlash, "orgs/"), "/")
+		if org == "" || strings.Contains(org, "/") {
+			return nil
+		}
+		s.retainOrgEvents(ctx, org, now)
+		return nil
 	})
 }
 
