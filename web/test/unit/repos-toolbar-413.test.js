@@ -66,7 +66,9 @@ test("gate and href preserved: canWrite + pre-filled owner", () => {
     toolbar.includes("href={`/new?owner=${encodeURIComponent(owner())}`}"),
     "pre-filled owner href preserved with encodeURIComponent"
   );
-  const ctas = [...REPOS.matchAll(/New repository/g)];
+  // Forgejo #422: the Repos.jsx file-header comment names the CTA too —
+  // count the rendered element (the text node closing into </A>), not prose.
+  const ctas = [...REPOS.matchAll(/New repository\s*</g)];
   assert.equal(ctas.length, 1, "exactly one New-repository CTA on the page");
 });
 

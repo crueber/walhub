@@ -65,7 +65,11 @@ test("identity block stays atop the main column above the toolbar", () => {
   assert.ok(main.includes('join(" · ")'), "location · timezone separator kept");
   assert.ok(main.includes("renderBody(profile().bio_markdown)"), "bio renders through the shared markdown pipeline");
   assert.ok(main.indexOf("profile-header") < main.indexOf("repos-toolbar"), "identity renders above the Repositories toolbar");
-  assert.ok(main.indexOf("repos-toolbar") < main.indexOf("orderByActivity"), "toolbar renders above the listing");
+  // Forgejo #422: the profile-view teaser counts via orderByActivity too —
+  // scope the toolbar-above-listing pin to the repositories view.
+  const reposView = REPOS.slice(REPOS.indexOf('<Show when={view() === "repos"}>'));
+  assert.ok(reposView.indexOf("repos-toolbar") !== -1, "toolbar lives in the repositories view");
+  assert.ok(reposView.indexOf("repos-toolbar") < reposView.indexOf("orderByActivity"), "toolbar renders above the listing");
   assert.ok(main.includes("<Show when={getEditing() && getProfile()?.can_edit}>"), "the edit form opens in place in the main column");
 });
 

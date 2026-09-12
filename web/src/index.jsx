@@ -15,7 +15,7 @@ import Landing from "./pages/Landing.jsx";
 import HowItWorks from "./pages/HowItWorks.jsx";
 import Import from "./pages/Import.jsx";
 import New from "./pages/New.jsx";
-import Repos from "./pages/Repos.jsx";
+import Repos, { OwnerRepositories } from "./pages/Repos.jsx";
 import Repo from "./pages/Repo.jsx";
 import Tree from "./pages/Tree.jsx";
 import Blob from "./pages/Blob.jsx";
@@ -69,6 +69,12 @@ render(
           (Forgejo #348 — the shell serves it either way, but the router
           must resolve the create form, never a repo named orgs/new). */}
       <Route path="/orgs/new" component={OrgNew} />
+      {/* Static before dynamic: /:owner/repositories must not fall into
+          /:owner/:name (Forgejo #422 — the owner repositories tab, never a
+          repo named "repositories"; a repo literally named "repositories"
+          loses its UI page — git/API paths unaffected, same reservation
+          class as /orgs/new above). */}
+      <Route path="/:owner/repositories" component={OwnerRepositories} />
       <Route path="/:owner" component={Repos} />
       <Route path="/:org/settings" component={Org} />
       <Route path="/:owner/teams/:slug" component={Team} />
