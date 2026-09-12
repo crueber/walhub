@@ -5,14 +5,15 @@
 // new-issue + labels/milestones links. Rows upsert in place on `issue`
 // SSE frames (the repo stream is shared; this page refetches its window).
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Show, onCleanup } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { sortByNumDesc } from "../lib/sort.js";
 import { resolveIssueState, issueListState } from "../lib/issueState.js";
 import { TTL } from "../lib/collab.js";
-import { labelColorMap } from "../lib/labels.js";
+import { labelColorMap, toggleLabel } from "../lib/labels.js";
+import { parseLabelsParam, serializeLabelsParam, resolveMilestoneFilter } from "../lib/issueFilters.js";
 import { milestoneDisplay, milestoneFilterHref } from "../lib/milestones.js";
 import { LabelChip } from "../components/LabelPicker.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -23,6 +24,148 @@ import Empty from "../components/Empty.jsx";
 function statePill(state) {
   if (state !== "closed") return null;
   return <span class="chip chip-closed shrink-0">closed</span>;
+}
+
+// LabelsFilter — multi-select labels dropdown for the filter bar (issue
+// #416): the LabelPicker idiom (08 §2, #107) pointed at the filter param
+// instead of a PATCH. The trigger summarizes the selection (comma list,
+// truncated; "All labels" when unfiltered); the panel lists every repo
+// label as a menuitemcheckbox grid row ([check+dot] [name] [description],
+// #334) plus bare rows for selected-but-unknown names (a deleted label in
+// a shared deep link — self-heal, never silently dropped) and a Clear row.
+// Toggling never closes the panel (multi-add without reopening). Esc
+// closes and restores trigger focus; outside-click closes (removed in
+// onCleanup; no toggle-fight — the trigger lives inside `root`, so the
+// document handler never sees its clicks as outside). The panel anchors
+// left (unlike the thread pickers' right-0): this cell sits mid-grid, so
+// a right-anchored w-80 panel would hang past the phone viewport's left
+// edge; the shared `label-drop` hook keeps the opaque + #278 viewport
+// bound either way. Props: { value: string (the raw `?labels=` param),
+// all: [{name,color,description?}], pending: bool, onToggle(name),
+// onClear() }.
+function LabelsFilter(props) {
+  const [getOpen, setOpen] = createSignal(false);
+  let root;
+  let trigger;
+
+  const onDocClick = (e) => {
+    if (getOpen() && root && !root.contains(e.target)) setOpen(false);
+  };
+  const onDocKey = (e) => {
+    if (getOpen() && e.key === "Escape") {
+      setOpen(false);
+      trigger?.focus();
+    }
+  };
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onDocKey);
+  onCleanup(() => {
+    document.removeEventListener("click", onDocClick);
+    document.removeEventListener("keydown", onDocKey);
+  });
+
+  const selected = () => parseLabelsParam(props.value);
+  const selectedSet = () => new Set(selected().map((n) => n.toLowerCase()));
+  const unknownSelected = () => {
+    const known = new Set((props.all ?? []).map((l) => String(l.name).toLowerCase()));
+    return selected().filter((n) => !known.has(n.toLowerCase()));
+  };
+  const summary = () => {
+    if (props.pending) return "loading…";
+    const s = selected();
+    if (!s.length) return "All labels";
+    return s.join(", ");
+  };
+
+  return (
+    <div class="relative" ref={root}>
+      <button
+        type="button"
+        ref={trigger}
+        class="input flex w-full items-center justify-between gap-2 text-left"
+        aria-haspopup="menu"
+        aria-expanded={getOpen() ? "true" : "false"}
+        aria-label={`Filter by labels${selected().length ? `: ${summary()}` : ""}`}
+        title={summary()}
+        disabled={props.pending}
+        onClick={() => setOpen(!getOpen())}
+      >
+        <span class="min-w-0 flex-1 truncate">{summary()}</span>
+        <span aria-hidden="true" class="shrink-0">
+          ▾
+        </span>
+      </button>
+      <Show when={getOpen()}>
+        <div
+          class="label-drop scroll-slim card absolute left-0 z-30 mt-1 max-h-72 w-80 overflow-y-auto p-1"
+          role="menu"
+          aria-label="Filter issues by labels"
+        >
+          <Show when={selected().length > 0}>
+            <button
+              type="button"
+              role="menuitem"
+              aria-label="clear labels filter"
+              title="Clear the labels filter"
+              class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              onClick={() => props.onClear?.()}
+            >
+              <span class="inline-block w-4 shrink-0 text-center" aria-hidden="true">
+                ✕
+              </span>
+              <span class="muted italic">Clear</span>
+            </button>
+          </Show>
+          <For each={unknownSelected()}>
+            {(name) => (
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked="true"
+                aria-label={`remove label ${name}`}
+                title={`remove ${name} (no longer in this repo)`}
+                class="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                onClick={() => props.onToggle?.(name)}
+              >
+                <span class="flex shrink-0 items-center gap-2" aria-hidden="true">
+                  <span class="inline-block w-4 text-center">✓</span>
+                </span>
+                <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">{name}</span>
+              </button>
+            )}
+          </For>
+          <For each={props.all ?? []} fallback={<p class="muted px-2 py-1 text-xs">no labels in this repo yet</p>}>
+            {(l) => {
+              const on = () => selectedSet().has(String(l.name).toLowerCase());
+              return (
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={on() ? "true" : "false"}
+                  aria-label={`${on() ? "remove" : "add"} label filter ${l.name}`}
+                  title={`${on() ? "remove" : "add"} ${l.name}${l.description ? ` — ${l.description}` : ""}`}
+                  class="grid w-full grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  onClick={() => props.onToggle?.(l.name)}
+                >
+                  <span class="flex shrink-0 items-center gap-2" aria-hidden="true">
+                    <span class="inline-block w-4 text-center">{on() ? "✓" : ""}</span>
+                    <span
+                      class="inline-block h-3 w-3 rounded-full border border-zinc-300 dark:border-zinc-700"
+                      style={{ "background-color": `#${l.color}` }}
+                    />
+                  </span>
+                  <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium">{l.name}</span>
+                  <Show when={l.description}>
+                    <span class="muted min-w-0 truncate text-xs">{l.description}</span>
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
 }
 
 export default function Issues() {
@@ -72,6 +215,15 @@ export default function Issues() {
     setSearch({ [k]: v || undefined });
   };
 
+  // Milestone select binding (#416): the raw `?milestone=` param against
+  // the cached set — "" (unfiltered), "none", a known id, or an unknown
+  // id shown as its raw value (deep link to a deleted milestone — the
+  // filter stays visible, never silently dropped). Pending while the set
+  // loads, so the select disables instead of flashing bare ids.
+  const msFilter = () => resolveMilestoneFilter(search.milestone, getMilestoneSet()?.milestones);
+  const toggleFilterLabel = (name) =>
+    setFilter("labels", serializeLabelsParam(toggleLabel(parseLabelsParam(search.labels), name)));
+
   return (
     <div class="issues-page">
       <div class="mb-2 flex flex-wrap items-center gap-2">
@@ -119,23 +271,33 @@ export default function Issues() {
             onChange={(e) => setFilter("assignee", e.target.value)}
           />
         </label>
-        <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        <div class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
           Labels
-          <input
-            class="input"
-            placeholder="labels (a,b)"
+          <LabelsFilter
             value={search.labels || ""}
-            onChange={(e) => setFilter("labels", e.target.value)}
+            all={getLabelSet()?.labels}
+            pending={getLabelSet() === undefined}
+            onToggle={toggleFilterLabel}
+            onClear={() => setFilter("labels", "")}
           />
-        </label>
+        </div>
         <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
           Milestone
-          <input
+          <select
             class="input"
-            placeholder="milestone or none"
-            value={search.milestone || ""}
+            value={msFilter().value}
+            disabled={msFilter().pending}
             onChange={(e) => setFilter("milestone", e.target.value)}
-          />
+            aria-label="Filter by milestone"
+            title={msFilter().unknown ? `Unknown milestone ${msFilter().value} (no longer in this repo)` : undefined}
+          >
+            <option value="">All milestones</option>
+            <option value="none">No milestone</option>
+            <For each={getMilestoneSet()?.milestones ?? []}>{(m) => <option value={m.id}>{m.title}</option>}</For>
+            <Show when={msFilter().unknown}>
+              <option value={msFilter().value}>{msFilter().value}</option>
+            </Show>
+          </select>
         </label>
         <div class="col-span-2 flex items-end sm:col-span-4 lg:col-span-1">
           <button type="button" class="btn w-full lg:w-auto" onClick={reload}>

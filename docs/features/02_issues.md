@@ -647,6 +647,27 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   sibling column — left as is, no change. Browser proof (both themes, 390px,
   zero console errors) is open: the shared-daemon network guard blocks
   private/loopback targets, no private daemon per workspace rules.
+- **Issues-list Milestone/Labels filters are dropdowns fed from the repo
+  caches (issue #416, 2026-09-12).** The filter bar's two free-text inputs
+  are gone: Milestone is a native single-select (State-field consistency —
+  the implementer's call the issue left open, decided native) with options
+  from the page-owned `milestones:{o}/{r}` set plus "All milestones"
+  (clear) and "No milestone" (→ `none`); Labels is a multi-select popover
+  in the LabelPicker idiom (outside-click/Esc close, focus restore,
+  `onCleanup`, w-80 grid rows, `label-drop` hook) mapping to the same
+  comma-separated `labels` param, with "All labels"/Clear and bare rows
+  for selected-but-unknown names. Deep links (`?milestone=<id>/none`,
+  `?labels=a,b`, unknown ids) hydrate via `web/src/lib/issueFilters.js`
+  (`parseLabelsParam`/`serializeLabelsParam`/`resolveMilestoneFilter`,
+  `node --test`): unknown milestone ids render as a raw-value option,
+  unknown label names as removable bare rows — filters are shown, never
+  silently dropped. Pending caches disable (never bare-id flashes); the
+  panel anchors left (mid-grid cell — right-0 would hang past a phone
+  viewport's left edge) under the same #278 viewport bound. No backend,
+  SDK, or API change; no new deps; shared SWR caches, no new invalidation.
+  Headless cover: `web/test/unit/issues-filter-dropdowns.test.js`; `vite
+  build` green; live-browser proof open per the same shared-daemon guard
+  as #334.
 
 ## Explicitly out of scope
 
