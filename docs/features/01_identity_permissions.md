@@ -609,8 +609,9 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   team expansion in `Resolve`, `DeleteTeam` stripping) but undiscoverable — the
   add-binding form was free text only. On org-owned repos the form now offers a
   native team `<select>` fed by one `client.orgs.teams.list` GET on the owner org
-  (cached under its own data key; 404 on user-owned repos / 403 / empty all
-  degrade to the text-only form, so non-org owners see no change). Choosing a
+  (cached under its own data key; email owners skip the GET — an org slug can
+  never contain `@` — while 404 / 403 / empty all degrade to the text-only
+  form, so non-org owners see no change). Choosing a
   team composes the normalized `team:org/slug` spelling into the subject field
   (still editable — free text stays the fallback); the add path validates through
   the headless `web/src/lib/access.js` helpers (charset mirrors of

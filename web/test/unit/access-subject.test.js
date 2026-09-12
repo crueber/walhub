@@ -22,6 +22,7 @@ import {
   looksLikeEmail,
   validateAccessSubject,
   composeTeamSubject,
+  shouldFetchTeams,
   asTeamList,
   teamOptionLabel,
 } from "../../src/lib/access.js";
@@ -87,6 +88,14 @@ test("composeTeamSubject builds the server spelling from org + slug", () => {
   });
 });
 
+test("shouldFetchTeams skips email (user-owned) and empty owners, fetches orgs", () => {
+  assert.equal(shouldFetchTeams("acme"), true);
+  assert.equal(shouldFetchTeams("  acme  "), true);
+  for (const skip of ["", "   ", "jane@example.com", "SAM@Example.COM", null, undefined]) {
+    assert.equal(shouldFetchTeams(skip), false, `skips: ${String(skip)}`);
+  }
+});
+
 test("asTeamList takes the bare-array teams.list shape, degrades to []", () => {
   const rows = [{ slug: "frontend", name: "Frontend" }, { slug: "platform" }];
   assert.deepEqual(asTeamList(rows), rows);
@@ -113,6 +122,7 @@ test("Access tab fetches the owner org's team list for the picker", () => {
   assert.ok(s.includes("repos.orgs.teams.list"), "picker is fed by client.orgs.teams.list");
   assert.ok(s.includes("org-teams:"), "team roster cached under its own data key");
   assert.ok(s.includes("asTeamList"), "payload normalized through the headless helper");
+  assert.ok(s.includes("shouldFetchTeams"), "email owners skip the roster GET (no wasted 404 on user repos)");
 });
 
 test("Access tab offers a discoverable team dropdown beside the free-text input", () => {

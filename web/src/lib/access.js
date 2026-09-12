@@ -78,6 +78,19 @@ export function composeTeamSubject(org, slug) {
 }
 
 /**
+ * shouldFetchTeams(owner) → whether the Access tab should request the
+ * owner org's team roster. User-owned repos have an email owner (an org
+ * slug per identity.ValidOrg can never contain `@`), so they skip the
+ * GET entirely instead of wasting a request that 404s; empty owners
+ * skip too. Anything else (org or legacy-namespace owner) fetches and
+ * lets 404/403/empty degrade to the text-only form.
+ */
+export function shouldFetchTeams(owner) {
+  const v = String(owner ?? "").trim();
+  return Boolean(v) && !v.includes("@");
+}
+
+/**
  * asTeamList(payload) → the team rows for the picker. The server returns
  * the teams list as a bare array (`[{slug, name?, members?}]`, see
  * Org.jsx TeamsTab); anything else (null, 404-mapped, envelope drift)

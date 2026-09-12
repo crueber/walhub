@@ -13,6 +13,7 @@ import { TTL } from "../lib/collab.js";
 import {
   validateAccessSubject,
   composeTeamSubject,
+  shouldFetchTeams,
   asTeamList,
   teamOptionLabel,
 } from "../lib/access.js";
@@ -34,13 +35,14 @@ export default function AccessTab(props) {
   const [getRole, setRole] = createSignal("read");
   const [getSaving, setSaving] = createSignal(false);
   // Team-subject picker (issue #361): the owner org's team roster, fetched
-  // once for the add-binding form. [] while loading-denied-or-empty — a 404
-  // (user-owned repo) or 403 (no team visibility) degrades to the free-text
-  // subject input, which always stays. One extra GET on an admin settings
-  // tab, never on a hot path.
+  // once for the add-binding form. [] while loading-denied-or-empty — an
+  // email (user-owned) owner skips the GET entirely (an org slug can never
+  // contain `@`); a 404 (legacy-namespace owner) or 403 (no team
+  // visibility) degrades to the free-text subject input, which always
+  // stays. One extra GET on an admin settings tab, never on a hot path.
   const owner = () => String(props.ctx?.owner ?? "").trim();
   const [getTeamRows] = useData(`org-teams:${owner().toLowerCase()}`, () => {
-    if (!owner()) return [];
+    if (!shouldFetchTeams(owner())) return [];
     return repos.orgs.teams.list(owner()).then(asTeamList, () => []);
   }, 5000);
   const [getTeamPick, setTeamPick] = createSignal("");
