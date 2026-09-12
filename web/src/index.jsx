@@ -45,6 +45,7 @@ import OrgNew from "./pages/OrgNew.jsx";
 import Apidocs from "./pages/Apidocs.jsx";
 import Setup from "./pages/Setup.jsx";
 import Keys from "./pages/Keys.jsx";
+import Invitations from "./pages/Invitations.jsx";
 
 initData(repos); // the dogfood client, one instance
 
@@ -59,6 +60,10 @@ render(
       <Route path="/setup" component={Setup} />
       <Route path="/api" component={Apidocs} />
       <Route path="/keys" component={Keys} />
+      {/* Static before dynamic (see /orgs/new below): /invitations must not
+          fall into /:owner (Forgejo #362 — the inbox, never an owner named
+          "invitations"). */}
+      <Route path="/invitations" component={Invitations} />
       <Route path="/notifications" component={Notifications} />
       {/* Static before dynamic: /orgs/new must not fall into /:owner/:name
           (Forgejo #348 — the shell serves it either way, but the router

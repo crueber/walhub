@@ -341,7 +341,7 @@ Invitation kinds: `org` (join an org with role `owner|member`) and `repo` (colla
 |---|---|---|
 | `orgs/<org>/invitations/<id>.json` | **Create**-only, immutable | `{"version":1,"id":"<16-byte hex>","token":"<32-byte hex>","kind":"org","org":"acme","role":"member","subject":"pat@example.com","invited_by":"jane@example.com","state":"pending","created_at","expires_at"}` |
 | `repos/<o>/<r>/meta/invitations/<id>.json` | **Create**-only, immutable | same shape, `kind:"repo"`, plus `"role"` (repo role) |
-| `users/<principal>/invitations/index.json` | **CAS'd** (overwritable family) | `{"version":1,"entries":[{"id","org"|"repo","role","invited_by","created_at"}],"updated_at"}` — P4-style hot window of pending invites |
+| `users/<principal>/invitations/index.json` | **CAS'd** (overwritable family) | `{"version":1,"entries":[{"id","org"|"repo","role","invited_by","created_at","expires_at"}],"updated_at"}` — P4-style hot window of pending invites (`expires_at` rides the row since Forgejo #362; pre-#362 rows omit it) |
 
 - `state` is carried by compensating **replacement objects? No — invitations are Create-only**;
   state transitions (`accepted`, `cancelled`, `expired`) are recorded by writing the invitee's inbox
@@ -619,3 +619,16 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   note on invalid, and the server revalidates on PUT as before. Native select,
   not a popover: no new CSS, no #278 viewport concern, no team mutations from
   the picker (the access PUT owns the save). No backend change, no new deps.
+- **Inbox rows carry `expires_at` (Forgejo #362, survey #349 candidate 10).**
+  `GET /api/v1/invitations` (`MyInvites`) served id/org|repo/role/invited_by/
+  created_at but no expiry, so an inbox UI would need a per-row preview GET
+  fan-out to show it. Both create paths now stamp `ExpiresAt` onto the
+  `InboxEntry` (same value as the issuer object); the field is `omitempty`,
+  so pre-#362 rows decode with `""`, which readers treat as unknown — never
+  as expired (display fails open; accept still fails closed via the issuer
+  object's 409 "invitation expired"). Rationale: one read serves the whole
+  inbox (law 6 — no N+1), the index stays a cache of issuer truth (expiry is
+  still enforced at the object in `findInvite`, never from the row), and the
+  JSON addition is append-only (no fixture/round-trip break: no golden pins
+  the inbox shape). The `/invitations` inbox page and the org-tab expiry
+  column are specified in 12_web_ui.md.

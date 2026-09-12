@@ -36,7 +36,10 @@ type Invitation struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// InboxEntry is one row of the pending-invites index.
+// InboxEntry is one row of the pending-invites index. ExpiresAt rides
+// along (Forgejo #362) so GET /api/v1/invitations serves expiry in one
+// read — no per-row preview fan-out. Rows written before #362 omit it
+// (omitempty); readers treat "" as unknown, never as expired.
 type InboxEntry struct {
 	ID        string `json:"id"`
 	Org       string `json:"org,omitempty"`
@@ -44,6 +47,7 @@ type InboxEntry struct {
 	Role      string `json:"role"`
 	InvitedBy string `json:"invited_by"`
 	CreatedAt string `json:"created_at"`
+	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
 // Inbox is users/<principal>/invitations/index.json: the P4-style hot
@@ -184,7 +188,7 @@ func (s *Service) CreateOrgInvite(ctx context.Context, org, email, role, invited
 		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
 		return nil, err
 	}
-	if err := s.inboxAdd(ctx, email, InboxEntry{ID: id, Org: org, Role: role, InvitedBy: inv.InvitedBy, CreatedAt: inv.CreatedAt}); err != nil {
+	if err := s.inboxAdd(ctx, email, InboxEntry{ID: id, Org: org, Role: role, InvitedBy: inv.InvitedBy, CreatedAt: inv.CreatedAt, ExpiresAt: inv.ExpiresAt}); err != nil {
 		return nil, err
 	}
 	return inv, nil
@@ -224,7 +228,7 @@ func (s *Service) CreateRepoInvite(ctx context.Context, owner, repo, subject str
 		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
 		return nil, err
 	}
-	if err := s.inboxAdd(ctx, subject, InboxEntry{ID: id, Repo: owner + "/" + repo, Role: string(role), InvitedBy: inv.InvitedBy, CreatedAt: inv.CreatedAt}); err != nil {
+	if err := s.inboxAdd(ctx, subject, InboxEntry{ID: id, Repo: owner + "/" + repo, Role: string(role), InvitedBy: inv.InvitedBy, CreatedAt: inv.CreatedAt, ExpiresAt: inv.ExpiresAt}); err != nil {
 		return nil, err
 	}
 	return inv, nil

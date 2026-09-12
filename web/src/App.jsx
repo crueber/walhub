@@ -6,7 +6,7 @@ import { createEffect, createSignal, Show, For } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { usePending, trayErrors, dismissError } from "./lib/data.js";
 import { theme, toggleTheme } from "./lib/store.js";
-import { refreshUnread } from "./pages/Notifications.jsx";
+import { refreshUnread, unreadCount } from "./pages/Notifications.jsx";
 import NotificationTray from "./components/NotificationTray.jsx";
 
 export default function App(props) {
@@ -58,6 +58,14 @@ export default function App(props) {
             <A href="/explore">explore</A>
             <A href="/import">import</A>
             <A href="/keys">keys</A>
+            {/* Forgejo #362: the invitee inbox. Gated on the shared unread
+                signal — non-null means the authenticated unread_count probe
+                succeeded, so this adds no request of its own (law 6);
+                anonymous visitors never see the link and the page itself
+                explains sign-in. */}
+            <Show when={unreadCount() !== null}>
+              <A href="/invitations">invitations</A>
+            </Show>
             <A href="/setup">setup</A>
           </nav>
           <div class="ml-auto flex shrink-0 items-center gap-2">
