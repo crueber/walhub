@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/cachepolicy"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -447,7 +448,7 @@ func writeAttachmentHeaders(w http.ResponseWriter, version, contentType string, 
 	if version != "" {
 		hdr.Set("ETag", `"`+version+`"`)
 	}
-	hdr.Set("Cache-Control", "private, max-age=31536000, immutable")
+	hdr.Set("Cache-Control", cachepolicy.Immutable)
 	hdr.Set("Accept-Ranges", "bytes")
 	if contentType != "" {
 		hdr.Set("Content-Type", contentType)

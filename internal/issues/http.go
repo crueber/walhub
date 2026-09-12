@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/cachepolicy"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 )
@@ -202,8 +203,10 @@ const (
 	// ETag keeps the revalidation cheap (304 when unchanged), and the
 	// no-store events tail agrees with it (neither class serves stale,
 	// so summary and tail cannot disagree across a refresh).
-	ccThread  = "private, no-cache"
-	ccNoStore = "no-store"
+	// An alias for the shared mutable-collab class (internal/cachepolicy,
+	// Forgejo #382): the value is defined once, never redeclared here.
+	ccThread  = cachepolicy.Mutable
+	ccNoStore = cachepolicy.NoStore
 )
 
 // decodeStrict unmarshals body into v after rejecting unknown top-level

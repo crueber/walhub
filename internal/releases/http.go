@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/cachepolicy"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -17,7 +18,7 @@ import (
 
 // Wire conventions (07 §2, same as internal/api and internal/notify):
 // JSON success, plain-text errors, arrays [] never null, RFC 3339 UTC,
-// per-segment decoding, SWR+ETag on JSON GETs and the static contract on
+// per-segment decoding, no-cache+ETag on JSON GETs and the static contract on
 // bytes, both lanes everywhere. Anonymous-denied reads get a real 401 with
 // WWW-Authenticate: Bearer (never a 200 with an in-band error).
 
@@ -219,8 +220,11 @@ const (
 	// on EVERY read instead of serving a stale-while-revalidate window.
 	// The store-version ETags keep the revalidation cheap (304 when
 	// unchanged). Asset BYTES stay immutable (content-addressed).
-	ccMutable = "private, no-cache"
-	ccNoStore = "no-store"
+	// Aliases for the shared cache-policy definition
+	// (internal/cachepolicy, Forgejo #382): values defined once, never
+	// redeclared here.
+	ccMutable = cachepolicy.Mutable
+	ccNoStore = cachepolicy.NoStore
 )
 
 // decodeStrict unmarshals body into v after rejecting unknown top-level
