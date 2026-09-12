@@ -1,10 +1,10 @@
 // web/test/unit/profile-header.test.js — Forgejo #395 (#390 follow-up):
 // the /:owner user-profile header is one composed identity block —
-// identity left (username h1, handle, location · timezone, bio, Edit
-// profile), avatar right (h-24 circle with Regenerate/Remove grouped
-// beneath it), New-repository CTA prominent above — instead of #390's
-// orphan justify-end avatar row floating above a header row that knew
-// nothing about it. Layout only: every gate (Edit = server can_edit,
+// identity left (username h1, handle, location · timezone, bio, grouped
+// action row), avatar right (h-24 circle with Regenerate/Remove grouped
+// beneath it) — instead of #390's orphan justify-end avatar row floating
+// above a header row that knew nothing about it (#403: the orphan CTA row
+// above the header joined Edit profile in the grouped row under the bio). Layout only: every gate (Edit = server can_edit,
 // Regenerate/Remove = self-only, #376 invalidation, org path #359) is
 // asserted unchanged. Orgs keep their own header untouched. No DOM:
 // JSX pinned as source text, mirroring header-narrow.test.js /
@@ -72,13 +72,18 @@ test("avatar column renders for self even without an avatar (Regenerate opts bac
   assert.ok(REPOS.includes('invalidate("me")'), "navbar avatar invalidation untouched");
 });
 
-test("New-repository CTA prominent above the grid, never colliding with the avatar", () => {
+test("grouped action row: New repository + Edit profile under the bio (#403)", () => {
   const userShow = block(REPOS, "<Show when={!isOrg()}>", "<h3");
-  const cta = userShow.indexOf("New repository");
   const grid = userShow.indexOf("profile-header");
-  assert.ok(cta !== -1 && cta < grid, "CTA renders above the identity/avatar grid in its own row");
-  assert.ok(userShow.slice(0, grid).includes("justify-end"), "CTA row is right-aligned (top-right, prominent)");
-  assert.ok(userShow.slice(0, grid).includes("btn primary"), "CTA keeps primary styling");
+  const cta = userShow.indexOf("New repository");
+  assert.ok(cta !== -1 && cta > grid, "CTA renders inside the header grid, not above it");
+  assert.ok(!userShow.slice(0, grid).includes("New repository"), "no orphan CTA row exists above the header");
+  assert.ok(!userShow.slice(0, grid).includes("justify-end"), "no orphan right-aligned row above the header");
+  const row = block(REPOS, "mt-3 flex flex-wrap gap-2", "profile-avatar");
+  assert.ok(row.includes("New repository"), "New repository lives in the grouped action row");
+  assert.ok(row.includes("Edit profile"), "Edit profile lives in the grouped action row");
+  assert.ok(row.indexOf("New repository") < row.indexOf("Edit profile"), "New repository leads, Edit profile follows");
+  assert.ok(row.includes("btn primary"), "CTA keeps primary styling");
 });
 
 test("light + dark share the treatment", () => {

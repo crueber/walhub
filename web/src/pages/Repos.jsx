@@ -288,39 +288,29 @@ export default function Repos() {
   const canManage = () => isOrg() && !!getProfile()?.can_edit;
   return (
     <div class="repos-page">
-      {/* Forgejo #395 (#390 follow-up): the user profile header is one
-          composed identity block — a two-column flex row with the
-          identity content left (username h1, handle, location ·
-          timezone, bio, Edit profile) and the avatar right (the h-24
-          circle with its Regenerate/Remove actions grouped beneath
-          it), instead of #390's orphan justify-end avatar row above a
-          header row that knew nothing about it. The New-repository CTA
-          stays prominent in its own top-right action row above the
-          grid (implementer's call per the issue — above, not beside,
-          so it never collides with the avatar at any width). Mobile
-          (390px, #273-#278 conventions): the grid stacks via
-          flex-col-reverse — avatar block on top, identity below, both
-          full-width, buttons wrapping — so there is no dead
-          half-width band. Orgs are untouched below (title row + org
-          doc fields, #359). All gating unchanged (Edit profile:
-          server can_edit; Regenerate/Remove: self-only; #376 cache
-          invalidation) — layout only. */}
+      {/* Forgejo #403 (#395 follow-up): the orphan New-repository CTA row
+          above the header is gone — both profile actions (New repository
+          when the viewer may write, Edit profile when the server says
+          can_edit) group in one action row under the bio, GitHub-style,
+          acting on the page the header names. The header itself closes
+          with a bottom divider (pb-6 border-b) so the Repositories
+          section starts on a clean rule; the h1 anchors at text-2xl
+          with the handle tight beneath it (mt-0.5). Mobile (390px,
+          #273-#278 conventions): flex-col-reverse stacks the avatar
+          block on top and the identity below, both full-width, buttons
+          wrapping. Orgs are untouched below (title row + org doc
+          fields, #359). All gating unchanged (New: canWrite;
+          Edit: server can_edit; Regenerate/Remove: self-only; #376
+          cache invalidation) — layout only. */}
       <Show when={!isOrg()}>
-        <Show when={canWrite()}>
-          <div class="mb-3 flex justify-end">
-            <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
-              New repository
-            </A>
-          </div>
-        </Show>
-        <div class="profile-header flex flex-col-reverse gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div class="profile-header flex flex-col-reverse gap-4 border-b border-zinc-200 pb-6 sm:flex-row sm:items-start sm:justify-between dark:border-zinc-700">
           <div class="min-w-0 flex-1">
-            <h1 class="text-xl font-semibold">{displayName()}</h1>
+            <h1 class="text-2xl font-semibold">{displayName()}</h1>
             {/* The org block below already renders @{owner}; the
                 user-profile handle renders only for non-org owners
                 (no double handle). */}
             <Show when={profile().display_name}>
-              <p class="muted text-sm">@{owner()}</p>
+              <p class="muted mt-0.5 text-sm">@{owner()}</p>
             </Show>
             <Show when={profile().location || profile().timezone}>
               <p class="muted mt-1 text-sm">
@@ -333,13 +323,18 @@ export default function Repos() {
                 innerHTML={renderBody(profile().bio_markdown)}
               />
             </Show>
-            <Show when={getProfile()?.can_edit && !getEditing()}>
-              <p class="mt-3">
+            <div class="mt-3 flex flex-wrap gap-2">
+              <Show when={canWrite()}>
+                <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
+                  New repository
+                </A>
+              </Show>
+              <Show when={getProfile()?.can_edit && !getEditing()}>
                 <button class="btn px-3 py-1" type="button" onClick={() => setEditing(true)}>
                   Edit profile
                 </button>
-              </p>
-            </Show>
+              </Show>
+            </div>
           </div>
           {/* Forgejo #376: avatar self-service for the owner's own page.
               The column renders when there is an avatar to show OR the

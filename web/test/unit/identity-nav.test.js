@@ -271,17 +271,19 @@ test("IdentityMenu #390: initials fallback keeps the same circle shape", () => {
   assert.ok(fb.includes("ring-1"), "fallback shares the ring treatment");
 });
 
-test("Repos #395 (#390 follow-up): profile header is one composed block, not an orphan avatar row", () => {
+test("Repos #395/#403: profile header is one composed block, actions grouped under the bio", () => {
   const REPOS = srcOf("../../src/pages/Repos.jsx");
   assert.ok(REPOS.includes("h-24 w-24"), "avatar at 96px (>= 72px)");
   assert.ok(REPOS.includes("profile-header"), "identity + avatar share one composed header block");
-  // The orphan is gone: no standalone justify-end avatar row above the
-  // title row — the only justify-end row left is the New-repository CTA.
-  const orphan = REPOS.indexOf("mb-3 flex justify-end");
-  assert.ok(orphan !== -1, "CTA action row exists");
-  assert.ok(REPOS.slice(orphan, orphan + 400).includes("New repository"), "the justify-end row is the CTA, not the avatar");
+  // The orphans are gone (#403): no standalone justify-end row above the
+  // header — New repository groups with Edit profile in one action row
+  // under the bio inside the grid.
+  assert.ok(!REPOS.includes("mb-3 flex justify-end"), "no orphan action row above the header");
+  assert.ok(!REPOS.includes("flex justify-end"), "no right-aligned orphan row anywhere on the user header");
+  const grid = REPOS.indexOf('<div class="profile-header');
+  const cta = REPOS.indexOf(">\n                  New repository", grid);
+  assert.ok(grid !== -1 && cta !== -1, "the New-repository CTA renders inside the composed header grid");
   const large = REPOS.indexOf("h-24 w-24");
-  const grid = REPOS.indexOf("profile-header");
   assert.ok(grid < large, "the large avatar renders inside the composed header grid");
   assert.ok(REPOS.includes("ring-zinc-300"), "ring treatment consistent with the navbar");
   assert.ok(!REPOS.includes("width={36}"), "the small inline user avatar is gone (org avatar keeps its own size)");
