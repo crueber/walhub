@@ -143,7 +143,10 @@ func TestGitProtocolPassthrough(t *testing.T) {
 }
 
 func TestMaxSessionsRefuses(t *testing.T) {
-	tr := &captureTransport{block: make(chan struct{})}
+	// Own-deadline budget (#409): every wait below fails fast with a named
+	// message instead of consuming the package's 10-minute timeout.
+	const sessionWait = 5 * time.Second
+	tr := &captureTransport{block: make(chan struct{}), entered: make(chan struct{})}
 	key, signer := testKeyEntry(t, "ada", true)
 	srv, err := New(Config{
 		Listen:      "127.0.0.1:0",
@@ -161,14 +164,33 @@ func TestMaxSessionsRefuses(t *testing.T) {
 	addr := waitAddr(t, srv)
 	cl := dialTestClient(t, addr.String(), signer)
 
-	// first session: held open by the blocked transport
+	// first session: held open by the blocked transport. entered is closed
+	// when its exec reaches the transport, proving it owns the single slot.
 	sess1, err := cl.NewSession()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sess1.Close()
-	go func() { _ = sess1.Run("git-upload-pack '/a/b.git'") }()
-	// second session: refused immediately by the limiter
+	// Held-session teardown (#409): release the transport block AND close
+	// the client session, so the parked upload can never wait on this test
+	// goroutine's continuation. Cleanups run LIFO: the session closes
+	// before the block releases.
+	var blockOnce sync.Once
+	release := func() { blockOnce.Do(func() { close(tr.block) }) }
+	t.Cleanup(release)
+	t.Cleanup(func() { _ = sess1.Close() })
+	sess1Done := make(chan error, 1)
+	go func() { sess1Done <- sess1.Run("git-upload-pack '/a/b.git'") }()
+	// Deterministic slot-holder: do not offer the second exec until sess1
+	// is parked in the transport (poll-with-deadline, the
+	// TestSessionCapIsPerConnection idiom — never a fixed sleep, never an
+	// unsynchronized launch).
+	select {
+	case <-tr.entered:
+	case <-time.After(sessionWait):
+		t.Fatal("slot-holder session did not reach the transport within 5s (stuck wait: captureTransport.entered)")
+	}
+	// second session: refused immediately by the limiter, against its own
+	// deadline so a regression fails fast with a named message.
 	sess2, err := cl.NewSession()
 	if err != nil {
 		t.Fatal(err)
@@ -176,11 +198,32 @@ func TestMaxSessionsRefuses(t *testing.T) {
 	defer sess2.Close()
 	var errBuf strings.Builder
 	sess2.Stderr = &errBuf
-	err = sess2.Run("git-upload-pack '/a/b.git'")
-	if err == nil || !strings.Contains(errBuf.String(), "too many concurrent sessions") {
-		t.Fatalf("second session = %v %q, want limiter refusal", err, errBuf.String())
+	type runResult struct {
+		err error
+		msg string
 	}
-	close(tr.block)
+	runDone := make(chan runResult, 1)
+	go func() {
+		runErr := sess2.Run("git-upload-pack '/a/b.git'")
+		runDone <- runResult{err: runErr, msg: errBuf.String()}
+	}()
+	select {
+	case r := <-runDone:
+		if r.err == nil || !strings.Contains(r.msg, "too many concurrent sessions") {
+			t.Fatalf("second session = %v %q, want limiter refusal", r.err, r.msg)
+		}
+	case <-time.After(sessionWait):
+		t.Fatal("second session Run did not return within 5s (stuck wait: limiter refusal)")
+	}
+	// Release the held session and join it: the upload must drain now that
+	// the refusal is asserted.
+	release()
+	_ = sess1.Close()
+	select {
+	case <-sess1Done:
+	case <-time.After(sessionWait):
+		t.Fatal("held session Run did not return within 5s of release (stuck wait: transport block)")
+	}
 }
 
 // releaseQueue blocks each exec in its own channel so a test can finish
