@@ -168,6 +168,10 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// #210 adoption hints: the same instance apiEnv carries above
 		// (nil in setup-only — no create or push paths exist there).
 		PlaceholderHints: placeholderHintsOf(apiEnv),
+		// Forgejo #376: the post-login avatar hook (background
+		// generation for users without one; nil in setup-only —
+		// no logins happen there).
+		AvatarHook: avatarHookOf(ident),
 	})
 	// Features 01–08 mount here (collab.go chainCollab, 09 §4 touch
 	// point 3: one block per package + the per-user SSE mounts that
@@ -351,6 +355,17 @@ func pushGateOf(ident *identity.Service) server.PushGate {
 	}
 	var _ server.PushGate = ident
 	return ident
+}
+
+// avatarHookOf adapts the identity service to the server AvatarHook
+// seam (Forgejo #376: nil in setup-only mode → no post-login
+// generation). The hook only enqueues (EnsureAvatarAsync never blocks),
+// so the login response never waits on generation.
+func avatarHookOf(ident *identity.Service) func(username, email string) {
+	if ident == nil {
+		return nil
+	}
+	return func(username, email string) { ident.EnsureAvatarAsync(username, email) }
 }
 
 // placeholderHintsOf shares the #210 adoption hint set between the api

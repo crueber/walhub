@@ -71,6 +71,10 @@ type Server struct {
 	// default). Shared with api.Env by composition (serveHTTP).
 	placeholderHints *api.PlaceholderHints
 
+	// avatarHook fires after a successful browser-login session mint
+	// (Forgejo #376 — set from Options.AvatarHook); nil → no-op.
+	avatarHook func(username, email string)
+
 	// repoExtras fronts repoDispatch with feature repo-subpath surfaces
 	// (repo_extra.go: the 14.3 routing note for non-lane families like
 	// release asset bytes); nil → core switch only.
@@ -122,6 +126,14 @@ type Options struct {
 	// PlaceholderHints is the shared #210 adoption hint set (api.Env and
 	// the server point at one instance); nil → no push-path marker ops.
 	PlaceholderHints *api.PlaceholderHints
+	// AvatarHook fires after a successful browser-login session mint
+	// (Forgejo #376): the identity service enqueues a background
+	// avatar generation for users without one. Nil → no generation
+	// (tests, setup-only). The hook MUST NOT block — it only enqueues
+	// (identity.EnsureAvatarAsync); the login response already
+	// answered. Wired by composition (cmd/walhub); server never
+	// imports the identity package (law 8).
+	AvatarHook func(username, email string)
 }
 
 // BootState is the §3.4 boot decision tree outcome.
@@ -179,6 +191,7 @@ func New(o Options) *Server {
 	s.pushGate = o.PushGate
 	s.mirrorGuard = o.MirrorGuard
 	s.placeholderHints = o.PlaceholderHints
+	s.avatarHook = o.AvatarHook
 	return s
 }
 

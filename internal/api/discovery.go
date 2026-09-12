@@ -155,6 +155,10 @@ func (h *handlers) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := h.env.PrincipalOf(r)
+	avatarURL := ""
+	if h.env.Avatars != nil && !p.Anonymous {
+		avatarURL = h.env.Avatars.UserAvatarURL(r.Context(), p.Name)
+	}
 	writeCached(w, r, ccNoStore, "", http.StatusOK, struct {
 		Principal string `json:"principal"`
 		Write     bool   `json:"write"`
@@ -163,7 +167,11 @@ func (h *handlers) me(w http.ResponseWriter, r *http.Request) {
 		// in the identity menu — setupAccess admits host admins (open
 		// while mode=none, where the menu never renders anyway).
 		Admin bool `json:"admin"`
-	}{Principal: p.Name, Write: p.Write, Anonymous: p.Anonymous, Admin: p.Admin})
+		// AvatarURL (#376) is the stable user-avatar URL ("?v="
+		// cache-busted); omitted when the user has none (the navbar
+		// renders the username fallback) or the surface is unwired.
+		AvatarURL string `json:"avatar_url,omitempty"`
+	}{Principal: p.Name, Write: p.Write, Anonymous: p.Anonymous, Admin: p.Admin, AvatarURL: avatarURL})
 }
 
 // --- GET /api/v1/owners, /api/v1/owners/{owner}/repos (§8, from the STORE) ------------

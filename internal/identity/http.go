@@ -27,6 +27,7 @@ import (
 // phantoms, nothing missing).
 var ExposedTemplates = []string{
 	"/api/v1/users/{principal}",
+	"/api/v1/users/{principal}/avatar",
 	"/api/v1/orgs",
 	"/api/v1/orgs/{org}",
 	"/api/v1/orgs/{org}/avatar",
@@ -235,15 +236,22 @@ func (h *Handler) handleTop(w http.ResponseWriter, r *http.Request, rest []strin
 	return false
 }
 
-// routeUsers: GET/PUT /api/v1/users/{principal}.
+// routeUsers: GET/PUT /api/v1/users/{principal},
+// GET/POST/DELETE /api/v1/users/{principal}/avatar (Forgejo #376).
 func (h *Handler) routeUsers(w http.ResponseWriter, r *http.Request, rest []string) bool {
-	if len(rest) != 1 || rest[0] == "" {
+	if len(rest) == 0 || rest[0] == "" {
 		return false
 	}
 	principal := normPrincipal(rest[0])
 	if !ValidPrincipal(principal) {
 		writePlain(w, http.StatusBadRequest, "invalid principal")
 		return true
+	}
+	if len(rest) == 2 && rest[1] == "avatar" {
+		return h.routeUserAvatar(w, r, principal)
+	}
+	if len(rest) != 1 {
+		return false
 	}
 	p, aerr := h.principal(r)
 	if aerr != nil {
@@ -305,6 +313,79 @@ func (h *Handler) routeUsers(w http.ResponseWriter, r *http.Request, rest []stri
 		return true
 	}
 	methodNotAllowed(w, "GET", "PUT")
+	return true
+}
+
+// routeUserAvatar: GET/POST/DELETE /api/v1/users/{principal}/avatar
+// (Forgejo #376). GET is public (same anonymous-read rule as the
+// profile itself) and serves the generated SVG with the sniffed
+// Content-Type; POST regenerates (explicit opt-back-in, self-or-admin);
+// DELETE removes the avatar and opts out (self-or-admin — the same
+// gate as PUT on the profile).
+func (h *Handler) routeUserAvatar(w http.ResponseWriter, r *http.Request, principal string) bool {
+	p, aerr := h.principal(r)
+	if aerr != nil {
+		writeErr(w, aerr)
+		return true
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if p.Anonymous && !h.Svc.anonymousRead() {
+			writePlain(w, http.StatusUnauthorized, "authentication required")
+			return true
+		}
+		raw, prof, err := h.Svc.GetUserAvatar(r.Context(), principal)
+		if err != nil {
+			writeErr(w, err)
+			return true
+		}
+		if raw == nil || prof == nil {
+			writePlain(w, http.StatusNotFound, "no avatar")
+			return true
+		}
+		hdr := w.Header()
+		hdr.Set("Content-Type", prof.AvatarContentType)
+		hdr.Set("Content-Length", strconv.Itoa(len(raw)))
+		// Immutable-until-regenerate: the pointer's updated_at changes
+		// on every install, and clients cache-bust with
+		// ?v=<avatar_updated_at> (UserAvatarURL), so a long max-age
+		// is safe (the #359 org-avatar reasoning). The ETag names the
+		// same version for cheap revalidation.
+		hdr.Set("Cache-Control", "public, max-age=86400, immutable")
+		etag := "user-avatar-" + prof.AvatarUpdatedAt
+		hdr.Set("ETag", `"`+etag+`"`)
+		if matchETag(r.Header.Get("If-None-Match"), etag) {
+			hdr.Del("Content-Length")
+			w.WriteHeader(http.StatusNotModified)
+			return true
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return true
+	case http.MethodPost, http.MethodDelete:
+		if p.Anonymous {
+			writePlain(w, http.StatusUnauthorized, "authentication required")
+			return true
+		}
+		if !p.Admin && normPrincipal(p.Name) != principal {
+			writePlain(w, http.StatusForbidden, "self or admin")
+			return true
+		}
+		var prof *Profile
+		var err error
+		if r.Method == http.MethodDelete {
+			prof, err = h.Svc.DeleteUserAvatar(r.Context(), principal)
+		} else {
+			prof, err = h.Svc.RegenerateUserAvatar(r.Context(), principal)
+		}
+		if err != nil {
+			writeErr(w, err)
+			return true
+		}
+		writeCached(w, r, ccNoStore, "", http.StatusOK, prof)
+		return true
+	}
+	methodNotAllowed(w, "GET", "POST", "DELETE")
 	return true
 }
 

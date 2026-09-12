@@ -59,7 +59,7 @@
  *     browser_login: boolean, login_url: string, mode: string},
  *   endpoints: string[]}} Discovery
  *
- * @typedef {{principal: string, write: boolean, anonymous: boolean, admin: boolean}} Me
+ * @typedef {{principal: string, write: boolean, anonymous: boolean, admin: boolean, avatar_url?: string}} Me
  *
  * @typedef {{revision: number, author: string, updated_at: string, message: string, toml: string}} Settings
  *
@@ -67,7 +67,8 @@
  *   message: string, at: string, toml: string}[]}} SettingsHistory
  *
  * @typedef {{version: number, principal: string, display_name: string, bio: string,
- *   created_at: string, updated_at: string}} Profile
+ *   email?: string, avatar_content_type?: string, avatar_updated_at?: string,
+ *   avatar_disabled?: boolean, created_at: string, updated_at: string}} Profile
  *
  * @typedef {{owner: string, display_name: string, location: string, timezone: string,
  *   bio_markdown: string, updated_at: string, can_edit: boolean}} OwnerProfile

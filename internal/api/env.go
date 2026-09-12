@@ -566,6 +566,16 @@ type Env struct {
 	// pre-existing repos badge public, never private-by-omission.
 	RepoVisibility func(ctx context.Context, owner, repo string) (vis string, ok bool)
 
+	// Avatars is the per-user avatar URL projection (Forgejo #376):
+	// the stable avatar URL behind GET /api/v1/me's avatar_url (the
+	// navbar identity control renders it). Nil → me() omits
+	// avatar_url (instances without the identity surface wired; the
+	// navbar renders the username fallback). "" per user → omitted
+	// (display metadata never fails the me() call). Wired by
+	// composition (cmd/walhub) so this package never imports the
+	// feature (law 8).
+	Avatars UserAvatar
+
 	// RenderCacheBytes is the rendered-immutable LRU budget
 	// (cache.render_cache_bytes; default 256 MiB — see 07_api.md §14).
 	RenderCacheBytes int64

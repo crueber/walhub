@@ -30,5 +30,20 @@ export function attachUsers(client) {
         headers: { "Content-Type": "application/json" },
         ...opts,
       }),
+    avatar: {
+      /** Avatar image path (`v` = avatar_updated_at cache-busts the
+       *  immutable max-age response, the org-avatar shape). Callers
+       *  gate on the user profile's avatar_content_type — the client
+       *  never probes the bytes. */
+      url: (principal, v) => `${path(principal)}/avatar${v ? `?v=${enc(v)}` : ""}`,
+      /** Regenerate the avatar (POST, self or admin): installs a fresh
+       *  deterministic render and clears the delete opt-out. */
+      regenerate: (principal, opts) =>
+        client._call(`${path(principal)}/avatar`, { method: "POST", ...opts }),
+      /** Remove the avatar (DELETE, self or admin): opts out of
+       *  auto-generation until an explicit regenerate. */
+      remove: (principal, opts) =>
+        client._call(`${path(principal)}/avatar`, { method: "DELETE", ...opts }),
+    },
   };
 }

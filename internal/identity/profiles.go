@@ -19,9 +19,20 @@ type Profile struct {
 	// when the caller IS the subject (Forgejo #370 — the verified
 	// email is visible to its owner alone, nowhere else). omitempty
 	// keeps stored docs and foreign views byte-identical.
-	Email     string `json:"email,omitempty"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	Email string `json:"email,omitempty"`
+	// AvatarContentType is the magic value "image/svg+xml" when the
+	// user holds a generated avatar ("" = none — the render gate, so
+	// GET profile answers avatar presence in its single round trip,
+	// the #359 org-avatar pointer shape). AvatarUpdatedAt is the
+	// install time (RFC3339): the ?v cache-buster on the stable
+	// avatar URL. AvatarDisabled is the opt-out flag (Forgejo #376):
+	// set on DELETE, honored by the login generator until an explicit
+	// regenerate clears it. All three are append-only (law 5).
+	AvatarContentType string `json:"avatar_content_type,omitempty"`
+	AvatarUpdatedAt   string `json:"avatar_updated_at,omitempty"`
+	AvatarDisabled    bool   `json:"avatar_disabled,omitempty"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
 }
 
 func encodeProfile(p *Profile) []byte {

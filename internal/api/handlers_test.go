@@ -210,6 +210,55 @@ func TestMe(t *testing.T) {
 	}
 }
 
+func TestMeAvatarURL(t *testing.T) {
+	f := newFixture(t)
+	p := auth.Principal{Name: "jane", Write: true}
+	// Unwired surface (nil Avatars) → avatar_url omitted (the navbar
+	// renders the username fallback).
+	w := f.do("GET", "/api/v1/me", nil, nil, &p)
+	var bare struct {
+		AvatarURL string `json:"avatar_url"`
+	}
+	decodeJSON(t, w, &bare)
+	if bare.AvatarURL != "" {
+		t.Fatalf("unwired avatar_url = %q, want omitted", bare.AvatarURL)
+	}
+	// Wired surface with no avatar → still omitted (display metadata
+	// never fails the me() call).
+	f.env.Avatars = stubAvatars{url: ""}
+	w = f.do("GET", "/api/v1/me", nil, nil, &p)
+	decodeJSON(t, w, &bare)
+	if bare.AvatarURL != "" {
+		t.Fatalf("no-avatar avatar_url = %q, want omitted", bare.AvatarURL)
+	}
+	// Wired surface with an avatar → the stable URL.
+	f.env.Avatars = stubAvatars{url: "/api/v1/users/jane/avatar?v=ts"}
+	w = f.do("GET", "/api/v1/me", nil, nil, &p)
+	var got struct {
+		AvatarURL string `json:"avatar_url"`
+	}
+	decodeJSON(t, w, &got)
+	if got.AvatarURL != "/api/v1/users/jane/avatar?v=ts" {
+		t.Fatalf("avatar_url = %q", got.AvatarURL)
+	}
+	// Anonymous callers never carry one (fresh struct — the key is
+	// omitted, not zeroed, so reuse would mask a leak).
+	w = f.do("GET", "/api/v1/me", nil, nil, nil)
+	var anonGot struct {
+		AvatarURL string `json:"avatar_url"`
+	}
+	decodeJSON(t, w, &anonGot)
+	if anonGot.AvatarURL != "" {
+		t.Fatalf("anonymous avatar_url = %q, want omitted", anonGot.AvatarURL)
+	}
+}
+
+// stubAvatars is the Env.Avatars seam behind TestMeAvatarURL (law 8 —
+// core tests never import the identity package).
+type stubAvatars struct{ url string }
+
+func (s stubAvatars) UserAvatarURL(_ context.Context, _ string) string { return s.url }
+
 func TestOwnersAndRepos(t *testing.T) {
 	f := newFixture(t)
 	w := f.do("GET", "/api/v1/owners", nil, nil, nil)

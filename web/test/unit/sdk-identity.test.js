@@ -22,6 +22,8 @@ test("identity SDK surface: users/orgs/access/invites paths", async () => {
   const cases = [
     { name: "users.get", run: (c) => c.users.get("Jane@X.c"), method: "GET", path: "/api/v1/users/jane%40x.c" },
     { name: "users.put", run: (c) => c.users.put("a@b.c", { display_name: "A" }), method: "PUT", path: "/api/v1/users/a%40b.c" },
+    { name: "users.avatar.regenerate", run: (c) => c.users.avatar.regenerate("alice"), method: "POST", path: "/api/v1/users/alice/avatar" },
+    { name: "users.avatar.remove", run: (c) => c.users.avatar.remove("alice"), method: "DELETE", path: "/api/v1/users/alice/avatar" },
     { name: "orgs.list", run: (c) => c.orgs.list(), method: "GET", path: "/api/v1/orgs" },
     { name: "orgs.create", run: (c) => c.orgs.create({ org: "acme" }), method: "POST", path: "/api/v1/orgs" },
     { name: "orgs.get", run: (c) => c.orgs.get("acme"), method: "GET", path: "/api/v1/orgs/acme" },
@@ -76,4 +78,11 @@ test("identity SDK: org avatar url carries the cache-busting version", async () 
   assert.equal(out, "/api/v1/orgs/acme/avatar?v=2026-09-12T00%3A00%3A00Z");
   const { out: bare } = await drive((c) => c.orgs.avatar.url("acme"));
   assert.equal(bare, "/api/v1/orgs/acme/avatar");
+});
+
+test("identity SDK: user avatar url carries the cache-busting version", async () => {
+  const { out } = await drive((c) => c.users.avatar.url("Alice", "2026-09-12T00:00:00Z"));
+  assert.equal(out, "/api/v1/users/alice/avatar?v=2026-09-12T00%3A00%3A00Z");
+  const { out: bare } = await drive((c) => c.users.avatar.url("alice"));
+  assert.equal(bare, "/api/v1/users/alice/avatar");
 });

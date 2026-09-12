@@ -8,6 +8,8 @@
 // the store layer):
 //
 //	users/<principal>/profile.json            CAS'd user profile
+//	users/<username>/avatar.svg               generated user avatar (Forgejo #376;
+//	                                          overwritable, pointer on profile.json)
 //	users/<principal>/invitations/index.json  CAS'd inbox index (pending invites)
 //	orgs/<org>/org.json                       CAS'd org profile (Create reserves the name)
 //	orgs/<org>/avatar                         overwritable raw avatar bytes (Forgejo #359)
@@ -41,6 +43,7 @@ import (
 	"net/mail"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/config"
@@ -226,6 +229,19 @@ type Service struct {
 
 	access *accessCache
 	teams  *teamCache
+
+	// Generate renders one deterministic avatar SVG for a seed (the
+	// verified email). Forgejo #376: production is
+	// GenerateUserAvatarSVG (DiceBear constellation); tests stub
+	// counting/blocking renders for the single-flight proof.
+	Generate func(seed string) (string, error)
+
+	// avatarBusy is the EnsureAvatarAsync dedup set: one in-flight
+	// background generation per principal (avatar.go — the task table
+	// is repo-keyed, so it cannot single-flight this). avatarMu is
+	// never held across a store call.
+	avatarMu   sync.Mutex
+	avatarBusy map[string]struct{}
 
 	// Stream publishes the 08 §4 "access" frame after an access.json CAS
 	// commit (nil = no-op; composition wires the repo bus). Synchronous
