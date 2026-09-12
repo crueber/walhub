@@ -309,114 +309,71 @@ export default function Repos() {
   const canManage = () => isOrg() && !!getProfile()?.can_edit;
   return (
     <div class="repos-page">
-      {/* Forgejo #413 (#403 follow-up): the New-repository CTA left both
-          header spots — the grouped action row under the bio (user) and
-          the org title row (org) — for a Repositories toolbar (heading
-          row, CTA right-anchored, flex-wrap at 390px per #273-#278), so
-          the header carries only identity/profile actions and the create
-          CTA sits with the list it populates. The user action row keeps
-          its wrapper with just "Edit profile" (stable wrap rhythm);
-          the org title row drops its justify-between wrapper (single
-          child); the header divider (pb-6 border-b, #403) stays. All
-          gating unchanged (New: canWrite; Edit: server can_edit;
-          Regenerate/Remove: self-only; #376 cache invalidation) —
-          layout only. */}
-      <Show when={!isOrg()}>
-        <div class="profile-header flex flex-col-reverse gap-4 border-b border-zinc-200 pb-6 sm:flex-row sm:items-start sm:justify-between dark:border-zinc-700">
-          <div class="min-w-0 flex-1">
-            <h1 class="text-2xl font-semibold">{displayName()}</h1>
-            {/* The org block below already renders @{owner}; the
-                user-profile handle renders only for non-org owners
-                (no double handle). */}
-            <Show when={profile().display_name}>
-              <p class="muted mt-0.5 text-sm">@{owner()}</p>
-            </Show>
-            <Show when={profile().location || profile().timezone}>
-              <p class="muted mt-1 text-sm">
-                {[profile().location, profile().timezone].filter(Boolean).join(" · ")}
-              </p>
-            </Show>
-            {/* Forgejo #420: the rendered bio hides while the edit
-                form is open — the form's own inline preview is the only
-                rendered surface during editing. onDone restores via
-                setEditing(false); non-editors never set editing. */}
-            <Show when={profile().bio_markdown && !getEditing()}>
-              <div
-                class="markdown-body mt-3"
-                innerHTML={renderBody(profile().bio_markdown)}
-              />
-            </Show>
-            {/* Forgejo #413: the New-repository CTA lives in the
-                Repositories toolbar below — this row carries only the
-                profile action. */}
-            <div class="mt-3 flex flex-wrap gap-2">
-              <Show when={getProfile()?.can_edit && !getEditing()}>
-                <button class="btn px-3 py-1" type="button" onClick={() => setEditing(true)}>
-                  Edit profile
-                </button>
+      {/* Forgejo #421 (#413/#403/#395 follow-up): the profile page is a
+          GitHub-style two-column grid — main content left (identity,
+          edit form, Repositories toolbar, listing), a narrow sidebar
+          right carrying the avatar with the owner actions grouped
+          vertically beneath it (Edit profile / Regenerate avatar /
+          Remove avatar, each full-width, an <hr> in the header divider
+          colors directly above the group). Below sm: the grid is one
+          column so the sidebar stacks below the main column at 390px
+          with no horizontal overflow (#273-#278: min-w-0 columns, no
+          fixed widths beside the avatar); DOM order stays main-first
+          so the h1 keeps heading order. The Repositories toolbar stays
+          as landed in #413; the identity block keeps display
+          name/handle/location/bio (with the #420 hide-while-editing
+          gate intact); the edit form opens in place in the main
+          column. All gating byte-identical (Edit: server can_edit;
+          Regenerate/Remove: self-only; Manage: canManage; #376 cache
+          invalidation) — layout only. */}
+      <div class="profile-layout grid grid-cols-1 gap-6 sm:grid-cols-[minmax(0,1fr)_12rem]">
+        <div class="profile-main min-w-0">
+          <Show when={!isOrg()}>
+            <div class="profile-header border-b border-zinc-200 pb-6 dark:border-zinc-700">
+              <h1 class="text-2xl font-semibold">{displayName()}</h1>
+              {/* The org block below already renders @{owner}; the
+                  user-profile handle renders only for non-org owners
+                  (no double handle). */}
+              <Show when={profile().display_name}>
+                <p class="muted mt-0.5 text-sm">@{owner()}</p>
               </Show>
-            </div>
-          </div>
-          {/* Forgejo #376: avatar self-service for the owner's own page.
-              The column renders when there is an avatar to show OR the
-              viewer can act (self without an avatar still gets
-              Regenerate to opt back in); the actions sit with the
-              avatar they act on. Regenerate installs a fresh
-              deterministic render (and opts back in); remove deletes
-              the avatar and opts out of auto-generation until the
-              next regenerate. Non-org only — org avatars live in org
-              settings. */}
-          <Show when={userSrc() || isSelf()}>
-            <div class="profile-avatar flex shrink-0 flex-row flex-wrap items-center gap-3 sm:flex-col sm:items-center">
-              <Show when={userSrc()}>
-                <img
-                  src={userSrc()}
-                  alt=""
-                  width={96}
-                  height={96}
-                  class="h-24 w-24 rounded-full ring-1 ring-zinc-300 dark:ring-zinc-600"
+              <Show when={profile().location || profile().timezone}>
+                <p class="muted mt-1 text-sm">
+                  {[profile().location, profile().timezone].filter(Boolean).join(" · ")}
+                </p>
+              </Show>
+              {/* Forgejo #420: the rendered bio hides while the edit
+                  form is open — the form's own inline preview is the only
+                  rendered surface during editing. onDone restores via
+                  setEditing(false); non-editors never set editing. */}
+              <Show when={profile().bio_markdown && !getEditing()}>
+                <div
+                  class="markdown-body mt-3"
+                  innerHTML={renderBody(profile().bio_markdown)}
                 />
               </Show>
-              <Show when={isSelf()}>
-                <div class="flex flex-row flex-wrap gap-2 text-sm sm:flex-col sm:items-center">
-                  <button class="btn px-3 py-1" type="button" onClick={regenerateAvatar}>
-                    Regenerate avatar
-                  </button>
-                  <Show when={userSrc()}>
-                    <button class="btn px-3 py-1" type="button" onClick={removeAvatar}>
-                      Remove avatar
-                    </button>
-                  </Show>
-                  <Show when={getAvatarNote()}>
-                    <span class="muted">{getAvatarNote()}</span>
-                  </Show>
-                </div>
-              </Show>
             </div>
+            <Show when={getEditing() && getProfile()?.can_edit}>
+              <ProfileForm
+                owner={owner()}
+                doc={getProfile()}
+                onDone={(saved) => {
+                  setEditing(false);
+                  if (saved) invalidate(`profile:${owner()}`);
+                }}
+              />
+            </Show>
           </Show>
-        </div>
-        <Show when={getEditing() && getProfile()?.can_edit}>
-          <ProfileForm
-            owner={owner()}
-            doc={getProfile()}
-            onDone={(saved) => {
-              setEditing(false);
-              if (saved) invalidate(`profile:${owner()}`);
-            }}
-          />
-        </Show>
-      </Show>
-      {/* Forgejo #359: org landing — the org header (avatar + badge +
-          org display name) and the org doc fields (description/location/
-          timezone/bio) render from the org doc; the user-profile block
-          above never renders for orgs. Forgejo #413: the New-repository
-          CTA left the title row for the shared Repositories toolbar
-          below, so the row drops its justify-between wrapper. */}
+      {/* Forgejo #359: org landing — the org identity (badge + org
+          display name + org doc fields: description/location/timezone/
+          bio) renders from the org doc in the main column; the user-
+          profile block above never renders for orgs. The org avatar and
+          the Manage affordance live in the sidebar (Forgejo #421: same
+          sidebar treatment as the user profile). Forgejo #413: the
+          New-repository CTA left the title row for the shared
+          Repositories toolbar below, so the title row is just the h2. */}
       <Show when={isOrg()}>
       <h2 class="mb-1 flex items-center gap-2 text-xl font-semibold">
-          {/* Forgejo #359: the org avatar renders from the org doc's
-              pointer (no byte probing; hides itself on 404). */}
-          <OrgAvatar org={owner()} doc={getOrg} size={36} />
           {orgName()}
           <span class="pill org-badge ml-2 align-middle text-xs font-normal" role="img" title="organization" aria-label="organization">
             org
@@ -439,13 +396,6 @@ export default function Repos() {
           class="markdown-body mt-3"
           innerHTML={renderBody(getOrg().bio_markdown)}
         />
-      </Show>
-      <Show when={canManage()}>
-        <p class="mt-3">
-          <A class="btn px-3 py-1" href={`/${owner()}/settings`}>
-            Manage organization
-          </A>
-        </p>
       </Show>
       </Show>
       {/* Forgejo #413: the Repositories toolbar — the section heading
@@ -487,13 +437,89 @@ export default function Repos() {
       <p class="muted mt-4 text-xs">
         <A class="hover:underline" href={`/import?owner=${encodeURIComponent(owner())}`}>import into {owner()}</A>
         {/* Forgejo #348: the settings link is an org-owner affordance
-            (same canManage gate as the header button above); user
+            (same canManage gate as the sidebar button below); user
             namespaces never had an org settings page to link to. */}
         <Show when={canManage()}>
           {' · '}
           <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
         </Show>
       </p>
+        </div>
+        {/* Forgejo #421: the owner-action sidebar — avatar on top, then
+            an <hr> in the header divider colors, then the owner actions
+            grouped in one vertical full-width stack (Edit profile when
+            profile.can_edit, Regenerate/Remove avatar when self-only).
+            The aside renders when there is an avatar to show, the
+            viewer can act (self without an avatar still gets Regenerate
+            to opt back in), or the viewer may edit (host admin on an
+            avatarless page); each action keeps its own byte-identical
+            gate below. Regenerate installs a fresh deterministic render
+            (and opts back in); remove deletes the avatar and opts out
+            of auto-generation until the next regenerate (Forgejo #376:
+            the server re-checks self-or-admin; the client never
+            decides). Non-org only — org avatars live in org settings. */}
+        <Show when={!isOrg() && (userSrc() || isSelf() || getProfile()?.can_edit)}>
+          <aside class="profile-sidebar flex min-w-0 flex-col items-center gap-3" aria-label="Profile actions">
+            <Show when={userSrc()}>
+              <div class="profile-avatar shrink-0">
+                <img
+                  src={userSrc()}
+                  alt=""
+                  width={96}
+                  height={96}
+                  class="h-24 w-24 rounded-full ring-1 ring-zinc-300 dark:ring-zinc-600"
+                />
+              </div>
+            </Show>
+            <Show when={(getProfile()?.can_edit && !getEditing()) || isSelf()}>
+              <hr class="w-full border-zinc-200 dark:border-zinc-700" />
+              <div class="profile-actions flex w-full flex-col gap-2">
+                <Show when={getProfile()?.can_edit && !getEditing()}>
+                  <button class="btn w-full justify-center px-3 py-1" type="button" onClick={() => setEditing(true)}>
+                    Edit profile
+                  </button>
+                </Show>
+                <Show when={isSelf()}>
+                  <button class="btn w-full justify-center px-3 py-1" type="button" onClick={regenerateAvatar}>
+                    Regenerate avatar
+                  </button>
+                  <Show when={userSrc()}>
+                    <button class="btn w-full justify-center px-3 py-1" type="button" onClick={removeAvatar}>
+                      Remove avatar
+                    </button>
+                  </Show>
+                  <Show when={getAvatarNote()}>
+                    <span class="muted text-center text-sm">{getAvatarNote()}</span>
+                  </Show>
+                </Show>
+              </div>
+            </Show>
+          </aside>
+        </Show>
+        {/* Forgejo #421: the org sidebar — the same treatment as the
+            user sidebar (avatar, divider, vertical full-width action
+            stack). Renders when the org doc names an avatar or the
+            viewer may manage; the avatar still renders from the org
+            doc's pointer with no byte probing (Forgejo #359: hides
+            itself on 404). */}
+        <Show when={isOrg() && (getOrg()?.avatar_content_type || canManage())}>
+          <aside class="profile-sidebar flex min-w-0 flex-col items-center gap-3" aria-label="Organization actions">
+            <Show when={getOrg()?.avatar_content_type}>
+              <div class="profile-avatar shrink-0">
+                <OrgAvatar org={owner()} doc={getOrg} size={96} />
+              </div>
+            </Show>
+            <Show when={canManage()}>
+              <hr class="w-full border-zinc-200 dark:border-zinc-700" />
+              <div class="profile-actions flex w-full flex-col gap-2">
+                <A class="btn w-full justify-center px-3 py-1" href={`/${owner()}/settings`}>
+                  Manage organization
+                </A>
+              </div>
+            </Show>
+          </aside>
+        </Show>
+      </div>
     </div>
   );
 }
