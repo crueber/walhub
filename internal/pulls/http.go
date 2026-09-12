@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/cachepolicy"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 )
@@ -202,8 +203,14 @@ func matchETag(header, etag string) bool {
 }
 
 const (
-	ccSWR     = "private, max-age=0, stale-while-revalidate=60"
-	ccNoStore = "no-store"
+	// ccSWR stays for one route only: the pull diff (getDiff below) is a
+	// ref-derived patch body — it changes only via ref movement (push to
+	// head/base), which is exactly what the ref-dependent class bounds.
+	// Aliases for the shared cache-policy definition
+	// (internal/cachepolicy, Forgejo #382): values defined once, never
+	// redeclared here.
+	ccSWR     = cachepolicy.SWR
+	ccNoStore = cachepolicy.NoStore
 	// ccMutable is the mutable-collab freshness contract (issue #280;
 	// docs/go/07_api.md §4 third class): the pull view mutates via direct
 	// user action (comments, title/body/state patches), so it revalidates
@@ -212,7 +219,7 @@ const (
 	// getDiff below stays SWR: a patch body changes only via ref movement
 	// (push to head/base), which is exactly what the ref-dependent class
 	// bounds.
-	ccMutable = "private, no-cache"
+	ccMutable = cachepolicy.Mutable
 )
 
 // decodeStrict unmarshals body into v after rejecting unknown top-level

@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"git.packden.us/crueber/walhub/internal/cachepolicy"
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/policy"
@@ -684,10 +685,14 @@ func (e *Env) PrincipalOf(r *http.Request) auth.Principal {
 // --- plain-text + JSON writers ------------------------------------------------
 
 const (
-	ccImmutable = "private, max-age=31536000, immutable"
-	ccSWR       = "private, max-age=0, stale-while-revalidate=60"
-	ccNoStore   = "no-store"
-	ccNoCache   = "no-cache"
+	// Cache-Control classes (the §4 central design rule): the header
+	// strings live in internal/cachepolicy (Forgejo #382 — one shared
+	// definition carrying the mutability rule); these are aliases so
+	// existing call sites read unchanged. Nothing redeclares the values.
+	ccImmutable = cachepolicy.Immutable
+	ccSWR       = cachepolicy.SWR
+	ccNoStore   = cachepolicy.NoStore
+	ccNoCache   = cachepolicy.NoCache
 	// ccMutable is the mutable-collab freshness contract (issue #280;
 	// docs/go/07_api.md §4 third class): the repo summary carries
 	// user-mutable projections (visibility, open counts, description,
@@ -696,9 +701,8 @@ const (
 	// suffix-covered ETag keeps the revalidation cheap (304 when
 	// unchanged). Bare ccNoCache is NOT used here: the summary varies
 	// per caller (visibility-filtered reads), so the private directive
-	// stays. Per-package constant per the #280 precedent (no shared
-	// import was added there either).
-	ccMutable = "private, no-cache"
+	// stays.
+	ccMutable = cachepolicy.Mutable
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }

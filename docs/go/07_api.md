@@ -51,8 +51,9 @@ GET /api/v1/owners             → ["demo","jane"] (sorted; from the STORE, not 
 GET /api/v1/owners/{o}/repos   → ["hello","walgit"] (short names; 200 [] for unknown owner)
 GET /{o}/{r}/api               → {owner, name, full_name, head:{name,sha}|null, branches, tags,
                                   health:"empty"|"healthy"|"degraded", missing_total? (degraded only),
-                                  clone_url, ssh_clone_url?, html_url, api_url}   (SWR + ETag "<head sha>" + "~degraded"
-                                  suffix when degraded; "" when unborn — §9.1)
+                                  clone_url, ssh_clone_url?, html_url, api_url}   (mutable-collab class:
+                                  `private, no-cache` + ETag "<head sha>" + `~d`/`~m`/`~c`/`~v` suffixes
+                                  for the mutable projections + `If-None-Match` → 304; "" when unborn — §9.1)
 PUT/DELETE /{o}/{r}/api        → create (write) / delete (admin)
 GET …/refs                     → {head:{name,sha}|null} — O(1), default branch only (SWR + ETag)
 GET …/refs/{branches|tags}?prefix=&q=&after=&n=
@@ -127,6 +128,23 @@ routes directly — so twins would widen the browser-lane (cookie) surface for n
   still makes unchanged responses 304 with zero body, so only the stale-serve window is lost (which
   is exactly the #259/#280 flip-flop: refresh 1 painting pre-mutation state while revalidation
   lands, refresh 2 painting post-mutation state).
+- One shared definition (Forgejo #382): the five header values live in `internal/cachepolicy`
+  (`Immutable`, `SWR`, `Mutable`, `NoStore`, `NoCache`) with the rule above in the package doc.
+  Core (`internal/api`) and every feature package alias them; nothing redeclares the strings.
+  `cachepolicy.Check` enforces the machine-checkable half (SWR + version-derived ETag fails);
+  each package's `cacheclass_test.go` pins every served cacheable GET to its class and asserts
+  Check on the pair, with every `ExposedTemplates` entry covered by a row or an explicit
+  mutation-only set — a new route without a row fails CI.
+- Listings boundary: `owners`, `owners/{o}/repos`, and `owners/detailed` stay SWR with NO ETag,
+  pinned deliberately. They carry no user-mutable projections (names, counts, git-derived
+  activity rollups only) and no sibling endpoint serves the same data under a different class,
+  so there is no #259-style disagreement hazard. Gaining either — a version ETag or a mutable
+  projection — moves them to the mutable class with ETag coverage, and Check fails the
+  SWR+version combination the moment it appears.
+- ETag suffixes retained: the summary's `~d`/`~m`/`~c`/`~v` suffixes stay under no-cache
+  (harmless — the browser always revalidates now — and pinned by existing 304 tests). The
+  #382 amendment's optional suffix simplification is deferred: zero user benefit, nonzero
+  churn risk.
 
 - Ref-dependent ETags: the value is the **quoted resolved sha** (`ETag: "cb38da1…"`), matching a bare double-quoted hex
   string in the header; compare `If-None-Match` by stripping quotes and weak prefixes.
@@ -1282,3 +1300,24 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   the response mutates via PUT by construction, exactly the mutability
   rule §4 states. The SPA needs no change: it already invalidates its
   `profile:{owner}` client entry on save.
+- **Cache-class-by-mutability law + shared definition + contract guard (Forgejo #382 —
+  amends the §4 "two/three cache classes" framing into a LAW, supersedes #259).** #381 proved
+  the per-endpoint fix approach cannot close the class: the summary carried a correct
+  version-keyed ETag yet still painted stale under SWR, and the same trap recurred across
+  #259 → #280 → #381 on every surface that copied `ccSWR` onto mutable state. The systemic
+  fix, all in this change: (a) the rule is now stated as law in §4 — *addressability does
+  not decide the class, mutability does* — with the listings boundary (owners/ownerRepos/
+  owners-detailed stay SWR, unversioned and sibling-free) and the suffix-retention note;
+  (b) one shared definition, `internal/cachepolicy`, carrying the rule in its package doc —
+  core and all five feature packages alias it (issues keeps the `ccThread` name as an alias:
+  the thread class IS the mutable class), nothing redeclares a header string; (c) a
+  per-package `cacheclass_test.go` contract pinning every served cacheable GET to its exact
+  class and running `cachepolicy.Check` on the pair, with `ExposedTemplates` coverage so a
+  new route without a row fails CI (verified by flipping the summary to SWR and watching
+  the contract test go red, then reverting); (d) the re-audit sweep: the only SWR left
+  outside git content is the pull diff (ref-derived patch body — SWR-legit, documented at
+  the const) and the SWR listings above (boundary-documented); notify/review/checks/tags
+  and all mutation-adjacent reads were already no-store. (e) ETag-suffix simplification
+  explicitly deferred (retention note in §4). Client: no change — the SPA's `invalidate()`
+  + mutation-site reconcile (data.js, #318) already invalidates on mutation; the header
+  contract now backs the reload case it could not fix alone.

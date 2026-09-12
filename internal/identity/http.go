@@ -8,13 +8,15 @@ import (
 	"strconv"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/cachepolicy"
 	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 )
 
 // Wire conventions (07 §2, same as internal/api): plain-text errors,
-// []-never-null, RFC 3339 UTC, per-segment decoding, SWR/ETag or no-store,
-// both lanes everywhere. Anonymous-denied reads get a real 401 with
+// []-never-null, RFC 3339 UTC, per-segment decoding, no-cache+ETag or
+// no-store per route (07 §4 — nothing here serves a stale window), both
+// lanes everywhere. Anonymous-denied reads get a real 401 with
 // WWW-Authenticate: Bearer.
 
 // ExposedTemplates lists the discovery endpoints[] entries this surface
@@ -193,8 +195,11 @@ const (
 	// version-keyed ETags keep the revalidation cheap (304 when
 	// unchanged); collection/singleton GETs without a version token take
 	// the class without an ETag (always 200, never stale).
-	ccMutable = "private, no-cache"
-	ccNoStore = "no-store"
+	// Aliases for the shared cache-policy definition
+	// (internal/cachepolicy, Forgejo #382): values defined once, never
+	// redeclared here.
+	ccMutable = cachepolicy.Mutable
+	ccNoStore = cachepolicy.NoStore
 )
 
 func readBodyJSON(w http.ResponseWriter, r *http.Request, limit int64, v any) bool {
