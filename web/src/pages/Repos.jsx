@@ -471,8 +471,14 @@ export default function Repos() {
                 />
               </div>
             </Show>
-            <Show when={(getProfile()?.can_edit && !getEditing()) || isSelf()}>
+            {/* Forgejo #421: the divider renders only beneath a shown
+                avatar — an avatarless but actionable sidebar (self opted
+                out via #376 Remove, or an editor without an avatar) must
+                not open on a stray rule. */}
+            <Show when={userSrc() && ((getProfile()?.can_edit && !getEditing()) || isSelf())}>
               <hr class="w-full border-zinc-200 dark:border-zinc-700" />
+            </Show>
+            <Show when={(getProfile()?.can_edit && !getEditing()) || isSelf()}>
               <div class="profile-actions flex w-full flex-col gap-2">
                 <Show when={getProfile()?.can_edit && !getEditing()}>
                   <button class="btn w-full justify-center px-3 py-1" type="button" onClick={() => setEditing(true)}>
@@ -509,8 +515,12 @@ export default function Repos() {
                 <OrgAvatar org={owner()} doc={getOrg} size={96} />
               </div>
             </Show>
-            <Show when={canManage()}>
+            {/* Forgejo #421: same no-orphan-rule treatment as the user
+                sidebar — the divider needs the org avatar above it. */}
+            <Show when={getOrg()?.avatar_content_type && canManage()}>
               <hr class="w-full border-zinc-200 dark:border-zinc-700" />
+            </Show>
+            <Show when={canManage()}>
               <div class="profile-actions flex w-full flex-col gap-2">
                 <A class="btn w-full justify-center px-3 py-1" href={`/${owner()}/settings`}>
                   Manage organization

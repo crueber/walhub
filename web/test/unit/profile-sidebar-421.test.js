@@ -101,11 +101,21 @@ test("an <hr>-style divider sits between the avatar and the action group, immedi
   assert.ok(hrTag.includes("dark:border-zinc-700"), "dark divider matches the header rule");
   assert.ok(side.indexOf("h-24 w-24") < hr, "divider renders below the avatar");
   assert.ok(hr < side.indexOf("Edit profile"), "divider renders immediately above Edit profile");
+  // No orphan rule: each divider's own Show also requires the avatar
+  // above it, so an avatarless-but-actionable sidebar (self opted out
+  // via #376 Remove, editor without an avatar) opens on actions, not a
+  // stray line.
+  const hrShow = side.slice(side.lastIndexOf("<Show when=", hr), hr);
+  assert.ok(hrShow.includes("userSrc()"), "user divider requires the avatar above it");
+  assert.ok(hrShow.includes("getProfile()?.can_edit"), "user divider still requires an actionable viewer");
   const orgSide = block(REPOS, 'aria-label="Organization actions"', "</aside>");
   const orgHr = orgSide.indexOf("<hr");
   assert.ok(orgHr !== -1, "the org sidebar carries the same divider");
   assert.ok(orgSide.indexOf("<OrgAvatar") < orgHr, "org divider renders below the avatar");
   assert.ok(orgHr < orgSide.indexOf("Manage organization"), "org divider renders immediately above Manage organization");
+  const orgHrShow = orgSide.slice(orgSide.lastIndexOf("<Show when=", orgHr), orgHr);
+  assert.ok(orgHrShow.includes("avatar_content_type"), "org divider requires the org avatar above it");
+  assert.ok(orgHrShow.includes("canManage()"), "org divider still requires a manager");
 });
 
 test("action gates byte-identical: Edit = server can_edit, avatar actions = self-only", () => {
