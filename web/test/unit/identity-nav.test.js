@@ -284,7 +284,9 @@ test("Repos #395/#403/#413: profile header is one composed block, New repository
   const grid = REPOS.indexOf('<div class="profile-header');
   assert.ok(grid !== -1, "the composed header grid exists");
   const headerEnd = REPOS.indexOf("getEditing()", grid);
-  const cta = REPOS.indexOf("New repository");
+  // Forgejo #422: the Repos.jsx file-header comment names the CTA — pin the
+  // rendered text node (closing newline into </A>), not prose.
+  const cta = REPOS.indexOf("New repository\n");
   assert.ok(cta !== -1 && cta > headerEnd, "the New-repository CTA renders below the header, in the toolbar");
   const large = REPOS.indexOf("h-24 w-24");
   assert.ok(grid < large, "the large avatar renders inside the composed header grid");

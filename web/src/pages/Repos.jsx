@@ -1,4 +1,10 @@
-// web/src/pages/Repos.jsx — route "/:owner": the owner's profile + repositories.
+// web/src/pages/Repos.jsx — routes "/:owner" (profile) and
+// "/:owner/repositories" (the repositories tab, Forgejo #422): the owner's
+// profile + repositories. The profile page is the dedicated identity view
+// (header, tab strip, repository-count teaser linking to the tab); the
+// repositories tab keeps the Repositories toolbar + New repository CTA +
+// grid + import link exactly as they rendered before the split (a move, not
+// a redesign).
 // The profile header (Forgejo #234) shows the display name (owner slug when
 // unset), location, IANA timezone, and the markdown bio rendered through the
 // shared pipeline (renderBody: marked GFM + DOMPurify — the same gate as
@@ -22,7 +28,7 @@
 
 import repos from "../../sdk/src/index.js";
 import { createSignal, createEffect, For, Show } from "solid-js";
-import { useParams, A } from "@solidjs/router";
+import { useParams, useLocation, A } from "@solidjs/router";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { orderByActivity } from "../lib/owners.js";
 import { timeZones } from "../lib/timezone.js";
@@ -75,6 +81,49 @@ export function RepoRow(props) {
       <StarCount full={full()} />
       <ActivityStamp full={full()} at={props.at} empty={props.empty} />
     </li>
+  );
+}
+
+/** Owner tab strip (Forgejo #422): Profile ⇄ Repositories. The tab-strip-vs-
+ *  simple-link decision is a strip — it reuses the repo page's tab bar
+ *  anatomy (web/src/pages/Repo.jsx: the same flex / overflow-x-auto /
+ *  whitespace-nowrap / border-b shape with the same link treatment and
+ *  active-tab underline, under its own `owner-tabs` hook so the #274
+ *  narrow-width rules apply). The strip renders on BOTH routes (outside
+ *  every isOrg Show) so the two views navigate to each other; the active
+ *  tab derives from the pathname. The repositories tab carries the listing
+ *  count when loaded (the shared `repos:{owner}` payload — no new fetch).
+ *  props: owner, count (number|null). */
+export function OwnerTabs(props) {
+  const loc = useLocation();
+  const active = () => (loc.pathname === `/${props.owner}/repositories` ? "repos" : "profile");
+  const cls =
+    "rounded-t px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100";
+  return (
+    <nav
+      class="owner-tabs mb-4 flex max-w-full gap-1 overflow-x-auto whitespace-nowrap border-b border-zinc-200 dark:border-zinc-800"
+      aria-label="owner sections"
+    >
+      <A
+        href={`/${props.owner}`}
+        class={cls}
+        classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": active() === "profile" }}
+        aria-current={active() === "profile" ? "page" : undefined}
+      >
+        Profile
+      </A>
+      <A
+        href={`/${props.owner}/repositories`}
+        class={cls}
+        classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": active() === "repos" }}
+        aria-current={active() === "repos" ? "page" : undefined}
+      >
+        Repositories
+        <Show when={props.count != null}>
+          <span class="tab-badge" aria-label={`${props.count} repositories`}>{props.count}</span>
+        </Show>
+      </A>
+    </nav>
   );
 }
 
@@ -221,7 +270,14 @@ function ProfileForm(props) {
   );
 }
 
-export default function Repos() {
+/** The owner page in both views (Forgejo #422): `view="profile"` is the
+ *  `/:owner` identity page (header, tab strip, repository-count teaser —
+ *  no grid); `view="repos"` is the `/:owner/repositories` tab (tab strip
+ *  plus the toolbar + grid + import link moved verbatim). One component so
+ *  the header, sidebar (#421), gates, fetches, and cache keys stay shared
+ *  by construction — the listing markup is never forked. */
+function OwnerPage(props) {
+  const view = () => props.view ?? "profile";
   const params = useParams();
   const owner = () => params.owner;
   const [getDoc] = useData(
@@ -307,6 +363,13 @@ export default function Repos() {
   const isOrg = () => getOrg() != null;
   const orgName = () => getOrg()?.display_name || owner();
   const canManage = () => isOrg() && !!getProfile()?.can_edit;
+  // Forgejo #422: the repositories-tab count rides the shared `repos:{owner}`
+  // listing payload (the same key /explore shares) — null while loading, so
+  // the tab renders first and the badge fills in with zero new fetches.
+  const repoCount = () => {
+    const d = getDoc();
+    return d ? orderByActivity(d.repos).length : null;
+  };
   return (
     <div class="repos-page">
       {/* Forgejo #421 (#413/#403/#395 follow-up): the profile page is a
@@ -398,6 +461,38 @@ export default function Repos() {
         />
       </Show>
       </Show>
+      {/* Forgejo #422: the owner tab strip — Profile ⇄ Repositories, on both
+          routes and both owner variants (outside every isOrg Show) so each
+          view links to the other. The anatomy reuses the repo page's tab
+          bar (Repo.jsx); the count badge rides repoCount() above. */}
+      <div class="mt-6">
+        <OwnerTabs owner={owner()} count={repoCount()} />
+      </div>
+      {/* Forgejo #422: the profile view keeps the identity above and swaps
+          the listing for a repository-count teaser linking to the tab — no
+          grid, no toolbar, no import footer here. */}
+      <Show when={view() === "profile"}>
+        <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
+          {(doc) => {
+            const rows = orderByActivity(doc().repos);
+            return (
+              <p class="muted mb-4">
+                {rows.length} repositor{rows.length === 1 ? "y" : "ies"}
+                {" · "}
+                <A
+                  class="text-emerald-700 hover:underline dark:text-emerald-400"
+                  href={`/${owner()}/repositories`}
+                >
+                  View all →
+                </A>
+              </p>
+            );
+          }}
+        </Show>
+      </Show>
+      {/* Forgejo #422: the repositories tab — the listing moved verbatim
+          (toolbar + grid + import footer); only this Show gate is new. */}
+      <Show when={view() === "repos"}>
       {/* Forgejo #413: the Repositories toolbar — the section heading
           with the New-repository CTA right-anchored (the same flex
           items-center justify-between title-row shape the org header
@@ -444,6 +539,7 @@ export default function Repos() {
           <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
         </Show>
       </p>
+      </Show>
         </div>
         {/* Forgejo #421: the owner-action sidebar — avatar on top, then
             an <hr> in the header divider colors, then the owner actions
@@ -532,4 +628,20 @@ export default function Repos() {
       </div>
     </div>
   );
+}
+
+/** Route "/:owner": the profile view (identity + tab strip + teaser). */
+export default function Repos() {
+  return <OwnerPage view="profile" />;
+}
+
+/** Route "/:owner/repositories" (Forgejo #422): the repositories tab (tab
+ *  strip + the toolbar/grid/import listing moved verbatim). No API change —
+ *  the listing rides the shared `repos:{owner}` key, and the server already
+ *  serves the SPA shell on the two-segment shape (repoPageGated), so this
+ *  stays client-only. Reservation note: a repo literally named
+ *  "repositories" loses its UI page (the static route wins client-side);
+ *  its git/API paths are unaffected — the same class as /orgs/new. */
+export function OwnerRepositories() {
+  return <OwnerPage view="repos" />;
 }
