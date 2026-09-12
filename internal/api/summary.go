@@ -170,12 +170,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 	if countsOK {
 		// Same trap once more (issue #319): a close/reopen moves no ref,
 		// so the ETag covers the shared index version or the badges go
-		// stale behind a 304. The class stays SWR (the #235/#240
-		// precedent — coordinated with, not duplicating, the #280
-		// no-cache migration, which covers version-keyed collab GETs;
-		// the summary itself remains ref-dependent git content): the
-		// residual ≤60 s window closes client-side via stream
-		// invalidation of the shared summary entry (08 §4).
+		// stale behind a 304.
 		etag += "~c" + strconv.Itoa(counts.Version)
 	}
 	if visibility != "" {
@@ -184,7 +179,17 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// client 304s and keeps showing the stale badge.
 		etag += "~v" + visibility
 	}
-	writeCached(w, r, ccSWR, etag, http.StatusOK, body)
+	// Forgejo #381: the summary serves the mutable-collab class
+	// (private, no-cache), NOT SWR. The ~d/~m/~c/~v suffixes above make
+	// *revalidation* correct, but SWR's stale-serve window still licensed
+	// the browser to paint the pre-mutation body on the next refresh
+	// while revalidating in the background (the #280 flip-flop class —
+	// the summary was the surface #280 left on SWR). no-cache keeps the
+	// ETag/304 economics (unchanged summaries revalidate to 304 with
+	// zero body) and drops only the stale-serve window. Law 6: this
+	// path is off the push/sync/checkpoint budgets (those never call
+	// here), so no hot-path sequential-trip regression.
+	writeCached(w, r, ccMutable, etag, http.StatusOK, body)
 }
 
 // descriptionHash is the short ETag suffix covering the summary description

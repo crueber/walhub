@@ -153,6 +153,14 @@ function GeneralTab(props) {
         role_bindings: doc?.role_bindings ?? [],
       });
       setVisNote(`saved (version ${next.version})`);
+      // Forgejo #381: the select shows the PUT's authoritative echo, not
+      // whatever the post-save refetch returns first — the header badge
+      // (shared summary, no-cache server-side) and this select can never
+      // disagree on one screen. The `access:{full}` invalidations below
+      // refetch both entries (keys verified to match the useData seeds);
+      // the 5 s prefill TTL is kept deliberately — ttl=0 would refetch-loop
+      // against the data layer's signal-subscribed effect.
+      setVis(next.visibility ?? vis);
       // Reflect without a full reload: the header badge reads the shared
       // summary, the Access tab reads the shared access doc.
       invalidate(`repo:${props.ctx.full}`);

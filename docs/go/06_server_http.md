@@ -189,7 +189,7 @@ Then dispatch on `sub[0]` (after `.git`-strip and re-join with "/"): the table i
 | GET | `/{o}/{r}[.git]/bundles/catchup[?filter=]` | same list without the fulls |
 | GET/HEAD | `/{o}/{r}[.git]/bundles/{strategy}/{name}` | the bundle object; full static contract (§5) |
 | GET | `{lane}/refs`, `{lane}/refs/{branches\|tags}`, `{lane}/resolve[/{rest}]`, `{lane}/tree/{rest}`, `{lane}/blob/{rest}[?raw]`, `{lane}/commits`, `{lane}/commit/{sha}` | JSON API (07_api.md; tree/blob tails are greedy — rev may contain slashes, issue #251); `lane` = `/api` or `/api-browser` |
-| GET | `{lane}` | repo summary (SWR + ETag head sha, suffixed for description/health/mirror/counts/visibility) |
+| GET | `{lane}` | repo summary (mutable-collab class `private, no-cache` + ETag head sha, suffixed for description/health/mirror/counts/visibility — Forgejo #381) |
 | GET | `{lane}/policy`, `{lane}/settings`, `{lane}/settings/{effective\|history\|describe}`, POST `{lane}/policy/{validate\|dry-run}`, POST `{lane}/settings/validate` | read-level |
 | GET | `{lane}/overview` | WAL dashboard JSON, no-store |
 | GET | `{lane}/ops` | `{available:[OpSpec], recent:[TaskRecord], bundle_strategies}` no-store |
