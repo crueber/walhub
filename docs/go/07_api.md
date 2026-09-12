@@ -119,7 +119,7 @@ routes directly — so twins would widen the browser-lane (cookie) surface for n
 |---|---|
 | **sha-addressed** (full 40/64-hex in the `{sha}`/`{rev}` position): `tree/{sha}/…`, `blob/{sha}/…`, `commits?ref={sha}`, `commit/{sha}` | `Cache-Control: private, max-age=31536000, immutable` |
 | **ref-dependent**: `owners*`, `refs*`, `resolve`, and any tree/blob/commits/commit addressed by a NAME | `Cache-Control: private, max-age=0, stale-while-revalidate=60` + `ETag: "<resolved sha>"` + `If-None-Match` → `304` |
-| **mutable collab** (issue #280): any GET whose resource can change via a direct user action — issue/PR threads (`ETag: "v<version>"`), social counters, single/latest/list releases, the pull view, identity profiles/orgs/teams/invites/access docs | `Cache-Control: private, no-cache` + the existing version ETag + `If-None-Match` → `304` |
+| **mutable collab** (issue #280) + the repo summary (Forgejo #381): any GET whose resource can change via a direct user action — issue/PR threads (`ETag: "v<version>"`), social counters, single/latest/list releases, the pull view, identity profiles/orgs/teams/invites/access docs, and the repo summary (visibility, open counts, description, mirror state all mutate with no ref movement) | `Cache-Control: private, no-cache` + the existing version ETag + `If-None-Match` → `304` |
 
 - Mutability, not addressability, decides the class: SWR's stale-serve window is for content whose
   staleness is bounded by ref movement (refs move rarely; seconds-old is fine). User-mutable state
@@ -497,7 +497,9 @@ the suffix a description-only change (same head sha) would 304 and keep showing 
 clearing the description drops the suffix, which busts the cache too. `branches`/`tags` are **counts** (integers). `clone_url` from `server.public_url` (or request
 Host); `ssh_clone_url` (17_ssh.md §3 — the SSH transport advertisement, `external_port` else the
 listen port on the same public host, `:22` omitted; absent while SSH is disabled with no external
-override); `api_url` = the `/api` lane URL; SWR + `ETag: "<head sha>"`. `PUT` here creates (require_write,
+override); `api_url` = the `/api` lane URL; mutable-collab class (`private, no-cache`,
+Forgejo #381 — SWR's stale-serve window defeated the suffix-covered ETag, see below)
++ `ETag: "<head sha>"` with the `~degraded`/`~d`/`~m`/`~c`/`~v` suffixes. `PUT` here creates (require_write,
 `?object_format=sha1|sha256`, `201`/`409` exists); `DELETE` (require_admin) → `204`.
 
 `health` is the **repo-state vocabulary** (issue #209 — scoped: this field describes the repo,
@@ -545,10 +547,11 @@ costs two extra requests per repo view) at +1 server-side probe per summary — 
 budgeted paths (push/sync/checkpoint never call here, so their sim budgets hold unchanged).
 `ETag` covers the counts with the `~c<index-version>` suffix: the shared index version bumps
 on every card upsert by either collab writer, so a close/reopen with no ref move still busts
-SWR (same trap as `~degraded`/`~d`). The class stays SWR — coordinated with, not duplicating,
-the #280 no-cache migration (version-keyed collab GETs moved; the summary itself remains
-ref-dependent git content): the residual ≤60 s window closes client-side via stream
-invalidation of the shared summary entry (08 §4).
+a revalidation (same trap as `~degraded`/`~d`). The class is the §4 mutable-collab class
+(`private, no-cache`, Forgejo #381 — this supersedes the earlier "class stays SWR,
+stream-invalidation closes the window" coordination: the suffixes make revalidation
+correct, but only no-cache removes the stale-serve window that painted pre-mutation
+bodies on refresh; unchanged summaries still 304).
 
 `visibility` is the badge source (Forgejo #345 — additive `"public"|"private"`,
 Forgejo #374 adds `"authenticated"`: always present, `""` when the identity
@@ -557,6 +560,8 @@ GET — usually a version hit, no body; missing/empty/invalid `access.json` reso
 the §10 legacy default, so pre-existing repos badge public). `ETag` covers the field with
 the `~v<visibility>` suffix — a visibility flip moves no ref, so without it a revalidating
 client would 304 and keep showing the stale badge (same trap as `~degraded`/`~d`/`~m`/`~c`).
+The suffix makes revalidation correct; the §4 mutable-collab class (Forgejo #381) removes
+the stale-serve window the suffix alone cannot close.
 
 ### 9.1.1 Explicit create — `POST /api/v1/repos` (+ `/api-browser/v1` twin; issue #210)
 
@@ -1202,8 +1207,26 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   The summary `health: degraded` now has two sources: the cached `fsck.pb` report (a hit
   short-circuits) and the serve-health sidecar `meta/serve-health.json` (05 §5.2.1) — direct
   probe for non-mirrors, the mirror hook's `degraded_reason` verdict for mirrors (+0 extra
-  GETs there). Cost change, stated plainly: healthy non-mirror summaries pay +2 exact-key
-  GETs instead of +1 (same R1-B1 cost class, off the law-6 budgeted paths — not a hot-path
-  regression). `mirrorHash` covers `degraded_reason` so the flip busts the SWR cache.
-  Rationale: an unhealthy repo reporting `healthy`/`ok` with no recovery is the contract
-  failure of #320; there is no cheaper read path to the serve verdict.
+   GETs there). Cost change, stated plainly: healthy non-mirror summaries pay +2 exact-key
+   GETs instead of +1 (same R1-B1 cost class, off the law-6 budgeted paths — not a hot-path
+   regression). `mirrorHash` covers `degraded_reason` so the flip busts the SWR cache.
+   Rationale: an unhealthy repo reporting `healthy`/`ok` with no recovery is the contract
+   failure of #320; there is no cheaper read path to the serve verdict.
+- **Repo summary joins the mutable-collab class (Forgejo #381 — amends the §4 scope
+  and supersedes the #319 "class stays SWR" coordination).** The summary was the
+  surface #280 left on `ccSWR` because its ETag covers most mutable fields — but a
+  version-keyed ETag gives correct *revalidation* while SWR's stale-serve window is a
+  *correctness* concession git content can afford and user-mutable state cannot: a
+  visibility flip changed the ETag (`~v`) yet the browser still painted the pre-flip
+  body on the next refresh (alternating public/private across refreshes). Fix (a)
+  from the issue: serve `private, no-cache` (new per-package `ccMutable`, the #280
+  precedent — bare `ccNoCache` would drop the `private` directive the
+  visibility-filtered reads need); `~d`/`~m`/`~c`/`~v` suffixes unchanged, so
+  unchanged summaries still 304 with zero body (law 6: ETag/304 economics kept, and
+  the path is off the push/sync/checkpoint budgets). The settings visibility select
+  (authoritative `access.json` GET, already no-cache) now paints the PUT's echo on
+  save, so badge and select never disagree on one screen (the #259 sibling-endpoint
+  lesson); its 5 s prefill TTL is kept (ttl=0 would refetch-loop against the data
+  layer's signal-subscribed effect) with the `access:{full}` invalidation keys
+  verified to match. This closes the #280 systemic scope: the summary call site is
+  explicitly listed as fixed here.

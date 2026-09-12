@@ -357,6 +357,80 @@ func TestFilterCatalogRollup(t *testing.T) {
 	}
 }
 
+// TestSummaryMutableClassAndETagEconomics pins the Forgejo #381 fix:
+// the summary serves the mutable-collab no-cache class (never a
+// stale-serve window), while the suffix-covered ETag keeps unchanged
+// summaries revalidating to 304 with zero body.
+func TestSummaryMutableClassAndETagEconomics(t *testing.T) {
+	f, _ := visFixture(t)
+	f.view.summaries["demo/walgit"] = SummaryData{
+		Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1,
+		Description: "a description",
+	}
+	mirror := MirrorView{UpstreamURL: "https://example.com/up.git", Schedule: "daily"}
+	f.env.MirrorSummary = func(_ context.Context, owner, repo string) (MirrorView, bool) {
+		if owner == "demo" && repo == "walgit" {
+			return mirror, true
+		}
+		return MirrorView{}, false
+	}
+	f.env.CollabCounts = func(_ context.Context, owner, repo string) (CollabCounts, bool) {
+		if owner == "demo" && repo == "walgit" {
+			return CollabCounts{OpenIssues: 2, Version: 7}, true
+		}
+		return CollabCounts{}, false
+	}
+	w := f.do("GET", "/demo/walgit/api", nil, nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("summary = %d", w.Code)
+	}
+	// The class forbids stale-serve: exact no-cache value, and no
+	// stale-while-revalidate directive anywhere in it.
+	if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("summary cache = %q, want %q", cc, ccMutable)
+	}
+	if cc := w.Header().Get("Cache-Control"); strings.Contains(cc, "stale-while-revalidate") {
+		t.Fatalf("summary cache must not permit stale-serve: %q", cc)
+	}
+	// Every mutable projection still busts the ETag: ~d (description),
+	// ~m (mirror), ~c (open-count index version), ~v (visibility).
+	wantETag := `"` + fakeSHA +
+		"~d" + descriptionHash("a description") +
+		"~m" + mirrorHash(mirror) +
+		"~c7" +
+		"~vpublic" + `"`
+	if etag := w.Header().Get("ETag"); etag != wantETag {
+		t.Fatalf("etag = %q, want %q", etag, wantETag)
+	}
+	// Unchanged summary revalidates to 304 (ETag/304 economics kept —
+	// no bandwidth regression from leaving SWR).
+	etag := w.Header().Get("ETag")
+	w304 := f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": etag}, nil)
+	if w304.Code != http.StatusNotModified {
+		t.Fatalf("unchanged summary = %d, want 304", w304.Code)
+	}
+	// A visibility flip moves no ref but must NOT 304 against the old
+	// etag — and the new etag 304s in turn.
+	f.env.RepoVisibility = func(_ context.Context, _, _ string) (string, bool) {
+		return "private", true
+	}
+	wFlip := f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": etag}, nil)
+	if wFlip.Code != http.StatusOK {
+		t.Fatalf("flipped summary with stale etag = %d, want 200", wFlip.Code)
+	}
+	if etag2 := wFlip.Header().Get("ETag"); !strings.Contains(etag2, "~vprivate") {
+		t.Fatalf("flipped etag = %q, want ~vprivate suffix", etag2)
+	} else {
+		w304b := f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": etag2}, nil)
+		if w304b.Code != http.StatusNotModified {
+			t.Fatalf("reflipped summary = %d, want 304", w304b.Code)
+		}
+	}
+	if cc := wFlip.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("flipped summary cache = %q, want %q", cc, ccMutable)
+	}
+}
+
 func assertStrings(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {

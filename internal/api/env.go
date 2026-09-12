@@ -688,6 +688,17 @@ const (
 	ccSWR       = "private, max-age=0, stale-while-revalidate=60"
 	ccNoStore   = "no-store"
 	ccNoCache   = "no-cache"
+	// ccMutable is the mutable-collab freshness contract (issue #280;
+	// docs/go/07_api.md §4 third class): the repo summary carries
+	// user-mutable projections (visibility, open counts, description,
+	// mirror state — Forgejo #381), so every GET revalidates on EVERY
+	// read instead of serving a stale-while-revalidate window. The
+	// suffix-covered ETag keeps the revalidation cheap (304 when
+	// unchanged). Bare ccNoCache is NOT used here: the summary varies
+	// per caller (visibility-filtered reads), so the private directive
+	// stays. Per-package constant per the #280 precedent (no shared
+	// import was added there either).
+	ccMutable = "private, no-cache"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -727,7 +738,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // writeCached writes a JSON body with the §4 cache class headers and the
-// If-None-Match → 304 path. class: ccImmutable | ccSWR | ccNoStore | ccNoCache.
+// If-None-Match → 304 path. class: ccImmutable | ccSWR | ccNoStore | ccNoCache | ccMutable.
 func writeCached(w http.ResponseWriter, r *http.Request, class, etag string, status int, v any) {
 	h := w.Header()
 	h.Set("Cache-Control", class)

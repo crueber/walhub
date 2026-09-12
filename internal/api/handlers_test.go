@@ -331,7 +331,7 @@ func TestRepoSummary(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
-	if cc := w.Header().Get("Cache-Control"); cc != ccSWR {
+	if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
 		t.Fatalf("summary cache = %q", cc)
 	}
 	if etag := w.Header().Get("ETag"); etag != `"`+fakeSHA+`"` {

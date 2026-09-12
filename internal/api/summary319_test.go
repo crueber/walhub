@@ -2,10 +2,10 @@
 // fields (always present, 0 = none), and the ETag/cache story for
 // ref-less collab mutations (a close/reopen moves no ref, so the ETag
 // covers the shared index version — the #235/#240 suffix precedent).
-// The class stays SWR (coordinated with, not duplicating, the #280
-// no-cache migration: the summary itself remains ref-dependent git
-// content; the ≤60 s window closes client-side via stream invalidation
-// of the shared summary entry).
+// The class is the #280 mutable-collab no-cache class (Forgejo #381
+// moved the summary off SWR: the version-covering ETag makes
+// revalidation correct, but SWR's stale-serve window still licensed the
+// browser to paint the pre-mutation body on the next refresh).
 package api
 
 import (
@@ -68,11 +68,11 @@ func TestSummaryCollabCountsWire(t *testing.T) {
 			if want := `"` + fakeSHA + c.wantSuffix + `"`; etag != want {
 				t.Fatalf("etag = %q, want %q", etag, want)
 			}
-			// The class stays SWR (the #280 coordination: version-keyed
-			// collab GETs moved to no-cache; the summary itself remains
-			// ref-dependent git content with a version-covering ETag).
-			if cc := w.Header().Get("Cache-Control"); cc != ccSWR {
-				t.Fatalf("summary cache = %q, want %q", cc, ccSWR)
+			// The class is the #280 mutable-collab no-cache class (Forgejo
+			// #381): revalidation stays ETag-cheap, the stale-serve window
+			// is gone.
+			if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
+				t.Fatalf("summary cache = %q, want %q", cc, ccMutable)
 			}
 		})
 	}
