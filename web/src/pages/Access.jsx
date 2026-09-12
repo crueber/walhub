@@ -18,6 +18,7 @@ import {
   teamOptionLabel,
 } from "../lib/access.js";
 import { visibilityOptions } from "../lib/visibility.js";
+import { friendlyAccessError } from "../lib/accessSave.js";
 
 const ROLES = ["read", "triage", "write", "maintain", "admin"];
 
@@ -76,7 +77,7 @@ export default function AccessTab(props) {
       if (keepNote) setNote(keepNote);
     } catch (err) {
       reportError(err, key());
-      setNote(friendly(err));
+      setNote(friendlyAccessError(err));
     }
   };
 
@@ -93,7 +94,7 @@ export default function AccessTab(props) {
       await load(`saved (version ${next.version})`);
     } catch (err) {
       reportError(err, key());
-      setNote(friendly(err));
+      setNote(friendlyAccessError(err));
       if (err?.status === 409) await load();
     } finally {
       setSaving(false);
@@ -258,13 +259,9 @@ export default function AccessTab(props) {
   );
 }
 
-function friendly(err) {
-  if (!err) return "";
-  if (err.status === 409) return "changed under you — reloaded the latest version";
-  if (err.status === 403) return "admin role required to change access";
-  if (err.status === 401) return "sign in to view access";
-  return String(err.message ?? err);
-}
+// Failure wording lives in lib/accessSave.js (friendlyAccessError) — the
+// Settings visibility save shares it so both tabs word the same failure
+// the same way (Forgejo #391).
 
 /** Effective access (08 §§3.6/5): your resolved role plus the effective
  *  collaborator list with resolution sources. Read-gated; anonymous on a
