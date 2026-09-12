@@ -17,7 +17,7 @@ import {
   asTeamList,
   teamOptionLabel,
 } from "../lib/access.js";
-import { visibilityOptions } from "../lib/visibility.js";
+import VisSelect from "../components/VisSelect.jsx";
 import { friendlyAccessError } from "../lib/accessSave.js";
 
 const ROLES = ["read", "triage", "write", "maintain", "admin"];
@@ -169,14 +169,16 @@ export default function AccessTab(props) {
               <h3 class="mb-2 font-semibold">Visibility</h3>
               <label class="flex items-center gap-2 text-sm">
                 <span class="muted">Anonymous readers:</span>
-                <select
-                  class="input"
-                  value={getVis() ?? ""}
+                {/* Forgejo #410: the shared VisSelect (real <For> render path
+                    over identity-stable options). The default
+                    aria-label="Visibility" is new here — the inline select
+                    it replaces had none. */}
+                <VisSelect
+                  value={getVis()}
                   disabled={getVis() === null}
-                  onChange={(e) => setVis(e.currentTarget.value)}
-                >
-                  <For each={visibilityOptions(isOrg())}>{(o) => <option value={o.value}>{o.label}</option>}</For>
-                </select>
+                  onChange={setVis}
+                  isOrg={isOrg()}
+                />
               </label>
               <Show when={getVis() === null}>
                 <p class="muted mt-1 text-xs">loading current visibility…</p>

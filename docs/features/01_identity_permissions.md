@@ -462,7 +462,8 @@ Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
   `orgs.get` probe that 404s to null for users),
   role-binding table (subject, role, remove), add-binding form (user or team autocomplete), CAS version
   in the footer; save = full-doc PUT, 409 renders "changed under you, reload". The settings
-  General tab carries the same owner-aware visibility select (same probe, shared helper).
+  General tab carries the same owner-aware visibility select (same probe, shared `VisSelect`
+  component — issue #410).
 - **Profile** `/:owner` renders user or org profile (existing route gains the org variant).
   User owners additionally render the generated avatar from the user profile's pointer
   (issue #376 — gated on `avatar_content_type`, `?v=` cache-bust, hides on 404), with
@@ -751,3 +752,32 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   wording but keeps its no-retry full-document PUT (a blind retry there would clobber a concurrent
   binding edit). Rationale: fail closed with clear errors (law 9) applies to the UI too — the user
   must never stare at a select the server disagrees with.
+- **VisSelect render path + identity-stable options (issue #410, 2026-09-12)** — the profile
+  visibility selector rendered nothing through an opaque render path. Research-first verdicts
+  (against the pinned `solid-js@1.9.15` sources in `web/node_modules`):
+  (H1 CONFIRMED) a `<For>` children mapper is invoked per item as `mapFn(item)` for an arity-1
+  mapper like ours (client `mapArray`'s `mapper`), or `fn(item, () => i)` (SSR `simpleMap`) — the
+  index arrives as an accessor function, never a raw number, and the item is the option object,
+  never `o.label`; a hand-rolled adapter calling `children(item, i)` / `children(o.label)`
+  mismatches both real paths. (H2 CONFIRMED as an adapter bug, not framework timing) `mapArray`
+  reads `list() || []`, so an undefined `each` renders nothing — the observed `Cannot read
+  properties of undefined (reading 'value')` comes from invoking the mapper with an undefined
+  ITEM, which the real path never does with a populated `each`. (H3 REFUTED for production) the
+  vite bundle ships the runtime INSIDE `/_ui/assets/*.js` (no external runtime file exists to
+  404); the 404 was a harness artifact of bypassing the vite build — plain node has no JSX
+  transform, so `.jsx` cannot even be imported (that unimportability IS the "opaque" path).
+  On top of that, the issue-comment finding held: `visibilityOptions()` built fresh
+  arrays/objects per call, and `<For>` diffs by `===` identity, so every owner-kind refire rebuilt
+  all `<option>` nodes and the select fell back to the first option (`public`) while the value
+  signal stood still. The fix: `web/src/components/VisSelect.jsx` is the one shared selector
+  (Settings General tab + Access tab; real `<For each={visibilityOptions(props.isOrg)}>` path,
+  `value={props.value ?? ""}` keeps the #394 blank-while-unseeded rule, the Access tab gains the
+  `aria-label="Visibility"` its inline select lacked); `visibilityOptions()` returns hoisted
+  frozen constants (deep-equal shape unchanged); `web/src/lib/visSelect.js` is the headless row
+  model (`visRows`: exactly the current row `selected`, none for unknown/empty); and
+  `web/test/unit/vis-select.test.js` is the live-render rig — the REAL `For` from `solid-js`
+  (no adapter stub) rendering populated rows and observing the selected mark follow visibility
+  changes `public → private → authenticated` plus the user→org relabel, with the H1/H2 invocation
+  shapes pinned. Rationale: law 11 (DOM thin, logic headless-tested) forbids throwaway JSX-runtime
+  hacks — the component renders through the shipped path and the rig observes that path's real
+  contract.
