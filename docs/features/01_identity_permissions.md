@@ -289,7 +289,9 @@ Every destination write is `PutCreate`: a lost race aborts 409 with
 best-effort cleanup and the source untouched. The delete pass removes
 exactly the copied set, then re-lists the source prefix — leftovers mean
 a push raced the move and report 409 with the destination complete (a
-mistyped or raced transfer is recoverable: transfer back). `access.json`
+mistyped transfer is recoverable by transferring back; a raced transfer
+leaves the named src residue to delete — the destination is already
+complete, so a re-transfer would 409 on the occupied manifest). `access.json`
 is the one interpreted object: visibility and all bindings survive except
 the owner-subject — `user:<src>` bindings drop (the seller keeps no
 admin) and a user destination without a binding gains

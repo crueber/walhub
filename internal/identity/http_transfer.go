@@ -13,7 +13,8 @@ import (
 // rule, verbatim). Success is 201 {owner, repo} at the new address.
 //
 // Anonymous callers get a real 401 (CheckRole maps anonymous-denied to
-// 401 — law 9); unresolvable destination orgs 404; an occupied
+// 401 — law 9); unknown or foreign destination orgs 403 via CheckCreateOwner
+// (only the caller's own namespace and host admins bypass); an occupied
 // destination 409.
 func (h *Handler) routeTransfer(w http.ResponseWriter, r *http.Request, owner, repo string) bool {
 	if r.Method != http.MethodPost {

@@ -19,8 +19,9 @@
 // land objects under the source prefix after the copy pass; the delete
 // pass removes exactly the keys the copy pass saw, then re-lists the
 // source prefix — leftovers mean a concurrent write, reported as 409 with
-// the destination complete and named (the operator re-transfers or deletes
-// the residue; nothing is ever deleted before its copy ACKs). No lock is
+// the destination complete and named (the operator deletes the src residue,
+// or deletes the destination and transfers back; nothing is ever deleted
+// before its copy ACKs). No lock is
 // held across any store call.
 package identity
 
