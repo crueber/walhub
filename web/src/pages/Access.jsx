@@ -1,10 +1,21 @@
 // web/src/pages/Access.jsx — repo Access tab (features/01 §9): visibility
 // toggle, role-binding table, add-binding form, full-document PUT with the
 // CAS version in the footer; a 409 renders "changed under you, reload".
+// Issue #361: on org-owned repos the add form gains a team dropdown (the
+// owner org's roster via client.orgs.teams.list, composing team:org/slug
+// into the subject field); free text stays the fallback and the spelling
+// validates client-side (lib/access.js) with a friendly note.
 
 import { createSignal, For, Show } from "solid-js";
+import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
+import {
+  validateAccessSubject,
+  composeTeamSubject,
+  asTeamList,
+  teamOptionLabel,
+} from "../lib/access.js";
 
 const ROLES = ["read", "triage", "write", "maintain", "admin"];
 
@@ -22,6 +33,17 @@ export default function AccessTab(props) {
   const [getSub, setSub] = createSignal("");
   const [getRole, setRole] = createSignal("read");
   const [getSaving, setSaving] = createSignal(false);
+  // Team-subject picker (issue #361): the owner org's team roster, fetched
+  // once for the add-binding form. [] while loading-denied-or-empty — a 404
+  // (user-owned repo) or 403 (no team visibility) degrades to the free-text
+  // subject input, which always stays. One extra GET on an admin settings
+  // tab, never on a hot path.
+  const owner = () => String(props.ctx?.owner ?? "").trim();
+  const [getTeamRows] = useData(`org-teams:${owner().toLowerCase()}`, () => {
+    if (!owner()) return [];
+    return repos.orgs.teams.list(owner()).then(asTeamList, () => []);
+  }, 5000);
+  const [getTeamPick, setTeamPick] = createSignal("");
 
   const reset = (doc) => {
     setBase(doc);
@@ -64,14 +86,30 @@ export default function AccessTab(props) {
   };
 
   const addRow = () => {
-    const sub = getSub().trim();
-    if (!sub) return;
+    // The team dropdown composes into the subject field, so validation
+    // reads the one free-text value — typed or composed alike get the
+    // friendly note, never a silent no-op.
+    const checked = validateAccessSubject(getSub());
+    if (checked.error) {
+      setNote(checked.error);
+      return;
+    }
+    const sub = checked.subject;
     if (getRows().some((r) => r.subject.toLowerCase() === sub.toLowerCase())) {
       setNote("that subject already has a binding");
       return;
     }
     setRows([...getRows(), { subject: sub, role: getRole() }]);
     setSub("");
+    setTeamPick("");
+  };
+
+  // Picking a team fills the subject field with the composed spelling
+  // (editable after — free text stays the fallback for users and for
+  // non-org owners, where the dropdown never renders).
+  const pickTeam = (slug) => {
+    setTeamPick(slug);
+    if (slug) setSub(composeTeamSubject(owner(), slug));
   };
 
   const dirty = () => {
@@ -151,7 +189,7 @@ export default function AccessTab(props) {
                   </table>
                 </div>
               </Show>
-              <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
+              <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] sm:items-end">
                 <label class="min-w-0 text-sm">
                   <span class="muted block text-xs">subject (user:email or team:org/slug)</span>
                   <input
@@ -159,9 +197,23 @@ export default function AccessTab(props) {
                     size={32}
                     placeholder="user:jane@example.com"
                     value={getSub()}
-                    onInput={(e) => setSub(e.currentTarget.value)}
+                    onInput={(e) => { setSub(e.currentTarget.value); setTeamPick(""); }}
                   />
                 </label>
+                <Show when={(getTeamRows() ?? []).length > 0}>
+                  <label class="min-w-0 text-sm">
+                    <span class="muted block text-xs">team (org {owner()}) — fills the subject</span>
+                    <select
+                      class="input min-w-0"
+                      value={getTeamPick()}
+                      aria-label={`teams in ${owner()}`}
+                      onChange={(e) => pickTeam(e.currentTarget.value)}
+                    >
+                      <option value="">pick a team…</option>
+                      <For each={getTeamRows()}>{(t) => <option value={t.slug}>{teamOptionLabel(t)}</option>}</For>
+                    </select>
+                  </label>
+                </Show>
                 <label class="text-sm">
                   <span class="muted block text-xs">role</span>
                   <select class="input" value={getRole()} onChange={(e) => setRole(e.currentTarget.value)}>
