@@ -27,11 +27,14 @@ function block(src, start, end) {
   return src.slice(s, e);
 }
 
-test("user header action row no longer carries the CTA", () => {
-  const row = block(REPOS, "mt-3 flex flex-wrap gap-2", "profile-avatar");
-  assert.ok(!row.includes("New repository"), "CTA left the user header action row");
-  assert.ok(!row.includes("/new?owner="), "no create link hides in the header row");
-  assert.ok(row.includes("Edit profile"), "Edit profile stays (the row keeps its wrapper)");
+test("user header action row no longer carries the CTA (#421: identity carries no actions at all)", () => {
+  const identity = block(REPOS, '<div class="profile-header', "</div>");
+  assert.ok(!identity.includes("New repository"), "CTA left the user header for the toolbar");
+  assert.ok(!identity.includes("/new?owner="), "no create link hides in the header");
+  assert.ok(!identity.includes("Edit profile"), "Edit profile left the identity block for the sidebar (#421)");
+  const side = block(REPOS, 'aria-label="Profile actions"', "</aside>");
+  assert.ok(side.includes("Edit profile"), "Edit profile grouped in the sidebar");
+  assert.ok(!side.includes("New repository"), "New repository never joins the sidebar action group");
 });
 
 test("org title row no longer carries the CTA", () => {
@@ -91,7 +94,7 @@ test("no data-fetch, cache-key, or gating-logic changes", () => {
     "<Show when={canWrite()}>",
     "<Show when={getProfile()?.can_edit && !getEditing()}>",
     "<Show when={isSelf()}>",
-    "<Show when={userSrc() || isSelf()}>",
+    "<Show when={userSrc()}>",
     "<Show when={getEditing() && getProfile()?.can_edit}>",
   ]) {
     assert.ok(REPOS.includes(gate), `gate kept byte-identical: ${gate}`);
