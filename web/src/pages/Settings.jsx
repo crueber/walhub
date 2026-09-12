@@ -10,6 +10,7 @@ import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { useData, reportError, asList, invalidate, tolerateMissing } from "../lib/data.js";
 import { dangerMatches } from "../lib/danger.js";
+import { transferBody } from "../lib/transfer.js";
 import {
   SETTINGS_GROUP,
   DANGER_GROUP,
@@ -924,14 +925,30 @@ export function DangerConfirm(props) {
 }
 
 // DangerZone renders as the sidebar's Danger Zone section content (issue
-// #123 — no longer pinned below every tab). First entry: Delete Repository —
-// admin-only on the server (`DELETE …/api` → 204, 403 otherwise and the
-// 403 text lands in the entry's error line); success invalidates the owners,
-// repo-list, and repo entries (issue #200) and navigates home because the
-// repo page no longer exists.
+// #123 — no longer pinned below every tab). Entries: Transfer Repository
+// (Forgejo #358) and Delete Repository — both admin-only on the server
+// (the 403/409 text lands in the entry's error line); success invalidates
+// the owners, repo-list, and repo entries (issue #200) and navigates
+// because the repo page no longer exists at this address (transfer lands
+// on the new one).
 function DangerZone(props) {
   const navigate = useNavigate();
   const full = () => props.ctx.full;
+  const [getDstOwner, setDstOwner] = createSignal("");
+
+  async function transferRepo() {
+    // No reportError here: the throw lands in DangerConfirm's plain-text
+    // error line (tray + inline would surface the same failure twice).
+    const res = await props.repo.transfer(transferBody({ owner: getDstOwner() }));
+    const owner = full().split("/")[0];
+    invalidate("owners");
+    invalidate(`repos:${owner}`);
+    invalidate(`repos:${res.owner}`);
+    invalidate(`repo:${full()}`);
+    invalidate(`social:${full()}`);
+    invalidate(`activity:${full()}`);
+    navigate(`/${res.owner}/${res.repo}`);
+  }
 
   async function deleteRepo() {
     // No reportError here: the throw lands in DangerConfirm's plain-text
@@ -955,6 +972,31 @@ function DangerZone(props) {
     <section class="card border-red-500/60 p-4" aria-label="Danger Zone">
       <h3 class="mb-1 font-semibold text-red-700 dark:text-red-400">Danger Zone</h3>
       <p class="muted mb-3 text-sm">Irreversible actions. Each requires typing the repository name.</p>
+      <div class="mb-3 rounded border border-red-500/40 p-3">
+        <h4 class="font-medium text-red-700 dark:text-red-400">Transfer Repository</h4>
+        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+          Moves this repository and all of its data to another owner — your
+          username, an organization you belong to, or (for host admins) any
+          namespace. Access bindings move with it: your owner binding is
+          replaced by the new owner's, collaborators and team grants are kept.
+        </p>
+        <label class="mt-2 block text-sm">
+          <span class="muted block text-xs">new owner</span>
+          <input
+            class="input w-72 max-w-full font-mono text-xs"
+            type="text"
+            placeholder="beta"
+            value={getDstOwner()}
+            onInput={(e) => setDstOwner(e.currentTarget.value)}
+            aria-label="New owner"
+          />
+        </label>
+        <DangerConfirm
+          expected={full()}
+          confirmLabel="Transfer this repository"
+          onConfirm={transferRepo}
+        />
+      </div>
       <div class="rounded border border-red-500/40 p-3">
         <h4 class="font-medium text-red-700 dark:text-red-400">Delete Repository</h4>
         <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
