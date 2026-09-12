@@ -28,6 +28,7 @@ const routes = [
   ["GET", "/{o}/{r}/api/mirror/sync", "last sync status (open read, like GET mirror)"],
   ["POST", "/{o}/{r}/api/mirror/sync", "sync now (admin)"],
   ["GET|PUT", "/api/v1/users/{principal}", "profile (read; self or admin to edit)"],
+  ["GET", "/api/v1/users/{principal}/orgs", "orgs of a principal, sorted names, [] when none (read)"],
   ["GET|POST", "/api/v1/orgs", "orgs (read; write to create)"],
   ["GET|PUT|DELETE", "/api/v1/orgs/{org}", "org (read; owner to change; DELETE 204)"],
   ["GET", "/api/v1/orgs/{org}/members", "members (read)"],

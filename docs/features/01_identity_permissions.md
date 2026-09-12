@@ -406,6 +406,7 @@ RouteProvider (Seam 1).
 | `GET /api/v1/users/{principal}/avatar` | any (public read) | generated SVG (`image/svg+xml`, immutable max-age + version ETag, `?v=` busting); 404 when none |
 | `POST /api/v1/users/{principal}/avatar` | self or admin | regenerate (clears opt-out, installs fresh deterministic render) → 200 profile; 404 without a verified email |
 | `DELETE /api/v1/users/{principal}/avatar` | self or admin | remove + opt out of auto-generation → 200 profile; 404 unknown |
+| `GET /api/v1/users/{principal}/orgs` | any (mutable-collab, content ETag) | → sorted `["acme", …]` over `MemberOrgsFor` (any roster role, #370 alias matching); `[]` when none, 200 for unknown principals (never 404); GET-only |
 | `GET /api/v1/orgs` | any (mutable-collab, no version token) | → sorted `["acme", …]` |
 | `POST /api/v1/orgs` | write | `{org, display_name}` → 201 `{org}`; 409 taken; creator becomes owner |
 | `GET/PUT/DELETE /api/v1/orgs/{org}` | read / owner / owner | profile CRUD (PUT body = `{display_name, description, location, timezone, bio_markdown}`, full-document replace, owner-profile limits mirrored; description unbudgeted); 409 on delete with repos; DELETE also removes the avatar object |
@@ -781,3 +782,16 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   shapes pinned. Rationale: law 11 (DOM thin, logic headless-tested) forbids throwaway JSX-runtime
   hacks — the component renders through the shipped path and the rig observes that path's real
   contract.
+- **Membership rail is a dedicated endpoint, not a profile field (issue #423, 2026-09-12)** —
+  `GET /api/v1/users/{principal}/orgs` serves the sorted names from `Service.MemberOrgsFor`
+  (any roster role, #370 alias matching) instead of a `member_orgs` field on the owner-profile
+  doc. Rationale (law 8): the profile route lives in core `internal/api`, which must never import
+  the identity package — a field would need a new seam and would hang a LIST-plus-probes fan-out
+  off every profile GET; the endpoint keeps that cost on the explicit human-rate rail (profile
+  page loads) and leaves `profileETag` untouched (no #382 entanglement — a bio edit rides a
+  separate route and can never stale the rail). Visibility: no filtering — every containing roster
+  is served to any read-authorized caller (anonymous needs `anonymous_read`, the profile/members
+  gate); org visibility governs repos, not roster facts. Client: the user-profile Organizations
+  section links each org to `/:org` with an explicit "No organizations" empty state (never
+  absent); org profiles omit the section (member principals are email spellings, not routable
+  owner slugs per #370 — the roster is managed at organization settings).

@@ -70,6 +70,7 @@ func TestCacheClassContract(t *testing.T) {
 		wantETag bool
 	}{
 		{"profile", "/api/v1/users/{principal}", adminH, "/api/v1/users/jane%40example.com", ccMutable, true},
+		{"user orgs", "/api/v1/users/{principal}/orgs", adminH, "/api/v1/users/bob%40example.com/orgs", ccMutable, true},
 		{"orgs", "/api/v1/orgs", adminH, "/api/v1/orgs", ccMutable, false},
 		{"org", "/api/v1/orgs/{org}", adminH, "/api/v1/orgs/acme", ccMutable, true},
 		{"members", "/api/v1/orgs/{org}/members", adminH, "/api/v1/orgs/acme/members", ccMutable, true},

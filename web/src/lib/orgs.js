@@ -80,6 +80,27 @@ export function mergeOrgActivity(existing, incoming) {
 }
 
 /**
+ * normalizeMemberOrgs(value) → sorted unique org-name strings (Forgejo
+ * #423). Coerces the `GET /api/v1/users/{principal}/orgs` payload (bare
+ * array; the server never serves null, but tolerates legacy/odd shapes)
+ * into the exact shape the profile Organizations section renders:
+ * non-strings and blanks dropped, deduped, sorted. Headless-testable.
+ */
+export function normalizeMemberOrgs(value) {
+  const list = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const out = [];
+  for (const entry of list) {
+    const name = typeof entry === "string" ? entry.trim() : "";
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  out.sort();
+  return out;
+}
+
+/**
  * isValidOwnerPart(name) → whether name is usable as a repo owner segment.
  * Mirrors git.validPart for the owner half of ParseRepoId (ASCII
  * [A-Za-z0-9._-], 1–100 chars, no leading dot, not ".."): Forgejo #370 —
