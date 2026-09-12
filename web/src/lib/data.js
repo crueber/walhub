@@ -364,8 +364,12 @@ let invalidateScheduled = false;
 
 /**
  * Fresh window (ms) for one SSE-invalidated key: the 08 §6 TTL table by
- * key prefix, DEFAULT_TTL for unlisted prefixes (settings:/mirror:/ops:/
- * overview:/org:… all revalidate at 5 s in their useData seeds).
+ * key prefix, DEFAULT_TTL for unlisted prefixes. Unlisted-but-seeded
+ * prefixes (settings:/access:/statuses:/latest:/mirror:/org:…) all seed
+ * at 5 s — except collaborators:, which seeds at TTL.perms (30 s), so the
+ * 5 s fallback is deliberately fail-fresh there (access changes refetch
+ * sooner, never later). overview:/ops: have no useData seeds (uncached
+ * keys are silent no-ops in the flush below).
  */
 function ttlForKey(key) {
   const v = TTL[key.split(":")[0]];
