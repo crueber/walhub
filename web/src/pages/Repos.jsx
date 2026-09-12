@@ -288,20 +288,18 @@ export default function Repos() {
   const canManage = () => isOrg() && !!getProfile()?.can_edit;
   return (
     <div class="repos-page">
-      {/* Forgejo #403 (#395 follow-up): the orphan New-repository CTA row
-          above the header is gone — both profile actions (New repository
-          when the viewer may write, Edit profile when the server says
-          can_edit) group in one action row under the bio, GitHub-style,
-          acting on the page the header names. The header itself closes
-          with a bottom divider (pb-6 border-b) so the Repositories
-          section starts on a clean rule; the h1 anchors at text-2xl
-          with the handle tight beneath it (mt-0.5). Mobile (390px,
-          #273-#278 conventions): flex-col-reverse stacks the avatar
-          block on top and the identity below, both full-width, buttons
-          wrapping. Orgs are untouched below (title row + org doc
-          fields, #359). All gating unchanged (New: canWrite;
-          Edit: server can_edit; Regenerate/Remove: self-only; #376
-          cache invalidation) — layout only. */}
+      {/* Forgejo #413 (#403 follow-up): the New-repository CTA left both
+          header spots — the grouped action row under the bio (user) and
+          the org title row (org) — for a Repositories toolbar (heading
+          row, CTA right-anchored, flex-wrap at 390px per #273-#278), so
+          the header carries only identity/profile actions and the create
+          CTA sits with the list it populates. The user action row keeps
+          its wrapper with just "Edit profile" (stable wrap rhythm);
+          the org title row drops its justify-between wrapper (single
+          child); the header divider (pb-6 border-b, #403) stays. All
+          gating unchanged (New: canWrite; Edit: server can_edit;
+          Regenerate/Remove: self-only; #376 cache invalidation) —
+          layout only. */}
       <Show when={!isOrg()}>
         <div class="profile-header flex flex-col-reverse gap-4 border-b border-zinc-200 pb-6 sm:flex-row sm:items-start sm:justify-between dark:border-zinc-700">
           <div class="min-w-0 flex-1">
@@ -323,12 +321,10 @@ export default function Repos() {
                 innerHTML={renderBody(profile().bio_markdown)}
               />
             </Show>
+            {/* Forgejo #413: the New-repository CTA lives in the
+                Repositories toolbar below — this row carries only the
+                profile action. */}
             <div class="mt-3 flex flex-wrap gap-2">
-              <Show when={canWrite()}>
-                <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
-                  New repository
-                </A>
-              </Show>
               <Show when={getProfile()?.can_edit && !getEditing()}>
                 <button class="btn px-3 py-1" type="button" onClick={() => setEditing(true)}>
                   Edit profile
@@ -386,13 +382,13 @@ export default function Repos() {
         </Show>
       </Show>
       {/* Forgejo #359: org landing — the org header (avatar + badge +
-          org display name + New-repository button) and the org doc
-          fields (description/location/timezone/bio) render from the
-          org doc; the user-profile block above never renders for
-          orgs. */}
+          org display name) and the org doc fields (description/location/
+          timezone/bio) render from the org doc; the user-profile block
+          above never renders for orgs. Forgejo #413: the New-repository
+          CTA left the title row for the shared Repositories toolbar
+          below, so the row drops its justify-between wrapper. */}
       <Show when={isOrg()}>
-      <div class="mb-1 flex items-center justify-between">
-        <h2 class="flex items-center gap-2 text-xl font-semibold">
+      <h2 class="mb-1 flex items-center gap-2 text-xl font-semibold">
           {/* Forgejo #359: the org avatar renders from the org doc's
               pointer (no byte probing; hides itself on 404). */}
           <OrgAvatar org={owner()} doc={getOrg} size={36} />
@@ -401,12 +397,6 @@ export default function Repos() {
             org
           </span>
         </h2>
-        <Show when={canWrite()}>
-          <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
-            New repository
-          </A>
-        </Show>
-      </div>
       <p class="muted text-sm">@{owner()}</p>
       <Show when={getOrg()?.description}>
         <p class="mt-1 text-sm">{getOrg().description}</p>
@@ -433,7 +423,20 @@ export default function Repos() {
         </p>
       </Show>
       </Show>
-      <h3 class="mb-2 mt-6 text-base font-semibold">Repositories</h3>
+      {/* Forgejo #413: the Repositories toolbar — the section heading
+          with the New-repository CTA right-anchored (the same flex
+          items-center justify-between title-row shape the org header
+          used; flex-wrap gap-2 per #273-#278 so 390px wraps without
+          overflow). The single surface owning repo creation for both
+          user and org variants; gate and href unchanged. */}
+      <div class="repos-toolbar mb-2 mt-6 flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-base font-semibold">Repositories</h3>
+        <Show when={canWrite()}>
+          <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
+            New repository
+          </A>
+        </Show>
+      </div>
       <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
         {(doc) => {
           const rows = orderByActivity(doc().repos);

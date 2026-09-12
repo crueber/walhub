@@ -1,11 +1,13 @@
 // web/test/unit/profile-header-403.test.js — Forgejo #403: the owner
 // profile header reads like GitHub's — grouped action row, no dead space.
-// Layout only: New repository joins Edit profile in one grouped action row
-// under the bio (the orphan CTA row above the header is deleted), the h1
-// anchors at text-2xl with the handle tight beneath it, and the header
-// closes with a bottom divider before Repositories. Every Show gate stays
-// byte-identical (canWrite, can_edit, isSelf, userSrc); no fetch, cache
-// key, or server interaction changes. The org branch (#359) is untouched.
+// (#413 moved the New-repository CTA out of that grouped row into the
+// Repositories toolbar; the pins below assert the surviving #403 shape:
+// h1 anchor, tight handle, bottom divider, composition — plus the absence
+// of the CTA from the header.)
+// Layout only: Edit profile keeps its can_edit gate under the bio, every
+// other Show gate stays byte-identical (canWrite, can_edit, isSelf,
+// userSrc); no fetch, cache key, or server interaction changes. The org
+// branch (#359) keeps its header minus the title-row CTA (likewise #413).
 // No DOM: JSX pinned as source text, mirroring profile-header.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -28,7 +30,7 @@ function block(src, start, end) {
   return src.slice(s, e);
 }
 
-test("no full-width row above the header; actions group under the bio", () => {
+test("no full-width row above the header; Edit profile alone under the bio (#413)", () => {
   const userShow = block(REPOS, "<Show when={!isOrg()}>", "<h3");
   const grid = userShow.indexOf("profile-header");
   assert.ok(grid !== -1, "profile header grid exists");
@@ -36,8 +38,8 @@ test("no full-width row above the header; actions group under the bio", () => {
   assert.ok(!userShow.slice(0, grid).includes("justify-end"), "no orphan right-aligned row above the header");
   assert.ok(!userShow.slice(0, grid).includes("mb-3 flex"), "no orphan action row above the header");
   const row = block(REPOS, "mt-3 flex flex-wrap gap-2", "profile-avatar");
-  assert.ok(row.includes("New repository"), "New repository renders in the grouped row");
-  assert.ok(row.includes("Edit profile"), "Edit profile renders in the grouped row");
+  assert.ok(!row.includes("New repository"), "New repository left the grouped row for the toolbar (#413)");
+  assert.ok(row.includes("Edit profile"), "Edit profile stays in the row under the bio");
 });
 
 test("h1 anchors at text-2xl; handle sits tight beneath it", () => {
@@ -57,8 +59,10 @@ test("header closes with a bottom divider before Repositories", () => {
   assert.ok(tag.includes("border-b"), "header closes with a bottom rule");
   assert.ok(tag.includes("border-zinc-200"), "light divider");
   assert.ok(tag.includes("dark:border-zinc-700"), "dark divider");
-  const h3 = block(REPOS, "<h3", "Repositories</h3>");
-  assert.ok(h3.includes("mt-6"), "Repositories keeps its spacing below the rule");
+  const toolbar = block(REPOS, "repos-toolbar", "</div>");
+  assert.ok(toolbar.includes("mt-6"), "Repositories toolbar keeps its spacing below the rule");
+  assert.ok(toolbar.includes("<h3"), "heading lives in the toolbar row");
+  assert.ok(toolbar.includes("text-base font-semibold"), "heading keeps its #403 type size");
 });
 
 test("composition preserved: identity left, avatar right, stacked at 390px", () => {
@@ -105,16 +109,16 @@ test("zero fetch/cache/server changes", () => {
   }
   assert.ok(REPOS.includes('"me"'), "me fetch untouched");
   const ctas = [...REPOS.matchAll(/href={`\/new\?owner=\${encodeURIComponent\(owner\(\)\)}`}/g)];
-  assert.equal(ctas.length, 2, "exactly two New-repository links: grouped user row + org title row");
+  assert.equal(ctas.length, 1, "exactly one New-repository link: the shared Repositories toolbar");
   assert.ok(REPOS.includes("repos.owners.detailed(owner()"), "listing fetch untouched");
   assert.ok(REPOS.includes("repos.owners.updateProfile("), "profile save untouched");
 });
 
-test("org branch out of scope and untouched (#359)", () => {
+test("org branch keeps its header minus the title-row CTA (#359, #413)", () => {
   const org = block(REPOS, "<Show when={isOrg()}>", "<h3");
   assert.ok(org.includes("<OrgAvatar"), "org avatar still in the title row");
   assert.ok(org.includes("size={36}"), "org avatar keeps its own size");
-  assert.ok(org.includes("New repository"), "org keeps its own CTA in the title row");
+  assert.ok(!org.includes("New repository"), "org title row no longer carries the CTA (shared toolbar owns it)");
   assert.ok(org.includes("Manage organization"), "Manage affordance kept");
   assert.ok(!org.includes("profile-header"), "the composed user grid never renders for orgs");
   assert.ok(!org.includes("border-b"), "the user header divider never renders for orgs");
