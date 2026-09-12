@@ -248,7 +248,11 @@ truth**; frames invalidate cache keys, they do not carry full state.
 
 **Invalidation storm control:** a burst of frames (CI posting 30 check runs) MUST coalesce — cache keys are
 collected into a set and invalidated once per tick, and the promise-cache already single-flights per key
-(one in-flight fetch per key; joiners share it — the client-side analog of 13 §3). Timeline appends bypass
+(one in-flight fetch per key; joiners share it — the client-side analog of 13 §3). The tick alone does
+not bound live traffic (Forgejo #396): frames arriving in separate tasks each flushed a full refetch
+round, so the flush additionally expands prefixes into a set first (one generation per entry per
+flush) and TTL-gates each key (fresh entries skip — sustained frame rates decay to TTL cadence;
+immutable windows never SSE-refetch). Mutation invalidations always refetch (#41). Timeline appends bypass
 refetch entirely (the frame carries `num`+`seq`; the event body arrives via the normal events window fetch).
 
 **Abort patterns:** every stream is owned by exactly one `mountStream` slot (12 §2.5): `run()` aborts the
@@ -442,6 +446,14 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   (`~c<index-version>` suffix, 07 §9.1 — a close/reopen with no ref move still busts SWR).
   Headless cover in the extended `repo-tabs.test.js` (badge numerators, hide-at-0) and the
   updated `collab-lib.test.js` / `issue-invalidation.test.js` frame-table pins.
+- **TTL-aware SSE invalidation (Forgejo #396).** The per-tick coalescer could not bound live
+  traffic — frames in separate tasks each flushed a full TTL-bypassing refetch round per cached
+  key (~5 GET/sec bursts from one tab). The `scheduleInvalidate` flush (SSE path only) now
+  dedupes prefix expansion per flush and skips already-fresh entries per the §6 TTL table, so
+  sustained frame rates decay to TTL cadence while mutation `invalidate()` stays eager (#41).
+  Immutable `events:` windows never SSE-refetch (timelines append frames directly). Headless
+  cover: `web/test/unit/fetch-rate-guard.test.js` (burst budgets, post-TTL liveness,
+  mutation-eager pin).
 
 ## Explicitly out of scope
 

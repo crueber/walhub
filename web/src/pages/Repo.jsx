@@ -15,7 +15,7 @@ import { mountStream } from "../lib/sse.js";
 import { shortRef, pillHead, pillLabel } from "../lib/ref-pill.js";
 export { shortRef };
 
-export const BUSY_MS = 1500; // poll cadence while something runs
+export const BUSY_MS = 5000; // poll cadence while something runs (Forgejo #396: 1.5 s hammered …/tasks — the hottest endpoint — while maintenance/follow tasks ran; progress percentages stay live at 5 s)
 export const IDLE_MS = 15000; // poll cadence when idle
 export const LINGER_MS = 20000; // finished tasks stay listed this long
 
