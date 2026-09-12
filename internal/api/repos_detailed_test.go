@@ -3,8 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 
+	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/sizecatalog"
 	"git.packden.us/crueber/walhub/internal/store"
 	"git.packden.us/crueber/walhub/internal/store/proto"
@@ -239,5 +242,89 @@ func TestOwnerReposDetailedMirrorFlag(t *testing.T) {
 	}
 	if rows["walgit"].MirrorUpstream != "" {
 		t.Fatalf("corrupt sidecar carries no upstream: %+v", rows["walgit"])
+	}
+}
+
+// TestDetailedMutableClassAndETagEconomics pins the Forgejo #384 fix
+// (the #381 pattern on the detailed route): the listing serves the
+// mutable-collab no-cache class (never a stale-serve window over the
+// visibility/mirror flags), while the content-hashed ETag keeps
+// unchanged listings revalidating to 304 with zero body. Sequence:
+// 200 → 304 → visibility flip → 200 → 304 → mirror flip → 200 → 304.
+func TestDetailedMutableClassAndETagEconomics(t *testing.T) {
+	f := newFixture(t)
+	putTestCatalog(t, f)
+	vis := "public"
+	f.env.RepoVisibility = func(_ context.Context, _, _ string) (string, bool) {
+		return vis, true
+	}
+	admin := &auth.Principal{Name: "jane", Write: true, Admin: true}
+	const path = "/api/v1/owners/demo/repos/detailed"
+
+	w := f.req("GET", path)
+	if w.Code != http.StatusOK {
+		t.Fatalf("detailed = %d (%s)", w.Code, w.Body.String())
+	}
+	// The class forbids stale-serve: exact no-cache value, and no
+	// stale-while-revalidate directive anywhere in it.
+	if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("detailed cache = %q, want %q", cc, ccMutable)
+	}
+	if cc := w.Header().Get("Cache-Control"); strings.Contains(cc, "stale-while-revalidate") {
+		t.Fatalf("detailed cache must not permit stale-serve: %q", cc)
+	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("detailed must carry an ETag (the mutable-flag economics depend on it)")
+	}
+	// Unchanged listing revalidates to 304 (ETag/304 economics kept —
+	// no bandwidth regression from leaving SWR).
+	if w304 := f.do("GET", path, nil, map[string]string{"If-None-Match": etag}, admin); w304.Code != http.StatusNotModified {
+		t.Fatalf("unchanged detailed = %d, want 304", w304.Code)
+	}
+	// A visibility flip moves no ref but must NOT 304 against the old
+	// etag — and the new etag 304s in turn.
+	vis = "private"
+	wFlip := f.do("GET", path, nil, map[string]string{"If-None-Match": etag}, admin)
+	if wFlip.Code != http.StatusOK {
+		t.Fatalf("flipped detailed with stale etag = %d, want 200", wFlip.Code)
+	}
+	etagV := wFlip.Header().Get("ETag")
+	if etagV == "" || etagV == etag {
+		t.Fatalf("flipped etag = %q, want a new ETag distinct from %q", etagV, etag)
+	}
+	if w304 := f.do("GET", path, nil, map[string]string{"If-None-Match": etagV}, admin); w304.Code != http.StatusNotModified {
+		t.Fatalf("reflipped detailed = %d, want 304", w304.Code)
+	}
+	if cc := wFlip.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("flipped detailed cache = %q, want %q", cc, ccMutable)
+	}
+	// A mirror flip moves no ref either: adding the sidecar must bust
+	// the revalidation the same way, and the new etag 304s in turn.
+	if _, err := f.env.Store.Put(context.Background(), store.MirrorKey("demo", "hello"),
+		store.PutBody{Bytes: []byte(`{"version":1,"upstream_url":"https://example.com/up.git","schedule":"daily"}`)},
+		store.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	wMirror := f.do("GET", path, nil, map[string]string{"If-None-Match": etagV}, admin)
+	if wMirror.Code != http.StatusOK {
+		t.Fatalf("mirrored detailed with stale etag = %d, want 200", wMirror.Code)
+	}
+	etagM := wMirror.Header().Get("ETag")
+	if etagM == "" || etagM == etagV {
+		t.Fatalf("mirrored etag = %q, want a new ETag distinct from %q", etagM, etagV)
+	}
+	rows := decodeDetailed(t, wMirror.Body.Bytes())
+	found := false
+	for _, r := range rows {
+		if r.Name == "hello" && r.Mirror && r.MirrorUpstream == "https://example.com/up.git" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("mirror flag missing after sidecar add: %+v", rows)
+	}
+	if w304 := f.do("GET", path, nil, map[string]string{"If-None-Match": etagM}, admin); w304.Code != http.StatusNotModified {
+		t.Fatalf("remirrored detailed = %d, want 304", w304.Code)
 	}
 }

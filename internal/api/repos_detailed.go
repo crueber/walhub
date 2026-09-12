@@ -20,6 +20,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"net/http"
 	"strconv"
 	"strings"
@@ -63,7 +64,11 @@ type RepoSizeRow struct {
 // asc), min_bytes=/max_bytes= (uint64; unknown rows never match a bound).
 // sort=activity orders by last_commit_time (unknowns always last, ties on
 // (owner,name)); the explore page uses sort=activity&order=desc.
-// Cache class: SWR (ref-dependent listing, same as ownerRepos).
+// Cache class: mutable-collab (Forgejo #384, the #381 pattern): the rows
+// carry user-mutable projections (visibility, mirror + mirror_upstream —
+// flipped from sidecars/access.json with no ref movement), so every GET
+// revalidates instead of serving a stale-while-revalidate window. The
+// content-hashed ETag keeps the revalidation cheap (304 when unchanged).
 func (h *handlers) ownerReposDetailed(w http.ResponseWriter, r *http.Request) {
 	if !h.env.gate(w, r, AuthRead) {
 		return
@@ -139,9 +144,30 @@ func (h *handlers) ownerReposDetailed(w http.ResponseWriter, r *http.Request) {
 	// LRU-backed conditional access.json GET per row (usually a version
 	// hit, no body — the same trip the read gate already paid).
 	fillVisibilityFlags(r.Context(), h.env, owner, out)
-	writeCached(w, r, ccSWR, "", http.StatusOK, struct {
+	// Forgejo #384: ccMutable, not ccSWR (the #381 pattern). The ~suffix
+	// discipline of the summary has no single head sha to hang suffixes
+	// on here (N rows, N tips), so the ETag is a content hash over the
+	// rendered rows instead — covering the same trap class: a
+	// visibility/mirror-only flip keeps every catalog field identical,
+	// so without covering those fields a revalidating client would 304
+	// and keep showing the stale badges.
+	writeCached(w, r, ccMutable, detailedETag(out), http.StatusOK, struct {
 		Repos []RepoSizeRow `json:"repos"`
 	}{Repos: out})
+}
+
+// detailedETag is the content hash covering the detailed rows (Forgejo
+// #384): FNV-1a/32 hex of the rendered rows' JSON, prefixed "d". It covers
+// every mutable projection on the rows — visibility, mirror,
+// mirror_upstream — plus the catalog-driven fields (size_bytes,
+// object_count, head_seq, updated_at, last_commit_sha/time, last_push_at)
+// and the row order itself, so any badge/flag/measure flip busts the
+// revalidation while an unchanged listing still 304s with zero body.
+func detailedETag(out []RepoSizeRow) string {
+	h := fnv.New32a()
+	b, _ := json.Marshal(out)
+	_, _ = h.Write(b)
+	return "d" + strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 
 func parseBytesParam(s string) (*uint64, error) {
