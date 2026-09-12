@@ -288,36 +288,123 @@ export default function Repos() {
   const canManage = () => isOrg() && !!getProfile()?.can_edit;
   return (
     <div class="repos-page">
-      {/* Forgejo #390: the user avatar at profile scale (h-24 w-24),
-          right-aligned in its own row above the title + New-repository
-          row — its own block, so it never collides with the title,
-          the #345 visibility badges, the description, or the button at
-          desktop or 390px widths. Orgs keep the org avatar in the
-          title row below, never both. */}
-      <Show when={!isOrg() && userSrc()}>
-        <div class="mb-3 flex justify-end">
-          <img
-            src={userSrc()}
-            alt=""
-            width={96}
-            height={96}
-            class="h-24 w-24 rounded-full ring-1 ring-zinc-300 dark:ring-zinc-600"
-          />
+      {/* Forgejo #395 (#390 follow-up): the user profile header is one
+          composed identity block — a two-column flex row with the
+          identity content left (username h1, handle, location ·
+          timezone, bio, Edit profile) and the avatar right (the h-24
+          circle with its Regenerate/Remove actions grouped beneath
+          it), instead of #390's orphan justify-end avatar row above a
+          header row that knew nothing about it. The New-repository CTA
+          stays prominent in its own top-right action row above the
+          grid (implementer's call per the issue — above, not beside,
+          so it never collides with the avatar at any width). Mobile
+          (390px, #273-#278 conventions): the grid stacks via
+          flex-col-reverse — avatar block on top, identity below, both
+          full-width, buttons wrapping — so there is no dead
+          half-width band. Orgs are untouched below (title row + org
+          doc fields, #359). All gating unchanged (Edit profile:
+          server can_edit; Regenerate/Remove: self-only; #376 cache
+          invalidation) — layout only. */}
+      <Show when={!isOrg()}>
+        <Show when={canWrite()}>
+          <div class="mb-3 flex justify-end">
+            <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
+              New repository
+            </A>
+          </div>
+        </Show>
+        <div class="profile-header flex flex-col-reverse gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div class="min-w-0 flex-1">
+            <h1 class="text-xl font-semibold">{displayName()}</h1>
+            {/* The org block below already renders @{owner}; the
+                user-profile handle renders only for non-org owners
+                (no double handle). */}
+            <Show when={profile().display_name}>
+              <p class="muted text-sm">@{owner()}</p>
+            </Show>
+            <Show when={profile().location || profile().timezone}>
+              <p class="muted mt-1 text-sm">
+                {[profile().location, profile().timezone].filter(Boolean).join(" · ")}
+              </p>
+            </Show>
+            <Show when={profile().bio_markdown}>
+              <div
+                class="markdown-body mt-3"
+                innerHTML={renderBody(profile().bio_markdown)}
+              />
+            </Show>
+            <Show when={getProfile()?.can_edit && !getEditing()}>
+              <p class="mt-3">
+                <button class="btn px-3 py-1" type="button" onClick={() => setEditing(true)}>
+                  Edit profile
+                </button>
+              </p>
+            </Show>
+          </div>
+          {/* Forgejo #376: avatar self-service for the owner's own page.
+              The column renders when there is an avatar to show OR the
+              viewer can act (self without an avatar still gets
+              Regenerate to opt back in); the actions sit with the
+              avatar they act on. Regenerate installs a fresh
+              deterministic render (and opts back in); remove deletes
+              the avatar and opts out of auto-generation until the
+              next regenerate. Non-org only — org avatars live in org
+              settings. */}
+          <Show when={userSrc() || isSelf()}>
+            <div class="profile-avatar flex shrink-0 flex-row flex-wrap items-center gap-3 sm:flex-col sm:items-center">
+              <Show when={userSrc()}>
+                <img
+                  src={userSrc()}
+                  alt=""
+                  width={96}
+                  height={96}
+                  class="h-24 w-24 rounded-full ring-1 ring-zinc-300 dark:ring-zinc-600"
+                />
+              </Show>
+              <Show when={isSelf()}>
+                <div class="flex flex-row flex-wrap gap-2 text-sm sm:flex-col sm:items-center">
+                  <button class="btn px-3 py-1" type="button" onClick={regenerateAvatar}>
+                    Regenerate avatar
+                  </button>
+                  <Show when={userSrc()}>
+                    <button class="btn px-3 py-1" type="button" onClick={removeAvatar}>
+                      Remove avatar
+                    </button>
+                  </Show>
+                  <Show when={getAvatarNote()}>
+                    <span class="muted">{getAvatarNote()}</span>
+                  </Show>
+                </div>
+              </Show>
+            </div>
+          </Show>
         </div>
+        <Show when={getEditing() && getProfile()?.can_edit}>
+          <ProfileForm
+            owner={owner()}
+            doc={getProfile()}
+            onDone={(saved) => {
+              setEditing(false);
+              if (saved) invalidate(`profile:${owner()}`);
+            }}
+          />
+        </Show>
       </Show>
+      {/* Forgejo #359: org landing — the org header (avatar + badge +
+          org display name + New-repository button) and the org doc
+          fields (description/location/timezone/bio) render from the
+          org doc; the user-profile block above never renders for
+          orgs. */}
+      <Show when={isOrg()}>
       <div class="mb-1 flex items-center justify-between">
         <h2 class="flex items-center gap-2 text-xl font-semibold">
           {/* Forgejo #359: the org avatar renders from the org doc's
               pointer (no byte probing; hides itself on 404). */}
-          <Show when={isOrg()}>
-            <OrgAvatar org={owner()} doc={getOrg} size={36} />
-          </Show>
-          {isOrg() ? orgName() : displayName()}
-          <Show when={isOrg()}>
-            <span class="pill org-badge ml-2 align-middle text-xs font-normal" role="img" title="organization" aria-label="organization">
-              org
-            </span>
-          </Show>
+          <OrgAvatar org={owner()} doc={getOrg} size={36} />
+          {orgName()}
+          <span class="pill org-badge ml-2 align-middle text-xs font-normal" role="img" title="organization" aria-label="organization">
+            org
+          </span>
         </h2>
         <Show when={canWrite()}>
           <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
@@ -325,21 +412,19 @@ export default function Repos() {
           </A>
         </Show>
       </div>
-      <Show when={isOrg()}>
-        <p class="muted text-sm">@{owner()}</p>
-      </Show>
-      <Show when={isOrg() && getOrg()?.description}>
+      <p class="muted text-sm">@{owner()}</p>
+      <Show when={getOrg()?.description}>
         <p class="mt-1 text-sm">{getOrg().description}</p>
       </Show>
       {/* Forgejo #359: the org profile fields (location/timezone/bio)
-          render from the org doc — the owner-profile block below reads
+          render from the org doc — the owner-profile block above reads
           the separate owner-slug profile, not the org. */}
-      <Show when={isOrg() && (getOrg()?.location || getOrg()?.timezone)}>
+      <Show when={getOrg()?.location || getOrg()?.timezone}>
         <p class="muted mt-1 text-sm">
           {[getOrg()?.location, getOrg()?.timezone].filter(Boolean).join(" · ")}
         </p>
       </Show>
-      <Show when={isOrg() && getOrg()?.bio_markdown}>
+      <Show when={getOrg()?.bio_markdown}>
         <div
           class="markdown-body mt-3"
           innerHTML={renderBody(getOrg().bio_markdown)}
@@ -352,58 +437,6 @@ export default function Repos() {
           </A>
         </p>
       </Show>
-      {/* The org block above already renders @{owner}; the user-profile
-          handle renders only for non-org owners (no double handle). */}
-      <Show when={profile().display_name && !isOrg()}>
-        <p class="muted text-sm">@{owner()}</p>
-      </Show>
-      <Show when={profile().location || profile().timezone}>
-        <p class="muted mt-1 text-sm">
-          {[profile().location, profile().timezone].filter(Boolean).join(" · ")}
-        </p>
-      </Show>
-      <Show when={profile().bio_markdown}>
-        <div
-          class="markdown-body mt-3"
-          innerHTML={renderBody(profile().bio_markdown)}
-        />
-      </Show>
-      <Show when={getProfile()?.can_edit && !getEditing()}>
-        <p class="mt-3">
-          <button class="btn px-3 py-1" type="button" onClick={() => setEditing(true)}>
-            Edit profile
-          </button>
-        </p>
-      </Show>
-      <Show when={getEditing() && getProfile()?.can_edit}>
-        <ProfileForm
-          owner={owner()}
-          doc={getProfile()}
-          onDone={(saved) => {
-            setEditing(false);
-            if (saved) invalidate(`profile:${owner()}`);
-          }}
-        />
-      </Show>
-      {/* Forgejo #376: avatar self-service for the owner's own page
-          (non-org only — org avatars live in org settings). Regenerate
-          installs a fresh deterministic render (and opts back in);
-          remove deletes the avatar and opts out of auto-generation
-          until the next regenerate. */}
-      <Show when={!isOrg() && isSelf()}>
-        <p class="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          <button class="btn px-3 py-1" type="button" onClick={regenerateAvatar}>
-            Regenerate avatar
-          </button>
-          <Show when={userSrc()}>
-            <button class="btn px-3 py-1" type="button" onClick={removeAvatar}>
-              Remove avatar
-            </button>
-          </Show>
-          <Show when={getAvatarNote()}>
-            <span class="muted">{getAvatarNote()}</span>
-          </Show>
-        </p>
       </Show>
       <h3 class="mb-2 mt-6 text-base font-semibold">Repositories</h3>
       <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>

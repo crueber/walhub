@@ -271,14 +271,18 @@ test("IdentityMenu #390: initials fallback keeps the same circle shape", () => {
   assert.ok(fb.includes("ring-1"), "fallback shares the ring treatment");
 });
 
-test("Repos #390: profile page shows a large avatar above the New-repository row", () => {
+test("Repos #395 (#390 follow-up): profile header is one composed block, not an orphan avatar row", () => {
   const REPOS = srcOf("../../src/pages/Repos.jsx");
   assert.ok(REPOS.includes("h-24 w-24"), "avatar at 96px (>= 72px)");
-  assert.ok(REPOS.includes("justify-end"), "avatar floated right");
+  assert.ok(REPOS.includes("profile-header"), "identity + avatar share one composed header block");
+  // The orphan is gone: no standalone justify-end avatar row above the
+  // title row — the only justify-end row left is the New-repository CTA.
+  const orphan = REPOS.indexOf("mb-3 flex justify-end");
+  assert.ok(orphan !== -1, "CTA action row exists");
+  assert.ok(REPOS.slice(orphan, orphan + 400).includes("New repository"), "the justify-end row is the CTA, not the avatar");
   const large = REPOS.indexOf("h-24 w-24");
-  const headerRow = REPOS.indexOf("justify-between");
-  const newBtn = REPOS.indexOf("New repository");
-  assert.ok(large < headerRow && headerRow < newBtn, "large avatar renders above the title + New-repository row");
+  const grid = REPOS.indexOf("profile-header");
+  assert.ok(grid < large, "the large avatar renders inside the composed header grid");
   assert.ok(REPOS.includes("ring-zinc-300"), "ring treatment consistent with the navbar");
   assert.ok(!REPOS.includes("width={36}"), "the small inline user avatar is gone (org avatar keeps its own size)");
 });
