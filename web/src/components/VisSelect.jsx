@@ -13,7 +13,7 @@
 //   never with a raw numeric index, never with `o.label` as the item.
 // - `each` is always the populated array (identity-stable per #410),
 //   so the mapper never meets an undefined item.
-// - The Word "jsx runtime" 404 was a harness artifact of bypassing the
+// - The "jsx runtime" 404 was a harness artifact of bypassing the
 //   vite build (node has no JSX transform); production ships the
 //   runtime INSIDE the bundled `/_ui/assets/*.js` — no separate
 //   runtime file exists to 404.
