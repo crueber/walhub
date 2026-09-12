@@ -162,12 +162,20 @@
   .empty-state-compact .empty-title { @apply text-sm; }
   .empty-state-compact .empty-hint { @apply text-xs; }
 
-  /* Floating popovers (issues #37, #115): solid panels — the shared .card
-     background is translucent in dark mode and page text would bleed through.
-     Every absolutely-positioned .card menu carries one of these classes
-     (.milestone-drop joined in issue #278: it is the same shape as
-     .label-drop and was missing the opaque treatment). */
-  .clone-body, .ref-drop, .tasks-drop, .notif-drop, .reaction-drop, .label-drop, .milestone-drop, .close-drop, .tag-drop {
+  /* Floating popovers (issues #37, #115; structural default since Forgejo
+     #405): solid panels — the shared .card background is translucent in dark
+     mode (dark:bg-zinc-900/70) and page text would bleed through any floating
+     panel. The opaque background is the STRUCTURAL default for every floating
+     .card: any absolute/fixed-positioned .card renders bg-white /
+     dark:bg-zinc-900 via this same-specificity-wins rule ordered after .card
+     (higher specificity .card.absolute/.card.fixed, so it wins regardless of
+     order). No per-menu hook class needed — IdentityMenu (#405) shipped
+     translucent precisely because the old hand-maintained enumeration
+     (.clone-body, .ref-drop, …) never listed it. New dropdowns are covered
+     automatically; the enumerated hook classes stay in the markup as harmless
+     markers (and keep their viewport-bound rule below) but carry no styling
+     role for opacity. */
+  .card.absolute, .card.fixed {
     @apply bg-white dark:bg-zinc-900;
   }
 
