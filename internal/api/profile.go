@@ -58,7 +58,7 @@ type OwnerProfile struct {
 // OwnerEditor decides org-role profile edits (docs/features/01 P6). Core
 // grants host admins and name-matched principals itself; the wired editor
 // adds org-owner-role grants without core importing the identity package
-// (law 8 — same shape as OrgGate/AccessBoot). Nil → core default only.
+// (law 8 — same shape as CreateOwnerGate/AccessBoot). Nil → core default only.
 // Probe errors fail closed (the caller 503s, never 403-as-404).
 type OwnerEditor interface {
 	CanEditOwnerProfile(ctx context.Context, owner string, p auth.Principal) (bool, error)

@@ -96,14 +96,14 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// expansion wired into dry-run via GroupExpander), and the
 	// access-bootstrap op (Seam 5).
 	c.ident, c.identHandler = newIdentityService(st, cfg)
-	var _ api.OrgGate = c.ident
+	var _ api.CreateOwnerGate = c.ident
 	var _ api.AccessBootstrap = c.ident
 	var _ api.OwnerEditor = c.ident
 	var _ api.OrgLister = c.ident
 	if apiEnv != nil {
 		apiEnv.Access = c.ident
 		apiEnv.GroupExpander = c.ident.PolicyExpander()
-		apiEnv.OrgGate = c.ident
+		apiEnv.CreateOwnerGate = c.ident
 		apiEnv.AccessBoot = c.ident
 		apiEnv.OwnerEdit = c.ident // Forgejo #234: org-owner profile edits
 		apiEnv.Orgs = c.ident      // Forgejo #348: owners/detailed is_org marker
@@ -210,6 +210,12 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// create-from-URL top-level twin) over the same store/registry;
 	// the mirror-sync task runs on the core wal task table (Seam 5).
 	c.mirrorSvc, c.mirrorHandler = newMirrorService(st, reg, cfg, apiEnv)
+	// Forgejo #346: the mirror create-from-URL twin enforces the same
+	// creation owner-admission rule (self, member org, or host admin)
+	// before creating anything.
+	if c.mirrorHandler != nil && c.ident != nil {
+		c.mirrorHandler.CheckCreateOwner = c.ident.CheckCreateOwner
+	}
 	// Feature 08 §4: access.json CAS commits publish the "access"
 	// collab frame (nil-safe seam on the identity service; the doc
 	// stays the backfill truth).

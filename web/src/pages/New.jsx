@@ -10,6 +10,7 @@ import { A, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { validateRepoName, isUiRouteCollision } from "../../sdk/src/create.js";
 import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
+import { allowedOwners } from "../lib/orgs.js";
 import { invalidate } from "../lib/data.js";
 
 function winnerUrl(msg) {
@@ -33,6 +34,11 @@ export default function New() {
   const [getWinner, setWinner] = createSignal("");
   const [getBusy, setBusy] = createSignal(false);
   const [getMe, setMe] = createSignal(null);
+  // Forgejo #346: the owner is bounded to self + member orgs (the server
+  // admits exactly that set, plus host admins via the API — the UI cannot
+  // see the admin flag on me, so admins needing a foreign namespace use
+  // the API directly). null = still resolving.
+  const [getOwners, setOwners] = createSignal(null);
   let ctrl = null;
   onCleanup(() => {
     if (ctrl) ctrl.abort();
@@ -40,11 +46,24 @@ export default function New() {
 
   repos
     .me()
-    .then((me) => {
+    .then(async (me) => {
       setMe(me);
-      if (!getOwner() && me?.principal && !me.anonymous) setOwner(me.principal);
+      const self = me?.principal && !me.anonymous ? me.principal : "";
+      if (!getOwner() && self) setOwner(self);
+      if (!self) {
+        setOwners([]);
+        return;
+      }
+      const opts = await allowedOwners(repos, self).catch(() => [self]);
+      setOwners(opts);
+      // Clamp a ?owner= preset (or stale value) to the admitted set — the
+      // server would 403 anything else with the allowed owners named.
+      if (!opts.includes(getOwner())) setOwner(self);
     })
-    .catch(() => setMe({ anonymous: true }));
+    .catch(() => {
+      setMe({ anonymous: true });
+      setOwners([]);
+    });
   const anonymous = () => getMe()?.anonymous !== false && !getMe()?.principal;
   const noWrite = () => getMe() != null && getMe().write === false;
 
@@ -156,15 +175,24 @@ export default function New() {
         <div class="grid grid-cols-2 gap-3">
           <label class="grid gap-1">
             <span class="text-sm font-medium">Owner</span>
-            <input
-              class="input font-mono"
-              value={getOwner()}
-              onInput={(e) => setOwner(e.currentTarget.value.trim())}
-              placeholder="acme"
-              autocomplete="off"
-              spellcheck={false}
-              aria-label="Owner"
-            />
+            <Show
+              when={getOwners() !== null}
+              fallback={
+                <select class="input font-mono" disabled aria-label="Owner">
+                  <option>{getOwner() || "…"}</option>
+                </select>
+              }
+            >
+              <select
+                class="input font-mono"
+                value={getOwner()}
+                onChange={(e) => setOwner(e.currentTarget.value)}
+                aria-label="Owner"
+              >
+                <For each={getOwners() ?? []}>{(o) => <option value={o}>{o}</option>}</For>
+              </select>
+            </Show>
+            <span class="muted text-xs">you and your orgs only</span>
           </label>
           <label class="grid gap-1">
             <span class="text-sm font-medium">Name</span>

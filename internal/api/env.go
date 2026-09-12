@@ -502,10 +502,12 @@ type Env struct {
 	// non-repo surfaces only.
 	Access ReadAccess
 
-	// OrgGate is the org-namespace create gate (Forgejo #210 §3): creation
-	// under an org prefix ALSO requires org membership. Nil → legacy-open
-	// (no gate). 403 only on proven non-membership; probe errors → 503.
-	OrgGate OrgGate
+	// CreateOwnerGate is the creation owner-admission gate (Forgejo #346):
+	// the owner must equal the principal's own username or be an org the
+	// principal belongs to; host admins bypass. Nil → legacy-open (no
+	// gate). Foreign owner → 403 naming the allowed owners; probe
+	// errors → 503.
+	CreateOwnerGate CreateOwnerGate
 
 	// AccessBoot materializes the eager access.json default at placeholder
 	// creation (#210 §3). Nil → no eager write (read-time synthesis only).

@@ -1,9 +1,14 @@
-// creategate.go — the explicit create-repo placeholder seams (Forgejo #210,
-// R1 B5/S2): the org-membership gate and the eager access.json default.
+// creategate.go — the explicit create-repo admission seam (Forgejo #346):
+// the creation/import owner-binding rule and the eager access.json
+// default.
 //
-// Both methods are injected into internal/api as the OrgGate /
-// AccessBootstrap interfaces (defined there — this package never imports
-// api, law 8). api.Env.OrgGate = identity service structurally.
+// The admission helper is injected into internal/api as the
+// CreateOwnerGate interface and into internal/repoimport as the
+// RoleService.CheckCreateOwner method (both defined there — this package
+// never imports api/repoimport/mirror, law 8). api.Env.CreateOwnerGate,
+// repoimport checkCreate, and the mirror create-from-URL twin all consult
+// the ONE rule below; the #347 push guardrail reuses it verbatim (see the
+// reuse contract on CheckCreateOwner).
 //
 // ### Concurrency
 // Hazard: mutating access.json under a concurrent admin edit. Avoidance:
@@ -15,34 +20,113 @@ package identity
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 
+	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
-// IsOrgMember implements the #210 §3 org-namespace create gate: one
-// exact-key GET of orgs/<org>/members.json (same cost class as the P6 team
-// expansion probes — human-rate path, never hot).
+// CheckCreateOwner is the single creation/import admission rule (Forgejo
+// #346): a logged-in principal may create or import a repo under owner iff
+// the owner is their own username, an org they belong to (any roster role —
+// v1 member-may-create; tighten to owner-only if a future decision says
+// so), or they are a host admin (global-admin bypass, documented). Anything
+// else fails closed: anonymous → ErrUnauthorized (real 401, so clients erase
+// creds — law 9); a bound principal naming a foreign owner → ErrForbidden
+// naming the allowed owners (their username + member orgs); a roster probe
+// failure → ErrUnavailable (callers answer 503, never 403-as-404).
 //
-//   - exists=false → the owner prefix is unclaimed; today's open behavior
-//     persists (back-compat).
-//   - exists=true, member=false → the caller answers 403.
-//   - probe errors (store down, corrupt roster) → err; the caller answers
-//     503, never 403-as-404 (S2 TOCTOU rule).
-func (s *Service) IsOrgMember(ctx context.Context, org, principal string) (exists, member bool, err error) {
-	m, _, gerr := s.getMembers(ctx, org)
+// Callers invoke it BEFORE any namespace write (before allocNum/manifest
+// create — a deny allocates no counter, writes no manifest, leaves no
+// partial state). It costs one exact-key members.json GET on the
+// non-self, non-admin path (human-rate create/import only, never hot),
+// plus a LIST + per-org probes on the DENY path only (law 6: verification
+// rides the failure path) to name the allowed orgs in the 403.
+//
+// ### Reuse contract (Forgejo #347)
+//
+// The push guardrail reuses this helper verbatim: a push that would
+// auto-create a repo gates the owner segment of the pushed path through
+// CheckCreateOwner BEFORE creating (same 403 message shape), and SSH/HTTP
+// receive-pack keeps this as the create-side rule while adding its own
+// repo-scoped write check for existing repos. #347 must not fork the rule —
+// any policy change (e.g. member-may-create → owner-only) lands here once
+// and both gates inherit it.
+//
+// ### Concurrency
+// Hazard: a roster edit racing the admission probe. Avoidance: the probe is
+// a single whole-object read; a concurrent demotion affects the next
+// request, never tears this one. No lock is held across any store call.
+func (s *Service) CheckCreateOwner(ctx context.Context, owner string, p auth.Principal) *auth.AuthError {
+	if p.Anonymous {
+		return &auth.AuthError{Kind: auth.ErrUnauthorized, Why: "authentication required"}
+	}
+	if p.Admin {
+		return nil
+	}
+	if normPrincipal(owner) == normPrincipal(p.Name) {
+		return nil
+	}
+	m, _, gerr := s.getMembers(ctx, owner)
 	if gerr != nil {
-		return false, false, gerr
+		return &auth.AuthError{Kind: auth.ErrUnavailable, Why: "org membership unavailable"}
 	}
-	if m == nil {
-		return false, false, nil
-	}
-	want := normPrincipal(principal)
-	for _, e := range m.Members {
-		if normPrincipal(e.Principal) == want {
-			return true, true, nil
+	if m != nil {
+		want := normPrincipal(p.Name)
+		for _, e := range m.Members {
+			if normPrincipal(e.Principal) == want {
+				return nil
+			}
 		}
 	}
-	return true, false, nil
+	return &auth.AuthError{Kind: auth.ErrForbidden, Why: s.ownerDenyMessage(ctx, owner, p.Name)}
+}
+
+// ownerDenyMessage names the allowed owners for the 403: the principal's
+// own username plus their member orgs (deny-path only cost). A roster LIST
+// failure degrades to the generic shape — the deny itself never depends on
+// the enumeration.
+func (s *Service) ownerDenyMessage(ctx context.Context, owner, principal string) string {
+	self := normPrincipal(principal)
+	orgs, err := s.MemberOrgs(ctx, principal)
+	if err != nil || len(orgs) == 0 {
+		return fmt.Sprintf("owner %q not permitted: use %q or an org you belong to", owner, self)
+	}
+	return fmt.Sprintf("owner %q not permitted: use %q or one of your orgs (%s)", owner, self, strings.Join(orgs, ", "))
+}
+
+// MemberOrgs returns the sorted names of every org whose roster contains
+// principal (any role). Collaboration/UI support for the #346 admission
+// rule (the 403 message above; the New/Import owner dropdowns resolve
+// their options server-side through the orgs surface). Cost is one LIST
+// over orgs/ plus one exact-key members.json GET per org — human-rate
+// callers only (deny messages, form loads), never a git hot path.
+func (s *Service) MemberOrgs(ctx context.Context, principal string) ([]string, error) {
+	orgs, err := s.ListOrgs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	want := normPrincipal(principal)
+	out := []string{}
+	for _, org := range orgs {
+		m, _, gerr := s.getMembers(ctx, org)
+		if gerr != nil {
+			return nil, gerr
+		}
+		if m == nil {
+			continue
+		}
+		for _, e := range m.Members {
+			if normPrincipal(e.Principal) == want {
+				out = append(out, org)
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // EnsureRepoAccess materializes the 01 §10 synthesized default eagerly at

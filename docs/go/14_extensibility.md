@@ -597,7 +597,7 @@ superseded by Forgejo #272, which lists the mirror repo lanes; see the #272 amen
   settings publish path), no feature state on disk, no new dependencies (the tz picker is
   `Intl.supportedValuesOf`, the bio reuses the marked+DOMPurify pipeline). Write auth is the
   `OwnerEditor` seam (core defines, identity implements the org-owner-role grant — law 8, the
-  OrgGate/AccessBoot shape); the core default is host-admin-or-name-match, documented in
+  CreateOwnerGate/AccessBoot shape); the core default is host-admin-or-name-match, documented in
   docs/features/01. Rationale: a profile for a namespace that may never have a repo cannot ride any
   repo-scoped commit point, and org-role resolution lives in identity — the seam keeps both truths
   without a core→feature import.

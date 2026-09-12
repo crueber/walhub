@@ -575,9 +575,10 @@ single-segment UI name — creation allowed, only the `/:owner` page misroutes);
 placeholder (no state change — double-click/retry-safe); `409` **plain text** carrying the
 winner URL (`repository already exists: <html_url>` — the frozen 409 convention stays
 `writePlain`, never a JSON envelope, so the UI links the squatter); `PUT` without the flag on
-an existing placeholder keeps the legacy `409 "repository already exists"`. Creation under an
-org prefix additionally requires org membership (member+; one exact-key `members.json` GET —
-non-member → `403`, unclaimed prefix → legacy-open, probe errors → `503`; see
+an existing placeholder keeps the legacy `409 "repository already exists"`. Creation
+additionally requires the #346 owner admission (owner == self, member org, or host admin —
+one exact-key `members.json` GET on the non-self path; foreign owner → `403` naming the
+allowed owners, probe errors → `503`; see
 `docs/features/01_identity_permissions.md`). First push adopts (never 409s — the push path
 has no conflict surface by construction); same-principal re-create after the first push (now
 real) is `409`. No expiry sweep in this change (`expires_at` always null; TTL off by default).
@@ -1005,10 +1006,13 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
     (01 §7: Create-only, delete-on-terminal, NOT overwritable), so **no §14.11 frozen-list change**
     was required; the adopting change states the classification here. No new manifest state, no
     new WAL kind, no new bucket family for the repo itself ("non-real" is a UI designation).
-  - *Org create-gate (01 §5 matrix amendment):* creation under an org prefix requires org
-    membership (member+) — 403 only on proven non-membership, unclaimed prefixes stay
-    legacy-open, probe errors → 503 (never 403-as-404). Rationale: without it placeholder
-    creation becomes name-squatting inside someone else's org.
+  - *Owner admission (01 §5.2, Forgejo #346 — supersedes the #210 org-only gate):*
+    the owner must equal the principal's username or be a member org (host admins
+    bypass) — 403 naming the allowed owners, probe errors → 503 (never 403-as-404).
+    Enforced by `(*Service).CheckCreateOwner` BEFORE any namespace write via the
+    `CreateOwnerGate` seam (explicit create), `RoleService.CheckCreateOwner` (import),
+    and the mirror create-from-URL hook. Rationale: without it placeholder
+    creation becomes name-squatting inside someone else's org — or any prefix at all.
   - *`?placeholder=true` justified AS the shape* (pre-1.0 rule): it selects create-semantics on
     the existing PUT — not an alias/shim/deprecated flag; the frozen 409-with-`html_url` stays
     plain text (`writePlain`), and every added response field is enumerated in §9.1.1.
@@ -1040,7 +1044,7 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   top-level twin (`api.RegisterExposed`, the import precedent). The summary
   gains `mirror: {upstream_url, schedule, next_sync_at, last_synced_at,
   last_result, consecutive_failures, due}` behind an `api.Env.MirrorSummary`
-  hook (the ReadGate/OrgGate shape — this package never imports the feature);
+  hook (the ReadGate/CreateOwnerGate shape — this package never imports the feature);
   the ETag covers it (`~m` suffix, the #235 `~d` precedent) so outcome-only
   changes never 304. Strict JSON (unknown fields 400); tokens ride the POST
   bodies memory-only (`secret_set` presence-only in task params). Issue #320

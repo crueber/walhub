@@ -67,7 +67,7 @@ func newMirrorService(st store.ObjectStore, reg *wal.Registry, cfg *config.Confi
 	}
 	if apiEnv != nil {
 		// The summary projection behind the Env hook (the ReadGate/
-		// OrgGate shape): api renders MirrorView without importing
+		// CreateOwnerGate shape): api renders MirrorView without importing
 		// the feature (law 8); the next fire is computed here, at
 		// read, from the stored preset (R1 (b)).
 		apiEnv.MirrorSummary = func(ctx context.Context, owner, repo string) (api.MirrorView, bool) {

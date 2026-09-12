@@ -61,3 +61,39 @@ test("isOrgRow reads the server is_org bit, legacy-tolerant", () => {
   assert.equal(isOrgRow(null), false);
   assert.equal(isOrgRow(undefined), false);
 });
+
+test("allowedOwners returns self plus member orgs, sorted", async () => {
+  const { allowedOwners } = await import("../../src/lib/orgs.js");
+  const client = {
+    orgs: {
+      list: async () => ["solo", "acme"],
+      members: {
+        get: async (org, principal) => {
+          if (org === "acme" && principal === "bob@example.com") return { principal, role: "member" };
+          return null;
+        },
+      },
+    },
+  };
+  assert.deepEqual(await allowedOwners(client, "bob@example.com"), ["bob@example.com", "acme"]);
+});
+
+test("allowedOwners degrades to self on list/probe failures", async () => {
+  const { allowedOwners } = await import("../../src/lib/orgs.js");
+  const downList = { orgs: { list: async () => { throw new Error("down"); } } };
+  assert.deepEqual(await allowedOwners(downList, "bob@example.com"), ["bob@example.com"]);
+  const flakyProbe = {
+    orgs: {
+      list: async () => ["acme", "solo"],
+      members: {
+        get: async (org) => {
+          if (org === "solo") throw new Error("flaky");
+          return null;
+        },
+      },
+    },
+  };
+  assert.deepEqual(await allowedOwners(flakyProbe, "bob@example.com"), ["bob@example.com"]);
+  assert.deepEqual(await allowedOwners(downList, ""), []);
+  assert.deepEqual(await allowedOwners(downList, null), []);
+});

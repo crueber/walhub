@@ -236,15 +236,16 @@ func (h *handlers) repoPut(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusServiceUnavailable, "repo registry not configured")
 		return
 	}
-	principal := h.env.PrincipalOf(r).Name
-	if h.checkOrgGate(w, r, id, principal) {
+	principal := h.env.PrincipalOf(r)
+	if h.checkCreateOwner(w, r, id, principal) {
 		return
 	}
+	principalName := principal.Name
 	if err := h.env.Repos.Create(r.Context(), id, format); err != nil {
 		if errors.Is(err, ErrExists) {
 			if placeholder {
 				if doc, ok := probePlaceholder(r.Context(), h.env.Store, id); ok && doc != nil {
-					if samePrincipal(doc.CreatedBy, principal) && h.stillUnborn(r.Context(), id) {
+					if samePrincipal(doc.CreatedBy, principalName) && h.stillUnborn(r.Context(), id) {
 						h.writeCreateJSON(w, r, id, true, http.StatusOK)
 						return
 					}
@@ -262,7 +263,7 @@ func (h *handlers) repoPut(w http.ResponseWriter, r *http.Request) {
 		// The PUT-flag path has no visibility concept: the eager default
 		// is always public (the POST twin's visibility toggle is the
 		// private path).
-		if err := h.createPlaceholder(r, id, format, principal, ""); err != nil {
+		if err := h.createPlaceholder(r, id, format, principalName, ""); err != nil {
 			mapViewErr(w, err)
 			return
 		}

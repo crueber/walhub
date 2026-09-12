@@ -62,7 +62,12 @@ Auth per P6 (S6 order: authenticate → authorize namespace → join-or-start;
 a join never precedes auth). Import needs **create rights on the target
 namespace** (host `write`/`admin`, org owner, owner-named user, or ≥`write`
 from existing bindings — `CheckRole(..., RoleWrite)`; anonymous → real
-401 with `WWW-Authenticate: Bearer`). Task-status reads gate on the
+401 with `WWW-Authenticate: Bearer`). Since Forgejo #346 the owner is
+additionally bound BEFORE any of that: the target owner must equal the
+caller's username or be an org they belong to (host admins bypass) —
+`CheckCreateOwner`, the one rule shared with explicit create (01 §5.2);
+a foreign owner fails `403` naming the allowed owners with no task
+started, no counter allocated, no manifest written. Task-status reads gate on the
 namespace (`CheckRead` — the task may exist before the repo does).
 
 | METHOD + path | Auth | Request → response | Seam |
@@ -484,6 +489,15 @@ clean.
    in the claim→commit window leaves our claim + their manifest (the
    retry converges and aborts loud on divergent refs — never silent,
    never overwriting).
+- **Creation owner admission (Forgejo #346).** `Begin` consults the shared
+  identity rule (`RoleService.CheckCreateOwner` — owner == self, member
+  org, or host admin) BEFORE join-or-start, so a deny starts no task and
+  writes nothing (no counter, no manifest). 401 anonymous / 403 foreign
+  owner naming the allowed owners / 503 on roster probe failure. Rationale:
+  host-wide `write` used to admit ANY owner string, squatting namespaces.
+  UI: the Import owner field is a self+orgs dropdown (server 403 is the
+  real gate). Push-side reuse (auto-create-on-push) lands in #347 against
+  the same helper.
 
 ## Explicitly out of scope
 

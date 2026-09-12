@@ -491,8 +491,11 @@ func pruneExpiredLocked(streams map[string]*stream) {
 
 // checkCreate enforces create-on-namespace (plan §4, S6 order — called
 // AFTER authenticate, BEFORE join-or-start): anonymous → 401 (real 401,
-// so clients erase creds — law 9); host write/admin, org owners, and
-// ≥write roles pass; everyone else → 403.
+// so clients erase creds — law 9); the #346 owner admission (owner ==
+// self, member org, or host admin) runs BEFORE any namespace write — a
+// deny allocates no counter, writes no manifest, leaves no partial state —
+// then host write/admin, org owners, and ≥write roles pass; everyone else
+// → 403.
 func (s *Service) checkCreate(ctx context.Context, p auth.Principal, owner, repo string) error {
 	if p.Anonymous {
 		return &StatusError{Status: 401, Message: "authentication required"}
@@ -503,6 +506,9 @@ func (s *Service) checkCreate(ctx context.Context, p auth.Principal, owner, repo
 		}
 		return &StatusError{Status: 403, Message: "write access required"}
 	}
+	if cerr := s.roles.CheckCreateOwner(ctx, owner, p); cerr != nil {
+		return statusOfAuth(cerr)
+	}
 	if cerr := s.roles.CheckRole(ctx, owner, repo, p, identity.RoleWrite); cerr != nil {
 		switch cerr.Kind {
 		case auth.ErrUnauthorized:
@@ -512,6 +518,21 @@ func (s *Service) checkCreate(ctx context.Context, p auth.Principal, owner, repo
 		}
 	}
 	return nil
+}
+
+// statusOfAuth maps an identity AuthError to the import StatusError shape:
+// 401 (+WWW-Authenticate: Bearer at the HTTP layer) for anonymous, 403 for
+// authenticated-but-unadmitted, 503 when identity state is down (never
+// 403-as-404).
+func statusOfAuth(cerr *auth.AuthError) *StatusError {
+	switch cerr.Kind {
+	case auth.ErrUnauthorized:
+		return &StatusError{Status: 401, Message: cerr.Why}
+	case auth.ErrUnavailable:
+		return &StatusError{Status: 503, Message: cerr.Why}
+	default:
+		return &StatusError{Status: 403, Message: cerr.Why}
+	}
 }
 
 // dangerousAllowed reports whether p may wield the dangerous confirm over

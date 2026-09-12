@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/git"
+	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
@@ -86,14 +87,15 @@ func probePlaceholder(ctx context.Context, st store.ObjectStore, id git.RepoId) 
 	return &doc, true
 }
 
-// OrgGate is the org-namespace create gate (§3): creation under an org
-// prefix (orgs/<org>/members.json exists) ALSO requires org membership.
-// Composition injects the identity service; nil → legacy-open (no gate).
-// 403 only on proven non-membership; probe errors → 503 (never 403-as-404).
-type OrgGate interface {
-	// IsOrgMember reports (exists, member, err): exists=false → the owner
-	// prefix is unclaimed and today's open behavior persists.
-	IsOrgMember(ctx context.Context, org, principal string) (exists, member bool, err error)
+// CreateOwnerGate is the creation owner-admission gate (Forgejo #346):
+// the owner must equal the principal's own username or be an org the
+// principal belongs to (any roster role — v1 member-may-create); host
+// admins bypass. Composition injects the identity service; nil →
+// legacy-open (no gate). Deny shapes: anonymous → 401, foreign owner →
+// 403 naming the allowed owners, probe errors → 503 (never 403-as-404).
+type CreateOwnerGate interface {
+	// CheckCreateOwner admits creation under owner for p (nil = admit).
+	CheckCreateOwner(ctx context.Context, owner string, p auth.Principal) *auth.AuthError
 }
 
 // OrgLister lists org names for the owners/detailed is_org marker
@@ -177,20 +179,23 @@ func uiRouteCollisionWarning(owner string) string {
 	return ""
 }
 
-// checkOrgGate enforces the org-membership gate. Returns true when the
-// response is already written (deny or probe error).
-func (h *handlers) checkOrgGate(w http.ResponseWriter, r *http.Request, id git.RepoId, principal string) bool {
-	gate := h.env.OrgGate
+// checkCreateOwner enforces the owner-admission gate BEFORE any namespace
+// write (a deny allocates no counter, writes no manifest). Returns true
+// when the response is already written (deny or probe error).
+func (h *handlers) checkCreateOwner(w http.ResponseWriter, r *http.Request, id git.RepoId, p auth.Principal) bool {
+	gate := h.env.CreateOwnerGate
 	if gate == nil {
 		return false
 	}
-	exists, member, err := gate.IsOrgMember(r.Context(), id.Owner, principal)
-	if err != nil {
-		writePlain(w, http.StatusServiceUnavailable, "org membership unavailable")
-		return true
-	}
-	if exists && !member {
-		writePlain(w, http.StatusForbidden, "org membership required to create under "+id.Owner)
+	if cerr := gate.CheckCreateOwner(r.Context(), id.Owner, p); cerr != nil {
+		switch cerr.Kind {
+		case auth.ErrForbidden:
+			writePlain(w, http.StatusForbidden, cerr.Why)
+		case auth.ErrUnavailable:
+			writePlain(w, http.StatusServiceUnavailable, cerr.Why)
+		default:
+			writePlain(w, http.StatusUnauthorized, cerr.Why)
+		}
 		return true
 	}
 	return false
@@ -396,7 +401,7 @@ func (ch *CreateHandler) post(w http.ResponseWriter, r *http.Request) {
 		placeholder = *body.Placeholder
 	}
 	p := e.PrincipalOf(r)
-	if h.checkOrgGate(w, r, id, p.Name) {
+	if h.checkCreateOwner(w, r, id, p) {
 		return
 	}
 	if e.Repos == nil {

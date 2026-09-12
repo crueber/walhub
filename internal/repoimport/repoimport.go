@@ -83,6 +83,10 @@ type RoleService interface {
 	Resolve(ctx context.Context, owner, repo string, p auth.Principal) (identity.Role, *identity.AccessDoc)
 	CheckRead(ctx context.Context, owner, repo string, p auth.Principal) *auth.AuthError
 	CheckRole(ctx context.Context, owner, repo string, p auth.Principal, want identity.Role) *auth.AuthError
+	// CheckCreateOwner is the #346 creation/import admission rule (owner ==
+	// self, member org, or host admin — fail closed). checkCreate consults
+	// it BEFORE any namespace write.
+	CheckCreateOwner(ctx context.Context, owner string, p auth.Principal) *auth.AuthError
 	BootstrapRepo(ctx context.Context, owner, repo string) (bool, error)
 	GetAccess(ctx context.Context, owner, repo string) (*identity.AccessDoc, store.Version, error)
 	PutAccess(ctx context.Context, owner, repo string, base store.Version, vis identity.Visibility, bindings []identity.AccessBinding) (*identity.AccessDoc, error)
