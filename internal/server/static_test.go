@@ -316,8 +316,10 @@ func TestWgtTokenLifecycle(t *testing.T) {
 	if aerr != nil || p.Name != "alice" || p.Email != "alice@example.com" || !p.Write {
 		t.Fatalf("p=%+v aerr=%v", p, aerr)
 	}
-	// Tampered payload → invalid.
-	bad := tok.Wire[:len(tok.Wire)-2] + "xx"
+	// Tampered MAC → invalid (deterministic bit-flip tamper —
+	// trailing-character substitution can decode to the identical MAC,
+	// Forgejo #397).
+	bad := tamperWireMAC(t, tok.Wire)
 	if _, aerr := s.authSvc.VerifyToken(bad); aerr == nil || aerr.Kind != auth.ErrInvalid {
 		t.Fatalf("tampered token must be invalid, got %v", aerr)
 	}

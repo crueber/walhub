@@ -310,6 +310,11 @@ func TestViewOf(t *testing.T) {
 }
 
 func TestRegisterKindDuplicate(t *testing.T) {
+	// Hermetic across -count=N and shuffles: the kinds map is
+	// process-global, so a previous run's registration would trip the
+	// duplicate panic on the FIRST call below, outside the recover
+	// (Forgejo #397).
+	ResetKindsForTest()
 	RegisterKind("mirror-test-kind")
 	defer func() {
 		if r := recover(); r == nil {

@@ -457,3 +457,35 @@ The rewrite copies CODE behavior (§20); each of these gets an explicit assertio
   sweep deleting concurrently-committed segments, unbounded orphan-backlog
   growth on failed batches (failure-path sweep), and the wiped version token
   never healing on guard-reject (token adopt). No prior decision affected.
+- **CI-flake treatment, Forgejo #397 round (2026-09-12).** Six docker-run
+  coverage-gate failures in twenty runs, five distinct flakes, all
+  test-contract bugs (no production change): (a) `TestBeginOnMirrorIs409`
+  (repoimport) and `TestCreateFromURLOwnerAdmission` (mirror) returned
+  while a spawned clone/sync was still writing into a `t.TempDir`, so
+  cleanup `RemoveAll` intermittently failed with "directory not empty" —
+  fixed by joining the background work first (`awaitDone` /
+  `waitAsync`, the `TestCreateFromURL` precedent), never by deleting the
+  pin; (b) `TestSSEWriterKeepaliveExitsOnClose` asserted an immediate
+  `NumGoroutine` count after spawning keepalives, pinning scheduling, not
+  behavior — fixed by polling up to the expected count (the #178
+  poll-don't-sleep treatment, both keepalive tests); (c)
+  `TestVerifyTokenWireNegatives/tampered_mac` (~1/16 flake, reproduced
+  locally 2/30) and `TestWgtTokenLifecycle` (~1/256) tampered with the
+  token by substituting trailing base64url characters, which can decode
+  to the identical 32-byte HMAC (trailing sextet bits are padding) and
+  verify clean — fixed with a deterministic `tamperWireMAC` helper
+  (decode, flip a bit, re-encode), keeping the "invalid token" pin;
+  (d) the `RegisterKind` process-global maps (repoimport, mirror) leaked
+  across `-count=N` re-runs, panicking outside the panic tests' recover —
+  fixed with a test-only `ResetKindsForTest` beside each `RegisterKind`
+  (production keeps the panic-on-duplicate composition contract; both
+  maps are write-only so a reset cannot disturb other tests). The
+  resume/claim tests needed no change (already `awaitDone`-polled; the
+  #200 log's "resuming import" line was interleaved output, not the
+  failing assertion), and the process-global sweep found no other
+  test-written shared state. **Retry-guardrail ruling:** no retry stanza
+  on the coverage step and no `-shuffle=off` pinning — retries mask
+  flakes and shuffle-pinning surrenders real signal; flakes are fixed at
+  the test contract instead. Rationale: every one of these pinned
+  scheduling or randomness instead of behavior, and each fix is
+  deterministic without weakening the assertion.

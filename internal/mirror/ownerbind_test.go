@@ -4,9 +4,11 @@ package mirror
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
 )
@@ -35,13 +37,19 @@ func TestCreateFromURLOwnerAdmission(t *testing.T) {
 	// Admitted owner → 202.
 	h := testHandler(t, svc, reg, writer)
 	h.CheckCreateOwner = ownerHook(map[string]bool{"dev": true}, false)
-	if rec := doHandle(h, http.MethodPost, "/api/v1/repos/mirrors", fileBody("dev", "m-ok")); rec.Code != http.StatusAccepted {
+	rec := doHandle(h, http.MethodPost, "/api/v1/repos/mirrors", fileBody("dev", "m-ok"))
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("admitted = %d: %s", rec.Code, rec.Body.String())
 	}
+	// Join the background sync before returning: it clones into CacheDir
+	// (a t.TempDir), and a sync still cloning while TempDir cleanup runs
+	// RemoveAll fails the test with "directory not empty" under CI load
+	// (Forgejo #397; the TestCreateFromURL precedent).
+	waitAsync(t, svc, taskID(t, rec.Body.Bytes()), 30*time.Second)
 	// Foreign owner → 403 naming the owner, and nothing is created.
 	h2 := testHandler(t, svc, reg, writer)
 	h2.CheckCreateOwner = ownerHook(map[string]bool{"dev": true}, false)
-	rec := doHandle(h2, http.MethodPost, "/api/v1/repos/mirrors", fileBody("acme", "m-no"))
+	rec = doHandle(h2, http.MethodPost, "/api/v1/repos/mirrors", fileBody("acme", "m-no"))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("foreign = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -59,7 +67,24 @@ func TestCreateFromURLOwnerAdmission(t *testing.T) {
 	}
 	// Nil hook → legacy-open (instances without the identity surface).
 	h4 := testHandler(t, svc, reg, writer)
-	if rec := doHandle(h4, http.MethodPost, "/api/v1/repos/mirrors", fileBody("acme", "m-legacy")); rec.Code != http.StatusAccepted {
+	rec = doHandle(h4, http.MethodPost, "/api/v1/repos/mirrors", fileBody("acme", "m-legacy"))
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("nil hook = %d: %s", rec.Code, rec.Body.String())
 	}
+	waitAsync(t, svc, taskID(t, rec.Body.Bytes()), 30*time.Second)
+}
+
+// taskID extracts the async task id from a 202 create-from-URL body.
+func taskID(t *testing.T, body []byte) string {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	task, _ := out["task"].(map[string]any)
+	id, _ := task["id"].(string)
+	if id == "" {
+		t.Fatalf("202 body carries no task id: %s", body)
+	}
+	return id
 }
