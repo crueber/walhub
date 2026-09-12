@@ -9,8 +9,8 @@ import (
 
 // Bootstrap implements the Seam 5 access-bootstrap migration (01 §10):
 // each sweep, for every repo still lacking access.json, Create the
-// synthesized legacy default (creator binding user:<owner> admin).
-// Idempotent (Create 412 → skip), restartable, orphan-tolerant. Edits to a
+// synthesized legacy default (creator binding user:<owner> admin for
+// user namespaces — never for orgs, see SynthesizeOwner). Idempotent (Create 412 → skip), restartable, orphan-tolerant. Edits to a
 // repo with no access.json synthesize it themselves via the CAS path, so a
 // bootstrap racing a first admin edit resolves to no-op for the loser.
 //
@@ -47,7 +47,7 @@ func (s *Service) BootstrapRepo(ctx context.Context, owner, repo string) (bool, 
 // bootstrapOne Creates the synthesized default; 412 (already exists or a
 // concurrent writer won) counts as skipped.
 func (s *Service) bootstrapOne(ctx context.Context, owner, repo string) (int, int, error) {
-	doc := SynthesizeDefault(owner)
+	doc := s.SynthesizeOwner(ctx, owner)
 	doc.Version = 1
 	doc.UpdatedAt = s.nowUTC().Format(time.RFC3339)
 	if _, err := store.PutBytes(ctx, s.Store, AccessKey(owner, repo), encodeAccess(doc),

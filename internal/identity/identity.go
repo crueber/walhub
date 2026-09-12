@@ -118,11 +118,18 @@ func ValidOrg(org string) bool { return orgRe.MatchString(org) }
 // ValidSlug reports whether slug is a legal team slug.
 func ValidSlug(slug string) bool { return slugRe.MatchString(slug) }
 
-// ValidPrincipal reports whether p is a usable principal name (an email).
+// ValidPrincipal reports whether p is a usable principal name: a
+// username (Forgejo #370 — the identity key: lowercase [a-z0-9._-],
+// 1..64 chars, no leading dot) or, for pre-#370 state, a verified
+// email. Both spellings validate so the email→username migration reads
+// as an alias (matchPrincipal); NEW state always mints usernames.
 func ValidPrincipal(p string) bool {
 	p = strings.ToLower(strings.TrimSpace(p))
 	if p == "" || len(p) > 254 || strings.Contains(p, "/") {
 		return false
+	}
+	if auth.ValidUsername(p) {
+		return true
 	}
 	if _, err := mail.ParseAddress(p); err != nil {
 		return false

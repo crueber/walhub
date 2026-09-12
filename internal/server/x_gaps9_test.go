@@ -41,7 +41,7 @@ func TestWGTPrincipalRoundTripAndReject(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://x/_auth/check", nil)
 	req.Header.Set("Authorization", "Bearer "+tok.Wire)
 	p, aerr := s.authSvc.Authenticate(req, s.cfg)
-	if aerr != nil || p.Name != "alice@example.com" {
+	if aerr != nil || p.Name != "alice" || p.Email != "alice@example.com" {
 		t.Fatalf("wgt auth = %+v %v", p, aerr)
 	}
 	// A well-formed but forged wgt_ wire fails closed with ErrInvalid.
@@ -67,7 +67,7 @@ func TestAuthenticateUnknownModeIsAnonymous(t *testing.T) {
 func TestPrincipalForNameOIDCAdmission(t *testing.T) {
 	s, _ := oidcServer(t)
 	p, err := s.authSvc.PrincipalForName("alice@example.com")
-	if err != nil || p.Name != "alice@example.com" || !p.Write {
+	if err != nil || p.Name != "alice" || p.Email != "alice@example.com" || !p.Write {
 		t.Fatalf("allowed email = %+v %v", p, err)
 	}
 	// Outside every allowlist the SSH-key principal is denied (§8.4 email

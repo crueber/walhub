@@ -343,7 +343,7 @@ func TestOrgInviteHandlerErrors(t *testing.T) {
 	if w := doReq(h, "POST", "/api/v1/orgs/acme/invitations", `{bad`); w.Code != http.StatusBadRequest {
 		t.Errorf("bad json = %d", w.Code)
 	}
-	if w := doReq(h, "POST", "/api/v1/orgs/acme/invitations", `{"email":"not-an-email","role":"member"}`); w.Code != http.StatusBadRequest {
+	if w := doReq(h, "POST", "/api/v1/orgs/acme/invitations", `{"email":"bad!!principal","role":"member"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("bad email = %d", w.Code)
 	}
 	if w := doReq(h, "DELETE", "/api/v1/orgs/acme/invitations", ""); w.Code != http.StatusMethodNotAllowed {

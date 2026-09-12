@@ -190,9 +190,15 @@ export default function Import() {
     }
   };
 
-  const retry = () => {
+  // Forgejo #370: "back to form" lives on the outcome view only — the
+  // inline error already renders in place on the form, where the button
+  // would be a dead affordance.
+  const backToForm = () => {
     setPhase("form");
     setErr("");
+    setOutcome(null);
+    setBars({});
+    setLog([]);
   };
 
   const heads = () => Object.entries(getOutcome()?.head_shas ?? {});
@@ -351,11 +357,6 @@ export default function Import() {
             </div>
           </Show>
           <div class="flex gap-2">
-            <Show when={getPhase() === "error"}>
-              <button type="button" class="btn px-3 py-1" onClick={retry}>
-                back to form
-              </button>
-            </Show>
             <button type="submit" class="btn primary px-3 py-1" disabled={getBusy() || anonymous() || !getUrl() || !getOwner() || !getName()}>
               {getBusy() ? "starting…" : getMode() === "mirror" ? "create mirror" : "start import"}
             </button>
@@ -407,6 +408,11 @@ export default function Import() {
           <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${getOutcome().repo}`}>
             open {getOutcome().repo}
           </A>
+          <div class="flex gap-2">
+            <button type="button" class="btn px-3 py-1" onClick={backToForm}>
+              back to form
+            </button>
+          </div>
           <details>
             <summary class="cursor-pointer text-sm">head SHAs ({heads().length})</summary>
             <ul class="mt-1 space-y-0.5 font-mono text-xs">

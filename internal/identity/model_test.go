@@ -62,7 +62,8 @@ func TestPrincipals(t *testing.T) {
 	}{
 		{"jane@example.com", true},
 		{"Jane@Example.COM", true},
-		{"not-an-email", false},
+		{"not-an-email", true},
+		{"bad!!principal", false},
 		{"", false},
 		{"a/b@example.com", false},
 		{strings.Repeat("a", 250) + "@x.com", false},
@@ -118,7 +119,8 @@ func TestValidSubject(t *testing.T) {
 	}{
 		{"user:jane@example.com", true},
 		{"team:acme/platform", true},
-		{"user:not-an-email", false},
+		{"user:not-an-email", true},
+		{"user:bad!!principal", false},
 		{"team:Acme/x", false},
 		{"team:acme/", false},
 		{"group:admins", false},

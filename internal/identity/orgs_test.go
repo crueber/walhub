@@ -91,7 +91,7 @@ func TestMembers(t *testing.T) {
 	if _, err := s.CreateOrg(ctx, "acme", "A", "", "alice@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetMember(ctx, "acme", "not-an-email", OrgMember); !errors.Is(err, ErrInvalid) {
+	if _, err := s.SetMember(ctx, "acme", "bad!!principal", OrgMember); !errors.Is(err, ErrInvalid) {
 		t.Errorf("SetMember bad principal: %v", err)
 	}
 	if _, err := s.SetMember(ctx, "acme", "x@y.z", "root"); !errors.Is(err, ErrInvalid) {
@@ -196,7 +196,7 @@ func TestTeams(t *testing.T) {
 		t.Errorf("team re-read broken: %v %q", err, ver2)
 	}
 	// Membership.
-	if _, err := s.SetTeamMember(ctx, "acme", "platform", "not-an-email"); !errors.Is(err, ErrInvalid) {
+	if _, err := s.SetTeamMember(ctx, "acme", "platform", "bad!!principal"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("SetTeamMember bad principal: %v", err)
 	}
 	if _, err := s.SetTeamMember(ctx, "acme", "ghost", "x@y.z"); !errors.Is(err, ErrNotFound) {

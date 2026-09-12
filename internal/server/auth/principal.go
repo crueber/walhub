@@ -5,7 +5,14 @@ package auth
 // Principal is the authenticated identity. Admin (repo delete, PUT/DELETE settings+policy)
 // is INDEPENDENT of write (push + create).
 type Principal struct {
-	Name      string
+	Name string
+	// Email is the verified OIDC email behind the username Name
+	// (Forgejo #370): empty for static-token, anonymous, and
+	// auth-none principals. Carried so alias matching (stored email
+	// spellings) and token/session mints (which keep the email on
+	// the wire) work without another lookup. Never rendered to
+	// other users — Name is the only user-facing identity.
+	Email     string
 	Write     bool
 	Admin     bool
 	Anonymous bool

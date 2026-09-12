@@ -19,7 +19,7 @@ func TestOrgInvites(t *testing.T) {
 	if _, err := s.CreateOrg(ctx, "acme", "A", "", "alice@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateOrgInvite(ctx, "acme", "not-an-email", "member", "a@b.c", time.Hour); !errors.Is(err, ErrInvalid) {
+	if _, err := s.CreateOrgInvite(ctx, "acme", "bad!!principal", "member", "a@b.c", time.Hour); !errors.Is(err, ErrInvalid) {
 		t.Errorf("invite bad email: %v", err)
 	}
 	if _, err := s.CreateOrgInvite(ctx, "acme", "x@y.z", "root", "a@b.c", time.Hour); !errors.Is(err, ErrInvalid) {
@@ -103,7 +103,7 @@ func TestRepoInvites(t *testing.T) {
 	ctx := context.Background()
 	seedOrg(t, s)
 	seedRepo(t, s, "acme", "repo")
-	if _, err := s.CreateRepoInvite(ctx, "acme", "repo", "not-an-email", RoleWrite, "a@b.c", time.Hour); !errors.Is(err, ErrInvalid) {
+	if _, err := s.CreateRepoInvite(ctx, "acme", "repo", "bad!!principal", RoleWrite, "a@b.c", time.Hour); !errors.Is(err, ErrInvalid) {
 		t.Errorf("bad subject: %v", err)
 	}
 	if _, err := s.CreateRepoInvite(ctx, "acme", "repo", "x@y.z", "super", "a@b.c", time.Hour); !errors.Is(err, ErrInvalid) {
@@ -297,6 +297,58 @@ func TestListInvites(t *testing.T) {
 // removes the issuer-side invite object but cannot enumerate inboxes, so
 // readers skip the dead rows and accept/create fail closed instead of
 // binding roles into a ghost repo.
+// TestInviteEmailAliasInbox pins the #370 migration for invitations
+// addressed to a verified email before usernames existed: the username
+// principal carrying that email still lists, previews, and accepts
+// them — and the binding lands under the USERNAME.
+func TestInviteEmailAliasInbox(t *testing.T) {
+	s := testService()
+	ctx := context.Background()
+	seedOrg(t, s)
+	seedRepo(t, s, "acme", "repo")
+	if _, err := s.ResolveUsername(ctx, "dave@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	dave := authPrincipal("dave")
+	dave.Email = "dave@example.com"
+	inv, err := s.CreateRepoInvite(ctx, "acme", "repo", "dave@example.com", RoleWrite, "alice@example.com", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Listed through the username principal (email-spelled inbox merges).
+	entries, err := s.MyInvitesFor(ctx, dave)
+	if err != nil || len(entries) != 1 || entries[0].ID != inv.ID {
+		t.Fatalf("MyInvitesFor = %+v %v", entries, err)
+	}
+	// Previewed + accepted as the username; binding is username-spelled.
+	if _, err := s.PreviewInviteFor(ctx, dave, inv.ID, ""); err != nil {
+		t.Fatalf("PreviewInviteFor: %v", err)
+	}
+	if _, err := s.AcceptInviteFor(ctx, dave, inv.ID); err != nil {
+		t.Fatalf("AcceptInviteFor: %v", err)
+	}
+	doc, _, err := s.GetAccess(ctx, "acme", "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, b := range doc.RoleBindings {
+		if b.Subject == "user:dave" && b.Role == RoleWrite {
+			found = true
+		}
+		if b.Subject == "user:dave@example.com" {
+			t.Errorf("legacy email binding must not be written: %+v", doc.RoleBindings)
+		}
+	}
+	if !found {
+		t.Errorf("username binding missing: %+v", doc.RoleBindings)
+	}
+	// Both inbox rows drain (username + legacy email spelling).
+	if entries, _ := s.MyInvitesFor(ctx, dave); len(entries) != 0 {
+		t.Errorf("inbox must drain: %+v", entries)
+	}
+}
+
 func TestRepoInviteGhostRepo(t *testing.T) {
 	s := testService()
 	ctx := context.Background()

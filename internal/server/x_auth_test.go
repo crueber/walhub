@@ -193,7 +193,7 @@ func TestRequireAdminAndIdentityForward(t *testing.T) {
 	req := httptest.NewRequest("POST", "/x", nil)
 	req.Header.Set("X-Walgit-Principal", "alice@example.com")
 	got := s.authSvc.identityForward(req, p)
-	if got.Name != "alice@example.com" {
+	if got.Name != "alice" || got.Email != "alice@example.com" {
 		t.Fatalf("forwarded principal = %+v", got)
 	}
 	// Untrusted forwarder → caller kept.
@@ -431,7 +431,8 @@ func TestOIDCLogoutTokensPageAndMint(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "walgit_session", Value: sess.Wire})
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "alice@example.com") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "alice") ||
+		strings.Contains(rec.Body.String(), "alice@example.com") {
 		t.Fatalf("tokens page = %d", rec.Code)
 	}
 

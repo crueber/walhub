@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isOrgRow,
+  isValidOwnerPart,
   orgCreateBody,
   validateOrgName,
 } from "../../src/lib/orgs.js";
@@ -69,19 +70,19 @@ test("allowedOwners returns self plus member orgs, sorted", async () => {
       list: async () => ["solo", "acme"],
       members: {
         get: async (org, principal) => {
-          if (org === "acme" && principal === "bob@example.com") return { principal, role: "member" };
+          if (org === "acme" && principal === "bob") return { principal, role: "member" };
           return null;
         },
       },
     },
   };
-  assert.deepEqual(await allowedOwners(client, "bob@example.com"), ["bob@example.com", "acme"]);
+  assert.deepEqual(await allowedOwners(client, "bob"), ["bob", "acme"]);
 });
 
 test("allowedOwners degrades to self on list/probe failures", async () => {
   const { allowedOwners } = await import("../../src/lib/orgs.js");
   const downList = { orgs: { list: async () => { throw new Error("down"); } } };
-  assert.deepEqual(await allowedOwners(downList, "bob@example.com"), ["bob@example.com"]);
+  assert.deepEqual(await allowedOwners(downList, "bob"), ["bob"]);
   const flakyProbe = {
     orgs: {
       list: async () => ["acme", "solo"],
@@ -93,7 +94,34 @@ test("allowedOwners degrades to self on list/probe failures", async () => {
       },
     },
   };
-  assert.deepEqual(await allowedOwners(flakyProbe, "bob@example.com"), ["bob@example.com"]);
+  assert.deepEqual(await allowedOwners(flakyProbe, "bob"), ["bob"]);
   assert.deepEqual(await allowedOwners(downList, ""), []);
   assert.deepEqual(await allowedOwners(downList, null), []);
+});
+
+test("isValidOwnerPart mirrors the repo-id owner segment (no emails)", () => {
+  for (const good of ["bob", "crueber2", "a.b_c-d", "ACME", "x".repeat(100)]) {
+    assert.equal(isValidOwnerPart(good), true, `${good} must be a valid owner`);
+  }
+  for (const bad of ["", "crueber@gmail.com", "has space", "a/b", ".lead", "..", "bang!", "x".repeat(101), null, undefined]) {
+    assert.equal(isValidOwnerPart(bad), false, `${String(bad)} must be rejected`);
+  }
+});
+
+test("allowedOwners filters non-owner-segment options (Forgejo #370)", async () => {
+  const { allowedOwners } = await import("../../src/lib/orgs.js");
+  // A stale email principal (pre-username session) never reaches the
+  // options — the bad-target import failure cannot be selected.
+  const downList = { orgs: { list: async () => { throw new Error("down"); } } };
+  assert.deepEqual(await allowedOwners(downList, "bob@example.com"), []);
+  // Foreign-shaped org entries are dropped, valid ones kept.
+  const weird = {
+    orgs: {
+      list: async () => ["acme", "not an org", "has@at", { org: "solo" }],
+      members: {
+        get: async () => ({ role: "member" }),
+      },
+    },
+  };
+  assert.deepEqual(await allowedOwners(weird, "bob"), ["bob", "acme", "solo"]);
 });

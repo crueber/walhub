@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
@@ -295,7 +296,40 @@ func (s *Service) inboxRemove(ctx context.Context, principal, id string) error {
 // hide: expired rows still list and fail closed on accept, unchanged).
 // A probe error or malformed repo keeps the entry (fail open).
 func (s *Service) MyInvites(ctx context.Context, principal string) ([]InboxEntry, error) {
-	raw, _, err := store.GetBytes(ctx, s.Store, InboxKey(principal), store.GetOptions{})
+	return s.MyInvitesFor(ctx, auth.Principal{Name: principal})
+}
+
+// MyInvitesFor is MyInvites over a full principal: pre-#370 invites
+// addressed to the verified email live in the email-spelled inbox, so
+// both inboxes merge (deduped by id) when the principal carries an
+// email (the migration alias).
+func (s *Service) MyInvitesFor(ctx context.Context, p auth.Principal) ([]InboxEntry, error) {
+	keys := []string{InboxKey(normPrincipal(p.Name))}
+	if em := normPrincipal(p.Email); em != "" && em != normPrincipal(p.Name) {
+		keys = append(keys, InboxKey(em))
+	}
+	seen := map[string]bool{}
+	var out []InboxEntry
+	for _, key := range keys {
+		entries, err := s.myInvitesAt(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if !seen[e.ID] {
+				seen[e.ID] = true
+				out = append(out, e)
+			}
+		}
+	}
+	if out == nil {
+		out = []InboxEntry{}
+	}
+	return out, nil
+}
+
+func (s *Service) myInvitesAt(ctx context.Context, key string) ([]InboxEntry, error) {
+	raw, _, err := store.GetBytes(ctx, s.Store, key, store.GetOptions{})
 	if err != nil {
 		if store.IsNotFound(err) {
 			return []InboxEntry{}, nil
@@ -327,12 +361,27 @@ func (s *Service) MyInvites(ctx context.Context, principal string) ([]InboxEntry
 // invitee's inbox entry names the family (org or repo scope), so at most
 // two exact-key probes run — never a LIST.
 func (s *Service) findInvite(ctx context.Context, principal, id string) (*Invitation, error) {
-	raw, _, err := store.GetBytes(ctx, s.Store, InboxKey(principal), store.GetOptions{})
-	if err != nil && !store.IsNotFound(err) {
-		return nil, err
+	return s.findInviteFor(ctx, auth.Principal{Name: principal}, id)
+}
+
+// findInviteFor is findInvite over a full principal: pre-#370 invites
+// addressed to the verified email live in the email-spelled inbox, so
+// both inbox keys are probed when the principal carries an email (the
+// migration alias). Scopes merge; the issuer objects are identical.
+func (s *Service) findInviteFor(ctx context.Context, p auth.Principal, id string) (*Invitation, error) {
+	inboxes := []string{InboxKey(normPrincipal(p.Name))}
+	if em := normPrincipal(p.Email); em != "" && em != normPrincipal(p.Name) {
+		inboxes = append(inboxes, InboxKey(em))
 	}
 	var scopes []InboxEntry
-	if err == nil {
+	for _, key := range inboxes {
+		raw, _, err := store.GetBytes(ctx, s.Store, key, store.GetOptions{})
+		if err != nil && !store.IsNotFound(err) {
+			return nil, err
+		}
+		if err != nil {
+			continue
+		}
 		in, perr := parseInbox(raw)
 		if perr != nil {
 			return nil, perr
@@ -382,14 +431,21 @@ func (s *Service) findInvite(ctx context.Context, principal, id string) (*Invita
 // (anonymous callers are rejected at the handler — they log in first); the
 // binding write always follows the authed POST. The token is redacted.
 func (s *Service) PreviewInvite(ctx context.Context, principal, id, token string) (*Invitation, error) {
-	inv, err := s.findInvite(ctx, principal, id)
+	return s.PreviewInviteFor(ctx, auth.Principal{Name: principal}, id, token)
+}
+
+// PreviewInviteFor is PreviewInvite over a full principal (the #370
+// migration alias: an email-addressed invite previews for the username
+// principal carrying that email).
+func (s *Service) PreviewInviteFor(ctx context.Context, p auth.Principal, id, token string) (*Invitation, error) {
+	inv, err := s.findInviteFor(ctx, p, id)
 	if err != nil {
 		// Token-preview path: the invitee may not be authenticated yet; fall
 		// back to a direct probe is impossible without scope, so surface the
 		// lookup failure. Callers pass the authed principal for the POST.
 		return nil, err
 	}
-	if normPrincipal(inv.Subject) == normPrincipal(principal) {
+	if matchPrincipal(inv.Subject, p) {
 		cpy := *inv
 		cpy.Token = ""
 		return &cpy, nil
@@ -407,12 +463,20 @@ func (s *Service) PreviewInvite(ctx context.Context, principal, id, token string
 // second accept sees absent → done). A cancelled-vs-accept race is decided
 // by which CAS lands first; the loser gets 409.
 func (s *Service) AcceptInvite(ctx context.Context, principal, id string) (string, error) {
-	principal = normPrincipal(principal)
-	inv, err := s.findInvite(ctx, principal, id)
+	return s.AcceptInviteFor(ctx, auth.Principal{Name: principal}, id)
+}
+
+// AcceptInviteFor is AcceptInvite over a full principal: the binding
+// lands under the USERNAME even when the invite was addressed to the
+// verified email (the #370 migration), and the legacy email-spelled
+// inbox row is dropped alongside the username one.
+func (s *Service) AcceptInviteFor(ctx context.Context, p auth.Principal, id string) (string, error) {
+	principal := normPrincipal(p.Name)
+	inv, err := s.findInviteFor(ctx, p, id)
 	if err != nil {
 		return "", err
 	}
-	if normPrincipal(inv.Subject) != principal {
+	if !matchPrincipal(inv.Subject, p) {
 		return "", fmt.Errorf("%w: not your invitation", ErrForbidden)
 	}
 	// A repo deleted after the invite was issued leaves the inbox row
@@ -452,6 +516,9 @@ func (s *Service) AcceptInvite(ctx context.Context, principal, id string) (strin
 	}
 	_ = s.Store.Delete(ctx, inviteKeys(inv), "")
 	_ = s.inboxRemove(ctx, principal, id)
+	if em := normPrincipal(p.Email); em != "" && em != principal {
+		_ = s.inboxRemove(ctx, em, id)
+	}
 	if _, err := s.EnsureProfile(ctx, principal); err != nil {
 		return "", err
 	}
@@ -464,7 +531,7 @@ func (s *Service) addBinding(ctx context.Context, owner, repo, subject string, r
 	_, err := s.casUpdate(ctx, AccessKey(owner, repo), func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		var doc *AccessDoc
 		if cur == nil {
-			doc = SynthesizeDefault(owner)
+			doc = s.SynthesizeOwner(ctx, owner)
 			doc.RoleBindings = append(doc.RoleBindings, AccessBinding{Subject: subject, Role: role})
 		} else {
 			var perr error

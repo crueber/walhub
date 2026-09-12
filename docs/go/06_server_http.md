@@ -716,6 +716,24 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   reads, so the push-budget test passes unmodified with the gate wired (auth-none). Nil gate →
   legacy host-flag behavior. SSH enforces the identical rule (17.7); upload-pack/read paths
   are untouched (#345 semantics stand, including the host-flag read pass).
+- **NEW (2026-09-12) — OIDC principals are usernames, never emails** (Forgejo #370):
+  `principalFromEmail` (§8.4 email policy) keeps every admission/flag rule on the
+  verified email but returns `Principal{Name: <username>, Email: <email>}` — the
+  username resolves through the `AuthService.UsernameResolver` hook (wired in
+  `cmd/walhub` to the identity registry; nil falls back to the pure
+  `auth.DeriveUsername` base, which still satisfies "no @ in the name").
+  Session/token wires keep carrying the EMAIL (existing sessions stay valid —
+  law 5; the username re-resolves per request, stable via the alias), so
+  `MintSession`/`MintToken` take the email (`emailOf`: OIDC principal's
+  `Email`, else the name — static-token behavior unchanged). `PrincipalForName`
+  (SSH, 17 §3) resolves `@`-names as before and username-names through the
+  `EmailLookup` hook, failing closed when unwired/unknown; forwarded
+  `X-Walgit-Principal` values that are emails re-derive (name + flags),
+  usernames pass through with the caller's flags (forwarding never
+  upgrades). Rationale (law 9, leak = fail closed): the name IS the email
+  today, so every `Principal.Name` render surface leaks it and the import
+  owner dropdown feeds an unparseable owner; law 8 holds because the hooks
+  are `func` fields — the server never imports the identity package.
 
 **Divergence (2026-08-31):**
 

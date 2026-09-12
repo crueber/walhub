@@ -66,6 +66,10 @@ func TestCheckCreateOwnerMatrix(t *testing.T) {
 		wantMsgIn []string
 	}{
 		{"self", "alice@example.com", writer("alice@example.com"), 0, nil},
+		// Forgejo #370: usernames are valid owners — an import under
+		// the user's username passes admission (the email-owner bad
+		// target failure is gone because the owner is never an email).
+		{"username self", "crueber", writer("crueber"), 0, nil},
 		{"org owner", "acme", writer("alice@example.com"), 0, nil},
 		{"org member", "acme", writer("bob@example.com"), 0, nil},
 		{"nonmember org", "acme", writer("mallory@example.com"), 403,

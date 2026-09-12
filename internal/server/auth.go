@@ -52,6 +52,21 @@ type AuthService struct {
 	// handler-side per repo, where the credential's home object lives.
 	// Nil = no extra shapes (legacy behavior, unchanged).
 	ExtraCredential func(token string) (auth.Principal, *auth.AuthError, bool)
+
+	// UsernameResolver maps a verified OIDC email to its immutable
+	// username (Forgejo #370): the store-backed registry consulted at
+	// first login (users/<username>/user.json, CAS on creation for
+	// collision-uniqueness) and on every repeat login (one alias
+	// GET). Wired by composition in cmd/walhub (law 8 — the server
+	// never imports the identity package); nil (notably in unit
+	// tests) falls back to the pure auth.DeriveUsername base, which
+	// still satisfies "no @ in the principal name". An empty return
+	// also falls back to the base.
+	UsernameResolver func(email string) string
+	// EmailLookup maps a username back to its verified email for
+	// username-carrying credentials (SSH key auth via
+	// PrincipalForName). Nil or miss fails closed (ErrForbidden).
+	EmailLookup func(username string) (string, bool)
 }
 
 func NewAuthService(a *config.Auth, now func() time.Time) *AuthService {
@@ -227,9 +242,15 @@ func (s *AuthService) wgtPrincipal(wire string) (auth.Principal, *auth.AuthError
 	return s.principalFromEmail(st.Email)
 }
 
-// principalFromEmail applies the §8.4 email policy (7).
+// principalFromEmail applies the §8.4 email policy (7) and returns the
+// username principal (Forgejo #370): the principal NAME is the
+// immutable username (resolved via UsernameResolver when wired, else
+// the pure auth.DeriveUsername base) — the email never becomes a
+// principal name, owner segment, or path component. The verified email
+// rides along on Principal.Email for alias matching and session/token
+// mints (the wire keeps carrying the email).
 func (s *AuthService) principalFromEmail(email string) (auth.Principal, *auth.AuthError) {
-	email = strings.ToLower(email)
+	email = strings.ToLower(strings.TrimSpace(email))
 	domain := ""
 	if i := strings.LastIndexByte(email, '@'); i >= 0 {
 		domain = email[i+1:]
@@ -269,7 +290,30 @@ func (s *AuthService) principalFromEmail(email string) (auth.Principal, *auth.Au
 			admin = true
 		}
 	}
-	return auth.Principal{Name: email, Write: write, Admin: admin}, nil
+	return auth.Principal{Name: s.usernameFor(email), Email: email, Write: write, Admin: admin}, nil
+}
+
+// usernameFor resolves the immutable username for a verified email:
+// the wired registry when present, else the pure derivation base.
+// Never returns an @-carrying name (fail closed on the leak axis —
+// the worst case is a non-uniquified base, never an exposed email).
+func (s *AuthService) usernameFor(email string) string {
+	if s.UsernameResolver != nil {
+		if u := s.UsernameResolver(email); auth.ValidUsername(u) {
+			return u
+		}
+	}
+	return auth.DeriveUsername(email)
+}
+
+// emailOf reports the wire identity for session/token mints: the
+// verified email when the principal carries one (OIDC), else the name
+// (static-token/legacy behavior, unchanged).
+func emailOf(p auth.Principal) string {
+	if p.Email != "" {
+		return p.Email
+	}
+	return p.Name
 }
 
 // extra consults the Seam 2 ExtraCredential hook (nil-safe): (zero,
@@ -883,10 +927,15 @@ func (s *AuthService) identityForward(r *http.Request, caller auth.Principal) au
 	p.Name = name // forwarded name replaces the principal, keeps write
 	if em := principalEmail(name); em != "" {
 		if fp, aerr := s.principalFromEmail(em); aerr == nil {
+			p.Name = fp.Name
+			p.Email = fp.Email
 			p.Admin = fp.Admin
 			p.Write = fp.Write || p.Write
 		}
 	}
+	// A forwarded username (no @) carries no email to re-derive policy
+	// from; it keeps the caller's flags (fail closed — forwarding never
+	// upgrades, and the name is already leak-safe).
 	return p
 }
 
@@ -909,11 +958,31 @@ func randHex(n int) string {
 // admission and flags the browser login applies to that email; token → the
 // aggregate of the principal's static tokens (an unknown principal in token
 // mode is denied — its keys were added by credentials since removed).
+//
+// In oidc mode the name may be a username (no @): it resolves through
+// the wired EmailLookup back to the verified email and inherits that
+// email's admission + flags (fail closed — nil lookup or miss denies).
 func (a *AuthService) PrincipalForName(name string) (auth.Principal, error) {
 	switch a.cfg.Mode {
 	case "none":
 		return auth.None(), nil
 	case "oidc":
+		if !strings.Contains(name, "@") {
+			if a.EmailLookup == nil {
+				return auth.Principal{}, &auth.AuthError{Kind: auth.ErrForbidden,
+					Why: "unknown principal"}
+			}
+			em, ok := a.EmailLookup(strings.ToLower(strings.TrimSpace(name)))
+			if !ok {
+				return auth.Principal{}, &auth.AuthError{Kind: auth.ErrForbidden,
+					Why: "unknown principal"}
+			}
+			p, aerr := a.principalFromEmail(em)
+			if aerr != nil {
+				return auth.Principal{}, aerr
+			}
+			return p, nil
+		}
 		p, aerr := a.principalFromEmail(name)
 		if aerr != nil {
 			return auth.Principal{}, aerr

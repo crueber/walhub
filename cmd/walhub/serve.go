@@ -173,6 +173,32 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 	// point 3: one block per package + the per-user SSE mounts that
 	// ride the notify handler).
 	chainCollab(srv, collab)
+	// Forgejo #370: OIDC usernames. The auth service resolves verified
+	// emails to immutable usernames through the identity registry
+	// (users/<username>/user.json, CAS on creation); the reverse
+	// lookup backs username-carrying credentials (SSH key auth).
+	// Unwired (setup-only, tests) the pure derivation base applies.
+	// Store failures degrade to the base — the name stays leak-safe
+	// (no @), only collision-uniqueness waits for the next login.
+	if ident != nil {
+		identSvc := ident
+		srv.Auth().UsernameResolver = func(email string) string {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if u, err := identSvc.ResolveUsername(ctx, email); err == nil && u != "" {
+				return u
+			}
+			return ""
+		}
+		srv.Auth().EmailLookup = func(username string) (string, bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if em, err := identSvc.EmailForUsername(ctx, username); err == nil && em != "" {
+				return em, true
+			}
+			return "", false
+		}
+	}
 
 	// the SSH key registry backs both the sshd auth lookup and the
 	// /api/v1/ssh-keys surface (17_ssh.md §3); setup-only has no store, so

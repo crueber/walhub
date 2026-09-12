@@ -79,7 +79,7 @@ func (s *Service) CheckOrgOwner(ctx context.Context, org string, p auth.Principa
 	if p.Anonymous {
 		return &auth.AuthError{Kind: auth.ErrUnauthorized, Why: "authentication required"}
 	}
-	if s.isOrgOwner(ctx, org, normPrincipal(p.Name)) {
+	if s.isOrgOwnerFor(ctx, org, p) {
 		return nil
 	}
 	return &auth.AuthError{Kind: auth.ErrForbidden, Why: "org owner required"}

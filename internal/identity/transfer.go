@@ -129,7 +129,7 @@ func (s *Service) TransferRepo(ctx context.Context, srcOwner, srcRepo, dstOwner,
 			if gerr != nil {
 				return fail(gerr)
 			}
-			next := rewriteTransferAccess(raw, srcOwner, dstOwner, now)
+			next := s.rewriteTransferAccess(ctx, raw, srcOwner, dstOwner, now)
 			if next == nil {
 				// Corrupt access.json: carry the bytes untouched.
 				next = raw
@@ -153,12 +153,14 @@ func (s *Service) TransferRepo(ctx context.Context, srcOwner, srcRepo, dstOwner,
 		}
 		copied = append(copied, dstKey)
 	}
-	if !movedAccess && ValidPrincipal(dstOwner) {
+	if !movedAccess && s.isUserNamespace(ctx, dstOwner) {
 		// No access.json at the source: materialize the destination's
 		// synthesized default so a user new-owner holds the admin
-		// binding creation would have written. 412 = someone raced us
-		// (adopt, never overwrite).
-		def := SynthesizeDefault(dstOwner)
+		// binding creation would have written. Never for org
+		// destinations (org-owner resolution covers them — a
+		// user:<orgslug> binding would be a latent grant). 412 =
+		// someone raced us (adopt, never overwrite).
+		def := s.SynthesizeOwner(ctx, dstOwner)
 		def.Version = 1
 		if _, perr := store.PutBytes(ctx, s.Store, dstPrefix+"access.json", encodeAccess(def),
 			store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); perr != nil &&
@@ -249,17 +251,18 @@ func transferContentType(key string) string {
 // user:<srcOwner> bindings are dropped (the seller keeps no admin), and a
 // user:<dstOwner> admin binding is added when the destination is a user
 // namespace without one (org destinations need none: org-owner resolution
-// covers them). team: subjects name teams that still exist and move
-// untouched. Returns nil when raw does not parse (the caller carries the
-// bytes opaquely); the moved doc keeps its version (a move, not an edit)
-// with a fresh timestamp.
-func rewriteTransferAccess(raw []byte, srcOwner, dstOwner, now string) []byte {
+// covers them, and a user:<orgslug> binding would be a latent grant to
+// whoever later claims that username). team: subjects name teams that
+// still exist and move untouched. Returns nil when raw does not parse
+// (the caller carries the bytes opaquely); the moved doc keeps its
+// version (a move, not an edit) with a fresh timestamp.
+func (s *Service) rewriteTransferAccess(ctx context.Context, raw []byte, srcOwner, dstOwner, now string) []byte {
 	doc, err := parseAccess(raw)
 	if err != nil {
 		return nil
 	}
 	var kept []AccessBinding
-	if ValidPrincipal(srcOwner) {
+	if ValidPrincipal(srcOwner) && !s.orgExists(ctx, srcOwner) {
 		want := "user:" + normPrincipal(srcOwner)
 		for _, b := range doc.RoleBindings {
 			if strings.ToLower(b.Subject) == want {
@@ -270,7 +273,7 @@ func rewriteTransferAccess(raw []byte, srcOwner, dstOwner, now string) []byte {
 	} else {
 		kept = doc.RoleBindings
 	}
-	if ValidPrincipal(dstOwner) {
+	if s.isUserNamespace(ctx, dstOwner) {
 		want := "user:" + normPrincipal(dstOwner)
 		found := false
 		for _, b := range kept {

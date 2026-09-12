@@ -313,7 +313,7 @@ func TestWgtTokenLifecycle(t *testing.T) {
 		t.Fatalf("access token must carry wgt_ prefix: %q", tok.Wire)
 	}
 	p, aerr := s.authSvc.wgtPrincipal(tok.Wire)
-	if aerr != nil || p.Name != "alice@example.com" || !p.Write {
+	if aerr != nil || p.Name != "alice" || p.Email != "alice@example.com" || !p.Write {
 		t.Fatalf("p=%+v aerr=%v", p, aerr)
 	}
 	// Tampered payload → invalid.
@@ -350,7 +350,7 @@ func TestOIDCTreeBasicAuthNoIDTokens(t *testing.T) {
 	req = httptest.NewRequest("GET", "/x", nil)
 	req.AddCookie(&http.Cookie{Name: "walgit_session", Value: sess.Wire})
 	p, aerr = s.authSvc.Authenticate(req, s.cfg)
-	if aerr != nil || p.Name != "alice@example.com" {
+	if aerr != nil || p.Name != "alice" || p.Email != "alice@example.com" {
 		t.Fatalf("session principal = %+v aerr = %v", p, aerr)
 	}
 }
