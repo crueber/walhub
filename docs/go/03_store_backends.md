@@ -117,6 +117,24 @@ for conditional headers. `SignedGetURL` = the presigned URL itself (TTL as confi
 presigned GET, TTL 1 h, **no** authorization header — `Range` is not a signed header, so an edge may slice
 the object freely.
 
+#### Conditional-GET contract (Forgejo #391)
+
+The identity access LRU (`internal/identity/access.go` GetAccess) depends on exactly this behavior from
+EVERY backend class, and the contract suite (§10.2) pins it for memory + filesystem on every run
+(S3/GCS stay env-gated — verify before deploying a new backend class or store-side proxy):
+
+1. `If-None-Match: <current-version>` → 304/NotModified **iff** the version still matches.
+2. Any other `If-None-Match` (stale, unknown, malformed) → 200 with the FULL current body — a 200 is
+   always treated as fresh (the LRU refreshes from it), so a backend that cannot evaluate the
+   conditional must answer 200, never 304.
+3. No intermediary (CDN, caching proxy, edge) in front of the store may synthesize a 304: a stale 304
+   pins the LRU on its stale doc indefinitely (PutAccess invalidates only the instance that handled
+   the PUT; other instances converge via revalidation, which a false 304 defeats).
+
+On S3 the conditional headers ride the presigned GET **unsigned** (§2.1): S3 evaluates them against
+the live object, which satisfies (1)+(2) directly. A deployment that terminates those GETs at a
+cache instead of S3 must preserve (3) or access reads go stale across instances.
+
 ### 2.3 Writes: single PUT with conditionals, multipart only for Overwrite
 
 - **Single-shot PUT** (default): `PUT /<bucket>/<key>` with body, `x-amz-content-sha256` = body hash, and:
@@ -617,3 +635,8 @@ Memory and filesystem run **unconditionally** in CI; S3/GCS are env-gated integr
 - **Divergence (2026-08-31): D7 — the contract suite always runs memory AND filesystem** (§10.10); S3/GCS stay env-gated.
 - **Divergence (2026-08-31): D1 — dependency budget is exactly `go-chi/chi/v5`, `BurntSushi/toml`,
   `golang.org/x/net`; the store layer spends none of it** (stdlib only, as before).
+- **Forgejo #391 (2026-09-12): the §2.2 conditional-GET contract is load-bearing for the identity
+  access LRU** — 304 iff the version matches, 200-with-body otherwise (never a synthesized 304 from
+  an intermediary). Rationale: the #391 bounce was a failure-path UX defect, NOT store staleness —
+  memory + filesystem converge across instances by revalidation (identity evidence test), so the
+  contract needed pinning in words, not a code change.

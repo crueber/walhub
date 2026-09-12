@@ -737,3 +737,17 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   Rationale: fail closed on the leak axis (worst case is a non-uniquified
   base, never an exposed email); additive keys (law 5); the registry
   doubles as the "does this user exist" probe.
+- **Visibility save is authoritative + loud (issue #391, 2026-09-12)** — the #381 HTTP-cache
+  explanation no longer covered the settings-page bounce, and instrumented repro (one-line access
+  GET/PUT outcome logs, now permanent) plus handler-level evidence tests showed the save itself
+  failing, not the read: a stale-version PUT 409s and a non-admin PUT 403s, and the old Settings
+  save caught both into a small note while LEAVING the user's chosen value in the select — the next
+  refresh reseeded server truth and the save looked "not stuck". Cross-instance staleness was ruled
+  out on the memory + filesystem classes (a second instance sharing the store converges on its next
+  conditional revalidation; the store contract pins the If-None-Match mapping). The fix:
+  `web/src/lib/accessSave.js` is the one save path — fresh `access.get()` version immediately before
+  each PUT, one re-read retry on 409, and on ANY failure the select reseeds from server truth with a
+  specific note (403 = admin required, 409 = changed elsewhere). The Access tab shares the failure
+  wording but keeps its no-retry full-document PUT (a blind retry there would clobber a concurrent
+  binding edit). Rationale: fail closed with clear errors (law 9) applies to the UI too — the user
+  must never stare at a select the server disagrees with.

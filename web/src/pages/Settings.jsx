@@ -36,6 +36,7 @@ import DateTime from "../components/DateTime.jsx";
 import AccessTab from "./Access.jsx";
 import Wal from "./Wal.jsx";
 import { isVisibility, visibilityOptions } from "../lib/visibility.js";
+import { saveVisibilityOnly, reseedVisibility, friendlyAccessError } from "../lib/accessSave.js";
 import { shouldFetchTeams } from "../lib/access.js";
 
 // --- tiny line diff (LCS) for the per-revision "line diff" ----------------------
@@ -144,14 +145,10 @@ function GeneralTab(props) {
       return;
     }
     try {
-      // Re-read for the CAS version + current bindings; the PUT keeps
-      // every binding and flips only the visibility.
-      const doc = await props.repo.access.get();
-      const next = await props.repo.access.put({
-        version: doc?.version ?? 0,
-        visibility: vis,
-        role_bindings: doc?.role_bindings ?? [],
-      });
+      // Forgejo #391: one shared save path (lib/accessSave.js) — the CAS
+      // version comes from a fresh access.get() immediately before the
+      // PUT, with one re-read retry on 409.
+      const next = await saveVisibilityOnly(props.repo, vis);
       setVisNote(`saved (version ${next.version})`);
       // Forgejo #381: the select shows the PUT's authoritative echo, not
       // whatever the post-save refetch returns first — the header badge
@@ -165,7 +162,17 @@ function GeneralTab(props) {
       // summary, the Access tab reads the shared access doc.
       invalidate(`repo:${props.ctx.full}`);
       invalidate(`access:${props.ctx.full}`);
-    } catch (e) { setVisNote(String(e.message ?? e)); }
+    } catch (e) {
+      // Forgejo #391, authoritative + loud: on ANY failure the select is
+      // reseeded from server truth (never left showing an unsaved value)
+      // and the note names the specific cause (403 = not admin,
+      // 409 = changed elsewhere). The shared entry is invalidated too so
+      // the Access tab converges on the same truth.
+      const truth = await reseedVisibility(props.repo);
+      if (truth !== null) setVis(truth);
+      invalidate(`access:${props.ctx.full}`);
+      setVisNote(friendlyAccessError(e));
+    }
   }
 
   return (

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -181,12 +182,15 @@ func (s *Service) GetAccess(ctx context.Context, owner, repo string) (*AccessDoc
 	res, err := s.Store.Get(ctx, key, store.GetOptions{IfNoneMatch: known})
 	if err != nil {
 		if store.IsNotFound(err) {
-			return s.SynthesizeOwner(ctx, owner), "", nil
+			doc := s.SynthesizeOwner(ctx, owner)
+			slog.Debug("identity: access GET", "repo", owner+"/"+repo, "source", "synthesized", "visibility", string(doc.Visibility))
+			return doc, "", nil
 		}
 		return nil, "", err
 	}
 	switch r := res.(type) {
 	case store.NotModified:
+		slog.Debug("identity: access GET", "repo", owner+"/"+repo, "source", "lru", "version", cached.Version, "visibility", string(cached.Visibility))
 		return cached, known, nil
 	case store.Object:
 		defer r.Body.Close()
@@ -199,6 +203,7 @@ func (s *Service) GetAccess(ctx context.Context, owner, repo string) (*AccessDoc
 			return nil, "", perr
 		}
 		s.access.set(owner, repo, r.Meta.Version, doc)
+		slog.Debug("identity: access GET", "repo", owner+"/"+repo, "source", "store", "version", doc.Version, "visibility", string(doc.Visibility))
 		return doc, r.Meta.Version, nil
 	}
 	return nil, "", fmt.Errorf("identity: unknown GetResult for %s", key)
@@ -279,6 +284,7 @@ func (s *Service) PutAccess(ctx context.Context, owner, repo string, base store.
 	if cerr != nil {
 		return nil, cerr
 	}
+	slog.Debug("identity: access PUT", "repo", owner+"/"+repo, "to", result.Version, "visibility", string(result.Visibility))
 	s.access.invalidate(owner, repo)
 	if s.Stream != nil {
 		s.Stream(ctx, owner+"/"+repo)

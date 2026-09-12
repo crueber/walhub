@@ -2,6 +2,7 @@ package identity
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -215,18 +216,22 @@ func (h *Handler) routeAccess(w http.ResponseWriter, r *http.Request, owner, rep
 	switch r.Method {
 	case http.MethodGet:
 		if cerr := h.Svc.CheckRole(r.Context(), owner, repo, p, RoleTriage); cerr != nil {
+			slog.Info("identity: access GET denied", "repo", owner+"/"+repo, "principal", p.Name, "why", cerr.Error())
 			writeErr(w, cerr)
 			return true
 		}
 		doc, ver, err := h.Svc.GetAccess(r.Context(), owner, repo)
 		if err != nil {
+			slog.Info("identity: access GET error", "repo", owner+"/"+repo, "err", err.Error())
 			writeErr(w, err)
 			return true
 		}
+		slog.Debug("identity: access GET", "repo", owner+"/"+repo, "version", doc.Version, "visibility", string(doc.Visibility))
 		writeCached(w, r, ccMutable, etagOf("access", doc.Version)+"-"+string(ver), http.StatusOK, accessView(doc))
 		return true
 	case http.MethodPut:
 		if cerr := h.Svc.CheckRole(r.Context(), owner, repo, p, RoleAdmin); cerr != nil {
+			slog.Info("identity: access PUT denied", "repo", owner+"/"+repo, "principal", p.Name, "why", cerr.Error())
 			writeErr(w, cerr)
 			return true
 		}
@@ -243,18 +248,24 @@ func (h *Handler) routeAccess(w http.ResponseWriter, r *http.Request, owner, rep
 		}
 		cur, curVer, err := h.Svc.GetAccess(r.Context(), owner, repo)
 		if err != nil {
+			slog.Info("identity: access PUT reread error", "repo", owner+"/"+repo, "err", err.Error())
 			writeErr(w, err)
 			return true
 		}
 		if cur.Version != body.Version {
+			slog.Info("identity: access PUT conflict", "repo", owner+"/"+repo, "principal", p.Name,
+				"have", body.Version, "current", cur.Version)
 			writePlain(w, http.StatusConflict, "access.json changed under you; reload")
 			return true
 		}
 		doc, err := h.Svc.PutAccess(r.Context(), owner, repo, curVer, Visibility(body.Visibility), body.RoleBindings)
 		if err != nil {
+			slog.Info("identity: access PUT error", "repo", owner+"/"+repo, "principal", p.Name, "err", err.Error())
 			writeErr(w, err)
 			return true
 		}
+		slog.Info("identity: access PUT", "repo", owner+"/"+repo, "principal", p.Name,
+			"from", body.Version, "to", doc.Version, "visibility", string(doc.Visibility))
 		writeCached(w, r, ccNoStore, "", http.StatusOK, map[string]int{"version": doc.Version})
 		return true
 	}
