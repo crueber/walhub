@@ -37,6 +37,7 @@ import AccessTab from "./Access.jsx";
 import Wal from "./Wal.jsx";
 import { isVisibility, visibilityOptions } from "../lib/visibility.js";
 import { saveVisibilityOnly, reseedVisibility, friendlyAccessError } from "../lib/accessSave.js";
+import { docVisibility, reseed as reseedVisTrack, rebase as rebaseVisTrack, isDirty as isVisTrackDirty } from "../lib/visibilityReseed.js";
 import { shouldFetchTeams } from "../lib/access.js";
 
 // --- tiny line diff (LCS) for the per-revision "line diff" ----------------------
@@ -88,6 +89,7 @@ function GeneralTab(props) {
   // the bindings preserved. Non-privileged saves surface the 403 in the
   // note, the same read-mostly behavior as the description save.
   const [getVis, setVis] = createSignal(null); // null = not yet prefilled
+  const [getVisBase, setVisBase] = createSignal(null); // null = unseeded (loading)
   const [getVisNote, setVisNote] = createSignal("");
 
   const [getDoc] = useData(`settings:${props.ctx.full}`, () => props.repo.settings.get(), 5000);
@@ -110,13 +112,19 @@ function GeneralTab(props) {
     }
   });
 
-  // Prefill the visibility select once the access doc arrives.
+  // Forgejo #394: the select follows the shared entry while clean — an
+  // Access-tab save, another tab's save, or poll revalidation delivering
+  // a newer doc reseeds the untouched select; user edits are never
+  // clobbered (lib/visibilityReseed.js — the same baseline/dirty pattern
+  // the Access tab already uses). Sets fire only on actual field
+  // changes, so this effect settles instead of looping.
+  const visTrack = () => ({ value: getVis(), base: getVisBase() });
   createEffect(() => {
-    const doc = getAccess();
-    if (doc !== undefined && doc !== null && getVis() === null) {
-      setVis(doc.visibility ?? "public");
-    }
+    const next = reseedVisTrack(visTrack(), docVisibility(getAccess()));
+    if (next.value !== getVis()) setVis(next.value);
+    if (next.base !== getVisBase()) setVisBase(next.base);
   });
+  const visDirty = () => isVisTrackDirty(visTrack());
 
   async function save() {
     const desc = String(getText() ?? "");
@@ -157,7 +165,11 @@ function GeneralTab(props) {
       // refetch both entries (keys verified to match the useData seeds);
       // the 5 s prefill TTL is kept deliberately — ttl=0 would refetch-loop
       // against the data layer's signal-subscribed effect.
-      setVis(next.visibility ?? vis);
+      // Forgejo #394: rebase the baseline on the authoritative echo so
+      // the form settles clean at the saved value.
+      const confirmed = rebaseVisTrack(visTrack(), next.visibility ?? vis);
+      setVis(confirmed.value);
+      setVisBase(confirmed.base);
       // Reflect without a full reload: the header badge reads the shared
       // summary, the Access tab reads the shared access doc.
       invalidate(`repo:${props.ctx.full}`);
@@ -167,9 +179,15 @@ function GeneralTab(props) {
       // reseeded from server truth (never left showing an unsaved value)
       // and the note names the specific cause (403 = not admin,
       // 409 = changed elsewhere). The shared entry is invalidated too so
-      // the Access tab converges on the same truth.
+      // the Access tab converges on the same truth. The baseline
+      // rebases to truth too (Forgejo #394), so the form settles clean
+      // instead of flagging the server value as an unsaved edit.
       const truth = await reseedVisibility(props.repo);
-      if (truth !== null) setVis(truth);
+      if (truth !== null) {
+        const rebased = rebaseVisTrack(visTrack(), truth);
+        setVis(rebased.value);
+        setVisBase(rebased.base);
+      }
       invalidate(`access:${props.ctx.full}`);
       setVisNote(friendlyAccessError(e));
     }
@@ -201,18 +219,27 @@ function GeneralTab(props) {
         <Show when={getAccess()} fallback={<p class="muted text-sm">Sign in with triage role or higher to view visibility.</p>}>
           <label class="flex items-center gap-2 text-sm">
             <span class="muted">Who may read this repository:</span>
+            {/* Forgejo #394: unseeded (loading) is a blank disabled select,
+                never a public-looking default — value "" matches no option. */}
             <select
               class="input"
-              value={getVis() ?? "public"}
+              value={getVis() ?? ""}
+              disabled={getVis() === null}
               onChange={(e) => setVis(e.currentTarget.value)}
               aria-label="Visibility"
             >
               <For each={visibilityOptions(isOrg())}>{(o) => <option value={o.value}>{o.label}</option>}</For>
             </select>
           </label>
+          <Show when={getVis() === null}>
+            <p class="muted mt-1 text-xs">loading current visibility…</p>
+          </Show>
+          <Show when={visDirty()}>
+            <p class="warn-line !mt-1 !text-sm">unsaved changes</p>
+          </Show>
           <p class="muted mt-1 text-xs">Public repositories are readable without an account. Saving requires admin.</p>
           <div class="mt-2 flex flex-wrap items-center gap-2">
-            <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={saveVisibility}>Save visibility</button>
+            <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={saveVisibility} disabled={getVis() === null}>Save visibility</button>
           </div>
           <Show when={getVisNote()}>
             <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getVisNote()}</p>

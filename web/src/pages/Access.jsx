@@ -6,7 +6,7 @@
 // into the subject field); free text stays the fallback and the spelling
 // validates client-side (lib/access.js) with a friendly note.
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, createEffect, For, Show } from "solid-js";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
@@ -30,7 +30,11 @@ export default function AccessTab(props) {
   // Baseline: the last server doc (dirty() compares the form against this,
   // not against the cached getDoc which invalidate() does not refresh).
   const [getBase, setBase] = createSignal(null);
-  const [getVis, setVis] = createSignal("public");
+  // Forgejo #394: null = unseeded (loading) — the select renders a blank
+  // disabled control until server truth arrives, never a public-looking
+  // default. reset() fills it from a PRESENT doc, where `?? "public"` is
+  // the genuine missing-field default.
+  const [getVis, setVis] = createSignal(null);
   const [getRows, setRows] = createSignal([]);
   const [getNote, setNote] = createSignal("");
   const [getSub, setSub] = createSignal("");
@@ -137,11 +141,21 @@ export default function AccessTab(props) {
     );
   };
 
-  // Seed the form on first load.
-  const seed = (doc) => {
-    if (!getBase() && doc) reset(doc);
-    return null;
-  };
+  // Forgejo #394: follow the shared entry while the form is clean —
+  // a Settings visibility save, an explicit reload, or poll revalidation
+  // delivering a newer doc reseeds the untouched form; user edits are
+  // never clobbered (same rule as Settings, lib/visibilityReseed.js).
+  // The baseline rebases ONLY while clean, so a dirty form keeps its
+  // original CAS version and a concurrent save still 409s into the
+  // "changed under you, reload" path instead of silently
+  // last-writer-winning over the remote edit. The doc-identity guard
+  // keeps this settled: reset() baselines this exact doc, so the
+  // post-reset rerun skips.
+  createEffect(() => {
+    const doc = getDoc();
+    if (!doc) return;
+    if (doc !== getBase() && (!getBase() || !dirty())) reset(doc);
+  });
 
   return (
     <div>
@@ -151,19 +165,22 @@ export default function AccessTab(props) {
       <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
         {(doc) => (
           <>
-            {seed(doc())}
             <section class="card p-4">
               <h3 class="mb-2 font-semibold">Visibility</h3>
               <label class="flex items-center gap-2 text-sm">
                 <span class="muted">Anonymous readers:</span>
                 <select
                   class="input"
-                  value={getVis()}
+                  value={getVis() ?? ""}
+                  disabled={getVis() === null}
                   onChange={(e) => setVis(e.currentTarget.value)}
                 >
                   <For each={visibilityOptions(isOrg())}>{(o) => <option value={o.value}>{o.label}</option>}</For>
                 </select>
               </label>
+              <Show when={getVis() === null}>
+                <p class="muted mt-1 text-xs">loading current visibility…</p>
+              </Show>
             </section>
 
             <section class="card mt-4 p-4">
@@ -246,6 +263,9 @@ export default function AccessTab(props) {
               <button type="button" class="btn px-3 py-1" onClick={load}>reload</button>
               <span class="muted text-xs">version {getBase()?.version ?? 0} · full-document PUT · 409 means someone else saved first</span>
             </div>
+            <Show when={dirty()}>
+              <p class="warn-line mt-2 !text-sm">unsaved changes</p>
+            </Show>
             <Show when={getNote()}>
               <p class="mt-2 text-sm text-amber-700 dark:text-amber-300">{getNote()}</p>
             </Show>
