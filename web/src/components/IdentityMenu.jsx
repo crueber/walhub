@@ -1,7 +1,15 @@
 // web/src/components/IdentityMenu.jsx — Forgejo #371: the navbar identity
-// control (upper right, left of the tray): an avatar-or-username button
-// opening a dropdown with profile, keys, invitations, setup (admin-only),
-// and log out.
+// control (upper right, far right of the cluster): a bare-circle
+// avatar-or-initials trigger opening a dropdown with profile, keys,
+// invitations, setup (admin-only), and log out.
+//
+// Forgejo #390 (restyle only): the trigger dropped the btn box entirely —
+// the avatar is a standalone circle (h-8 w-8) with a light outer ring
+// (ring-1 zinc) that emphasizes on hover (ring-2 emerald); a small caret
+// beside the circle plus the hover ring keeps the dropdown affordance.
+// Without an avatar the username's initial renders in the same circle
+// shape. Popover behavior (outside-click, Esc + focus return, arrows,
+// menu roles) is untouched.
 //
 // Props: { username, avatarUrl?, items } — items are navModel menuItems
 // ({kind, label, href}); logout renders as a plain anchor (GET
@@ -72,7 +80,7 @@ export default function IdentityMenu(props) {
       <button
         ref={toggleRef}
         type="button"
-        class="btn max-w-32 truncate px-2 py-1"
+        class="group flex max-w-32 items-center gap-0.5 rounded-full p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
         title={props.username}
         aria-label={`Account: ${props.username}`}
         aria-haspopup="menu"
@@ -81,10 +89,27 @@ export default function IdentityMenu(props) {
       >
         <Show
           when={props.avatarUrl}
-          fallback={<span class="font-medium">{props.username}</span>}
+          fallback={
+            <span
+              aria-hidden="true"
+              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-sm font-semibold uppercase text-zinc-600 ring-1 ring-zinc-300 transition group-hover:ring-2 group-hover:ring-emerald-500/50 dark:bg-zinc-700 dark:text-zinc-200 dark:ring-zinc-600"
+            >
+              {props.username?.slice(0, 1)}
+            </span>
+          }
         >
-          <img src={props.avatarUrl} alt="" class="inline h-5 w-5 rounded-full" />
+          <img
+            src={props.avatarUrl}
+            alt=""
+            class="h-8 w-8 shrink-0 rounded-full ring-1 ring-zinc-300 transition group-hover:ring-2 group-hover:ring-emerald-500/50 dark:ring-zinc-600"
+          />
         </Show>
+        <span
+          aria-hidden="true"
+          class="select-none text-[10px] leading-none text-zinc-400 transition group-hover:text-zinc-600 dark:text-zinc-500 dark:group-hover:text-zinc-300"
+        >
+          ▾
+        </span>
       </button>
       <Show when={getOpen()}>
         <div
