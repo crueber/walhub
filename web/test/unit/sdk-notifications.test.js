@@ -24,6 +24,13 @@ const SURFACE = [
   { name: "webhooks.remove", run: (c) => c.repo("o/r").webhooks.remove("abc"), method: "DELETE", path: "/o/r/api/webhooks/abc" },
   { name: "webhooks.ping", run: (c) => c.repo("o/r").webhooks.ping("abc"), method: "POST", path: "/o/r/api/webhooks/abc/ping" },
   { name: "webhooks.deliveries", run: (c) => c.repo("o/r").webhooks.deliveries("abc"), method: "GET", path: "/o/r/api/webhooks/abc/deliveries" },
+  { name: "orgs.webhooks.list", run: (c) => c.orgs.webhooks.list("acme"), method: "GET", path: "/api/v1/orgs/acme/webhooks" },
+  { name: "orgs.webhooks.create", run: (c) => c.orgs.webhooks.create("acme", { url: "https://h.example/x" }), method: "POST", path: "/api/v1/orgs/acme/webhooks" },
+  { name: "orgs.webhooks.get", run: (c) => c.orgs.webhooks.get("acme", "abc"), method: "GET", path: "/api/v1/orgs/acme/webhooks/abc" },
+  { name: "orgs.webhooks.update", run: (c) => c.orgs.webhooks.update("acme", "abc", { active: false }), method: "PATCH", path: "/api/v1/orgs/acme/webhooks/abc" },
+  { name: "orgs.webhooks.remove", run: (c) => c.orgs.webhooks.remove("acme", "abc"), method: "DELETE", path: "/api/v1/orgs/acme/webhooks/abc" },
+  { name: "orgs.webhooks.ping", run: (c) => c.orgs.webhooks.ping("acme", "abc"), method: "POST", path: "/api/v1/orgs/acme/webhooks/abc/ping" },
+  { name: "orgs.webhooks.deliveries", run: (c) => c.orgs.webhooks.deliveries("acme", "abc"), method: "GET", path: "/api/v1/orgs/acme/webhooks/abc/deliveries" },
 ];
 
 test("notifications surface: every member hits its exact endpoint and method", async () => {

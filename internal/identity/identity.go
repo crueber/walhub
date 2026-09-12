@@ -217,6 +217,17 @@ type Service struct {
 	// commit (nil = no-op; composition wires the repo bus). Synchronous
 	// post-commit fan-out per P8; the access doc is the backfill truth.
 	Stream func(ctx context.Context, repo string)
+
+	// OrgEvent observes org membership/team/invite transitions after
+	// their CAS commits (nil = no-op; composition wires the notify
+	// org-hook log). Synchronous post-commit emission per P8 — the
+	// members/teams/invitation docs stay the backfill truth, so a drop
+	// in the observer loses one webhook event, never data. The
+	// observer must never block on delivery (queue + wake only).
+	// Actor is best-effort: service methods without an actor parameter
+	// report "" (system) with the subject in the title; invite paths
+	// carry the inviter/invitee they know.
+	OrgEvent func(ctx context.Context, org, action, actor, title string)
 }
 
 // New builds a Service over st.
@@ -231,6 +242,15 @@ func New(st store.ObjectStore, cfg *config.Config) *Service {
 	}
 	s.Repos = s.listRepos
 	return s
+}
+
+// emitOrgEvent invokes the OrgEvent observer when wired (nil-safe).
+// Callers invoke it only after the mutation's CAS committed.
+func (s *Service) emitOrgEvent(ctx context.Context, org, action, actor, title string) {
+	if s.OrgEvent == nil {
+		return
+	}
+	s.OrgEvent(ctx, org, action, actor, title)
 }
 
 // listRepos enumerates [owner, repo] pairs via delimiter listings

@@ -23,6 +23,12 @@
 //	repos/<o>/<r>/webhooks/<id>.json                 CAS'd hook config (§1.4)
 //	repos/<o>/<r>/webhooks/cursors/<id>.json         CAS'd per-hook cursor (§5.3)
 //	repos/<o>/<r>/webhooks/<id>/deliveries/recent.json  CAS'd last-25 ring (§1.4)
+//	orgs/<org>/webhooks/<id>.json                   CAS'd org hook config (#363)
+//	orgs/<org>/webhooks/cursors/<id>.json           CAS'd per-hook org-log cursor (#363)
+//	orgs/<org>/webhooks/cursors/<id>/repos/<repo>.json  CAS'd per-(hook, member repo) cursor (#363)
+//	orgs/<org>/webhooks/<id>/deliveries/recent.json  CAS'd last-25 ring (#363)
+//	orgs/<org>/orgevents/<seq:012x>.json            immutable org events, Create-only (#363)
+//	orgs/<org>/meta/orghook_state.json              CAS'd org-log seq allocator {"next_seq": N} (#363)
 //
 // ### Concurrency
 //
@@ -405,12 +411,15 @@ type Authenticator func(r *http.Request) (auth.Principal, *auth.AuthError)
 // webhooks, SSE buses, tasks, retention. Construct with New; Roles,
 // Profiles, Teams may be nil in tests that exercise pure paths (nil
 // Roles falls back to principal flags; nil Profiles/Teams drops
-// mention/team recipients).
+// mention/team recipients). OrgOwner may be nil in tests that do not
+// exercise org hooks (nil fails closed: only host admins pass the
+// org-owner gate).
 type Service struct {
 	Store    store.ObjectStore
 	Roles    RoleService
 	Profiles ProfileProber
 	Teams    TeamReader
+	OrgOwner OrgOwnerChecker
 	Now      func() time.Time
 
 	// RetentionDays overrides DefaultRetentionDays (tests; composition
@@ -432,6 +441,11 @@ type Service struct {
 	rbus  *repoBus
 	tasks *taskTable
 	wake  chan string
+	// wakeOrgCh carries org names for org-hook passes, separate from
+	// the repo wake channel so a repo owned by "orgs" can never
+	// misroute (and vice versa). Same coalescing discipline: a full
+	// channel means a pass is already pending.
+	wakeOrgCh chan string
 
 	// Phase-1 drain state (13 §8, same shape as the #74 import fix):
 	// drainCtx is cancelled by Drain; task leaders (webhooks, fanout)
@@ -470,6 +484,21 @@ type Service struct {
 	hookMu      sync.Mutex
 	hookSeen    map[string]int
 	hookPending map[string]bool
+
+	// orgHookSeen is the org-hooks-sweep high-water (#363): org →
+	// highest orghook_state NextSeq the sweep has scheduled a pass for.
+	// orgRepoSeen gates the member-repo half: "org\x00repo" → highest
+	// member collab_state NextSeq scheduled (per org+repo, not per
+	// hook — every hook on the org sees the same repo head; the
+	// per-(hook, repo) delivery cursors stay in the bucket).
+	// orgHookPending marks orgs whose last pass left any cursor behind
+	// a head plus orgs with a new or newly-activated hook not yet
+	// delivered. In-memory only (a restart re-passes every org with
+	// hooks once, then the watermarks rebuild); guarded by hookMu,
+	// never held across a store or network call.
+	orgHookSeen    map[string]int
+	orgRepoSeen    map[string]int
+	orgHookPending map[string]bool
 }
 
 // New builds a Service over st.
@@ -479,9 +508,12 @@ func New(st store.ObjectStore, roles RoleService) *Service {
 		Store: st, Roles: roles, Now: time.Now,
 		ubus: newUserBus(), rbus: newRepoBus(),
 		tasks: newTaskTable(), wake: make(chan string, 64),
+		wakeOrgCh:  make(chan string, 64),
 		fanoutSeen: map[string]int{},
 		hookSeen:   map[string]int{}, hookPending: map[string]bool{},
-		drainCtx: drainCtx, drainCancel: drainCancel,
+		orgHookSeen: map[string]int{}, orgRepoSeen: map[string]int{},
+		orgHookPending: map[string]bool{},
+		drainCtx:       drainCtx, drainCancel: drainCancel,
 	}
 }
 

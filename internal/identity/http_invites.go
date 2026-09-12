@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -137,25 +138,14 @@ func (h *Handler) routeOrgInvites(w http.ResponseWriter, r *http.Request, org st
 			methodNotAllowed(w, "DELETE")
 			return true
 		}
-		raw, _, gerr := store.GetBytes(r.Context(), h.Svc.Store, OrgInviteKey(org, rest[0]), store.GetOptions{})
-		if gerr != nil {
-			if store.IsNotFound(gerr) {
+		if _, derr := h.Svc.DeleteOrgInvite(r.Context(), org, rest[0], normPrincipal(p.Name)); derr != nil {
+			if errors.Is(derr, ErrNotFound) {
 				writePlain(w, http.StatusNotFound, "unknown invitation")
 				return true
 			}
-			writeErr(w, gerr)
-			return true
-		}
-		inv, perr := parseInvite(raw)
-		if perr != nil {
-			writeErr(w, perr)
-			return true
-		}
-		if derr := h.Svc.Store.Delete(r.Context(), OrgInviteKey(org, rest[0]), ""); derr != nil && !store.IsNotFound(derr) {
 			writeErr(w, derr)
 			return true
 		}
-		_ = h.Svc.inboxRemove(r.Context(), normPrincipal(inv.Subject), rest[0])
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	}

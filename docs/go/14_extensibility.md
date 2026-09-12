@@ -607,3 +607,25 @@ superseded by Forgejo #272, which lists the mirror repo lanes; see the #272 amen
   arrays stay `[]`; the count is never null because membership implies ≥1 live repo), served
   through the existing triple twins. The frozen overwritable-key list is untouched (no bucket
   state added — the count derives from the manifest-gated registry walk at request time).
+- **Forgejo #363 org webhooks amend the Feature 06 notify families (2026-09-12,
+  docs/features/06 §1.5/§5.4).** The frozen overwritable-key list gains the org-hook
+  families — `orgs/<org>/webhooks/<id>.json` (CAS'd hook config, same shape as the repo
+  hook), `orgs/<org>/webhooks/cursors/<id>.json` (CAS'd org-log cursor),
+  `orgs/<org>/webhooks/cursors/<id>/repos/<repo>.json` (CAS'd per-(hook, member repo)
+  cursor over the member repo's activity log — read, never written, by the org pass),
+  `orgs/<org>/webhooks/<id>/deliveries/recent.json` (CAS'd last-25 ring),
+  `orgs/<org>/meta/orghook_state.json` (CAS'd org-log seq allocator `{"next_seq": N}`)
+  — in the same revision that adopts the feature (14 §14.11 rule 2). Org events
+  (`orgs/<org>/orgevents/<seq>.json`) are Create-only immutable — not overwritable, no
+  listing needed. One task kind (`org-webhooks`, single-flight `("orgs/<org>",
+  "org-webhooks")` via the notify sweep + wake-up, same in-process pattern as the 06
+  kinds — no core touch). Seam 1 in code is the `server.ExtraRoutes` chain (top-level
+  `/api/v1/orgs/{org}/webhooks` twins, owner-gated through the narrow `OrgOwnerChecker`
+  seam satisfied by identity's `CheckOrgOwner`); discovery templates register via the
+  #272 `ExposedTemplates` + `api.RegisterExposed` rule in the same change. Identity
+  gains a nil-safe `OrgEvent` observer invoked post-commit by the member/team/invite
+  mutations (the P8 emission seam; composition wires it to notify) plus `DeleteOrgInvite`
+  so both org-invite cancel paths emit. Rationale: per-scope cursors are the same
+  isolation shape as per-hook/per-sink cursors (a lagging member repo holds back only its
+  own cursor); the org log needs the same CAS allocator discipline as the repo activity
+  log it mirrors.

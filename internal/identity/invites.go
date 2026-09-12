@@ -191,6 +191,7 @@ func (s *Service) CreateOrgInvite(ctx context.Context, org, email, role, invited
 	if err := s.inboxAdd(ctx, email, InboxEntry{ID: id, Org: org, Role: role, InvitedBy: inv.InvitedBy, CreatedAt: inv.CreatedAt, ExpiresAt: inv.ExpiresAt}); err != nil {
 		return nil, err
 	}
+	s.emitOrgEvent(ctx, org, "invite_created", normPrincipal(invitedBy), email+" invited to "+org)
 	return inv, nil
 }
 
@@ -429,6 +430,9 @@ func (s *Service) AcceptInvite(ctx context.Context, principal, id string) (strin
 		if _, serr := s.SetMember(ctx, inv.Org, principal, OrgRole(inv.Role)); serr != nil {
 			return "", serr
 		}
+		// SetMember above already emitted member_added/member_role_changed;
+		// the acceptance itself is its own org-hook event.
+		s.emitOrgEvent(ctx, inv.Org, "invite_accepted", principal, principal+" accepted the "+inv.Org+" invitation")
 	case InviteRepo:
 		org, repo, ok := strings.Cut(inv.Repo, "/")
 		if !ok {
@@ -513,6 +517,36 @@ func (s *Service) CancelInvite(ctx context.Context, principal, id string) (*Invi
 		return nil, derr
 	}
 	_ = s.inboxRemove(ctx, normPrincipal(inv.Subject), id)
+	if inv.Kind == InviteOrg {
+		s.emitOrgEvent(ctx, inv.Org, "invite_cancelled", principal, inv.Subject+"'s "+inv.Org+" invitation cancelled")
+	}
+	return inv, nil
+}
+
+// DeleteOrgInvite cancels one org invitation by id (owner-cancel path,
+// authorized by the handler via CheckOrgOwner): deletes the issuer
+// object and drops the inbox entry, then emits invite_cancelled for the
+// org-hook log (Forgejo #363, P8 — post-commit). Unknown ids are
+// ErrNotFound; a corrupt object is ErrInvalid. The invitee-decline path
+// (top-level DELETE) goes through CancelInvite instead, which locates
+// the invite through the caller's own inbox.
+func (s *Service) DeleteOrgInvite(ctx context.Context, org, id, actor string) (*Invitation, error) {
+	raw, _, gerr := store.GetBytes(ctx, s.Store, OrgInviteKey(org, id), store.GetOptions{})
+	if gerr != nil {
+		if store.IsNotFound(gerr) {
+			return nil, fmt.Errorf("%w: unknown invitation", ErrNotFound)
+		}
+		return nil, gerr
+	}
+	inv, perr := parseInvite(raw)
+	if perr != nil {
+		return nil, perr
+	}
+	if derr := s.Store.Delete(ctx, OrgInviteKey(org, id), ""); derr != nil && !store.IsNotFound(derr) {
+		return nil, derr
+	}
+	_ = s.inboxRemove(ctx, normPrincipal(inv.Subject), id)
+	s.emitOrgEvent(ctx, org, "invite_cancelled", normPrincipal(actor), inv.Subject+"'s "+org+" invitation cancelled")
 	return inv, nil
 }
 

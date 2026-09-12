@@ -218,9 +218,11 @@ func (s *Service) wakeRepo(repo string) {
 // once a day. A fan-out redrain runs once at startup (the issue #77
 // restart backstop — pending drains whose task died with the last
 // process re-enqueue before wake-ups are served) and on every minute
-// tick. Every goroutine exits via ctx (13 channel rule).
+// tick. The org-hooks sweep rides the same minute tick (Forgejo #363).
+// Every goroutine exits via ctx (13 channel rule).
 func (s *Service) Run(ctx context.Context) {
 	s.sweepFanout(ctx)
+	s.sweepOrgHooks(ctx)
 	webhooksTick := time.NewTicker(time.Minute)
 	retentionTick := time.NewTicker(24 * time.Hour)
 	defer webhooksTick.Stop()
@@ -231,9 +233,12 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case repo := <-s.wake:
 			s.StartWebhooks(ctx, repo)
+		case org := <-s.wakeOrgCh:
+			s.StartOrgWebhooks(ctx, org)
 		case <-webhooksTick.C:
 			s.sweepWebhooks(ctx)
 			s.sweepFanout(ctx)
+			s.sweepOrgHooks(ctx)
 		case <-retentionTick.C:
 			s.RunRetention(ctx)
 		}
@@ -863,7 +868,10 @@ func (s *Service) retainOverflow(ctx context.Context, principal string, dead map
 // retainRepoEvents deletes activity events below the minimum webhook
 // cursor AND older than CollabEventsFloorDays. Events are seq-ordered ≈
 // time-ordered, so the scan stops at the first too-new event. Capped per
-// pass; hookless repos compact everything past the floor.
+// pass; hookless repos compact everything past the floor. Org hooks
+// (Forgejo #363) hold the floor too: an org hook's per-(hook, repo)
+// cursor may lag the repo hooks' cursors, and the org pass may not have
+// delivered the event yet — so the minimum folds the org cursors in.
 func (s *Service) retainRepoEvents(ctx context.Context, owner, repo string, now time.Time) {
 	floor := now.AddDate(0, 0, -CollabEventsFloorDays).Format(dateTimeFmt)
 	minCursor := -1
@@ -880,6 +888,12 @@ func (s *Service) retainRepoEvents(ctx context.Context, owner, repo string, now 
 		c := s.readCursor(ctx, owner, repo, h.ID)
 		if minCursor < 0 || c < minCursor {
 			minCursor = c
+		}
+	}
+	if orgMin := s.orgRepoMinCursor(ctx, owner, repo); orgMin >= 0 {
+		active++
+		if minCursor < 0 || orgMin < minCursor {
+			minCursor = orgMin
 		}
 	}
 	if active == 0 {

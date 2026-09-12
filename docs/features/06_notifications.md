@@ -88,6 +88,25 @@ Delivery records: `repos/<o>/<r>/webhooks/<id>/deliveries/recent.json` — one C
 `{updated_at, entries:[{seq, event, status, at, error?, duration_ms}]}` (debugging surface only, not
 a durability mechanism).
 
+### 1.5 Org webhook configs — `orgs/<org>/webhooks/<id>.json` (Forgejo #363)
+
+Same wire shape as §1.4 (ULID id, write-only secret → `secret_set`, `events` filter, `active`,
+`insecure_tls`, same caps — `MaxHooks` per org, 409 past it). One config fans out across the
+whole org: the org's own membership/team/invite event log (§5.4) plus every member repo's
+`collab-events/` log. Delivery state per hook is two cursor families (same
+`{"published_seq", "updated_at"}` CAS'd body as §5.3):
+
+- `orgs/<org>/webhooks/cursors/<id>.json` — the org-log cursor;
+- `orgs/<org>/webhooks/cursors/<id>/repos/<repo>.json` — one cursor per member repo over that
+  repo's activity log (read, never written — the repo log stays the repo's).
+
+Deliveries land on the same last-25 ring shape at
+`orgs/<org>/webhooks/<id>/deliveries/recent.json`. Delete removes the config, both cursor
+families, and the ring. The org event objects (`orgs/<org>/orgevents/<seq:012x>.json`,
+Create-only) and the org-log allocator (`orgs/<org>/meta/orghook_state.json`, CAS'd
+`{"next_seq": N}`) join the frozen overwritable family alongside the §1.4 keys (14 §14.11
+rule 2, in the same revision that adopts the feature).
+
 ### Concurrency
 
 Hazard: a fan-out touching N notifications races concurrent emissions on the same thread. Avoidance:
@@ -247,6 +266,60 @@ of 14 §14.6. Cursor below a compacted/gap window: count `walhub_webhook_gap_tot
 from the oldest readable event (09 §12.3's honest-gap semantics). The loop body never runs under any
 repo lock (13 §2 rule 4); it is a maintainer-pass unit with a 10 s-per-POST context budget.
 
+### 5.4 Org webhooks (Forgejo #363)
+
+GitHub/Forgejo parity for org owners: one hook config observes every repo the org owns plus the
+org's membership lifecycle, instead of one per-repo hook per repo. Scope decisions, stated plainly:
+
+- **Member-repo half:** every member repo's `collab-events/` log (§5.3) is delivered through the
+  per-(hook, repo) cursor. This is the collab activity family (issues, PRs, reviews, checks,
+  releases, pings) — NOT git pushes, which stay on the WAL events-bridge TOML sinks (Seam 4;
+  the bridge is git-only by law), and NOT repo creation, which surfaces as the new repo's
+  first activity event rather than a synthetic record (a record without an author or a
+  timestamp would be a lie; the create twin and the PUT lane share no single seam).
+- **Org-log half:** `orgs/<org>/orgevents/<seq:012x>.json` carries `member_added`,
+  `member_removed`, `member_role_changed`, `team_created`, `team_deleted`,
+  `team_member_added`, `team_member_removed`, `invite_created`, `invite_accepted`,
+  `invite_cancelled` (`Kind: "org"`, `Repo` = the org name). The identity mutations append
+  through a nil-safe `OrgEvent` observer after their CAS commits (P8 — the
+  members/teams/invitation docs stay the backfill truth; composition wires it to
+  `EmitOrgEvent`, which reserves, appends, and wakes but never blocks on delivery).
+  Actor is best-effort: invite paths carry the inviter/invitee the service method knows;
+  member/team methods report the system actor with the subject in the title. Owner-cancel
+  of an org invite runs through `DeleteOrgInvite` (read + delete + inbox drop + emit) so
+  both cancel paths — invitee decline and owner cancel — emit; repo-invite cancels stay
+  silent (not org scope).
+- **Delivery:** task kind `org-webhooks`, single-flight `(orgs/<org>, "org-webhooks")`,
+  started by the explicit wake after each org emission and by the minute org sweep. One
+  pass delivers the org-log window then each member repo's window per active hook (org-log
+  and repo scopes each bounded to 256 events; hooks parallel under the pre-acquired
+  `FanoutParallel` semaphore, repos sequential inside one hook). Wire bytes reuse
+  `postEvent` verbatim — same keepers, same HMAC, same 10 s lane — so an org-hook POST is
+  indistinguishable from a repo-hook POST except for the org-action bodies. Ping
+  (`POST …/webhooks/{id}/ping`) synthesizes an org-log `ping` that bypasses the filter,
+  same contract as §5.3.
+- **Sweep gate (the §5.3 incremental discipline, per org):** an org costs one hooks LIST
+  plus one org-state GET per minute pass unless its allocator advanced, its last pass left
+  any cursor behind a head, or a member repo's `collab_state` advanced past the per-org
+  gate watermark (one GET per member repo, only for orgs with active hooks). In-memory
+  watermarks (`orgHookSeen`/`orgRepoSeen`/`orgHookPending`, `hookMu`-guarded, never held
+  across I/O) rebuild after a restart with one re-pass. Member enumeration reuses the
+  shared repo enumeration filtered to the org (cold path only — never a git hot path).
+- **Retention:** the §9 activity sweep folds each active org hook's per-(hook, repo)
+  cursor into the minimum-cursor floor, so events an org pass has not delivered yet are
+  never compacted; a freshly created (undelivered, cursor 0) org hook holds the floor
+  only until its first pass advances every member cursor.
+
+### Concurrency
+
+Hazard: concurrent org passes (wake + sweep) racing on one hook's cursors, and the sweep
+racing member-repo emissions. Avoidance: cursors CAS-advance monotonically (a lost CAS
+redelivers, never skips — the §5.3 at-least-once contract per scope); the gate watermarks
+are map-only under `hookMu`, never held across a store or network call; hooks run in
+parallel under the pre-acquired semaphore while repos inside one hook stay sequential, so
+one hook's burst is one goroutine wide. A dedicated org wake channel (not the repo one)
+keeps a repo owned by `orgs` from ever misrouting. No new locks, no lock held across I/O.
+
 ## 6. API endpoints
 
 Auth levels per P6. User notification routes are top-level (`/api/v1/…` + `/api-browser/v1` twins); webhook
@@ -272,6 +345,13 @@ RouteProvider (Seam 1).
 | `DELETE /{o}/{r}/api/webhooks/{id}` | admin | → 204 | also deletes cursor + deliveries |
 | `POST /{o}/{r}/api/webhooks/{id}/ping` | admin | → `{delivery: true}` | enqueues `ping` activity event |
 | `GET /{o}/{r}/api/webhooks/{id}/deliveries` | admin | → `{updated_at, entries: [...]}` | no-store |
+| `GET /api/v1/orgs/{org}/webhooks` | org owner | → `{webhooks: [Hook (no secret)]}` | both lanes; 401 anon, 403 non-owner |
+| `POST /api/v1/orgs/{org}/webhooks` | org owner | `{url, events[], secret?, insecure_tls?}` → `Hook` | filter accepts org actions (§5.4) + repo actions + `*`; 409 past the per-org cap (§1.5) |
+| `GET /api/v1/orgs/{org}/webhooks/{id}` | org owner | → `Hook` (`secret_set`, never `secret`) | 404 on unknown id (never 403) |
+| `PATCH /api/v1/orgs/{org}/webhooks/{id}` | org owner | partial → `Hook` | CAS'd |
+| `DELETE /api/v1/orgs/{org}/webhooks/{id}` | org owner | → 204 | also deletes both cursor families + deliveries |
+| `POST /api/v1/orgs/{org}/webhooks/{id}/ping` | org owner | → `{delivery: true}` | enqueues org-log `ping` (§5.4) |
+| `GET /api/v1/orgs/{org}/webhooks/{id}/deliveries` | org owner | → `{updated_at, entries: [...]}` | no-store |
 
 `Notification` (wire) = the §1.1 object; `Hook` = the §1.4 object minus `secret` plus `secret_set`. Auth
 detail: `{id}` routes resolve only for the owning principal — a foreign `id` is `404` (never `403`,
@@ -298,6 +378,7 @@ client.notifications.markRead(id) / markUnread(id) / markAllRead()
 client.notifications.stream(onNotification)              // fetch-based SSE reader, cancel fn returned
 client.watch.get(o, r) / client.watch.set(o, r, on)      // PUT/DELETE watch
 client.webhooks.list(o, r) / create(o, r, spec) / update(o, r, id, patch) / remove(o, r, id) / ping(o, r, id) / deliveries(o, r, id)
+client.orgs.webhooks.list(org) / create(org, spec) / get(org, id) / update(org, id, patch) / remove(org, id) / ping(org, id) / deliveries(org, id)
 ```
 
 Streaming uses the SDK's fetch-based reader (never `EventSource`; 12 §2.5 lane/auth rules apply — the
@@ -308,6 +389,7 @@ per-user stream is a browser-lane, credentials-included stream).
 | Kind | Key | Startable | Work |
 |---|---|---|---|
 | `webhooks` | `(repo, "webhooks")` | via sweep + wake-up after each fanned-out event | delivery loop, §5.3 |
+| `org-webhooks` | `("orgs/<org>", "org-webhooks")` | via org sweep + wake-up after each org emission | org delivery loop (org log + member repos), §5.4 |
 | `notify-fanout` | `(repo, "notify-fanout")` | internal (overflow fallback, §4) + redrain sweep (§8.1) | bulk notification Create burst for > 100 recipients; per-seq `collab-fanout/` completion record on drain |
 | `notify-retention` | global (maintainer pass unit, `Ops: nil`) | no | §9 retention + index compaction |
 
@@ -356,6 +438,9 @@ only the map and is never held across a store or network call.
 - Repo activity events (`collab-events/`) are compacted by the same pass once the newest webhook cursor is
   ≥ 1 000 seqs ahead: events below the minimum webhook cursor AND older than 7 days are deleted; the
   cursor honesty rule (§5.3) covers the gaps. The minimum-cursor check spans hooks — still one sweep, no locks.
+  Org hooks (§5.4) hold the same floor through their per-(hook, repo) cursors: an org pass that has not
+  delivered an event yet keeps it, and a brand-new org hook (cursor 0) holds member-repo compaction
+  only until its first pass advances every member cursor.
 
 ### Concurrency
 
@@ -580,11 +665,24 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   contract (exactly 1 LIST). Rationale: law 4 (no LIST on hot paths, P5) and law 6 (round
   trips are the cost model) — the tray is the highest-frequency user-private read.
 
+- **Org-level webhook configs (Forgejo #363, 2026-09-12):** one owner-gated config per org
+  (`orgs/<org>/webhooks/`, §1.5) fans out over the org-log (§5.4: member/team/invite transitions
+  appended post-commit through the nil-safe identity `OrgEvent` observer) plus every member repo's
+  activity log through per-(hook, repo) cursors. Delivery reuses `postEvent` verbatim (keepers,
+  HMAC, lane); the minute sweep gates per org (hooks LIST + org-state GET, member
+  `collab_state` probes only for orgs with active hooks); retention folds org cursors into the
+  compaction floor. Deliberately out of scope: git pushes (events-bridge TOML sinks stay
+  git-only) and repo creation (no synthetic record — the first activity event is the signal).
+  Owner-cancel of org invites runs through `DeleteOrgInvite` so both cancel paths emit.
+  No new dependencies; API + SDK only (no org-settings hooks tab — deferred). Rationale:
+  owners should not register N per-repo hooks to watch membership; the per-scope cursor keeps
+  the §5.3 at-least-once contract without a second delivery implementation.
+
 ## Explicitly out of scope
 
 - Email delivery (§5.2 seam), push notifications, mobile.
 - Per-thread mute/snooze and per-repo notification settings UI (GitHub's "participating vs all" dial) — v1 emits for participants + watchers; a preference object is the natural extension.
-- Org-level webhook configs (the schema is repo-scoped; org hooks are a future family).
+- An org-settings webhooks tab in the SPA (the API + SDK surface in §6/§7 is the v1 contract; the tab is a pure UI follow-up).
 - Notification digest batching, threading/grouping rules beyond the (user, thread, reason) dedup.
 - Webhook retry-with-backoff schedules (v1 is at-least-once via cursor; a failed delivery retries on the next pass), delivery payload customization/templates, and bot signatures.
 - In-repo "notifications" for git events (pushes) — those stay on the WAL events bridge (09).
