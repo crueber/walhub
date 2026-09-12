@@ -7,6 +7,7 @@ import { useParams, useNavigate } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import DateTime from "../components/DateTime.jsx";
+import { isInviteExpired, invitePageLink } from "../lib/invites.js";
 import { timeZones } from "../lib/timezone.js";
 import { normalizeOrgProfile, orgSaveBody } from "../lib/org-profile.js";
 import { renderBody } from "../lib/render-md.js";
@@ -518,7 +519,7 @@ function InvitesTab(props) {
           <Show when={(list() ?? []).length > 0} fallback={<p class="muted text-sm">no pending invitations.</p>}>
             <div class="overflow-x-auto">
               <table class="data-table">
-                <thead><tr><th>subject</th><th>role</th><th>invited by</th><th><span class="sr-only">actions</span></th></tr></thead>
+                <thead><tr><th>subject</th><th>role</th><th>invited by</th><th>expires</th><th><span class="sr-only">actions</span></th></tr></thead>
                 <tbody>
                   <For each={list() ?? []}>
                     {(inv) => (
@@ -526,6 +527,17 @@ function InvitesTab(props) {
                         <td><code class="font-mono text-xs">{inv.subject}</code></td>
                         <td>{inv.role}</td>
                         <td><code class="font-mono text-xs">{inv.invited_by}</code></td>
+                        {/* Forgejo #362: expiry served on the row; expired
+                            reads as expired before accept fails closed
+                            (the invitee sees the chip in /invitations and
+                            the accept button disabled). Cancel stays. */}
+                        <td>
+                          <Show when={inv.expires_at} fallback={<span class="muted">—</span>}>
+                            <Show when={isInviteExpired(inv)} fallback={<DateTime value={inv.expires_at} />}>
+                              <span class="chip-closed">expired</span>
+                            </Show>
+                          </Show>
+                        </td>
                         <td><Show when={props.canManage()}><button type="button" class="btn px-2 py-1" onClick={() => cancel(inv.id)}>cancel</button></Show></td>
                       </tr>
                     )}
@@ -552,7 +564,10 @@ function InvitesTab(props) {
       </div>
       </Show>
       <Show when={getLink()}>
-        <p class="mt-2 text-sm">accept link: <code class="font-mono text-xs">{getLink()}</code></p>
+        {/* Forgejo #362: the create endpoints return an API accept path —
+            share the inbox deep link (the invitee previews/accepts at
+            /invitations) and keep the API path as the fallback. */}
+        <p class="mt-2 text-sm">share link: <code class="font-mono text-xs">{invitePageLink(getLink()) || getLink()}</code></p>
       </Show>
       <Show when={getNote()}><p class="mt-2 text-sm text-amber-700 dark:text-amber-300">{getNote()}</p></Show>
     </section>

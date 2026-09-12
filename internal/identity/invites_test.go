@@ -37,6 +37,10 @@ func TestOrgInvites(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Org != "acme" {
 		t.Errorf("MyInvites: %v %+v", err, entries)
 	}
+	// Forgejo #362: expiry rides the inbox row (one read, no preview fan-out).
+	if len(entries) == 1 && entries[0].ExpiresAt != inv.ExpiresAt {
+		t.Errorf("inbox expires_at = %q, want %q", entries[0].ExpiresAt, inv.ExpiresAt)
+	}
 	if entries, err := s.MyInvites(ctx, "nobody@example.com"); err != nil || len(entries) != 0 {
 		t.Errorf("MyInvites empty: %v %+v", err, entries)
 	}
@@ -112,6 +116,10 @@ func TestRepoInvites(t *testing.T) {
 	list, err := s.ListRepoInvites(ctx, "acme", "repo", 100)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListRepoInvites: %v %+v", err, list)
+	}
+	// Forgejo #362: repo-kind expiry rides the inbox row too.
+	if entries, err := s.MyInvites(ctx, "dave@example.com"); err != nil || len(entries) != 1 || entries[0].ExpiresAt != inv.ExpiresAt {
+		t.Errorf("repo inbox expires_at: %v %+v want %q", err, entries, inv.ExpiresAt)
 	}
 	if _, err := s.AcceptInvite(ctx, "dave@example.com", inv.ID); err != nil {
 		t.Fatalf("AcceptInvite repo: %v", err)
