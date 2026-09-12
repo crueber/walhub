@@ -6,9 +6,9 @@
 // Props: { username, avatarUrl?, items } — items are navModel menuItems
 // ({kind, label, href}); logout renders as a plain anchor (GET
 // /_auth/logout clears the session cookie server-side and 302s home),
-// everything else as router links. avatarUrl is optional: no avatar
-// storage exists yet (#349 candidate), so the username renders until
-// avatars land and adding them later is a prop change.
+// everything else as router links. avatarUrl is optional (Forgejo #376
+// — me().avatar_url, omitted when the user has none): without one the
+// username renders instead.
 //
 // Dismissal mirrors the #255/#311 popover family (CommentComposer
 // SplitCloseMenu): Escape closes and refocuses the toggle, arrow keys walk

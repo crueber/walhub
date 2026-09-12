@@ -498,7 +498,7 @@ Session cookie `walgit_session`: `HttpOnly`; `SameSite=None; Secure` when CORS o
 
 - `GET /_auth/login?next=` → fetch discovery → HMAC-signed state `"{now+600}\n{nonce}\n{next}"` (`next` sanitized: must start with a single `/`) → 302 to the issuer's authorization endpoint with `response_type=code`, `scope=openid email`, `prompt=select_account`, `&hd=` = first allowed domain; **no PKCE**; the nonce is carried but not verified — the state HMAC is the anti-forgery.
 - Redirect URI: `{public_url}/_auth/callback`. Loopback origins use `http(s)://localhost[:port]/_auth/callback` **plus** a `/_auth/claimed?ticket=` hop that sets the cookie on `walgit.localhost` (a 60 s signed ticket) — because `localhost` and `walgit.localhost` are different cookie hosts.
-- `GET /_auth/callback?code&state`: verify state (600 s), exchange the code (one retry), verify the ID token (aud = **exactly** the client id, then domain policy), set the session cookie, redirect to `next`.
+- `GET /_auth/callback?code&state`: verify state (600 s), exchange the code (one retry), verify the ID token (aud = **exactly** the client id, then domain policy), set the session cookie, redirect to `next`. After the session mint, the server fires the `AvatarHook` seam (Forgejo #376 — composition wires the identity service, which enqueues a background DiceBear generation for users without an avatar; the hook only enqueues, the login response never waits).
 - `/_auth/logout` clears the cookie. `/_auth/me` → `{principal, write}`.
 - `/_auth/check` (the edge's `auth_request`): on success 204 + `X-Walgit-Principal: <name>` + `X-Walgit-Write: 0|1` + `Cache-Control: private, max-age=300` (edges cache one verdict per credential ~5 min); 401/403/503 otherwise.
 - `POST /_auth/tokens`: session required, same-origin CSRF guard (`Sec-Fetch-Site` header must be `same-origin`), returns `{token, principal, write, expires_at}` (no-store); GET renders the mint page.
@@ -745,9 +745,21 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   (non-`/`-prefixed or `//` targets fall back to `/`), so the navbar's plain-anchor
   Log out needs no JS and always lands home.
 
+- **NEW (2026-09-12) — post-login avatar hook** (Forgejo #376):
+  `GET /_auth/callback` fires the `AvatarHook` seam after the session mint
+  (wired in `cmd/walhub` to the identity service's `EnsureAvatarAsync`;
+  nil in setup-only/tests). The hook only enqueues — a per-principal
+  single-flight background generation (DiceBear constellation, seed =
+  email) that installs `users/<username>/avatar.svg` — so the login
+  response never waits on rendering. Rationale: generation is local and
+  fast but still off the login path (fail-closed on errors: the next
+  login retries); law 8 holds because the hook is a `func` field.
+  Full semantics (opt-out, serving, determinism) live in
+  docs/features/01_identity_permissions.md Decisions.
+
 **Divergence (2026-08-31):**
 
-- **D1 — Router is chi.** `github.com/go-chi/chi/v5` (core package ONLY — no `chi/cors`, no `chi/middleware`) replaces Go 1.22 ServeMux patterns (§3.1). Route inventory and handler behavior are unchanged; only registration/matching mechanics moved to chi. CORS stays hand-rolled (§2.3). Backend dependency budget is now exactly: `chi/v5`, `BurntSushi/toml`, `golang.org/x/net` (h2c).
+- **D1 — Router is chi.** `github.com/go-chi/chi/v5` (core package ONLY — no `chi/cors`, no `chi/middleware`) replaces Go 1.22 ServeMux patterns (§3.1). Route inventory and handler behavior are unchanged; only registration/matching mechanics moved to chi. CORS stays hand-rolled (§2.3). Backend dependency budget is now exactly: `chi/v5`, `BurntSushi/toml`, `golang.org/x/net` (h2c), `golang.org/x/crypto` (SSH transport, 17_ssh.md), `github.com/dicebear/dicebear-go/v10` + `github.com/dicebear/styles/v10` (user-avatar generation, Forgejo #376 — plus build-required transitives `github.com/dicebear/schema` + `github.com/santhosh-tekuri/jsonschema/v6`; AGENTS.md §1).
 - **D2 — Frontend was standard ECMAScript (SUPERSEDED 2026-09-02 by explicit user request — DEVIATIONS.md D-WEB-6).** Historical: no TypeScript, no framework, no bundler; the SDK was ONE plain-ESM `web/sdk/repos.js`; the `/repos.mjs` route and the esbuild twin were gone (§3.1, §3.3); `web/src/setup*` was a plain-ESM setup page. **Shipped stack:** SolidJS SPA (`solid-js` + `@solidjs/router` runtime, Tailwind v4, vite-built into `web/dist/`; Setup page at `web/src/pages/Setup.jsx`); the SDK stays dependency-free, authored as submodules (`web/sdk/src/*.js`) and esbuild-bundled to `web/dist/repos.js`.
 - **D5 — Zero-config first run.** Missing config boots with built-in defaults (`0.0.0.0:8080`, filesystem store under `<data-dir>/store`, auth `none`, `auto_create_on_push`) instead of fatal exit 2 — the old step-2 "missing config file is a fatal exit 2" of the startup order is superseded by the bootstrap leg (§10.4, §3.4).
 - **D6 — Setup UI + API first-class.** `/setup` + `/api/v1/setup{,/test}` with the open-while-unsecured access rule and the SETUP-ONLY MODE for invalid configs (§3.4, new `internal/setup` package).

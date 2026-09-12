@@ -46,7 +46,7 @@ the contract; do not "improve" them.
 
 ```text
 GET /api/v1                    → {version:1, base, browser_base:"/api/v1", sdk, auth, endpoints[]}
-GET /api/v1/me                 → {principal, write, anonymous} | 401 (no-store)
+GET /api/v1/me                 → {principal, write, anonymous, admin?, avatar_url?} | 401 (no-store)
 GET /api/v1/owners             → ["demo","jane"] (sorted; from the STORE, not disk)
 GET /api/v1/owners/{o}/repos   → ["hello","walgit"] (short names; 200 [] for unknown owner)
 GET /{o}/{r}/api               → {owner, name, full_name, head:{name,sha}|null, branches, tags,
@@ -401,8 +401,10 @@ table-derived list (PUT/DELETE rows are never `Expose`); feature-registered capa
 (checks token mint/revoke, the create twin) are listed anyway — `endpoints` is a *capability
 hint*, not an ACL.
 
-- `GET /api/v1/me` → `{principal, write, anonymous, admin}`, `no-store`; `401` (plain text) when unauthenticated
+- `GET /api/v1/me` → `{principal, write, anonymous, admin, avatar_url?}`, `no-store`; `401` (plain text) when unauthenticated
   in a mode that requires auth. `admin` (Forgejo #371) gates the navbar's Setup menu entry;
+  `avatar_url` (Forgejo #376 — the stable user-avatar URL, `?v=` cache-busted, omitted when
+  the user has none or the identity surface is unwired) feeds the navbar identity control;
   the discovery auth block carries the instance `mode` (`none|token|oidc`) so the navbar knows
   whether Login/identity apply at all (never in `none` mode).
 - `GET /api/v1/owners[?sort=activity&order=]` (Forgejo #283) → sorted owner names **from the STORE** (object-store listing / registry), never

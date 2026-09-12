@@ -220,6 +220,20 @@ export default function Repos() {
     () => `org:${owner()}`,
     () => repos.orgs.get(owner()).catch(() => null)
   );
+  // Forgejo #376: the user avatar. users.get resolves null for unknown
+  // owners and orgs (404 → null, never a tray) — one extra cached GET
+  // that doubles as the profile-consumption surface (the navbar is the
+  // other, via me().avatar_url). Gated on the user profile's
+  // avatar_content_type — the client never probes the bytes.
+  const [getUser] = useData(
+    () => `user:${owner()}`,
+    () => repos.users.get(owner()).catch(() => null)
+  );
+  const userSrc = () => {
+    const u = getUser();
+    if (!u?.avatar_content_type) return null;
+    return repos.users.avatar.url(owner(), u.avatar_updated_at);
+  };
   const [getEditing, setEditing] = createSignal(false);
   // Writers-only New button (mirrors require_write so the button never
   // promises what POST /api/v1/repos refuses): hidden for anonymous
@@ -230,6 +244,37 @@ export default function Repos() {
     if (!me) return false;
     if (me.anonymous) return false;
     return me.write !== false;
+  };
+  // Forgejo #376: avatar self-service — the viewer is the owner (the
+  // server re-checks self-or-admin; the client never decides).
+  const isSelf = () => {
+    const me = getMe();
+    return !!me && !me.anonymous && (me.principal ?? "").toLowerCase() === owner().toLowerCase();
+  };
+  const [getAvatarNote, setAvatarNote] = createSignal("");
+  const refreshAvatar = () => {
+    invalidate(`user:${owner()}`);
+    invalidate("me"); // the navbar renders the same avatar
+  };
+  const regenerateAvatar = async () => {
+    setAvatarNote("");
+    try {
+      await repos.users.avatar.regenerate(owner());
+      refreshAvatar();
+    } catch (err) {
+      reportError(err, `user:${owner()}`);
+      setAvatarNote(String(err?.message ?? err));
+    }
+  };
+  const removeAvatar = async () => {
+    setAvatarNote("");
+    try {
+      await repos.users.avatar.remove(owner());
+      refreshAvatar();
+    } catch (err) {
+      reportError(err, `user:${owner()}`);
+      setAvatarNote(String(err?.message ?? err));
+    }
   };
   const profile = () => getProfile() ?? emptyProfile(owner());
   const displayName = () => profile().display_name || owner();
@@ -249,6 +294,12 @@ export default function Repos() {
               pointer (no byte probing; hides itself on 404). */}
           <Show when={isOrg()}>
             <OrgAvatar org={owner()} doc={getOrg} size={36} />
+          </Show>
+          {/* Forgejo #376: the user avatar renders from the user
+              profile's pointer (same no-probing rule; orgs keep the
+              org avatar above, never both). */}
+          <Show when={!isOrg() && userSrc()}>
+            <img src={userSrc()} alt="" width={36} height={36} class="inline rounded-full" />
           </Show>
           {isOrg() ? orgName() : displayName()}
           <Show when={isOrg()}>
@@ -322,6 +373,26 @@ export default function Repos() {
             if (saved) invalidate(`profile:${owner()}`);
           }}
         />
+      </Show>
+      {/* Forgejo #376: avatar self-service for the owner's own page
+          (non-org only — org avatars live in org settings). Regenerate
+          installs a fresh deterministic render (and opts back in);
+          remove deletes the avatar and opts out of auto-generation
+          until the next regenerate. */}
+      <Show when={!isOrg() && isSelf()}>
+        <p class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <button class="btn px-3 py-1" type="button" onClick={regenerateAvatar}>
+            Regenerate avatar
+          </button>
+          <Show when={userSrc()}>
+            <button class="btn px-3 py-1" type="button" onClick={removeAvatar}>
+              Remove avatar
+            </button>
+          </Show>
+          <Show when={getAvatarNote()}>
+            <span class="muted">{getAvatarNote()}</span>
+          </Show>
+        </p>
       </Show>
       <h3 class="mb-2 mt-6 text-base font-semibold">Repositories</h3>
       <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>

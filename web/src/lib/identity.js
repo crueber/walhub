@@ -1,7 +1,9 @@
 // web/src/lib/identity.js — Forgejo #371: navbar identity model.
 //
 // Pure functions over the two auth payloads the shell already fetches:
-//   me        — GET /api/v1/me → {principal, write, anonymous, admin}
+//   me        — GET /api/v1/me → {principal, write, anonymous, admin,
+//               avatar_url?} (avatar_url is the stable user-avatar URL,
+//               omitted when the user has none — Forgejo #376)
 //               (null when the fetch 401s/throws: signed out)
 //   discovery — GET /api/v1 → {auth: {mode, browser_login, login_url}}
 //               (null while loading/failed: legacy nav, no identity)
@@ -91,6 +93,10 @@ export function navModel({ me = null, discovery = null } = {}, currentPath = "/"
     loginHref,
     showIdentity,
     username: signedIn ? (me.principal ?? "") : "",
+    // Forgejo #376: the navbar avatar. me.avatar_url is the stable
+    // user-avatar URL ("?v=" cache-busted); "" renders the username
+    // fallback (IdentityMenu's optional-avatar prop).
+    avatarUrl: signedIn ? (me.avatar_url || "") : "",
     menuItems: signedIn ? menuItems(me, mode) : [],
     // Primary nav: signed-in users (outside none mode) find
     // keys/invitations/setup in the menu; everyone else keeps today's nav.

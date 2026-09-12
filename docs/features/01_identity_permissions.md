@@ -38,7 +38,8 @@ A **user profile** is a bucket object keyed by the principal name:
 
 | Key | Kind | Schema |
 |---|---|---|
-| `users/<principal>/profile.json` | CAS'd (overwritable family) | `{"version":1,"principal":"jane@example.com","display_name":"Jane Doe","bio":"","created_at":"RFC3339","updated_at":"RFC3339"}` |
+| `users/<principal>/profile.json` | CAS'd (overwritable family) | `{"version":1,"principal":"jane@example.com","display_name":"Jane Doe","bio":"","created_at":"RFC3339","updated_at":"RFC3339"}` (+ `avatar_content_type`/`avatar_updated_at` when the user holds a generated avatar, `avatar_disabled` when opted out — Forgejo #376, append-only) |
+| `users/<username>/avatar.svg` | overwritable (Forgejo #376) | generated avatar bytes (`image/svg+xml`); pointer on profile.json, same bytes-first/pointer-second discipline as the #359 org avatar |
 | `users/<principal>/invitations/index.json` | CAS'd (overwritable family) | inbox index, §7 |
 
 Rules: `<principal>` is the lowercased email, percent-encoded per segment for keys with `@` → `%40`
@@ -400,8 +401,11 @@ RouteProvider (Seam 1).
 
 | Method + path | Auth (P6) | Request → response |
 |---|---|---|
-| `GET /api/v1/users/{principal}` | any (public read) | → `{profile}`; 404 unknown |
+| `GET /api/v1/users/{principal}` | any (public read) | → `{profile}` (carries `avatar_content_type`/`avatar_updated_at` when the user holds an avatar, `avatar_disabled` when opted out); 404 unknown |
 | `PUT /api/v1/users/{principal}` | self or admin | body = profile → 200 profile; 400 invalid |
+| `GET /api/v1/users/{principal}/avatar` | any (public read) | generated SVG (`image/svg+xml`, immutable max-age + version ETag, `?v=` busting); 404 when none |
+| `POST /api/v1/users/{principal}/avatar` | self or admin | regenerate (clears opt-out, installs fresh deterministic render) → 200 profile; 404 without a verified email |
+| `DELETE /api/v1/users/{principal}/avatar` | self or admin | remove + opt out of auto-generation → 200 profile; 404 unknown |
 | `GET /api/v1/orgs` | any (mutable-collab, no version token) | → sorted `["acme", …]` |
 | `POST /api/v1/orgs` | write | `{org, display_name}` → 201 `{org}`; 409 taken; creator becomes owner |
 | `GET/PUT/DELETE /api/v1/orgs/{org}` | read / owner / owner | profile CRUD (PUT body = `{display_name, description, location, timezone, bio_markdown}`, full-document replace, owner-profile limits mirrored; description unbudgeted); 409 on delete with repos; DELETE also removes the avatar object |
@@ -460,9 +464,13 @@ Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
   in the footer; save = full-doc PUT, 409 renders "changed under you, reload". The settings
   General tab carries the same owner-aware visibility select (same probe, shared helper).
 - **Profile** `/:owner` renders user or org profile (existing route gains the org variant).
+  User owners additionally render the generated avatar from the user profile's pointer
+  (issue #376 — gated on `avatar_content_type`, `?v=` cache-bust, hides on 404), with
+  regenerate/remove self-service on the owner's own page; the navbar identity control
+  renders the same avatar from `me().avatar_url` (username fallback when absent).
 
 SDK additions (submodules under `web/sdk/src/`, bundled by esbuild into `repos.js`; JSDoc typedefs in
-`types.js`): `users.js` (`users.get/put`), `orgs.js` (`orgs.*`, members, teams,
+`types.js`): `users.js` (`users.get/put`, `users.avatar.url/regenerate/remove` — issue #376), `orgs.js` (`orgs.*`, members, teams,
 `orgs.avatar.url/upload/remove` — issue #359), `access.js`
 (`repo.access.get/put`), `invites.js` (`invites.list/mine/accept/cancel`), `transfer.js`
 (`repo.transfer({owner, repo?})` — issue #358). The `/:owner` org header and the
@@ -555,6 +563,31 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   409 referenced a missing feature, making orgs with repos undeletable; v1 skips the
   transfer+accept dance (Forgejo parity deferred) because both gates already exist and
   the owner initiating the move holds admin on both ends by construction.
+- **Auto-generated user avatars (issue #376, §8 — law-1 exception, user-authorized
+  2026-09-12, AGENTS.md §1):** `github.com/dicebear/dicebear-go/v10` +
+  `github.com/dicebear/styles/v10` render the deterministic avatar (DiceBear
+  "constellation", seed = verified email) in-process on first login. Verified
+  deviations from the issue's assumptions: (a) the library carries two
+  build-required transitives (`github.com/dicebear/schema` +
+  `github.com/santhosh-tekuri/jsonschema/v6` — option validation; `go mod graph`
+  proof in the PR); (b) constellation defines NO options, so the issue's
+  "electric" preset names nothing here (it is a notionists variant) — generation
+  uses default options, documented in `avatar.go`. Storage mirrors the #359
+  org-avatar shape: bytes at `users/<username>/avatar.svg` (bucket truth, law 4)
+  with the pointer (`avatar_content_type`/`avatar_updated_at`) on profile.json;
+  serving is `GET /api/v1/users/{principal}/avatar` (`image/svg+xml`,
+  `public, max-age=86400, immutable` + `?v=<avatar_updated_at>` busting).
+  Generation is a per-principal single-flight goroutine behind the server
+  `AvatarHook` seam (called from the OIDC session-mint path) — NOT a task-table
+  job (repo-keyed, narrated work only; login already answered, no progress to
+  report). Deletion opts out (`avatar_disabled`, honored by the login check)
+  until an explicit `POST …/avatar` regenerates (same email → identical image,
+  the determinism note). The seed feeds the PRNG only (verified absent from the
+  output) with a sanitize-first gate (SVG shape, no `<script>`, no seed leak —
+  fail closed). Consumption: `me().avatar_url` → navbar identity control, plus
+  the `/:owner` header with self-service regenerate/remove. Rationale: logins
+  must never block on generation, emails must never leak into markup or other
+  users' views, and the task table must not gain a non-repo kind.
 
 ## Explicitly out of scope
 

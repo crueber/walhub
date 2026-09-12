@@ -208,6 +208,13 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		plainStatus(w, http.StatusServiceUnavailable, "session mint failed")
 		return
 	}
+	// Forgejo #376: enqueue a background avatar generation for users
+	// without one (never blocks the login response — the hook only
+	// enqueues; generation + install happen on a per-principal
+	// single-flight goroutine in the identity service).
+	if s.avatarHook != nil {
+		s.avatarHook(p.Name, emailOf(p))
+	}
 	if isLoopbackHost(hostOnly(r.Host)) {
 		// Loopback: bounce through /_auth/claimed with a 60 s signed ticket so
 		// the cookie lands on walgit.localhost (different cookie host).

@@ -105,6 +105,24 @@ test("signed-in oidc non-admin → identity menu without setup", () => {
   assert.equal(nav.showSetupInNav, false);
 });
 
+test("signed-in with avatar_url → navModel carries the avatar URL", () => {
+  const me = { ...alice, avatar_url: "/api/v1/users/alice/avatar?v=ts" };
+  const nav = navModel({ me, discovery: oidcLogin }, "/");
+  assert.equal(nav.avatarUrl, "/api/v1/users/alice/avatar?v=ts");
+});
+
+test("signed-in without avatar_url → username fallback (empty avatarUrl)", () => {
+  const nav = navModel({ me: alice, discovery: oidcLogin }, "/");
+  assert.equal(nav.avatarUrl, "");
+});
+
+test("signed-out → no avatar URL even when discovery is healthy", () => {
+  const nav = navModel({ me: null, discovery: oidcLogin }, "/");
+  assert.equal(nav.avatarUrl, "");
+  const anonNav = navModel({ me: anon, discovery: oidcLogin }, "/");
+  assert.equal(anonNav.avatarUrl, "");
+});
+
 test("signed-in oidc admin → setup joins the menu", () => {
   const nav = navModel({ me: root, discovery: oidcLogin }, "/");
   assert.deepEqual(
@@ -177,6 +195,7 @@ test("App renders Login through the OIDC pathway with next", () => {
 test("App renders the identity control left of the tray", () => {
   assert.ok(APP.includes("<IdentityMenu"), "identity menu mounted");
   assert.ok(APP.includes("nav().showIdentity"), "menu gated on signed-in");
+  assert.ok(APP.includes("avatarUrl={nav().avatarUrl}"), "stable avatar URL passed through (#376)");
   const right = APP.slice(APP.indexOf('<div class="ml-auto'));
   assert.ok(right.indexOf("<IdentityMenu") < right.indexOf("<NotificationTray"), "identity sits left of the tray");
 });
@@ -210,7 +229,7 @@ test("IdentityMenu: keyboard support (menu roles, arrows, Escape refocus)", () =
 
 test("IdentityMenu: avatar-or-username + logout as session-clearing anchor", () => {
   assert.ok(MENU.includes("props.username"), "username rendered when no avatar exists");
-  assert.ok(MENU.includes("props.avatarUrl"), "optional avatar URL prop for #349");
+  assert.ok(MENU.includes("props.avatarUrl"), "optional avatar URL prop (#376: me().avatar_url)");
   assert.ok(MENU.includes("<A") && MENU.includes('href={item.href}'), "router links for in-app entries");
   assert.ok(MENU.includes("<a") && MENU.includes('href={item.href}'), "plain anchor for logout (cookie clear + redirect)");
 });

@@ -107,6 +107,17 @@ type OrgLister interface {
 	ListOrgs(ctx context.Context) ([]string, error)
 }
 
+// UserAvatar reports the stable avatar URL for a username (Forgejo
+// #376, Env.Avatars behind GET /api/v1/me's avatar_url). Composition
+// injects the identity service; nil → me() omits avatar_url (the
+// navbar renders the username fallback). "" means the user has no
+// avatar (display metadata must never fail the me() call).
+type UserAvatar interface {
+	// UserAvatarURL returns the stable avatar URL ("?v=" cache-busted)
+	// or "" when the user has none.
+	UserAvatarURL(ctx context.Context, username string) string
+}
+
 // AccessBootstrap materializes the eager access.json default at placeholder
 // creation (01 §10 synthesized default, eagerly written). Create-wins,
 // adopt-don't-overwrite (412 = someone raced us — adopt, never overwrite).
