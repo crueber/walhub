@@ -179,6 +179,7 @@ function start(key, entry, fn, { keepRefetch = false } = {}) {
   // started is dropped and can never overwrite fresh state.
   if (!keepRefetch) entry.refetch = fn;
   const generation = ++entry.seq;
+  entry.lastStart = Date.now(); // Forgejo #396: fetch-start stamp for the SSE fresh-skip below
   const task = (async () => {
     try {
       const value = await fn();
@@ -204,7 +205,7 @@ function start(key, entry, fn, { keepRefetch = false } = {}) {
 function ensureEntry(key) {
   let entry = cache.get(key);
   if (!entry) {
-    entry = { signal: createSignal(undefined), promise: null, value: undefined, at: 0, error: null, refetch: null, seq: 0 };
+    entry = { signal: createSignal(undefined), promise: null, value: undefined, at: 0, error: null, refetch: null, seq: 0, lastStart: 0 };
     cache.set(key, entry);
   }
   return entry;
@@ -345,14 +346,31 @@ export function invalidateIssueLists(full) {
   invalidate(`repo:${full}`);
 }
 
-// --- 08 §4 invalidation-storm coalescing ------------------------------------
+// --- 08 §4 invalidation-storm coalescing (Forgejo #396) ----------------------
 // A burst of collab frames (CI posting 30 check runs) MUST coalesce:
-// keys are collected into a set and invalidated once per tick. Background
-// reads still single-flight per key (startIfStale joins the in-flight
-// fetch); invalidations always start a new generation and the ordering
-// guard in start() drops whichever settles stale (#41).
+// keys are collected into a set and invalidated once per tick. The tick
+// alone does NOT bound live traffic — frames arriving in separate tasks
+// each flushed a full refetch round per cached key (a 64-frame spread
+// replay cost ~3 GETs/frame with zero TTL respect). The flush is therefore
+// TTL-aware: an SSE invalidation for an already-fresh entry is a no-op,
+// so sustained frame rates decay to the key's TTL cadence (5 s typical;
+// Infinity = immutable windows, never SSE-refetched — timelines append
+// frames directly, so skipping the refetch loses nothing). Mutation
+// invalidations still go through invalidate() directly and ALWAYS refetch
+// (#41 ordering: a post-mutation body must win over any in-flight read).
+// scheduleInvalidate is the SSE path ONLY (sole caller: invalidateCollab).
 const pendingInvalidations = new Set();
 let invalidateScheduled = false;
+
+/**
+ * Fresh window (ms) for one SSE-invalidated key: the 08 §6 TTL table by
+ * key prefix, DEFAULT_TTL for unlisted prefixes (settings:/mirror:/ops:/
+ * overview:/org:… all revalidate at 5 s in their useData seeds).
+ */
+function ttlForKey(key) {
+  const v = TTL[key.split(":")[0]];
+  return v === undefined ? DEFAULT_TTL : v;
+}
 
 /** Queue one key for coalesced invalidation (flushed once per tick). */
 export function scheduleInvalidate(key) {
@@ -363,9 +381,30 @@ export function scheduleInvalidate(key) {
     invalidateScheduled = false;
     const keys = [...pendingInvalidations];
     pendingInvalidations.clear();
+    // Expand prefixes FIRST so each entry invalidates at most once per
+    // flush: a sha key queued both explicitly and via its `*` prefix used
+    // to start two generations (two GETs) for a single frame.
+    const expanded = new Set();
     for (const k of keys) {
-      if (k.endsWith("*")) invalidatePrefix(k.slice(0, -1));
-      else invalidate(k);
+      if (k.endsWith("*")) {
+        const base = k.slice(0, -1);
+        for (const ck of cache.keys()) {
+          if (ck.startsWith(base)) expanded.add(ck);
+        }
+      } else expanded.add(k);
+    }
+    const now = Date.now();
+    for (const k of expanded) {
+      const entry = cache.get(k);
+      if (!entry || typeof entry.refetch !== "function") continue; // uncached = silent no-op
+      const freshMs = ttlForKey(k);
+      // Fresh entry, fresh news already on the way or just landed: skip.
+      // In-flight counts by START time (a slow read older than the window
+      // still gets superseded, as before); settled counts by settle time.
+      if (entry.promise) {
+        if (now - (entry.lastStart || 0) < freshMs) continue;
+      } else if (entry.at > 0 && now - entry.at < freshMs) continue;
+      invalidate(k);
     }
   });
 }
