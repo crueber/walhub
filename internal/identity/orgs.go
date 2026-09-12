@@ -557,6 +557,12 @@ func (s *Service) SetMember(ctx context.Context, org, principal string, role Org
 		return nil, fmt.Errorf("%w: invalid org role %q", ErrInvalid, string(role))
 	}
 	var result *Members
+	// added/roleChanged describe the COMMITTED attempt only: every CAS
+	// attempt re-derives them from its own read, so a lost race's
+	// values are overwritten by the retry that wins (the concurrent
+	// winner emits its own event — exactly one emission per
+	// transition). Emission runs after err == nil below.
+	var added, roleChanged bool
 	_, err := s.casUpdate(ctx, MembersKey(org), func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		if cur == nil {
 			return nil, false, fmt.Errorf("%w: unknown org %q", ErrNotFound, org)
@@ -569,10 +575,12 @@ func (s *Service) SetMember(ctx context.Context, org, principal string, role Org
 		for i := range m.Members {
 			if normPrincipal(m.Members[i].Principal) == principal {
 				m.Members[i].Principal = principal
+				roleChanged = m.Members[i].Role != role
 				m.Members[i].Role = role
 				found = true
 			}
 		}
+		added = !found
 		if !found {
 			m.Members = append(m.Members, Member{Principal: principal, Role: role, JoinedAt: s.nowUTC().Format(time.RFC3339)})
 		}
@@ -585,6 +593,13 @@ func (s *Service) SetMember(ctx context.Context, org, principal string, role Org
 	if err != nil {
 		return nil, err
 	}
+	// Org-hook fan-out (Forgejo #363): post-commit, P8 — the roster is
+	// the backfill truth. Action spellings match notify's orgActions.
+	if added {
+		s.emitOrgEvent(ctx, org, "member_added", "", principal+" joined "+org)
+	} else if roleChanged {
+		s.emitOrgEvent(ctx, org, "member_role_changed", "", principal+" is now "+string(role)+" in "+org)
+	}
 	return result, nil
 }
 
@@ -592,6 +607,8 @@ func (s *Service) SetMember(ctx context.Context, org, principal string, role Org
 func (s *Service) RemoveMember(ctx context.Context, org, principal string) (*Members, error) {
 	principal = normPrincipal(principal)
 	var result *Members
+	// removed describes the committed attempt (see SetMember).
+	var removed bool
 	_, err := s.casUpdate(ctx, MembersKey(org), func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		if cur == nil {
 			return nil, false, fmt.Errorf("%w: unknown org %q", ErrNotFound, org)
@@ -602,11 +619,13 @@ func (s *Service) RemoveMember(ctx context.Context, org, principal string) (*Mem
 		}
 		kept := m.Members[:0]
 		removedOwner := false
+		removed = false
 		for _, e := range m.Members {
 			if normPrincipal(e.Principal) == principal {
 				if e.Role == OrgOwner {
 					removedOwner = true
 				}
+				removed = true
 				continue
 			}
 			kept = append(kept, e)
@@ -631,6 +650,9 @@ func (s *Service) RemoveMember(ctx context.Context, org, principal string) (*Mem
 	})
 	if err != nil {
 		return nil, err
+	}
+	if removed {
+		s.emitOrgEvent(ctx, org, "member_removed", "", principal+" left "+org)
 	}
 	return result, nil
 }
@@ -672,6 +694,7 @@ func (s *Service) CreateTeam(ctx context.Context, org, slug, name, description s
 		}
 		return nil, err
 	}
+	s.emitOrgEvent(ctx, org, "team_created", "", "team "+org+"/"+slug+" created")
 	return t, nil
 }
 
@@ -787,6 +810,8 @@ func (s *Service) SetTeamMember(ctx context.Context, org, slug, principal string
 		return nil, fmt.Errorf("%w: invalid principal %q", ErrInvalid, principal)
 	}
 	var result *Team
+	// added describes the committed attempt (see SetMember).
+	var added bool
 	_, err := s.casUpdate(ctx, TeamKey(org, slug), func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		if cur == nil {
 			return nil, false, fmt.Errorf("%w: unknown team %q", ErrNotFound, org+"/"+slug)
@@ -798,6 +823,7 @@ func (s *Service) SetTeamMember(ctx context.Context, org, slug, principal string
 		for _, m := range t.Members {
 			if normPrincipal(m) == principal {
 				result = t
+				added = false
 				return nil, false, nil
 			}
 		}
@@ -806,12 +832,16 @@ func (s *Service) SetTeamMember(ctx context.Context, org, slug, principal string
 		t.Version++
 		t.UpdatedAt = s.nowUTC().Format(time.RFC3339)
 		result = t
+		added = true
 		return encodeTeam(t), true, nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	s.teams.invalidate(org, slug)
+	if added {
+		s.emitOrgEvent(ctx, org, "team_member_added", "", principal+" joined team "+org+"/"+slug)
+	}
 	return result, nil
 }
 
@@ -819,6 +849,8 @@ func (s *Service) SetTeamMember(ctx context.Context, org, slug, principal string
 func (s *Service) RemoveTeamMember(ctx context.Context, org, slug, principal string) (*Team, error) {
 	principal = normPrincipal(principal)
 	var result *Team
+	// removed describes the committed attempt (see SetMember).
+	var removed bool
 	_, err := s.casUpdate(ctx, TeamKey(org, slug), func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		if cur == nil {
 			return nil, false, fmt.Errorf("%w: unknown team %q", ErrNotFound, org+"/"+slug)
@@ -828,10 +860,13 @@ func (s *Service) RemoveTeamMember(ctx context.Context, org, slug, principal str
 			return nil, false, perr
 		}
 		kept := t.Members[:0]
+		removed = false
 		for _, m := range t.Members {
 			if normPrincipal(m) != principal {
 				kept = append(kept, m)
+				continue
 			}
+			removed = true
 		}
 		t.Members = kept
 		t.Version++
@@ -843,6 +878,9 @@ func (s *Service) RemoveTeamMember(ctx context.Context, org, slug, principal str
 		return nil, err
 	}
 	s.teams.invalidate(org, slug)
+	if removed {
+		s.emitOrgEvent(ctx, org, "team_member_removed", "", principal+" left team "+org+"/"+slug)
+	}
 	return result, nil
 }
 
@@ -941,6 +979,7 @@ func (s *Service) DeleteTeam(ctx context.Context, org, slug string) error {
 		return err
 	}
 	s.teams.invalidate(org, slug)
+	s.emitOrgEvent(ctx, org, "team_deleted", "", "team "+org+"/"+slug+" deleted")
 	return nil
 }
 

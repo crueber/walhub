@@ -560,37 +560,12 @@ func (s *Service) postEvent(ctx context.Context, h *Hook, ev *ActivityEvent) (in
 
 // readCursor loads the per-hook cursor (0 when absent).
 func (s *Service) readCursor(ctx context.Context, owner, repo, id string) int {
-	raw, _, err := s.getJSON(ctx, CursorKey(owner, repo, id))
-	if err != nil || raw == nil {
-		return 0
-	}
-	var c CursorDoc
-	if err := json.Unmarshal(raw, &c); err != nil || c.PublishedSeq < 0 {
-		return 0
-	}
-	return c.PublishedSeq
+	return readCursorAt(ctx, s, CursorKey(owner, repo, id))
 }
 
 // advanceCursor CASes the cursor forward (monotonic: never retreats).
 func (s *Service) advanceCursor(ctx context.Context, owner, repo, id string, seq int) {
-	_, _ = s.casUpdate(ctx, CursorKey(owner, repo, id), 5, func(cur []byte, _ store.Version) ([]byte, bool, error) {
-		var c CursorDoc
-		if cur != nil {
-			if err := json.Unmarshal(cur, &c); err != nil {
-				return nil, false, nil // corrupt cursor: leave for the next pass
-			}
-		}
-		if seq <= c.PublishedSeq {
-			return nil, false, nil
-		}
-		c.PublishedSeq = seq
-		c.UpdatedAt = s.nowUTC().Format(dateTimeFmt)
-		raw, err := encode(c)
-		if err != nil {
-			return nil, false, err
-		}
-		return raw, true, nil
-	})
+	advanceCursorAt(ctx, s, CursorKey(owner, repo, id), seq)
 }
 
 // deliveryURLRe finds http(s) URLs inside error text (Go transport
@@ -695,42 +670,12 @@ func redactDeliveryKV(s, key string) string {
 // credential material before storing: they echo the hook URL, which may
 // carry userinfo or query tokens.
 func (s *Service) recordDelivery(ctx context.Context, owner, repo, id string, ev *ActivityEvent, status int, derr error) {
-	entry := DeliveryEntry{Seq: ev.Seq, Event: ev.Action, Status: status, At: s.nowUTC().Format(dateTimeFmt)}
-	if derr != nil {
-		entry.Error = scrubDeliveryError(derr.Error())
-	}
-	_, _ = s.casUpdate(ctx, DeliveriesKey(owner, repo, id), 3, func(cur []byte, _ store.Version) ([]byte, bool, error) {
-		var d DeliveriesDoc
-		if cur != nil {
-			_ = json.Unmarshal(cur, &d)
-		}
-		d.Entries = append(d.Entries, entry)
-		if len(d.Entries) > MaxDeliveries {
-			d.Entries = d.Entries[len(d.Entries)-MaxDeliveries:]
-		}
-		d.UpdatedAt = entry.At
-		raw, err := encode(d)
-		if err != nil {
-			return nil, false, err
-		}
-		return raw, true, nil
-	})
+	recordDeliveryAt(ctx, s, DeliveriesKey(owner, repo, id), ev, status, derr)
 }
 
 // ReadDeliveries loads the ring (nil entries when absent — wire `[]`).
 func (s *Service) ReadDeliveries(ctx context.Context, owner, repo, id string) *DeliveriesDoc {
-	raw, _, err := s.getJSON(ctx, DeliveriesKey(owner, repo, id))
-	if err != nil || raw == nil {
-		return &DeliveriesDoc{Entries: []DeliveryEntry{}}
-	}
-	var d DeliveriesDoc
-	if err := json.Unmarshal(raw, &d); err != nil {
-		return &DeliveriesDoc{Entries: []DeliveryEntry{}}
-	}
-	if d.Entries == nil {
-		d.Entries = []DeliveryEntry{}
-	}
-	return &d
+	return readDeliveriesAt(ctx, s, DeliveriesKey(owner, repo, id))
 }
 
 // PingHook synthesizes a ping activity event (num 0), appends it to the

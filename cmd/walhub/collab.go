@@ -223,6 +223,14 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 		c.ident.Stream = func(ctx context.Context, repo string) {
 			c.notifySvc.PublishFrame(notify.RepoFrame{Name: "access", Repo: repo})
 		}
+		// Forgejo #363: org membership/team/invite transitions append
+		// to the notify org-hook log (nil-safe seam on the identity
+		// service; the members/teams/invitation docs stay the backfill
+		// truth). Synchronous post-commit emission per P8; EmitOrgEvent
+		// reserves, appends, and wakes — it never blocks on delivery.
+		c.ident.OrgEvent = func(ctx context.Context, org, action, actor, title string) {
+			c.notifySvc.EmitOrgEvent(ctx, org, action, actor, title)
+		}
 	}
 	return c
 }

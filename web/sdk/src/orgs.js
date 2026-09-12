@@ -1,6 +1,6 @@
 /**
  * Orgs client group (features/01 §8–§9): orgs, members, teams, org invites.
- * `client.orgs.*` over `/api/v1/orgs[/…]` (both lanes).
+ * `client.orgs.*` over `/api/v1/orgs[/…]` (both lanes), incl. org webhooks.
  */
 
 const enc = encodeURIComponent;
@@ -63,8 +63,45 @@ export function attachOrgs(client) {
       remove: (org, opts) => call(orgPath(org, "/avatar"), { method: "DELETE", ...opts }),
     },
 
-    members: {
-      /** Roster. */
+    webhooks: {
+      /** Org hook list: `GET …/webhooks` → `{webhooks}` (owner; secrets never returned). */
+      list: (org, opts) => call(orgPath(org, "/webhooks"), { method: "GET", ...opts }),
+      /** Create: `{url, events?, secret?, active?, insecure_tls?}` → Hook (owner). */
+      create: (org, spec = {}, opts) =>
+        call(orgPath(org, "/webhooks"), {
+          method: "POST",
+          body: JSON.stringify(spec ?? {}),
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+        }),
+      /** One hook; null when unknown. */
+      get: async (org, id, opts) => {
+        try {
+          return await call(orgPath(org, `/webhooks/${enc(id)}`), { method: "GET", ...opts });
+        } catch (err) {
+          if (err?.status === 404) return null;
+          throw err;
+        }
+      },
+      /** Update: `{url?, events?, secret?, active?, insecure_tls?}` → Hook (owner, CAS'd). */
+      update: (org, id, patch = {}, opts) =>
+        call(orgPath(org, `/webhooks/${enc(id)}`), {
+          method: "PATCH",
+          body: JSON.stringify(patch ?? {}),
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+        }),
+      /** Delete: drops the config, both cursor families, and the deliveries ring. */
+      remove: (org, id, opts) => call(orgPath(org, `/webhooks/${enc(id)}`), { method: "DELETE", ...opts }),
+      /** Ping: `POST …/webhooks/{id}/ping` → `{delivery}` (owner). */
+      ping: (org, id, opts) =>
+        call(orgPath(org, `/webhooks/${enc(id)}/ping`), { method: "POST", ...opts }),
+      /** Deliveries: `GET …/webhooks/{id}/deliveries` → last-25 ring (no-store). */
+      deliveries: (org, id, opts) =>
+        call(orgPath(org, `/webhooks/${enc(id)}/deliveries`), { method: "GET", ...opts }),
+    },
+
+    members: {      /** Roster. */
       list: (org, opts) => call(orgPath(org, "/members"), { method: "GET", ...opts }),
       /** One row; null when not a member. */
       get: async (org, principal, opts) => {

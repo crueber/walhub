@@ -43,6 +43,10 @@ var ExposedTemplates = []string{
 	"/api/v1/notifications/stream",
 	"/api/v1/notifications/{id}/read",
 	"/api/v1/notifications/{id}/unread",
+	"/api/v1/orgs/{org}/webhooks",
+	"/api/v1/orgs/{org}/webhooks/{id}",
+	"/api/v1/orgs/{org}/webhooks/{id}/ping",
+	"/api/v1/orgs/{org}/webhooks/{id}/deliveries",
 	"/{owner}/{repo}/api/watch",
 	"/{owner}/{repo}/api/webhooks",
 	"/{owner}/{repo}/api/webhooks/{id}",
@@ -73,6 +77,10 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) bool {
 	segs := splitPath(r)
 	if len(segs) >= 3 && (segs[0] == "api" || segs[0] == "api-browser") && segs[1] == "v1" && segs[2] == "notifications" {
 		h.handleUser(w, r, segs[3:])
+		return true
+	}
+	if len(segs) >= 5 && (segs[0] == "api" || segs[0] == "api-browser") && segs[1] == "v1" && segs[2] == "orgs" && segs[4] == "webhooks" {
+		h.handleOrg(w, r, segs[3], segs[5:])
 		return true
 	}
 	if len(segs) >= 4 && (segs[2] == "api" || segs[2] == "api-browser") {
@@ -208,6 +216,104 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, who string) {
 				return
 			}
 		}
+	}
+}
+
+// --- org routes ------------------------------------------------------------------
+
+// handleOrg serves the org-hook surface (Forgejo #363):
+// GET/POST /api/v1/orgs/{org}/webhooks, GET/PATCH/DELETE
+// /api/v1/orgs/{org}/webhooks/{id}, POST …/{id}/ping,
+// GET …/{id}/deliveries — on both lanes (the caller normalizes the
+// lane before dispatch). Every route is owner-gated: anonymous gets a
+// real 401, authenticated-but-insufficient a 403; unknown hook ids are
+// 404 (never 403, which would leak existence). Secrets are never
+// returned (secret_set instead).
+func (h *Handler) handleOrg(w http.ResponseWriter, r *http.Request, org string, rest []string) {
+	org = strings.ToLower(strings.TrimSpace(org))
+	if !validOrgHookOrg(org) {
+		writePlain(w, http.StatusNotFound, "not found")
+		return
+	}
+	p, aerr := h.principal(r)
+	if aerr != nil {
+		writeErr(w, aerr)
+		return
+	}
+	if err := requireAuth(p); err != nil {
+		writePlain(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if err := h.Svc.requireOrgOwner(r.Context(), org, p); err != nil {
+		writePlain(w, statusFor(err), err.Error())
+		return
+	}
+	switch {
+	case len(rest) == 0 && r.Method == "GET":
+		hooks, err := h.Svc.ListOrgHooks(r.Context(), org)
+		if err != nil {
+			writePlain(w, statusFor(err), err.Error())
+			return
+		}
+		wire := make([]any, 0, len(hooks))
+		for _, hk := range hooks {
+			wire = append(wire, stripSecret(hk))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"webhooks": wire})
+	case len(rest) == 0 && r.Method == "POST":
+		var spec HookSpec
+		if err := readJSON(r, &spec); err != nil {
+			writePlain(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		hk, err := h.Svc.CreateOrgHook(r.Context(), org, p.Name, spec)
+		if err != nil {
+			writePlain(w, statusFor(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, stripSecret(hk))
+	case len(rest) == 1 && r.Method == "GET":
+		hk := h.Svc.GetOrgHook(r.Context(), org, rest[0])
+		if hk == nil {
+			writePlain(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, stripSecret(hk))
+	case len(rest) == 1 && r.Method == "PATCH":
+		var spec HookSpec
+		if err := readJSON(r, &spec); err != nil {
+			writePlain(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		hk, err := h.Svc.PatchOrgHook(r.Context(), org, rest[0], spec)
+		if err != nil {
+			writePlain(w, statusFor(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, stripSecret(hk))
+	case len(rest) == 1 && r.Method == "DELETE":
+		if err := h.Svc.DeleteOrgHook(r.Context(), org, rest[0]); err != nil {
+			writePlain(w, statusFor(err), err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case len(rest) == 2 && rest[1] == "ping" && r.Method == "POST":
+		delivered, err := h.Svc.PingOrgHook(r.Context(), org, rest[0], p.Name)
+		if err != nil {
+			writePlain(w, statusFor(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"delivery": delivered})
+	case len(rest) == 2 && rest[1] == "deliveries" && r.Method == "GET":
+		if h.Svc.GetOrgHook(r.Context(), org, rest[0]) == nil {
+			writePlain(w, http.StatusNotFound, "not found")
+			return
+		}
+		d := h.Svc.ReadOrgDeliveries(r.Context(), org, rest[0])
+		writeNoStore(w)
+		writeJSON(w, http.StatusOK, d)
+	default:
+		writePlain(w, http.StatusNotFound, "not found")
 	}
 }
 
