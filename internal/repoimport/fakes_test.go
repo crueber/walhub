@@ -31,6 +31,10 @@ type FakeRoles struct {
 	Bindings map[string][]identity.AccessBinding // "owner/repo" → bindings
 	Vis      map[string]identity.Visibility
 	Boot     int // BootstrapRepo calls
+	// Orgs scripts CheckCreateOwner membership: org → member principals.
+	// Nil → legacy-allow (tests that don't model orgs); non-nil → the
+	// #346 rule (self, listed member, or admin — else 403).
+	Orgs map[string][]string
 }
 
 func (f *FakeRoles) roleOf(name string) identity.Role {
@@ -67,6 +71,31 @@ func (f *FakeRoles) CheckRead(_ context.Context, _, _ string, p auth.Principal) 
 		return &auth.AuthError{Kind: auth.ErrUnauthorized, Why: "authentication required"}
 	}
 	return nil
+}
+
+// CheckCreateOwner scripts the #346 admission rule: anonymous → 401,
+// admin → allow, self → allow; with Orgs set, listed members pass and
+// everyone else gets a 403 naming the owner. Orgs == nil → legacy-allow
+// (tests that don't model orgs keep the old open shape).
+func (f *FakeRoles) CheckCreateOwner(_ context.Context, owner string, p auth.Principal) *auth.AuthError {
+	if p.Anonymous {
+		return &auth.AuthError{Kind: auth.ErrUnauthorized, Why: "authentication required"}
+	}
+	if p.Admin {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(owner), strings.TrimSpace(p.Name)) {
+		return nil
+	}
+	if f.Orgs == nil {
+		return nil
+	}
+	for _, m := range f.Orgs[owner] {
+		if strings.EqualFold(strings.TrimSpace(m), strings.TrimSpace(p.Name)) {
+			return nil
+		}
+	}
+	return &auth.AuthError{Kind: auth.ErrForbidden, Why: "owner " + owner + " not permitted"}
 }
 
 func (f *FakeRoles) CheckRole(_ context.Context, _, _ string, p auth.Principal, want identity.Role) *auth.AuthError {

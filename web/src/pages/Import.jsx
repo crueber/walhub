@@ -15,6 +15,7 @@ import { A, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { normalizeSource } from "../../sdk/src/import.js";
 import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
+import { allowedOwners } from "../lib/orgs.js";
 import { reportError, invalidate } from "../lib/data.js";
 
 export default function Import() {
@@ -41,6 +42,9 @@ export default function Import() {
   const [getTaskId, setTaskId] = createSignal("");
   const [getBusy, setBusy] = createSignal(false);
   const [getMe, setMe] = createSignal(null);
+  // Forgejo #346: owner bounded to self + member orgs (server-admitted
+  // set; admins needing a foreign namespace use the API). null = loading.
+  const [getOwners, setOwners] = createSignal(null);
   let ctrl = null;
   onCleanup(() => {
     if (ctrl) ctrl.abort();
@@ -48,8 +52,22 @@ export default function Import() {
 
   repos
     .me()
-    .then(setMe)
-    .catch(() => setMe({ anonymous: true }));
+    .then(async (me) => {
+      setMe(me);
+      const self = me?.principal && !me.anonymous ? me.principal : "";
+      if (!getOwner() && self) setOwner(self);
+      if (!self) {
+        setOwners([]);
+        return;
+      }
+      const opts = await allowedOwners(repos, self).catch(() => [self]);
+      setOwners(opts);
+      if (!opts.includes(getOwner())) setOwner(self);
+    })
+    .catch(() => {
+      setMe({ anonymous: true });
+      setOwners([]);
+    });
   const anonymous = () => getMe()?.anonymous !== false && !getMe()?.principal;
 
   const suggestion = () => normalizeSource(getUrl());
@@ -220,14 +238,24 @@ export default function Import() {
           <div class="grid grid-cols-2 gap-3">
             <label class="grid gap-1">
               <span class="text-sm font-medium">Owner</span>
-              <input
-                class="input font-mono"
-                value={getOwner()}
-                onInput={(e) => setOwner(e.currentTarget.value.trim())}
-                placeholder="acme"
-                autocomplete="off"
-                spellcheck={false}
-              />
+              <Show
+                when={getOwners() !== null}
+                fallback={
+                  <select class="input font-mono" disabled aria-label="Owner">
+                    <option>{getOwner() || "…"}</option>
+                  </select>
+                }
+              >
+                <select
+                  class="input font-mono"
+                  value={getOwner()}
+                  onChange={(e) => setOwner(e.currentTarget.value)}
+                  aria-label="Owner"
+                >
+                  <For each={getOwners() ?? []}>{(o) => <option value={o}>{o}</option>}</For>
+                </select>
+              </Show>
+              <span class="muted text-xs">you and your orgs only</span>
             </label>
             <label class="grid gap-1">
               <span class="text-sm font-medium">Name</span>

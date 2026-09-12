@@ -160,12 +160,12 @@ PUT    /{o}/{r}/api/mirror        → {upstream_url?, schedule?}: create (+ anon
 DELETE /{o}/{r}/api/mirror        → 204 (stops the loop; admin)
 POST   /{o}/{r}/api/mirror/sync   → {token?, force?} → 202 {task: {id}, target} (admin)
 GET    /{o}/{r}/api/mirror/sync[?id=] → {done, task?, error?} | {active, recent} (open read)
-POST   /api/v1/repos/mirrors (+ /api-browser/v1 twin) → {source_url, owner, name, schedule?, token?, dangerous?} → create repo + sidecar + first sync (202; write-gated, dangerous needs the import authority rule)
+POST   /api/v1/repos/mirrors (+ /api-browser/v1 twin) → {source_url, owner, name, schedule?, token?, dangerous?} → create repo + sidecar + first sync (202; write-gated + the #346 owner admission — owner == self, member org, or host admin, else 403 naming the allowed owners before anything is created; dangerous needs the import authority rule)
 ```
 
 - The summary (`summaryBody`) gains `mirror: {upstream_url, schedule,
   next_sync_at, last_synced_at, last_result, consecutive_failures, due}`
-  behind an `api.Env.MirrorSummary` hook (the ReadGate/OrgGate shape —
+  behind an `api.Env.MirrorSummary` hook (the ReadGate/CreateOwnerGate shape —
   api never imports the feature); nil hook → no field, no probe. The
   ETag covers it (`~m` suffix, the #235 `~d` precedent).
 - **Serve-health truth (issue #320)**: the hook probes
@@ -286,3 +286,10 @@ see §6).
   No-op fires never probe (the prior verdict stands). Rationale: a sync
   that publishes refs the instance cannot serve is not successful, and
   recovery must not need an operator.
+- **(i) Creation owner admission (2026-09-12, #346).** The create-from-URL
+  twin enforces the shared identity rule (`CheckCreateOwner` behind a
+  hook wired in composition; nil → legacy-open) BEFORE `CreateRepo`, so
+  a deny writes nothing (401 anonymous / 403 foreign owner / 503 on
+  probe failure — the `writeAuthErr` shape). Rationale: mirror creation
+  is repo creation through another door; leaving it host-write-only kept
+  the exact namespace squat #346 closed everywhere else.

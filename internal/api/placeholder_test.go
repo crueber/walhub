@@ -16,20 +16,32 @@ import (
 
 // --- placeholder fakes -----------------------------------------------------
 
-type fakeOrgGate struct {
+type fakeCreateOwnerGate struct {
 	exists  map[string]bool
 	members map[string]map[string]bool
 	err     error
 }
 
-func (f *fakeOrgGate) IsOrgMember(_ context.Context, org, principal string) (bool, bool, error) {
+// CheckCreateOwner mirrors the production #346 rule over the scripted
+// roster: anonymous → 401, admin → admit, self → admit, listed member →
+// admit, else 403 naming the owner; err → unavailable (caller maps 503).
+func (f *fakeCreateOwnerGate) CheckCreateOwner(_ context.Context, owner string, p auth.Principal) *auth.AuthError {
 	if f.err != nil {
-		return false, false, f.err
+		return &auth.AuthError{Kind: auth.ErrUnavailable, Why: "org membership unavailable"}
 	}
-	if !f.exists[org] {
-		return false, false, nil
+	if p.Anonymous {
+		return &auth.AuthError{Kind: auth.ErrUnauthorized, Why: "authentication required"}
 	}
-	return true, f.members[org][principal], nil
+	if p.Admin {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(owner), strings.TrimSpace(p.Name)) {
+		return nil
+	}
+	if f.exists[owner] && f.members[owner][p.Name] {
+		return nil
+	}
+	return &auth.AuthError{Kind: auth.ErrForbidden, Why: "owner " + owner + " not permitted"}
 }
 
 type fakeAccessBoot struct {
@@ -42,18 +54,24 @@ func (f *fakeAccessBoot) EnsureRepoAccess(_ context.Context, owner, repo, creato
 	return f.err
 }
 
-func placeholderFixture(t *testing.T) (*fixture, *fakeOrgGate, *fakeAccessBoot) {
+func placeholderFixture(t *testing.T) (*fixture, *fakeCreateOwnerGate, *fakeAccessBoot) {
 	t.Helper()
 	f := newFixture(t)
-	g := &fakeOrgGate{exists: map[string]bool{}, members: map[string]map[string]bool{}}
+	g := &fakeCreateOwnerGate{exists: map[string]bool{}, members: map[string]map[string]bool{}}
 	b := &fakeAccessBoot{}
-	f.env.OrgGate = g
+	f.env.CreateOwnerGate = g
 	f.env.AccessBoot = b
 	return f, g, b
 }
 
 func writerPrincipal(name string) *auth.Principal {
 	return &auth.Principal{Name: name, Write: true, Admin: true}
+}
+
+// writeOnlyPrincipal is a non-admin writer (the gate matrix needs
+// principals the admin bypass does not rescue).
+func writeOnlyPrincipal(name string) *auth.Principal {
+	return &auth.Principal{Name: name, Write: true}
 }
 
 // --- PUT ?placeholder=true -------------------------------------------------
@@ -187,24 +205,38 @@ func TestPutPlaceholderOrgGate(t *testing.T) {
 	f, g, _ := placeholderFixture(t)
 	g.exists["acme"] = true
 	g.members["acme"] = map[string]bool{"alice@example.com": true}
-	// Non-member → 403.
-	w := f.do("PUT", "/acme/gated?placeholder=true", nil, nil, writerPrincipal("mallory@example.com"))
+	// Non-member (non-admin) → 403 naming the owner.
+	w := f.do("PUT", "/acme/gated?placeholder=true", nil, nil, writeOnlyPrincipal("mallory@example.com"))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("non-member = %d (%s)", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), "acme") {
+		t.Fatalf("403 must name the owner: %q", w.Body.String())
+	}
 	// Member → 201.
-	w = f.do("PUT", "/acme/gated?placeholder=true", nil, nil, writerPrincipal("alice@example.com"))
+	w = f.do("PUT", "/acme/gated?placeholder=true", nil, nil, writeOnlyPrincipal("alice@example.com"))
 	if w.Code != 201 {
 		t.Fatalf("member = %d (%s)", w.Code, w.Body.String())
 	}
-	// Unclaimed prefix → legacy-open.
-	w = f.do("PUT", "/free/gated?placeholder=true", nil, nil, writerPrincipal("mallory@example.com"))
+	// Self-namespace (owner == principal, no org involved) → 201.
+	w = f.do("PUT", "/mallory/self?placeholder=true", nil, nil, writeOnlyPrincipal("mallory"))
 	if w.Code != 201 {
-		t.Fatalf("unclaimed = %d (%s)", w.Code, w.Body.String())
+		t.Fatalf("self = %d (%s)", w.Code, w.Body.String())
+	}
+	// Foreign prefix that is neither self nor a member org → 403
+	// (the #346 close of the legacy-open unclaimed-prefix shape).
+	w = f.do("PUT", "/free/gated?placeholder=true", nil, nil, writeOnlyPrincipal("mallory@example.com"))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("foreign prefix = %d (%s), want 403", w.Code, w.Body.String())
+	}
+	// Host admin bypasses the admission rule.
+	w = f.do("PUT", "/acme/admin?placeholder=true", nil, nil, writerPrincipal("root@example.com"))
+	if w.Code != 201 {
+		t.Fatalf("admin = %d (%s), want 201", w.Code, w.Body.String())
 	}
 	// Probe error → 503, never 403.
 	g.err = errors.New("store down")
-	w = f.do("PUT", "/acme/gated2?placeholder=true", nil, nil, writerPrincipal("mallory@example.com"))
+	w = f.do("PUT", "/acme/gated2?placeholder=true", nil, nil, writeOnlyPrincipal("mallory@example.com"))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("probe error = %d (%s)", w.Code, w.Body.String())
 	}
@@ -380,19 +412,22 @@ func TestPostReposOrgGate(t *testing.T) {
 	g.exists["acme"] = true
 	g.members["acme"] = map[string]bool{"alice@example.com": true}
 	ch := &CreateHandler{Env: f.env}
-	call := func(principal string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest("POST", "/api/v1/repos", strings.NewReader(`{"owner":"acme","name":"g"}`))
+	call := func(p *auth.Principal, name string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/api/v1/repos", strings.NewReader(`{"owner":"acme","name":"`+name+`"}`))
 		r.Header.Set("Content-Type", "application/json")
-		r = r.WithContext(WithPrincipal(r.Context(), *writerPrincipal(principal)))
+		r = r.WithContext(WithPrincipal(r.Context(), *p))
 		w := httptest.NewRecorder()
 		ch.Handle(w, r)
 		return w
 	}
-	if w := call("mallory@example.com"); w.Code != http.StatusForbidden {
+	if w := call(writeOnlyPrincipal("mallory@example.com"), "g"); w.Code != http.StatusForbidden {
 		t.Fatalf("non-member = %d", w.Code)
 	}
-	if w := call("alice@example.com"); w.Code != 201 {
+	if w := call(writeOnlyPrincipal("alice@example.com"), "g"); w.Code != 201 {
 		t.Fatalf("member = %d (%s)", w.Code, w.Body.String())
+	}
+	if w := call(writerPrincipal("root@example.com"), "g-admin"); w.Code != 201 {
+		t.Fatalf("admin bypass = %d (%s)", w.Code, w.Body.String())
 	}
 }
 

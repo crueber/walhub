@@ -27,6 +27,10 @@ func TestImportFileEndToEnd(t *testing.T) {
 	svc, st := testService(t, cfg, nil)
 	roles := realRoles(st, cfg)
 	svc.roles = roles
+	// #346 admission: carol imports under acme, so she must belong to it.
+	if _, err := roles.CreateOrg(context.Background(), "acme", "Acme", "", "carol@example.com"); err != nil {
+		t.Fatal(err)
+	}
 	h := testHandler(svc, auth.Principal{Name: "carol@example.com", Write: true})
 
 	remote := t.TempDir() + "/src"
@@ -145,7 +149,12 @@ func TestImportFileEndToEnd(t *testing.T) {
 func TestImportPackChecksumsBareHex(t *testing.T) {
 	cfg := testConfig(t)
 	svc, st := testService(t, cfg, nil)
-	svc.roles = realRoles(st, cfg)
+	roles := realRoles(st, cfg)
+	svc.roles = roles
+	// #346 admission: carol imports under acme, so she must belong to it.
+	if _, err := roles.CreateOrg(context.Background(), "acme", "Acme", "", "carol@example.com"); err != nil {
+		t.Fatal(err)
+	}
 	h := testHandler(svc, auth.Principal{Name: "carol@example.com", Write: true})
 
 	remote := t.TempDir() + "/src205"

@@ -203,16 +203,37 @@ a fork removes only the fork. A deleted fork can leave a stale entry in the pare
 (03 §7); fork-network readers MUST treat a missing child manifest as absent (conditional-GET miss =
 skip), never as an error — the GC liveness rule stays total over a partially-deleted network.
 
-### 5.2 Explicit-create org gate + eager access default (issue #210)
+### 5.2 Creation owner admission + eager access default (issues #210, #346)
 
-Creation under an org prefix (`orgs/<org>/members.json` exists) ALSO requires org membership
-(member+): one exact-key roster GET on the create path (human-rate, never hot — same cost class
-as the P6 team expansion probes). Non-member → `403`; unclaimed owner prefix (no org object) →
-today's open behavior persists (back-compat; claiming a populated prefix is out of scope); probe
-errors → `503`, never 403-as-404. The gate is injected into `internal/api` as the `OrgGate`
-interface (law 8: core defines the seam, this package implements `IsOrgMember` — no upward
-import). Rationale: without it placeholder creation becomes name-squatting inside someone else's
-org (the valuable prefixes are org-owned).
+A logged-in principal may create or import a repo under `owner` iff ONE
+holds (the #346 admission rule, enforced by `(*Service).CheckCreateOwner`
+BEFORE any namespace write — a deny allocates no counter, writes no
+manifest, leaves no partial state):
+
+- the owner equals their own username (case-insensitive), or
+- the owner names an org whose roster contains them (ANY roster role —
+  v1 member-may-create), or
+- they hold the host `admin` flag (global-admin bypass, documented;
+  the auth-none `anon` principal carries it, so zero-config first-run
+  creation is unaffected).
+
+Anonymous → `401` (real 401, law 9); a foreign owner → `403` naming the
+allowed owners (own username + member orgs, enumerated on the deny path
+only — law 6); roster probe failures → `503`, never 403-as-404. The rule
+costs one exact-key roster GET on the non-self, non-admin path
+(human-rate create/import only, never hot — same cost class as the P6
+team expansion probes). The seam is `CreateOwnerGate` (`internal/api`)
+/ `RoleService.CheckCreateOwner` (`internal/repoimport`) plus the mirror
+create-from-URL hook — law 8: core defines the seam, this package
+implements it. The UI bounds the New/Import owner fields to a dropdown of
+self + member orgs (server-authoritative 403 is the real gate; admins
+needing a foreign namespace use the API). The #347 push guardrail reuses
+the helper verbatim for auto-create-on-push (same 403 shape); the
+SSH/HTTP repo-scoped push rule for existing repos lands there, not here.
+
+This SUPERSEDES the #210 org-only gate (which left unclaimed prefixes
+open and said nothing about self): creation under a foreign prefix that
+is neither self nor a member org is now 403, not legacy-open.
 
 At placeholder creation the §10 synthesized default is materialized eagerly
 (`{visibility:"public", role_bindings:[{subject:"user:<creator>", role:"admin"}]}`), so the
@@ -407,7 +428,17 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   sorted names, so a server-side "newest" sort or paginated shape   would need per-repo manifest/log reads (or a new endpoint carrying creation times) rather than
   inventing metadata the listing does not have. Rationale: read-only reuse keeps the round-trip budget (1 + shown-owners GETs,
   SWR-cached) and the CAS surface untouched.
-- **Explicit-create org gate + eager access default (issue #210, §5.2, R1 B5/S2):** creation
+- **Creation owner admission (issue #346, §5.2 — supersedes the #210 org-only gate):** owner
+  must equal the principal's username or be a member org (any roster role — v1
+  member-may-create); host admins bypass; anonymous 401, foreign owner 403 naming the
+  allowed owners, probe errors 503. One rule (`CheckCreateOwner`) consulted by explicit
+  create, import, and the mirror create-from-URL twin BEFORE any namespace write; the #347
+  push guardrail reuses it verbatim for auto-create-on-push. Rationale: the #210 shape still
+  let any host-writer squat any unclaimed prefix or another user's namespace. The `OrgGate`/
+  `IsOrgMember` seam is replaced by `CreateOwnerGate`/`CheckCreateOwner` (+ `MemberOrgs` for
+  the 403 message) in the same change — no alias, no shim.
+- **Explicit-create org gate + eager access default (issue #210, §5.2, R1 B5/S2 — gate
+  part SUPERSEDED by #346 above):** creation
   under an org prefix requires membership (403 only on proven non-membership; unclaimed prefixes
   legacy-open; probe errors 503); the §10 synthesized default materializes eagerly at create
   (Create-wins, adopt-don't-overwrite); auth-none skips the creator binding (no
@@ -428,10 +459,10 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   against the owner slug (user-self: the `me()` principal IS the owner name on instances whose
   token mapping mints slug names), or (c) org `owner` role in `orgs/<org>/members.json` via the
   `api.OwnerEditor` seam implemented by `(*Service).CanEditOwnerProfile` (one exact-key roster
-  GET, human-rate; probe errors fail closed with 503, never 403-as-404 — the #210 creategate
+  GET, human-rate; probe errors fail closed with 503, never 403-as-404 — the creategate
   rule). Rationale: principals are emails while owner slugs are namespaces, so no pure core rule
   can express "org owner" — but core must not import identity (law 8), hence the seam (the
-  OrgGate/AccessBoot shape, wired in `cmd/walhub` composition). Org `member` (non-owner) and
+  CreateOwnerGate/AccessBoot shape, wired in `cmd/walhub` composition). Org `member` (non-owner) and
   team membership grant nothing: the profile speaks for the namespace, so only namespace owners
   (plus host admins) write it. The GET carries request-scoped `can_edit` (same rule, probe
   failure degrades to false) so the UI affordance never guesses — client gating stays cosmetic.

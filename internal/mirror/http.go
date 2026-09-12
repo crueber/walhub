@@ -61,6 +61,11 @@ type Handler struct {
 	// (composition binds it onto wal.Registry.Create). Nil → the
 	// create twin answers 503.
 	CreateRepo func(ctx context.Context, owner, name string) error
+	// CheckCreateOwner is the #346 creation owner-admission rule (owner
+	// == self, member org, or host admin — fail closed): enforced BEFORE
+	// CreateRepo, so a deny writes nothing. Composition binds the
+	// identity service; nil → legacy-open (no gate).
+	CheckCreateOwner func(ctx context.Context, owner string, p auth.Principal) *auth.AuthError
 	// AuthMode reports server.auth.mode for the dangerous-confirm
 	// authority rule (import dangerousAllowed shape).
 	AuthMode func() string
@@ -491,6 +496,14 @@ func (h *Handler) createFromURL(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(in.Owner) == "" || strings.TrimSpace(in.Name) == "" {
 		writePlain(w, http.StatusBadRequest, "owner and name are required")
 		return
+	}
+	// Owner admission BEFORE any namespace write (the #346 rule shared
+	// with explicit create + import: self, member org, or host admin).
+	if h.CheckCreateOwner != nil {
+		if cerr := h.CheckCreateOwner(r.Context(), strings.TrimSpace(in.Owner), p); cerr != nil {
+			writeAuthErr(w, cerr)
+			return
+		}
 	}
 	if _, err := git.ParseRepoId(in.Owner + "/" + in.Name); err != nil {
 		writePlain(w, http.StatusBadRequest, "bad target: "+err.Error())

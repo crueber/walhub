@@ -56,3 +56,36 @@ export function orgCreateBody(form) {
 export function isOrgRow(row) {
   return !!row && row.is_org === true;
 }
+
+/**
+ * allowedOwners(client, principal) → Promise<string[]>.
+ * The #346 owner-dropdown options: `[self, ...memberOrgs]` (sorted).
+ * Resolves via `client.orgs.list()` + one `client.orgs.members.get(org,
+ * principal)` probe per org (the SDK maps 404 → null = not a member).
+ * Any failure degrades to `[self]` — the SERVER is authoritative (a
+ * foreign owner gets a 403 naming the allowed owners); the dropdown is
+ * honesty, never the gate. Host admins needing a foreign namespace use
+ * the API directly (the UI cannot see the admin flag on `me`).
+ */
+export async function allowedOwners(client, principal) {
+  const self = String(principal ?? "").trim();
+  if (!self) return [];
+  let orgs;
+  try {
+    orgs = (await client.orgs.list()) ?? [];
+  } catch {
+    return [self];
+  }
+  const mine = [];
+  for (const entry of orgs) {
+    const name = typeof entry === "string" ? entry : entry?.org;
+    if (!name) continue;
+    try {
+      const row = await client.orgs.members.get(name, self);
+      if (row) mine.push(name);
+    } catch {
+      // A failed probe is "not proven a member" — skip, keep the rest.
+    }
+  }
+  return [self, ...mine.sort()];
+}
