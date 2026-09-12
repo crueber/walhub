@@ -27,6 +27,8 @@ test("identity SDK surface: users/orgs/access/invites paths", async () => {
     { name: "orgs.get", run: (c) => c.orgs.get("acme"), method: "GET", path: "/api/v1/orgs/acme" },
     { name: "orgs.put", run: (c) => c.orgs.put("acme", {}), method: "PUT", path: "/api/v1/orgs/acme" },
     { name: "orgs.delete", run: (c) => c.orgs.delete("acme"), method: "DELETE", path: "/api/v1/orgs/acme" },
+    { name: "orgs.avatar.upload", run: (c) => c.orgs.avatar.upload("acme", new Uint8Array([1, 2, 3])), method: "PUT", path: "/api/v1/orgs/acme/avatar" },
+    { name: "orgs.avatar.remove", run: (c) => c.orgs.avatar.remove("acme"), method: "DELETE", path: "/api/v1/orgs/acme/avatar" },
     { name: "orgs.members.list", run: (c) => c.orgs.members.list("acme"), method: "GET", path: "/api/v1/orgs/acme/members" },
     { name: "orgs.members.put", run: (c) => c.orgs.members.put("acme", "a@b.c", "member"), method: "PUT", path: "/api/v1/orgs/acme/members/a%40b.c" },
     { name: "orgs.members.delete", run: (c) => c.orgs.members.delete("acme", "a@b.c"), method: "DELETE", path: "/api/v1/orgs/acme/members/a%40b.c" },
@@ -67,4 +69,11 @@ test("identity SDK: 404 getters resolve null", async () => {
     const { out } = await drive(run, { status: 404, body: "not found" });
     assert.equal(out, null);
   }
+});
+
+test("identity SDK: org avatar url carries the cache-busting version", async () => {
+  const { out } = await drive((c) => c.orgs.avatar.url("Acme", "2026-09-12T00:00:00Z"));
+  assert.equal(out, "/api/v1/orgs/acme/avatar?v=2026-09-12T00%3A00%3A00Z");
+  const { out: bare } = await drive((c) => c.orgs.avatar.url("acme"));
+  assert.equal(bare, "/api/v1/orgs/acme/avatar");
 });

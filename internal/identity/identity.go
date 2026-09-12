@@ -10,6 +10,7 @@
 //	users/<principal>/profile.json            CAS'd user profile
 //	users/<principal>/invitations/index.json  CAS'd inbox index (pending invites)
 //	orgs/<org>/org.json                       CAS'd org profile (Create reserves the name)
+//	orgs/<org>/avatar                         overwritable raw avatar bytes (Forgejo #359)
 //	orgs/<org>/members.json                   CAS'd roster [{principal, role, joined_at}]
 //	orgs/<org>/teams/<slug>.json              CAS'd team (Create reserves the slug)
 //	orgs/<org>/invitations/<id>.json          Create-only immutable invite
@@ -157,6 +158,13 @@ func InboxKey(principal string) string {
 
 // OrgKey returns orgs/<org>/org.json.
 func OrgKey(org string) string { return "orgs/" + org + "/org.json" }
+
+// OrgAvatarKey returns orgs/<org>/avatar (Forgejo #359): the org's raw
+// avatar bytes, one overwritable object (not content-addressed — an org
+// has exactly one current avatar). The object's ContentType is the
+// magic-sniffed image type; org.json's avatar_content_type mirrors it as
+// the render gate so GET org stays one round trip.
+func OrgAvatarKey(org string) string { return "orgs/" + org + "/avatar" }
 
 // MembersKey returns orgs/<org>/members.json.
 func MembersKey(org string) string { return "orgs/" + org + "/members.json" }

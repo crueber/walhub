@@ -20,6 +20,13 @@ var (
 	ErrForbidden = errors.New("forbidden")
 	// ErrUnauthorized maps to 401 + WWW-Authenticate: Bearer.
 	ErrUnauthorized = errors.New("authentication required")
+	// ErrTooLarge maps to 413: an avatar upload over maxOrgAvatarBytes
+	// (same spelling as the issues attachment sentinel).
+	ErrTooLarge = errors.New("avatar too large")
+	// ErrUnsupportedMedia maps to 415: an avatar upload outside the
+	// PNG/JPEG/GIF/WebP magic-sniff allowlist (SVG rejected: same-origin
+	// served SVG is script execution in our origin).
+	ErrUnsupportedMedia = errors.New("unsupported avatar type")
 )
 
 // statusFor maps a sentinel to its HTTP status.
@@ -35,6 +42,10 @@ func statusFor(err error) int {
 		return http.StatusUnauthorized
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict
+	case errors.Is(err, ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
+	case errors.Is(err, ErrUnsupportedMedia):
+		return http.StatusUnsupportedMediaType
 	}
 	return http.StatusServiceUnavailable
 }
