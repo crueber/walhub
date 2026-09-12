@@ -495,7 +495,12 @@ func pruneExpiredLocked(streams map[string]*stream) {
 // self, member org, or host admin) runs BEFORE any namespace write — a
 // deny allocates no counter, writes no manifest, leaves no partial state —
 // then host write/admin, org owners, and ≥write roles pass; everyone else
-// → 403.
+// → 403. The host write/admin pass survives Forgejo #374 (which retired
+// the host-write grant from P6 resolution for READS): import is a
+// create-capability, so after admission a host credential overcomes a
+// per-repo role deny — but never an authentication failure, and the wired
+// roles stay consulted first (probe-error 503s and 401s surface
+// unchanged).
 func (s *Service) checkCreate(ctx context.Context, p auth.Principal, owner, repo string) error {
 	if p.Anonymous {
 		return &StatusError{Status: 401, Message: "authentication required"}
@@ -510,6 +515,9 @@ func (s *Service) checkCreate(ctx context.Context, p auth.Principal, owner, repo
 		return statusOfAuth(cerr)
 	}
 	if cerr := s.roles.CheckRole(ctx, owner, repo, p, identity.RoleWrite); cerr != nil {
+		if cerr.Kind == auth.ErrForbidden && (p.Write || p.Admin) {
+			return nil
+		}
 		switch cerr.Kind {
 		case auth.ErrUnauthorized:
 			return &StatusError{Status: 401, Message: cerr.Why}

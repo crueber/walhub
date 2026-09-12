@@ -110,7 +110,7 @@ One CAS'd object per repo: `repos/<o>/<r>/access.json` (P1 names it; it joins th
 | Field | Type | Rules |
 |---|---|---|
 | `version` | integer | CAS token; PUTs must carry the version they read (409 otherwise) |
-| `visibility` | `"public"\|"private"` | gates anonymous reads (§4.1) — default `"public"` |
+| `visibility` | `"public"\|"authenticated"\|"private"` (Forgejo #374) | gates anonymous reads (§4.1) — default `"public"` |
 | `role_bindings` | array | empty `[]` allowed; subjects `user:<email>` or `team:<org>/<slug>`; roles `read|triage|write|maintain|admin` |
 
 - **One binding per subject.** A PUT that carries duplicates for one subject is a 400 (plain-text error,
@@ -123,15 +123,19 @@ One CAS'd object per repo: `repos/<o>/<r>/access.json` (P1 names it; it joins th
 - **Who may write:** role `admin` at this repo, or host admin flag (P6). Same auth class as
   `PUT …/policy` and `PUT …/settings`.
 
-**Resolution order** is P6 verbatim, with the team expansion made exact: a `team:org/slug` binding
+**Resolution order** is P6 verbatim, with the team expansion made exact and the
+Forgejo #374 visibility split: a `team:org/slug` binding
 matches a principal iff the principal is in `orgs/<org>/teams/<slug>.json.members`. Resolution is
-max-role across: (1) `access.json` bindings (direct + team), (2) org ownership (owner of the org that
-owns the repo — owner role in `members.json`), (3) auth principal's `write`/`admin` flags (existing
-behavior, mapping write→write, admin→admin), (4) anonymous → `read` iff `visibility == "public"`,
-nothing otherwise. First match in that list that yields ANY role wins; within step 1 the max of
-matching bindings applies. Resolution result is memoized per-request; no lock is involved — it is two
-bucket GETs worst case (`access.json`, one `teams/<slug>.json` per referenced team, bounded by the
-binding list length).
+max-role across: (1) `access.json` bindings (direct + team), (2) the owning org's roster —
+owners resolve `admin`, members resolve `read` (one `members.json` GET covers both; a non-org
+owner reads as absent), (3) `authenticated` visibility grants any authenticated principal `read`,
+(4) the auth principal's `admin` flag (the host-wide `write` flag grants NOTHING — the #347
+direction extended to reads: it authenticates, never authorizes), (5) anonymous → `read` iff
+`visibility == "public"`, nothing otherwise. First match in that list that yields ANY role wins;
+within step 1 the max of matching bindings applies. Resolution result is memoized per-request; no
+lock is involved — it is two bucket GETs worst case (`access.json`, one `teams/<slug>.json` per
+referenced team, bounded by the binding list length; the roster GET replaces the old owner-only
+probe, so no round trip is added).
 
 ### Concurrency
 
@@ -152,7 +156,17 @@ already carries the repo's permission model is the single place a reader consult
 
 - Server `auth.anonymous_read` (06 §8.8) remains the **host-wide** lever: false means anonymous gets
   nothing anywhere, regardless of `visibility`. True means anonymous gets `read` **only where
-  `visibility == "public"`**.
+  `visibility == "public"`** (`authenticated` and `private` both refuse anonymous with a real
+  401 — law 9).
+- `authenticated` ("private, logged in only", Forgejo #374) grants any authenticated principal
+  `read` at resolution step 3 — the mode for user-owned repos that should stay off the anonymous
+  internet without naming every reader. `private` ("visible only by owner/org") is owner(s),
+  org members (org-owned repos — membership alone suffices, no binding needed), explicit
+  bindings, and host admin; on a user-owned repo that is the owner binding plus explicit
+  bindings plus host admin (fail closed — no binding, no read, even for the owner).
+- A host `write`-flag-only outsider reads `public` and `authenticated` repos through visibility
+  like any authenticated principal, and NOTHING on `private` repos (Forgejo #374 decision: the
+  #347 push rule extended to reads). Host `admin` still passes everywhere.
 - Enforcement point: the `require_read` hook named-but-not-spec'd in 14 §14.10.1 / D-EXT-1 is specified
   HERE. `env.Auth.RequireRead(r)` consults a registered read gate (this package) **after** principal
   resolution and before any handler body:
@@ -437,9 +451,14 @@ Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
   gates); member rows inline role `<select>`; invite form shows the returned accept link.
 - **Team page** `/:org/teams/:slug` — member list, add/remove, and the repos this team is bound to
   (derived by reading that org's repos' `access.json`; bounded by the org's repo count, P5-acceptable).
-- **Repo Access tab** `/:owner/:repo/settings/access` — a fourth settings sub-tab: visibility toggle,
+- **Repo Access tab** `/:owner/:repo/settings/access` — a fourth settings sub-tab: visibility
+  select (Forgejo #374: `public — anyone may read` / `private — logged in only` plus the
+  owner-shaped private mode — `private — owner only` for user-owned repos, `private — org
+  members only` for org-owned repos; the verdict rides the #348 owner-kind marker via one
+  `orgs.get` probe that 404s to null for users),
   role-binding table (subject, role, remove), add-binding form (user or team autocomplete), CAS version
-  in the footer; save = full-doc PUT, 409 renders "changed under you, reload".
+  in the footer; save = full-doc PUT, 409 renders "changed under you, reload". The settings
+  General tab carries the same owner-aware visibility select (same probe, shared helper).
 - **Profile** `/:owner` renders user or org profile (existing route gains the org variant).
 
 SDK additions (submodules under `web/sdk/src/`, bundled by esbuild into `repos.js`; JSDoc typedefs in
@@ -632,6 +651,24 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   JSON addition is append-only (no fixture/round-trip break: no golden pins
   the inbox shape). The `/invitations` inbox page and the org-tab expiry
   column are specified in 12_web_ui.md.
+- **Visibility modes split: `authenticated` added, `private` refined (Forgejo #374).**
+  The Access tab's single "private — members only" never meant what it said: resolution admitted
+  bindings + org owners + host admins + anyone with host-wide write, while EXCLUDING ordinary org
+  members without bindings. The enum is now additive — `public` (unchanged),
+  `authenticated` ("private, logged in only": any authenticated principal reads, anonymous 401s),
+  `private` ("visible only by owner/org": owner bindings, org roster members without bindings,
+  explicit bindings, host admin) — accepted everywhere visibility is parsed (normalizeAccess,
+  the POST create path, `EnsureRepoAccess`, the SDK typedef, both UI selects). The host-write
+  fallback is ruled DENY (the #347 direction extended to reads: the write flag authenticates,
+  never authorizes) — `CheckRead` early-allows host admin only, `Resolve` grants the admin
+  flag only, and the #345 listing filter probes writers per repo instead of bypassing them.
+  Migration: existing `private` docs keep their value (no data change); the behavioral delta is
+  that org members GAIN read without bindings and host-write-only outsiders LOSE private read
+  (they keep public/authenticated reads through visibility). Operators who used private as
+  "all logged-in users" should flip those repos to `authenticated`.
+  Rationale: two distinct intents (user-owned "not anonymous" vs org-owned "members only") need
+  two values — one label cannot serve both — and a host-wide credential must never imply
+  per-repo authorization.
 - **Usernames are the identity key; emails are owner-visible only (Forgejo #370).**
   The principal NAME is the immutable username (derived at first OIDC login
   from the verified email's local part — `auth.DeriveUsername` — uniquified

@@ -97,14 +97,21 @@ func validOrgRole(r string) bool { return r == string(OrgOwner) || r == string(O
 // Visibility gates anonymous reads.
 type Visibility string
 
-// Visibilities.
+// Visibilities (Forgejo #374): public is anonymous-readable;
+// authenticated ("private, logged in only") is readable by any
+// authenticated principal but never anonymous; private ("visible only
+// by owner/org") is owner + org members + explicit bindings + host
+// admin. The enum is additive: pre-#374 private docs keep their value
+// and gain the refined (member-inclusive, host-write-exclusive) read
+// semantics via Resolve — no data migration.
 const (
-	VisibilityPublic  Visibility = "public"
-	VisibilityPrivate Visibility = "private"
+	VisibilityPublic        Visibility = "public"
+	VisibilityAuthenticated Visibility = "authenticated"
+	VisibilityPrivate       Visibility = "private"
 )
 
 func validVisibility(v string) bool {
-	return v == string(VisibilityPublic) || v == string(VisibilityPrivate)
+	return v == string(VisibilityPublic) || v == string(VisibilityAuthenticated) || v == string(VisibilityPrivate)
 }
 
 var (

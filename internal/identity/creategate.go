@@ -142,7 +142,8 @@ func (s *Service) MemberOrgsFor(ctx context.Context, p auth.Principal) ([]string
 // writer shape as 01 §10 Concurrency (412 = someone raced us — adopt, don't
 // overwrite).
 //
-// visibility is the create request's visibility ("public"|"private"; "" from
+// visibility is the create request's visibility
+// ("public"|"authenticated"|"private"; "" from
 // the PUT-flag path means the public default). Unknown spellings fall back
 // to public — creation never fails on a visibility paraphrase (the POST
 // twin 400s unknown spellings before this runs).
@@ -157,7 +158,10 @@ func (s *Service) EnsureRepoAccess(ctx context.Context, owner, repo, creator, vi
 		return nil
 	}
 	vis := VisibilityPublic
-	if visibility == string(VisibilityPrivate) {
+	switch visibility {
+	case string(VisibilityAuthenticated):
+		vis = VisibilityAuthenticated
+	case string(VisibilityPrivate):
 		vis = VisibilityPrivate
 	}
 	doc := &AccessDoc{Version: 1, Visibility: vis, RoleBindings: []AccessBinding{}}

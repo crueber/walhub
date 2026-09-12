@@ -17,6 +17,7 @@ import {
   asTeamList,
   teamOptionLabel,
 } from "../lib/access.js";
+import { visibilityOptions } from "../lib/visibility.js";
 
 const ROLES = ["read", "triage", "write", "maintain", "admin"];
 
@@ -41,6 +42,18 @@ export default function AccessTab(props) {
   // visibility) degrades to the free-text subject input, which always
   // stays. One extra GET on an admin settings tab, never on a hot path.
   const owner = () => String(props.ctx?.owner ?? "").trim();
+  // Forgejo #374: the visibility options depend on the owner kind
+  // (user-owned: owner-only private; org-owned: org-members-only
+  // private). The org-vs-user verdict rides the #348 owner-kind marker:
+  // orgs.get resolves for orgs and 404s (→ null, never a tray) for
+  // users — one extra GET on an admin settings tab, never on a hot
+  // path. Email owners skip the probe (an org slug can never contain
+  // `@`, same rule as the team fetch below).
+  const [getOrg] = useData(`org:${owner().toLowerCase()}`, () => {
+    if (!shouldFetchTeams(owner())) return null;
+    return repos.orgs.get(owner()).then((doc) => doc ?? null, () => null);
+  }, 5000);
+  const isOrg = () => getOrg() != null;
   const [getTeamRows] = useData(`org-teams:${owner().toLowerCase()}`, () => {
     if (!shouldFetchTeams(owner())) return [];
     return repos.orgs.teams.list(owner()).then(asTeamList, () => []);
@@ -147,15 +160,14 @@ export default function AccessTab(props) {
                   value={getVis()}
                   onChange={(e) => setVis(e.currentTarget.value)}
                 >
-                  <option value="public">public — anyone may read</option>
-                  <option value="private">private — members only</option>
+                  <For each={visibilityOptions(isOrg())}>{(o) => <option value={o.value}>{o.label}</option>}</For>
                 </select>
               </label>
             </section>
 
             <section class="card mt-4 p-4">
               <h3 class="mb-2 font-semibold">Role bindings</h3>
-              <Show when={getRows().length > 0} fallback={<p class="muted text-sm">no bindings — org owners and host admins still apply.</p>}>
+              <Show when={getRows().length > 0} fallback={<p class="muted text-sm">no bindings — org members, org owners, and host admins still apply.</p>}>
                 <div class="overflow-x-auto">
                   <table class="data-table">
                     <thead>

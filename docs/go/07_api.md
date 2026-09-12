@@ -548,9 +548,9 @@ the #280 no-cache migration (version-keyed collab GETs moved; the summary itself
 ref-dependent git content): the residual ≤60 s window closes client-side via stream
 invalidation of the shared summary entry (08 §4).
 
-`visibility` is the public/private badge source (Forgejo #345 — additive `"public"|"private"`,
-always present, `""` when the identity surface is unwired; old clients ignore it per 14
-§14.12): read behind the `Env.RepoVisibility` hook (one LRU-backed conditional `access.json`
+`visibility` is the badge source (Forgejo #345 — additive `"public"|"private"`,
+Forgejo #374 adds `"authenticated"`: always present, `""` when the identity
+surface is unwired; old clients ignore it per 14 §14.12): read behind the `Env.RepoVisibility` hook (one LRU-backed conditional `access.json`
 GET — usually a version hit, no body; missing/empty/invalid `access.json` resolves `public`,
 the §10 legacy default, so pre-existing repos badge public). `ETag` covers the field with
 the `~v<visibility>` suffix — a visibility flip moves no ref, so without it a revalidating
@@ -560,7 +560,8 @@ client would 304 and keep showing the stale badge (same trap as `~degraded`/`~d`
 
 The discoverable create action (the `PUT` lane root is undiscoverable — no UI, no SDK method
 on `repo.js`): `POST /api/v1/repos` with JSON body `{owner, name, object_format? (sha1|sha256,
-default sha1), placeholder? (default true), visibility? (public|private)}` (require_write; in
+default sha1), placeholder? (default true), visibility? (public|authenticated|private — Forgejo
+#374)}` (require_write; in
 `none` mode anonymous inherits the existing write). Naming validation is `git.ParseRepoId`
 (two segments, `[A-Za-z0-9._-]{1,100}`, no leading `.`, not `..`, `.git` suffix stripped —
 `400` plain-text on violation; case preserved verbatim, `Acme/X` and `acme/X` are distinct

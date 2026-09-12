@@ -84,8 +84,8 @@
  *
  * @typedef {{subject: string, role: "read"|"triage"|"write"|"maintain"|"admin"}} AccessBinding
  *
- * @typedef {{version: number, visibility: "public"|"private",
- *   role_bindings: AccessBinding[]}} AccessDoc
+  * @typedef {{version: number, visibility: "public"|"authenticated"|"private",
+  *   role_bindings: AccessBinding[]}} AccessDoc
  *
  * @typedef {{id: string, kind: "org"|"repo", org: string, repo: string, role: string,
  *   subject: string, invited_by: string, state: string, created_at: string,

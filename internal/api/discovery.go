@@ -180,7 +180,7 @@ func (h *handlers) owners(w http.ResponseWriter, r *http.Request) {
 	// when anonymous_read is true — the flag's kept non-repo meaning);
 	// the CONTENT is visibility-filtered: owners with no repo readable
 	// by this caller are omitted, so no private repo leaks via
-	// membership. Unfiltered callers (nil Access, host admin/write)
+	// membership. Unfiltered callers (nil Access, host admin)
 	// take the legacy Owners() walk, byte-identical trips.
 	p := h.env.PrincipalOf(r)
 	var names []string

@@ -26,8 +26,9 @@ import (
 )
 
 // scriptedGate is a per-repo ReadAccess: readable "owner/repo" keys pass,
-// host admin/write callers pass everywhere (the P6 step-3 early-allow the
-// real hook applies), everything else denies (401 anonymous, 403
+// host admin callers pass everywhere (the P6 step-3 early-allow the
+// real hook applies — Forgejo #374: host WRITE alone grants nothing on
+// private repos), everything else denies (401 anonymous, 403
 // authenticated).
 type scriptedGate struct {
 	readable map[string]bool
@@ -36,7 +37,7 @@ type scriptedGate struct {
 
 func (s *scriptedGate) CheckRead(_ context.Context, owner, repo string, p auth.Principal) *auth.AuthError {
 	s.calls++
-	if p.Admin || p.Write {
+	if p.Admin {
 		return nil
 	}
 	if s.readable[owner+"/"+repo] {
@@ -95,7 +96,9 @@ func TestDispatchVisibilityMatrix(t *testing.T) {
 		{"stranger private", "priv", nil, &reader345, http.StatusForbidden},
 		{"member private", "priv", map[string]bool{"demo/priv": true}, &member345, http.StatusOK},
 		{"admin private", "priv", nil, &admin345, http.StatusOK},
-		{"host-write private", "priv", nil, &writer345, http.StatusOK},
+		// Forgejo #374: host-write-only outsiders read public and
+		// authenticated repos via visibility, never private ones.
+		{"host-write private", "priv", nil, &writer345, http.StatusForbidden},
 	}
 	for _, tc := range cases {
 		f, _ := newSeeded(t, tc.extra)

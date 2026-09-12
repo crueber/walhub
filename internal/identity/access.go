@@ -62,7 +62,7 @@ func validSubject(sub string) error {
 // subjects, one binding per subject; returns the sorted bindings.
 func normalizeAccess(vis string, bindings []AccessBinding) (Visibility, []AccessBinding, error) {
 	if !validVisibility(vis) {
-		return "", nil, fmt.Errorf("%w: visibility must be public|private, got %q", ErrInvalid, vis)
+		return "", nil, fmt.Errorf("%w: visibility must be public|authenticated|private, got %q", ErrInvalid, vis)
 	}
 	seen := map[string]bool{}
 	out := make([]AccessBinding, 0, len(bindings))
@@ -286,10 +286,18 @@ func (s *Service) PutAccess(ctx context.Context, owner, repo string, base store.
 	return result, nil
 }
 
-// Resolve returns the max role for principal on owner/repo per P6 verbatim:
+// Resolve returns the max role for principal on owner/repo per P6 verbatim,
+// as refined by Forgejo #374:
 // (1) access.json bindings (direct + team expansion), max of matches;
-// (2) org ownership of the owning org; (3) the auth principal's
-// write/admin flags; (4) anonymous → read iff public. Resolution is
+// (2) the owning org's roster — owners resolve admin, members read (one
+// exact-key members.json GET covering both; a non-org owner reads as
+// absent, so user-owned repos see no extra probe);
+// (3) authenticated visibility grants any authenticated principal read;
+// (4) the auth principal's admin flag (the host-wide write flag grants
+// NOTHING here — #347 direction extended to reads: it authenticates,
+// it never authorizes; host-write-only outsiders read public and
+// authenticated repos via visibility, never private ones);
+// (5) anonymous → read iff public. Resolution is
 // memoized per request by the caller; no lock is involved — two bucket
 // GETs worst case plus one teams GET per referenced team, bounded by the
 // binding list length.
@@ -314,22 +322,53 @@ func (s *Service) Resolve(ctx context.Context, owner, repo string, p auth.Princi
 				best = b.Role
 			}
 		}
-		if best == "" && s.isOrgOwnerFor(ctx, owner, p) {
-			best = RoleAdmin
+		if best == "" {
+			if r, ok := s.orgRosterRole(ctx, owner, p); ok {
+				best = r
+			}
+		}
+		if best == "" && doc.Visibility == VisibilityAuthenticated {
+			best = RoleRead
 		}
 	}
-	if best == "" {
-		switch {
-		case p.Admin:
-			best = RoleAdmin
-		case p.Write:
-			best = RoleWrite
-		}
+	if best == "" && p.Admin {
+		best = RoleAdmin
 	}
 	if best == "" && p.Anonymous && doc.Visibility == VisibilityPublic {
 		best = RoleRead
 	}
 	return best, doc
+}
+
+// orgRosterRole resolves the principal's roster role in the owning org
+// in ONE members.json GET (Forgejo #374): owners map to RoleAdmin,
+// members to RoleRead. ok=false when the owner is not an org, the
+// roster is missing, the store errors, or the principal is not on the
+// roster. User-owned repos (and absent orgs) cost exactly this one
+// exact-key probe — the same GET the old org-owner check already paid,
+// so Resolve gains no round trip.
+func (s *Service) orgRosterRole(ctx context.Context, org string, p auth.Principal) (Role, bool) {
+	m, _, err := s.getMembers(ctx, org)
+	if err != nil || m == nil {
+		return "", false
+	}
+	for _, e := range m.Members {
+		if matchPrincipal(e.Principal, p) {
+			if e.Role == OrgOwner {
+				return RoleAdmin, true
+			}
+			return RoleRead, true
+		}
+	}
+	return "", false
+}
+
+// isOrgMemberFor reports whether the principal holds ANY roster role
+// (owner or member) in org (Forgejo #374: the private-org-members read
+// rule). Absent orgs, store errors, and non-members read false.
+func (s *Service) isOrgMemberFor(ctx context.Context, org string, p auth.Principal) bool {
+	_, ok := s.orgRosterRole(ctx, org, p)
+	return ok
 }
 
 // isOrgOwner reports whether principal is an owner in orgs/<org>/members.json.
@@ -341,16 +380,8 @@ func (s *Service) isOrgOwner(ctx context.Context, org, principal string) bool {
 // spelling matches the username principal carrying that email (the
 // #370 migration alias).
 func (s *Service) isOrgOwnerFor(ctx context.Context, org string, p auth.Principal) bool {
-	m, _, err := s.getMembers(ctx, org)
-	if err != nil || m == nil {
-		return false
-	}
-	for _, e := range m.Members {
-		if matchPrincipal(e.Principal, p) && e.Role == OrgOwner {
-			return true
-		}
-	}
-	return false
+	r, ok := s.orgRosterRole(ctx, org, p)
+	return ok && r == RoleAdmin
 }
 
 // inTeam reports whether principal is in orgs/<org>/teams/<slug>.json.

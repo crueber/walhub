@@ -149,7 +149,7 @@ func (h *handlers) ownersDetailed(w http.ResponseWriter, r *http.Request) {
 	}
 	// Forgejo #345: membership, counts, and activity all derive from the
 	// repos readable by this caller. Unfiltered callers (nil Access, host
-	// admin/write) keep the single OwnerRepoCounts walk, byte-identical
+	// admin) keep the single OwnerRepoCounts walk, byte-identical
 	// trips; filtered callers trade one Repos walk per owner (the same
 	// manifest-gated rule, shared with the allowlist below, law 6).
 	p := h.env.PrincipalOf(r)

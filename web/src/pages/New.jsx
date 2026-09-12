@@ -254,8 +254,9 @@ export default function New() {
             <label class="flex items-center gap-1 text-sm">
               <span>visibility</span>
               <select class="input w-auto" value={getVisibility()} onChange={(e) => setVisibility(e.currentTarget.value)} aria-label="Visibility">
-                <option value="public">public</option>
-                <option value="private">private</option>
+                <option value="public">public — anyone may read</option>
+                <option value="authenticated">private — logged in only</option>
+                <option value="private">private — owner/org only</option>
               </select>
             </label>
           </div>

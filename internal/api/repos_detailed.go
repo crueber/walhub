@@ -51,8 +51,8 @@ type RepoSizeRow struct {
 	// label names the upstream). Corrupt-but-present still reports
 	// Mirror=true with no upstream (fail closed).
 	MirrorUpstream string `json:"mirror_upstream,omitempty"`
-	// Visibility is the public/private badge source (Forgejo #345):
-	// "public"|"private" when the identity surface is wired, "" when
+	// Visibility is the badge source (Forgejo #345, modes split #374):
+	// "public"|"authenticated"|"private" when the identity surface is wired, "" when
 	// it is not (never null — consumers ignore unknown fields, but an
 	// explicit empty reads as "unknown", not "public").
 	Visibility string `json:"visibility"`

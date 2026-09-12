@@ -25,7 +25,10 @@ func TestCheckRead(t *testing.T) {
 		kind  auth.AuthErrorKind
 	}{
 		{"host admin", "priv", admin, true, 0},
-		{"host write flag", "priv", writer, true, 0},
+		// Forgejo #374: host-write-only outsiders read public and
+		// authenticated repos via visibility, never private ones (the
+		// #347 direction extended to reads).
+		{"host write flag", "priv", writer, false, auth.ErrForbidden},
 		{"bound writer", "priv", bob, true, 0},
 		{"org owner", "priv", alice, true, 0},
 		{"stranger private", "priv", stranger, false, auth.ErrForbidden},

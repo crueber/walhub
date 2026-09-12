@@ -21,7 +21,9 @@ func WithPrincipal(ctx context.Context, p auth.Principal) context.Context {
 // resolution and before any handler body on the git read path, LFS reads,
 // and every repo-scoped read endpoint:
 //
-//  1. authenticated principal → resolve per §4; role ≥ read → allow;
+//  1. authenticated principal → resolve per §4 (Forgejo #374: bindings,
+//     owning-org roster with member read, authenticated-visibility read,
+//     host-admin flag); role ≥ read → allow;
 //     public visibility → allow; else 403.
 //  2. anonymous → access.json visibility public → allow, else 401
 //     (WWW-Authenticate: Bearer — git must erase the credential, 06 §8.4).
@@ -30,11 +32,13 @@ func WithPrincipal(ctx context.Context, p auth.Principal) context.Context {
 // host anonymous_read flag NO LONGER gates anonymous reads of public repos
 // — "public ⇒ readable without authentication". The flag keeps its meaning
 // for non-repo surfaces (owners listings, profiles, SPA shells outside repo
-// pages) and for the identity user/org surfaces. A host admin/write flag
-// always allows (P6 step 3); a missing access.json synthesizes the legacy
-// default (§10, public).
+// pages) and for the identity user/org surfaces. A host admin flag always
+// allows (P6 step 3); a host WRITE flag alone allows nothing on private
+// repos (Forgejo #374, the #347 direction extended to reads —
+// authentication-adjacent, never authorization); a missing access.json
+// synthesizes the legacy default (§10, public).
 func (s *Service) CheckRead(ctx context.Context, owner, repo string, p auth.Principal) *auth.AuthError {
-	if p.Admin || p.Write {
+	if p.Admin {
 		return nil
 	}
 	role, doc := s.Resolve(ctx, owner, repo, p)
