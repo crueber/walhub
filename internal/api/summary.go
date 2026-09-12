@@ -33,8 +33,8 @@ type summaryBody struct {
 	// ignore them (14 §14.12).
 	OpenIssues int `json:"open_issues"`
 	OpenPulls  int `json:"open_pulls"`
-	// Visibility is the public/private badge source (Forgejo #345):
-	// "public"|"private" when the identity surface is wired, "" when it
+	// Visibility is the badge source (Forgejo #345, modes split #374):
+	// "public"|"authenticated"|"private" when the identity surface is wired, "" when it
 	// is not (never null — old clients ignore it, 14 §14.12). Missing
 	// access.json resolves public (the §10 legacy default).
 	Visibility  string `json:"visibility"`

@@ -8,6 +8,7 @@
 
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
+import repos from "../../sdk/src/index.js";
 import { useData, reportError, asList, invalidate, tolerateMissing } from "../lib/data.js";
 import { dangerMatches } from "../lib/danger.js";
 import { transferBody } from "../lib/transfer.js";
@@ -34,6 +35,8 @@ import { useRepo, fmtBytes } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import AccessTab from "./Access.jsx";
 import Wal from "./Wal.jsx";
+import { isVisibility, visibilityOptions } from "../lib/visibility.js";
+import { shouldFetchTeams } from "../lib/access.js";
 
 // --- tiny line diff (LCS) for the per-revision "line diff" ----------------------
 
@@ -88,6 +91,15 @@ function GeneralTab(props) {
 
   const [getDoc] = useData(`settings:${props.ctx.full}`, () => props.repo.settings.get(), 5000);
   const [getAccess] = useData(`access:${props.ctx.full}`, () => props.repo.access.get().catch(() => null), 5000);
+  // Forgejo #374: the visibility select offers the owner-appropriate
+  // options (same owner-kind probe as the Access tab — orgs.get 404s to
+  // null for user-owned repos).
+  const owner = () => String(props.ctx?.owner ?? "").trim();
+  const [getOrg] = useData(`org:${owner().toLowerCase()}`, () => {
+    if (!shouldFetchTeams(owner())) return null;
+    return repos.orgs.get(owner()).then((doc) => doc ?? null, () => null);
+  }, 5000);
+  const isOrg = () => getOrg() != null;
 
   // Prefill once the settings doc arrives and the editor is still untouched.
   createEffect(() => {
@@ -127,8 +139,8 @@ function GeneralTab(props) {
 
   async function saveVisibility() {
     const vis = getVis();
-    if (vis !== "public" && vis !== "private") {
-      setVisNote("visibility must be public or private");
+    if (!isVisibility(vis)) {
+      setVisNote("visibility must be public, authenticated, or private");
       return;
     }
     try {
@@ -180,8 +192,7 @@ function GeneralTab(props) {
               onChange={(e) => setVis(e.currentTarget.value)}
               aria-label="Visibility"
             >
-              <option value="public">public — anyone may read</option>
-              <option value="private">private — members only</option>
+              <For each={visibilityOptions(isOrg())}>{(o) => <option value={o.value}>{o.label}</option>}</For>
             </select>
           </label>
           <p class="muted mt-1 text-xs">Public repositories are readable without an account. Saving requires admin.</p>

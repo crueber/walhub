@@ -110,6 +110,25 @@ func markPrivate(t *testing.T, ident *identity.Service, owner, repo string) {
 	}
 }
 
+// grantOwner adds a user:<owner> admin binding to a repo's access doc
+// (Forgejo #374: on a private user-owned repo the owner reads through an
+// explicit binding — what the Access tab saves — never through the
+// host-write flag).
+func grantOwner(t *testing.T, ident *identity.Service, owner, repo, user string) {
+	t.Helper()
+	ctx := context.Background()
+	doc, ver, err := ident.GetAccess(ctx, owner, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := append(doc.RoleBindings, identity.AccessBinding{
+		Subject: "user:" + user, Role: identity.RoleAdmin,
+	})
+	if _, err := ident.PutAccess(ctx, owner, repo, ver, doc.Visibility, bindings); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPushGuardEndToEndHTTP(t *testing.T) {
 	srv, _ := pushGuardStack(t, nil)
 	ts := httptest.NewServer(srv.Handler())
@@ -252,17 +271,23 @@ func TestPushGuardEndToEndSSH(t *testing.T) {
 	}
 
 	// Fetch-side alignment in the same gate area: a private repo refuses
-	// a flagless stranger's clone while the owner still reads (host
-	// writers keep the #345 P6-step-3 read pass, so the stranger here is
-	// the read-only observer, not mallory).
+	// a stranger's clone while the owner still reads. Forgejo #374: the
+	// owner reads through an explicit binding (private user-owned repos
+	// admit owner + bindings + admin only — the host-write flag alone
+	// grants nothing, so mallory is denied too); the observer stays the
+	// flagless stranger cell.
 	privSeed := t.TempDir()
 	e2eSeed(t, privSeed, "secret.txt", "secret\n", "secret")
 	if out, err := e2eGit(t, privSeed, sshEnv(aliceKey), "push", base+"/alice/priv.git", "main"); err != nil {
 		t.Fatalf("private seed push: %v\n%s", err, out)
 	}
 	markPrivate(t, ident, "alice", "priv")
+	grantOwner(t, ident, "alice", "priv", "alice")
 	if out, err := e2eGit(t, t.TempDir(), sshEnv(observerKey), "clone", base+"/alice/priv.git", "."); err == nil {
 		t.Fatalf("private ssh clone must fail\n%s", out)
+	}
+	if out, err := e2eGit(t, t.TempDir(), sshEnv(malloryKey), "clone", base+"/alice/priv.git", "."); err == nil {
+		t.Fatalf("private ssh clone by host-write outsider must fail\n%s", out)
 	}
 	if out, err := e2eGit(t, t.TempDir(), sshEnv(observerKey), "clone", "-q", base+"/alice/sshr.git", "."); err != nil {
 		t.Fatalf("public ssh clone by stranger: %v\n%s", err, out)

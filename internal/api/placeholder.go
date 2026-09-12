@@ -114,11 +114,12 @@ type OrgLister interface {
 // user: subject (auth-none anonymous) and may skip materialization entirely,
 // relying on read-time synthesis (R1 B5).
 //
-// visibility is the POST body's visibility ("public"|"private"; "" from the
-// PUT-flag path, which has no visibility concept) — "private" materializes
-// a private doc, anything else the public default. Callers validate the
-// spelling; implementations treat unknown as public (never fail creation
-// on a visibility paraphrase).
+// visibility is the POST body's visibility
+// ("public"|"authenticated"|"private"; "" from the
+// PUT-flag path, which has no visibility concept) — "private" or
+// "authenticated" materializes that doc, anything else the public
+// default. Callers validate the spelling; implementations treat unknown
+// as public (never fail creation on a visibility paraphrase).
 type AccessBootstrap interface {
 	EnsureRepoAccess(ctx context.Context, owner, repo, creator, visibility string) error
 }
@@ -392,8 +393,8 @@ func (ch *CreateHandler) post(w http.ResponseWriter, r *http.Request) {
 		}
 		format = f
 	}
-	if body.Visibility != "" && body.Visibility != "public" && body.Visibility != "private" {
-		writePlain(w, http.StatusBadRequest, `visibility must be public|private`)
+	if body.Visibility != "" && body.Visibility != "public" && body.Visibility != "authenticated" && body.Visibility != "private" {
+		writePlain(w, http.StatusBadRequest, `visibility must be public|authenticated|private`)
 		return
 	}
 	placeholder := true

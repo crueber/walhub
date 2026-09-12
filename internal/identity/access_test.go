@@ -153,7 +153,10 @@ func TestResolve(t *testing.T) {
 		{"direct triage", carol, RoleTriage},
 		{"org owner", alice, RoleAdmin},
 		{"host admin flag", admin, RoleAdmin},
-		{"flag write", writer, RoleWrite},
+		// Forgejo #374: the host-wide write flag authenticates, never
+		// authorizes — a host-write-only outsider resolves nothing on a
+		// private repo (reads public/authenticated repos via visibility).
+		{"host-write-only foreigner", writer, ""},
 		{"stranger private", stranger, ""},
 		{"anon private", anon, ""},
 	}
