@@ -182,10 +182,21 @@ func TestMe(t *testing.T) {
 		Principal string `json:"principal"`
 		Write     bool   `json:"write"`
 		Anonymous bool   `json:"anonymous"`
+		Admin     bool   `json:"admin"`
 	}
 	decodeJSON(t, w, &body)
-	if body.Principal != "jane" || !body.Write || body.Anonymous {
+	if body.Principal != "jane" || !body.Write || body.Anonymous || body.Admin {
 		t.Fatalf("me = %+v", body)
+	}
+	// admin principals advertise it (#371: the navbar gates Setup on this).
+	pa := auth.Principal{Name: "root", Write: true, Admin: true}
+	w = f.do("GET", "/api/v1/me", nil, nil, &pa)
+	var adminBody struct {
+		Admin bool `json:"admin"`
+	}
+	decodeJSON(t, w, &adminBody)
+	if !adminBody.Admin {
+		t.Fatalf("admin me = %+v, want admin true", adminBody)
 	}
 	// anonymous read allowed
 	f.env.Cfg.Server.Auth.AnonymousRead = true

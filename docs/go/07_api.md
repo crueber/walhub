@@ -358,7 +358,7 @@ The discovery document:
   "sdk": "/repos.js",
   "auth": {"bearer": true, "setup": "/services/setup.json", "browser": "/api-browser/v1",
             "authenticate": "/api/v1/authenticate",
-            "browser_login": true, "login_url": "/_auth/login"},
+            "browser_login": true, "login_url": "/_auth/login", "mode": "oidc"},
   "endpoints": [
     "/api/v1/me",
     "/api/v1/owners",
@@ -401,8 +401,10 @@ table-derived list (PUT/DELETE rows are never `Expose`); feature-registered capa
 (checks token mint/revoke, the create twin) are listed anyway — `endpoints` is a *capability
 hint*, not an ACL.
 
-- `GET /api/v1/me` → `{principal, write, anonymous}`, `no-store`; `401` (plain text) when unauthenticated
-  in a mode that requires auth.
+- `GET /api/v1/me` → `{principal, write, anonymous, admin}`, `no-store`; `401` (plain text) when unauthenticated
+  in a mode that requires auth. `admin` (Forgejo #371) gates the navbar's Setup menu entry;
+  the discovery auth block carries the instance `mode` (`none|token|oidc`) so the navbar knows
+  whether Login/identity apply at all (never in `none` mode).
 - `GET /api/v1/owners[?sort=activity&order=]` (Forgejo #283) → sorted owner names **from the STORE** (object-store listing / registry), never
   from a local disk directory; SWR class. Default (no query) is the legacy
   store order, byte-identical — no catalog read, zero added trips.
@@ -891,6 +893,17 @@ Decisions): a 404 would break git's credential-erase on dead tokens (law 9, 06 �
 listings (§8), never from the status code. Nil `Access` → legacy flag-only gating.
 
 ## 14. Decisions & deviations from the Rust design
+
+- **Navbar identity signals (Forgejo #371).** `GET /api/v1/me` gains `admin`
+  (the navbar gates its Setup menu entry on it — `setupAccess` admits host
+  admins outside none mode) and the discovery auth block gains the instance
+  `mode` (`none|token|oidc`), so the SPA knows whether Login/identity apply
+  at all (never in `none` mode — nothing to log in to — and the Login
+  button only when `browser_login` is true per #344). Both ride
+  already-fetched payloads (the `me` cache key pages share; one AuthOpen
+  discovery GET per app load) — zero new round trips on any hot path
+  (law 6). `/_auth/me` keeps its `{principal, write}` shape (edge-consumed,
+  unchanged).
 
 - **Public/private visibility enforced across listings, git, and the UI (Forgejo #345).**
   Spec amendment, stated explicitly: visibility (`access.json`, public-by-default, missing →

@@ -162,7 +162,10 @@ func TestLoadInvalidValidationFails(t *testing.T) {
 	dir := tmpDataDir(t)
 	path := writeConfig(t, dir, ConfigFileName, "[server.auth]\nmode = \"oidc\"\n")
 	_, _, err := Load([]string{path}, func(string) string { return "" })
-	if err == nil || !strings.Contains(err.Error(), "anonymous_read") {
+	// Forgejo #371: a bare oidc block still fails closed — on the
+	// allowlist + browser-login trio, no longer on anonymous_read
+	// (which is allowed either way in oidc mode).
+	if err == nil || (!strings.Contains(err.Error(), "allowed_domains") && !strings.Contains(err.Error(), "browser-login trio")) {
 		t.Fatalf("err = %v, want fail-closed oidc violation", err)
 	}
 }
@@ -283,7 +286,7 @@ func TestSaveSetupWritesAtomicallyWith0600(t *testing.T) {
 func TestSaveSetupRejectsInvalidConfig(t *testing.T) {
 	dir := tmpDataDir(t)
 	c := FirstRunDefaults(dir)
-	c.Server.Auth.Mode = "oidc" // anonymous_read still true → invalid
+	c.Server.Auth.Mode = "oidc" // no allowlist/trio → still invalid (#371: not the anon flag)
 	if err := SaveSetup(c, dir); err == nil {
 		t.Fatal("SaveSetup must refuse an invalid config")
 	}

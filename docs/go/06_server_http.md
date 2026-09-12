@@ -734,6 +734,16 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   today, so every `Principal.Name` render surface leaks it and the import
   owner dropdown feeds an unparseable owner; law 8 holds because the hooks
   are `func` fields — the server never imports the identity package.
+- **NEW (2026-09-12) — anonymous read allowed in OIDC mode + `/_auth/logout` contract** (Forgejo #371):
+  the §8.3 oidc tree never prohibited anonymous reads itself — the ban lived in config
+  validation only, and it is lifted (see 11_config_cli.md §8): `anonymous_read = true` is
+  the default recommendation (visitors browse public repos per #345's visibility semantics;
+  the navbar offers Login), `false` the everything-requires-login hard-lock for non-repo
+  surfaces. No gate-chain change (the #345 `CheckRead`-before-flag order stands). Logout
+  contract pinned: `GET /_auth/logout?next=` clears the `walgit_session` cookie
+  (`MaxAge: -1`, same path/flags as issuance) and 302s to the sanitized `next`
+  (non-`/`-prefixed or `//` targets fall back to `/`), so the navbar's plain-anchor
+  Log out needs no JS and always lands home.
 
 **Divergence (2026-08-31):**
 

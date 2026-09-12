@@ -23,21 +23,25 @@ func TestDiscoveryBrowserLoginAdvertisement(t *testing.T) {
 		mutate    func(*config.Config)
 		wantLogin bool
 		wantURL   string
+		wantMode  string
 	}{
-		{"token mode disabled", func(c *config.Config) {}, false, ""},
-		{"oidc trio enabled", trio, true, "/_auth/login"},
+		{"token mode disabled", func(c *config.Config) {}, false, "", "token"},
+		{"oidc trio enabled", trio, true, "/_auth/login", "oidc"},
 		{"oidc missing session_secret disabled", func(c *config.Config) {
 			trio(c)
 			c.Server.Auth.SessionSecret = ""
-		}, false, ""},
+		}, false, "", "oidc"},
 		{"oidc missing oauth_client_id disabled", func(c *config.Config) {
 			trio(c)
 			c.Server.Auth.OAuthClientID = ""
-		}, false, ""},
+		}, false, "", "oidc"},
 		{"oidc missing oauth_client_secret disabled", func(c *config.Config) {
 			trio(c)
 			c.Server.Auth.OAuthClientSecret = ""
-		}, false, ""},
+		}, false, "", "oidc"},
+		{"none mode", func(c *config.Config) {
+			c.Server.Auth.Mode = "none"
+		}, false, "", "none"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,6 +59,7 @@ func TestDiscoveryBrowserLoginAdvertisement(t *testing.T) {
 					Authenticate string `json:"authenticate"`
 					BrowserLogin bool   `json:"browser_login"`
 					LoginURL     string `json:"login_url"`
+					Mode         string `json:"mode"`
 				} `json:"auth"`
 			}
 			decodeJSON(t, w, &doc)
@@ -63,6 +68,9 @@ func TestDiscoveryBrowserLoginAdvertisement(t *testing.T) {
 			}
 			if doc.Auth.LoginURL != tc.wantURL {
 				t.Fatalf("login_url = %q, want %q", doc.Auth.LoginURL, tc.wantURL)
+			}
+			if doc.Auth.Mode != tc.wantMode {
+				t.Fatalf("mode = %q, want %q", doc.Auth.Mode, tc.wantMode)
 			}
 			// The pre-existing members never move (contract stability).
 			if !doc.Auth.Bearer || doc.Auth.Setup != "/services/setup.json" ||

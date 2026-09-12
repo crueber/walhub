@@ -56,10 +56,10 @@
  *
  * @typedef {{version: number, base: string, browser_base: string, sdk: string,
  *   auth: {bearer: boolean, setup: string, browser: string, authenticate: string,
- *     browser_login: boolean, login_url: string},
+ *     browser_login: boolean, login_url: string, mode: string},
  *   endpoints: string[]}} Discovery
  *
- * @typedef {{principal: string, write: boolean, anonymous: boolean}} Me
+ * @typedef {{principal: string, write: boolean, anonymous: boolean, admin: boolean}} Me
  *
  * @typedef {{revision: number, author: string, updated_at: string, message: string, toml: string}} Settings
  *

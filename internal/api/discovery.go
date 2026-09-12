@@ -27,6 +27,11 @@ type discoveryAuth struct {
 	// BrowserLogin is false.
 	BrowserLogin bool   `json:"browser_login"`
 	LoginURL     string `json:"login_url"`
+	// Mode is the instance auth mode ("none"|"token"|"oidc", #371): the
+	// navbar keys off it — no Login button and no identity menu in none
+	// mode (there is nothing to log in to), the identity menu for
+	// signed-in users otherwise.
+	Mode string `json:"mode"`
 }
 
 // browserLoginEnabled mirrors the server's BrowserLoginEnabled gate
@@ -51,6 +56,15 @@ func loginURLFor(cfg *config.Config) string {
 		return ""
 	}
 	return "/_auth/login"
+}
+
+// authModeOf reports the instance auth mode for the discovery auth block
+// (#371). Empty config defaults to "none" (the zero-config first run).
+func authModeOf(cfg *config.Config) string {
+	if cfg == nil || cfg.Server.Auth.Mode == "" {
+		return "none"
+	}
+	return cfg.Server.Auth.Mode
 }
 
 // discoveryEndpoints derives the capability list from the route table so it
@@ -128,6 +142,7 @@ func (h *handlers) discovery(w http.ResponseWriter, r *http.Request) {
 			Authenticate: "/api/v1/authenticate",
 			BrowserLogin: browserLoginEnabled(h.env.Cfg),
 			LoginURL:     loginURLFor(h.env.Cfg),
+			Mode:         authModeOf(h.env.Cfg),
 		},
 		Endpoints: discoveryEndpoints(),
 	})
@@ -144,7 +159,11 @@ func (h *handlers) me(w http.ResponseWriter, r *http.Request) {
 		Principal string `json:"principal"`
 		Write     bool   `json:"write"`
 		Anonymous bool   `json:"anonymous"`
-	}{Principal: p.Name, Write: p.Write, Anonymous: p.Anonymous})
+		// Admin (#371) tells the navbar whether the Setup entry belongs
+		// in the identity menu — setupAccess admits host admins (open
+		// while mode=none, where the menu never renders anyway).
+		Admin bool `json:"admin"`
+	}{Principal: p.Name, Write: p.Write, Anonymous: p.Anonymous, Admin: p.Admin})
 }
 
 // --- GET /api/v1/owners, /api/v1/owners/{owner}/repos (§8, from the STORE) ------------

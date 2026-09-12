@@ -65,7 +65,7 @@ Copied from Rust spec §15.1; key names, defaults, and meanings are **normative 
 | `server.ssh.host_key` / `host_key_env` | — | OpenSSH/PEM private key: path / env var NAME; auto-generated ed25519 under `<data-dir>/ssh/` when unset |
 | SSH public keys | — | user-managed in the object store via `GET\|POST\|DELETE /api/v1/ssh-keys` and the `/keys` page — not config (17_ssh.md §3) |
 | `server.auth.mode` | `"none"` | `none` \| `token` \| `oidc` |
-| `server.auth.anonymous_read` | `true` | must be false in oidc |
+| `server.auth.anonymous_read` | `true` | oidc: true (public browsing) recommended, false = hard-lock |
 | `server.auth.tokens[]` | — | `{principal, token \| token_env, write, admin}`; robots allowed in oidc mode too |
 | `server.auth.admin_emails / admin_domains` | `[]` | oidc admins |
 | `server.auth.issuer` | — | discovery at `<issuer>/.well-known/openid-configuration` |
@@ -329,7 +329,7 @@ $ walhub repo settings set acme/monorepo --file /tmp/settings.toml -m "bundle al
 Each rule is a named function in `internal/config/validate.go`; the list is the contract:
 
 1. **none-mode loopback (DIVERGENCE — warn, not fail).** When `server.auth.mode = "none"` and `server.listen` is NOT on a loopback address (127.0.0.0/8, `::1`, or `localhost` host), startup logs a loud warning — `auth.mode=none on non-loopback listen <addr>; anyone who can reach this port can read and write every repository — set server.auth.mode = "token" (or oidc) and restart` — and continues. The Rust rule (fail-closed, exit 2) is **superseded by divergence**: zero-config first runs bind `0.0.0.0` with auth `none` by design (§2.3), and an operator who sets an explicit file keeps the freedom to do the same, warned. `config check` reports it as a warning, exit 0.
-2. **oidc allowlist + browser-login trio.** `mode = "oidc"` requires `server.auth.anonymous_read = false` AND at least one of `allowed_domains` / `allowed_emails` non-empty. `oauth_client_id` and `oauth_client_secret` must be both set or both unset, AND all three of `session_secret` / `oauth_client_id` / `oauth_client_secret` must be non-empty (the browser-login trio, #344 — a partially-configured OIDC instance previously booted into a dead login state, so the missing keys are named in the error). `session_secret`, when set, MUST be ≥ 32 bytes.
+2. **oidc allowlist + browser-login trio.** `mode = "oidc"` requires at least one of `allowed_domains` / `allowed_emails` non-empty (`anonymous_read` is allowed either way — Forgejo #371: `true` is the default recommendation so visitors browse public repos per #345's visibility semantics, `false` the everything-requires-login hard-lock for non-repo surfaces). `oauth_client_id` and `oauth_client_secret` must be both set or both unset, AND all three of `session_secret` / `oauth_client_id` / `oauth_client_secret` must be non-empty (the browser-login trio, #344 — a partially-configured OIDC instance previously booted into a dead login state, so the missing keys are named in the error). `session_secret`, when set, MUST be ≥ 32 bytes.
 3. **bundle strategy validation.** For each `[[bundles.strategy]]`:
    - `kind = "incremental"` requires `base` naming an earlier-declared strategy's `name` (unknown or later-declared base → error);
    - a whole chain shares one `filter`: a strategy and its transitive base chain MUST declare identical `filter` values (absent = none);
@@ -529,3 +529,12 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
   the old pair-only check let a partially-configured instance boot into a dead login state
   (browser login disabled ⇒ every browser GET a bare 401, `/_auth/login` a 501); refuse-to-start
   was preferred over a degraded boot (see 06_server_http.md §14 for the login-page half).
+- **NEW (2026-09-12) — oidc allows `anonymous_read = true` (Forgejo #371):** §5 rule 2 no
+  longer refuses `anonymous_read` in oidc mode — the old blanket prohibition predates #345
+  (visibility as the read authority for repo surfaces) and made public repos unbrowsable on
+  OIDC instances. `true` is now the default recommendation (visitors browse public repos
+  without logging in; the navbar offers Login); `false` stays as the everything-requires-login
+  hard-lock for non-repo surfaces. The `/setup` copy and its client-side mirror
+  (`web/src/lib/setup.js`) describe the trade-off instead of "must be false". Interaction
+  with #344: the browser-login trio requirement is unchanged — anonymous browsing never
+  removes the need for a working login flow.

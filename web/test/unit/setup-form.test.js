@@ -125,7 +125,7 @@ test("unknown keys are a validation error, not a silent drop", () => {
 
 // --- §5 rule 2: oidc ---------------------------------------------------------------
 
-test("oidc requires anonymous_read=false (default true fails when unset)", () => {
+test("oidc allows anonymous_read either way (Forgejo #371: true = public browsing, false = hard-lock)", () => {
   const base = {
     "server.auth.mode": "oidc",
     "server.auth.allowed_domains": "acme.com",
@@ -133,9 +133,9 @@ test("oidc requires anonymous_read=false (default true fails when unset)", () =>
     "server.auth.oauth_client_id": "id",
     "server.auth.oauth_client_secret": "sec",
   };
-  assert.ok(messages(base, "server.auth.anonymous_read").length === 1);
+  assert.deepEqual(messages(base, "server.auth.anonymous_read"), []);
   assert.deepEqual(fatals({ ...base, "server.auth.anonymous_read": "false" }), []);
-  assert.ok(messages({ ...base, "server.auth.anonymous_read": "true" }, "server.auth.anonymous_read").length === 1);
+  assert.deepEqual(fatals({ ...base, "server.auth.anonymous_read": "true" }), []);
 });
 
 test("oidc requires a non-empty allowlist", () => {
