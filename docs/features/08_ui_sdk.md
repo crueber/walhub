@@ -30,7 +30,7 @@ lazy `import()`ed. Repo tabs extend to: **Code, Issues, Pulls, Releases, Commits
 | Route | Page module (`web/src/pages/`) | Gating (P6 role) | Notes |
 |---|---|---|---|
 | `/:owner` | `owners.js` (extended) | read | Renders an **org profile** when `owner` is an org: repos, members, description; else the existing user page |
-| `/:owner/:repo/issues` | `issues.js` | read | Filterable list (state/labels/assignee/milestone), index-backed, "Load more" by `after` cursor |
+| `/:owner/:repo/issues` | `issues.js` | read | Filterable list (state/assignee/labels/milestone, #415), index-backed, "Load more" by `after` cursor |
 | `/:owner/:repo/issues/new` | `issueNew.js` | authenticated | Title + markdown-lite composer |
 | `/:owner/:repo/issues/:num` | `issue.js` | read | ThreadTimeline + sidebar (labels, assignees, milestone, state) |
 | `/:owner/:repo/labels` | `labels.js` | triage+ | Label CRUD |
