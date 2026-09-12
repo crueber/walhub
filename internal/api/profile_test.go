@@ -26,8 +26,8 @@ func TestOwnerProfileGetEmpty(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if cc := w.Header().Get("Cache-Control"); cc != ccSWR {
-		t.Fatalf("cache-control = %q, want SWR", cc)
+	if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("cache-control = %q, want mutable-collab %q", cc, ccMutable)
 	}
 	var doc OwnerProfile
 	decodeJSON(t, w, &doc)
@@ -107,6 +107,70 @@ func TestOwnerProfilePutRoundTrip(t *testing.T) {
 	decodeJSON(t, w, &got)
 	if got.BioMarkdown != "" || got.DisplayName != "Demo Team" {
 		t.Fatalf("after clear = %+v", got)
+	}
+}
+
+// TestProfileMutableClassAndETagEconomics pins the Forgejo #385 fix
+// (the #381 pattern on the owner profile): the route serves the
+// mutable-collab no-cache class (never a stale-serve window over the
+// PUT-editable bio/name/location/timezone), while the content-hashed ETag
+// keeps unchanged profiles revalidating to 304 with zero body. Sequence:
+// PUT → 200 → 304 → bio edit → 200 → 304.
+func TestProfileMutableClassAndETagEconomics(t *testing.T) {
+	f := newFixture(t)
+	self := ownerSelf("demo")
+	const path = "/api/v1/owners/demo/profile"
+	if w := f.do("PUT", path,
+		strings.NewReader(`{"display_name":"Demo Team","location":"Berlin","timezone":"Europe/Berlin","bio_markdown":"# hi"}`),
+		nil, self); w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d (%s)", w.Code, w.Body.String())
+	}
+	w := f.do("GET", path, nil, nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("profile = %d (%s)", w.Code, w.Body.String())
+	}
+	// The class forbids stale-serve: exact no-cache value, and no
+	// stale-while-revalidate directive anywhere in it.
+	if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("profile cache = %q, want %q", cc, ccMutable)
+	}
+	if cc := w.Header().Get("Cache-Control"); strings.Contains(cc, "stale-while-revalidate") {
+		t.Fatalf("profile cache must not permit stale-serve: %q", cc)
+	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("profile must carry an ETag (the mutable-field economics depend on it)")
+	}
+	// Unchanged profile revalidates to 304 (ETag/304 economics kept —
+	// no bandwidth regression from leaving SWR).
+	if w304 := f.do("GET", path, nil, map[string]string{"If-None-Match": etag}, nil); w304.Code != http.StatusNotModified {
+		t.Fatalf("unchanged profile = %d, want 304", w304.Code)
+	}
+	// A bio edit moves no ref but must NOT 304 against the old etag —
+	// and the new etag 304s in turn.
+	if w := f.do("PUT", path,
+		strings.NewReader(`{"display_name":"Demo Team","location":"Berlin","timezone":"Europe/Berlin","bio_markdown":"# hello"}`),
+		nil, self); w.Code != http.StatusOK {
+		t.Fatalf("edit PUT = %d (%s)", w.Code, w.Body.String())
+	}
+	wEdit := f.do("GET", path, nil, map[string]string{"If-None-Match": etag}, nil)
+	if wEdit.Code != http.StatusOK {
+		t.Fatalf("edited profile with stale etag = %d, want 200", wEdit.Code)
+	}
+	etagE := wEdit.Header().Get("ETag")
+	if etagE == "" || etagE == etag {
+		t.Fatalf("edited etag = %q, want a new ETag distinct from %q", etagE, etag)
+	}
+	var got OwnerProfile
+	decodeJSON(t, wEdit, &got)
+	if got.BioMarkdown != "# hello" {
+		t.Fatalf("edited bio = %q, want the post-edit body (no stale-serve)", got.BioMarkdown)
+	}
+	if cc := wEdit.Header().Get("Cache-Control"); cc != ccMutable {
+		t.Fatalf("edited profile cache = %q, want %q", cc, ccMutable)
+	}
+	if w304 := f.do("GET", path, nil, map[string]string{"If-None-Match": etagE}, nil); w304.Code != http.StatusNotModified {
+		t.Fatalf("reedited profile = %d, want 304", w304.Code)
 	}
 }
 

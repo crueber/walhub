@@ -15,8 +15,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -160,6 +162,15 @@ func (h *handlers) canEditProfile(w http.ResponseWriter, r *http.Request, owner 
 // ownerProfileGet serves the profile (AuthRead — public bio). Unknown owners
 // read as an empty profile (200, §8 convention); can_edit is computed
 // best-effort (editor probe failure → false, never a read error).
+//
+// Cache class: mutable-collab (Forgejo #385, the #381 pattern): every
+// projection on the response is PUT-editable (display name, location,
+// timezone, bio — plus the server-stamped updated_at), so every GET
+// revalidates instead of serving a stale-while-revalidate window. The
+// content-hashed ETag keeps the revalidation cheap (304 when unchanged).
+// There is no avatar projection on this route (the issue's "avatar?"
+// question): avatars ride GET /api/v1/me's avatar_url (Forgejo #376), so
+// the ETag below covers the full OwnerProfile shape and nothing else.
 func (h *handlers) ownerProfileGet(w http.ResponseWriter, r *http.Request) {
 	if !h.env.gate(w, r, AuthRead) {
 		return
@@ -197,7 +208,23 @@ func (h *handlers) ownerProfileGet(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeCached(w, r, ccSWR, "", http.StatusOK, out)
+	writeCached(w, r, ccMutable, profileETag(out), http.StatusOK, out)
+}
+
+// profileETag is the content hash covering the served profile (Forgejo
+// #385): FNV-1a/32 hex of the rendered doc's JSON, prefixed "p". It covers
+// every mutable projection on the route — display_name, location, timezone,
+// bio_markdown, updated_at — plus the owner slug, so any PUT-editable field
+// flip busts the revalidation while an unchanged profile still 304s with
+// zero body. can_edit rides the same hash deliberately: it is
+// request-scoped (per-caller grant state), so folding it in keeps the ETag
+// per-caller-correct — a grant-only change (org-role add, no stored-field
+// move) still busts the revalidation instead of 304ing a stale affordance.
+func profileETag(out OwnerProfile) string {
+	h := fnv.New32a()
+	b, _ := json.Marshal(out)
+	_, _ = h.Write(b)
+	return "p" + strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 
 // ownerProfilePut replaces the profile (AuthWrite + owner rule). The body is
