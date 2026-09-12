@@ -45,17 +45,17 @@ func TestOrgCRUD(t *testing.T) {
 	if _, err := s.GetOrg(ctx, "bad"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("corrupt org: %v", err)
 	}
-	upd, err := s.PutOrg(ctx, "acme", "Acme!", "new")
+	upd, err := s.PutOrg(ctx, "acme", OrgEdit{DisplayName: "Acme!", Description: "new"})
 	if err != nil {
 		t.Fatalf("PutOrg: %v", err)
 	}
 	if upd.Version != 2 || upd.DisplayName != "Acme!" {
 		t.Errorf("PutOrg broken: %+v", upd)
 	}
-	if _, err := s.PutOrg(ctx, "ghost", "x", ""); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PutOrg(ctx, "ghost", OrgEdit{DisplayName: "x"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("PutOrg ghost: %v", err)
 	}
-	if _, err := s.PutOrg(ctx, "bad", "x", ""); !errors.Is(err, ErrInvalid) {
+	if _, err := s.PutOrg(ctx, "bad", OrgEdit{DisplayName: "x"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("PutOrg corrupt: %v", err)
 	}
 	// Remove the corrupt fixture so the listing below is exact.

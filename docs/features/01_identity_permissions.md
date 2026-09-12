@@ -55,7 +55,8 @@ repo owner name). Org objects:
 
 | Key | Create or CAS | Schema |
 |---|---|---|
-| `orgs/<org>/org.json` | **CAS'd** (overwritable family) | `{"version":1,"org":"acme","display_name":"Acme Corp","description":"","created_at","updated_at"}` |
+| `orgs/<org>/org.json` | **CAS'd** (overwritable family) | `{"version":1,"org":"acme","display_name":"Acme Corp","description":"","location":"","timezone":"","bio_markdown":"","avatar_content_type":"","avatar_updated_at":"","created_at","updated_at"}` (location/timezone/bio_markdown + avatar pointer are append-only, issue #359 — old readers ignore them, old writers omit them) |
+| `orgs/<org>/avatar` | **overwritable** raw bytes (issue #359) | magic-sniffed PNG/JPEG/GIF/WebP, ≤ 2 MiB; object ContentType is the sniffed type; `org.json`'s `avatar_content_type` mirrors it as the render gate |
 | `orgs/<org>/members.json` | **CAS'd** (overwritable family) | `{"version":2,"members":[{"principal":"jane@example.com","role":"owner","joined_at"},{"principal":"sam@example.com","role":"member","joined_at"}],"updated_at"}` |
 | `orgs/<org>/teams/<slug>.json` | **CAS'd** (overwritable family) | `{"version":1,"org":"acme","slug":"platform","name":"Platform","description":"","members":["jane@example.com"],"created_at","updated_at"}` |
 
@@ -389,7 +390,8 @@ RouteProvider (Seam 1).
 | `PUT /api/v1/users/{principal}` | self or admin | body = profile → 200 profile; 400 invalid |
 | `GET /api/v1/orgs` | any (mutable-collab, no version token) | → sorted `["acme", …]` |
 | `POST /api/v1/orgs` | write | `{org, display_name}` → 201 `{org}`; 409 taken; creator becomes owner |
-| `GET/PUT/DELETE /api/v1/orgs/{org}` | read / owner / owner | profile CRUD; 409 on delete with repos |
+| `GET/PUT/DELETE /api/v1/orgs/{org}` | read / owner / owner | profile CRUD (PUT body = `{display_name, description, location, timezone, bio_markdown}`, full-document replace, owner-profile limits mirrored; description unbudgeted); 409 on delete with repos; DELETE also removes the avatar object |
+| `GET/PUT/DELETE /api/v1/orgs/{org}/avatar` | read / owner / owner | raw avatar bytes (GET → sniffed Content-Type, immutable max-age; PUT raw bytes → 200 org doc; DELETE clears pointer + bytes, idempotent); 413 over 2 MiB; 415 outside PNG/JPEG/GIF/WebP |
 | `GET/PUT/DELETE …/members/{principal}` | read / owner / owner | roster ops; last owner removal → 409 |
 | `GET/POST …/teams`, `GET/PUT/DELETE …/teams/{slug}` | read / owner | team CRUD |
 | `PUT/DELETE …/teams/{slug}/members/{principal}` | owner | membership edit |
@@ -441,9 +443,15 @@ Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
 - **Profile** `/:owner` renders user or org profile (existing route gains the org variant).
 
 SDK additions (submodules under `web/sdk/src/`, bundled by esbuild into `repos.js`; JSDoc typedefs in
-`types.js`): `users.js` (`users.get/put`), `orgs.js` (`orgs.*`, members, teams), `access.js`
+`types.js`): `users.js` (`users.get/put`), `orgs.js` (`orgs.*`, members, teams,
+`orgs.avatar.url/upload/remove` — issue #359), `access.js`
 (`repo.access.get/put`), `invites.js` (`invites.list/mine/accept/cancel`), `transfer.js`
-(`repo.transfer({owner, repo?})` — issue #358).
+(`repo.transfer({owner, repo?})` — issue #358). The `/:owner` org header and the
+`/:org/settings` Profile tab render `location`/`timezone`/`bio_markdown` (markdown
+through the shared pipeline) and the avatar (gated on `avatar_content_type`, `?v=`
+cache-bust, hides on 404); the settings form edits all five profile fields
+(timezone via the `Intl.supportedValuesOf` picker) and uploads/removes the avatar
+(client pre-checks the 2 MiB cap; the server enforces it).
 
 ## 10. Migration of existing repos
 
@@ -556,6 +564,25 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   (orgs/teams lists, single member) take the class without an ETag (always 200, never stale);
   invite/perms routes were already `no-store`. Rationale: mutability, not addressability, decides
   the class (07_api.md §4 third class).
+- **Org profile parity + avatar (issue #359).** `org.json` gains `location`/`timezone`/
+  `bio_markdown` with the exact owner-profile spelling and budgets (display/location ≤ 200
+  runes, timezone IANA-shape ≤ 64 bytes, bio ≤ 64 KiB valid UTF-8 — duplicated constants,
+  not an import, because identity must not import the api package per law 8), and the PUT
+  body carries all five profile fields as a full-document replace (absent clears, same as
+  the owner-profile PUT; `description` stays unbudgeted so long-standing taglines never
+  start 400ing). NO `website` field: the parity target (owner profile) has none and
+  `description` stays the tagline — a website can be linked from the bio. Avatar bytes live
+  at `orgs/<org>/avatar` (law 4: bucket object, wipe-safe), size-capped at 2 MiB (avatars
+  are chrome, not content — issue images allow 8 MiB) and magic-sniffed against the
+  PNG/JPEG/GIF/WebP allowlist (SVG rejected: same-origin SVG executes script; the client
+  Content-Type is ignored). Bytes-first-pointer-second (the attachments/releases
+  philosophy): PUT writes bytes then CASes `avatar_content_type`/`avatar_updated_at` onto
+  `org.json`, so GET org answers avatar presence in its single round trip (law 6) and a
+  crashed pointer write leaves inert bytes, never a dangling pointer; a pruned object
+  under a set pointer renders as "no avatar", never an error. Profile PUTs preserve the
+  pointer; DeleteOrg removes the avatar object. Rationale: GitHub/Forgejo parity needs
+  both the fields and the picture, and the pointer keeps the hot read (GET org) at one
+  round trip with no probe fan-out.
 - **Org marker on `owners/detailed` via the `OrgLister` seam (Forgejo #348).** The core
   `owners/detailed` rows gain `is_org` from `Env.Orgs.ListOrgs` (one call per listing —
   law 6; nil seam → all false; list error fails open to all-false, display metadata never

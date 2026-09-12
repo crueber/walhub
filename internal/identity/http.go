@@ -29,6 +29,7 @@ var ExposedTemplates = []string{
 	"/api/v1/users/{principal}",
 	"/api/v1/orgs",
 	"/api/v1/orgs/{org}",
+	"/api/v1/orgs/{org}/avatar",
 	"/api/v1/orgs/{org}/members",
 	"/api/v1/orgs/{org}/members/{principal}",
 	"/api/v1/orgs/{org}/teams",
@@ -366,6 +367,8 @@ func (h *Handler) routeOrgs(w http.ResponseWriter, r *http.Request, rest []strin
 		return h.routeOrg(w, r, org)
 	}
 	switch rest[0] {
+	case "avatar":
+		return h.routeOrgAvatar(w, r, org, rest[1:])
 	case "members":
 		return h.routeMembers(w, r, org, rest[1:])
 	case "teams":
@@ -416,13 +419,95 @@ func (h *Handler) routeOrg(w http.ResponseWriter, r *http.Request, org string) b
 		var body struct {
 			DisplayName string `json:"display_name"`
 			Description string `json:"description"`
+			Location    string `json:"location"`
+			Timezone    string `json:"timezone"`
+			BioMarkdown string `json:"bio_markdown"`
 		}
-		if !readBodyJSON(w, r, 64<<10, &body) {
+		if !readBodyJSON(w, r, 128<<10, &body) {
 			return true
 		}
-		o, err := h.Svc.PutOrg(r.Context(), org, body.DisplayName, body.Description)
+		o, err := h.Svc.PutOrg(r.Context(), org, OrgEdit{
+			DisplayName: body.DisplayName,
+			Description: body.Description,
+			Location:    body.Location,
+			Timezone:    body.Timezone,
+			BioMarkdown: body.BioMarkdown,
+		})
 		if err != nil {
 			writeErr(w, err)
+			return true
+		}
+		writeCached(w, r, ccNoStore, "", http.StatusOK, o)
+		return true
+	}
+	methodNotAllowed(w, "GET", "PUT", "DELETE")
+	return true
+}
+
+// routeOrgAvatar: GET/PUT/DELETE /api/v1/orgs/{org}/avatar (Forgejo
+// #359). GET is public (same anonymous-read rule as the org itself) and
+// serves the raw bytes with the sniffed Content-Type; PUT/DELETE are
+// owner-only via CheckOrgOwner (the same gate as PUT/DELETE on the org).
+func (h *Handler) routeOrgAvatar(w http.ResponseWriter, r *http.Request, org string, rest []string) bool {
+	if len(rest) != 0 {
+		return false
+	}
+	p, aerr := h.principal(r)
+	if aerr != nil {
+		writeErr(w, aerr)
+		return true
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if p.Anonymous && !h.Svc.anonymousRead() {
+			writePlain(w, http.StatusUnauthorized, "authentication required")
+			return true
+		}
+		raw, ct, err := h.Svc.GetOrgAvatar(r.Context(), org)
+		if err != nil {
+			writeErr(w, err)
+			return true
+		}
+		if raw == nil {
+			writePlain(w, http.StatusNotFound, "no avatar")
+			return true
+		}
+		hdr := w.Header()
+		hdr.Set("Content-Type", ct)
+		hdr.Set("Content-Length", strconv.Itoa(len(raw)))
+		// Immutable-until-PUT: the pointer's updated_at changes on every
+		// upload, and the UI cache-busts with ?v=<avatar_updated_at>, so
+		// a long max-age is safe (same reasoning as hashed UI assets).
+		hdr.Set("Cache-Control", "public, max-age=86400, immutable")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return true
+	case http.MethodPut, http.MethodDelete:
+		if cerr := h.Svc.CheckOrgOwner(r.Context(), org, p); cerr != nil {
+			writeErr(w, cerr)
+			return true
+		}
+		if r.Method == http.MethodDelete {
+			o, err := h.Svc.DeleteOrgAvatar(r.Context(), org)
+			if err != nil {
+				writeErr(w, err)
+				return true
+			}
+			writeCached(w, r, ccNoStore, "", http.StatusOK, o)
+			return true
+		}
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxOrgAvatarBytes+1))
+		if err != nil {
+			writePlain(w, http.StatusRequestEntityTooLarge, "avatar too large")
+			return true
+		}
+		if int64(len(raw)) > maxOrgAvatarBytes {
+			writePlain(w, http.StatusRequestEntityTooLarge, "avatar too large")
+			return true
+		}
+		o, verr := h.Svc.PutOrgAvatar(r.Context(), org, raw)
+		if verr != nil {
+			writeErr(w, verr)
 			return true
 		}
 		writeCached(w, r, ccNoStore, "", http.StatusOK, o)

@@ -7,10 +7,43 @@ import { useParams, useNavigate } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import DateTime from "../components/DateTime.jsx";
+import { timeZones } from "../lib/timezone.js";
+import { normalizeOrgProfile, orgSaveBody } from "../lib/org-profile.js";
+import { renderBody } from "../lib/render-md.js";
 import { DangerConfirm } from "./Settings.jsx";
 
 const ORG_ROLES = ["owner", "member"];
 const TABS = ["Profile", "Members", "Teams", "Invitations"];
+// Client-side pre-check mirroring the server's 2 MiB avatar cap (the
+// server still enforces it — this only fails fast with a readable note).
+const MAX_AVATAR_BYTES = 2 << 20;
+
+/** Current avatar <img> (Forgejo #359): renders only when the org doc
+ *  names an avatar (avatar_content_type is the render gate — no byte
+ *  probing); hides itself if the bytes 404 (pruned bucket). Shared with
+ *  the /:owner org header (the RepoRow precedent: page-level sharing). */
+export function OrgAvatar(props) {
+  const src = () => {
+    const o = props.doc?.();
+    if (!o?.avatar_content_type) return null;
+    return repos.orgs.avatar.url(props.org, o.avatar_updated_at);
+  };
+  return (
+    <Show when={src()}>
+      <img
+        src={src()}
+        alt=""
+        width={props.size ?? 48}
+        height={props.size ?? 48}
+        class="rounded object-cover"
+        style={`width:${props.size ?? 48}px;height:${props.size ?? 48}px`}
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+        }}
+      />
+    </Show>
+  );
+}
 
 function ProfileTab(props) {
   const org = props.org;
@@ -18,13 +51,22 @@ function ProfileTab(props) {
   const [getOrg] = useData(key(), () => repos.orgs.get(org), 5000);
   const [getName, setName] = createSignal("");
   const [getDesc, setDesc] = createSignal("");
+  const [getLoc, setLoc] = createSignal("");
+  const [getTz, setTz] = createSignal("");
+  const [getBio, setBio] = createSignal("");
   const [getNote, setNote] = createSignal("");
   const [getSeeded, setSeeded] = createSignal(false);
+  const [getAvatarNote, setAvatarNote] = createSignal("");
+  const zones = timeZones();
 
-  const seed = (o) => {
+  const seedAll = (o) => {
     if (o && !getSeeded()) {
-      setName(o.display_name ?? "");
-      setDesc(o.description ?? "");
+      const s = normalizeOrgProfile(o, org);
+      setName(s.display_name);
+      setDesc(s.description);
+      setLoc(s.location);
+      setTz(s.timezone);
+      setBio(s.bio_markdown);
       setSeeded(true);
     }
     return null;
@@ -33,7 +75,16 @@ function ProfileTab(props) {
   const save = async () => {
     setNote("");
     try {
-      await repos.orgs.put(org, { display_name: getName(), description: getDesc() });
+      await repos.orgs.put(
+        org,
+        orgSaveBody({
+          display_name: getName(),
+          description: getDesc(),
+          location: getLoc(),
+          timezone: getTz(),
+          bio_markdown: getBio(),
+        })
+      );
       invalidate(key());
       setNote("saved");
     } catch (err) {
@@ -42,11 +93,46 @@ function ProfileTab(props) {
     }
   };
 
+  const uploadAvatar = async (file) => {
+    setAvatarNote("");
+    if (!file) return;
+    if (file.size > MAX_AVATAR_BYTES) {
+      setAvatarNote("avatar too large (max 2 MiB)");
+      return;
+    }
+    try {
+      await repos.orgs.avatar.upload(org, file, { contentType: file.type || undefined });
+      invalidate(key());
+      invalidate(`profile:${org}`);
+    } catch (err) {
+      reportError(err, key());
+      setAvatarNote(
+        err?.status === 413
+          ? "avatar too large (max 2 MiB)"
+          : err?.status === 415
+            ? "only PNG, JPEG, GIF, and WebP avatars are accepted"
+            : String(err?.message ?? err)
+      );
+    }
+  };
+
+  const removeAvatar = async () => {
+    setAvatarNote("");
+    try {
+      await repos.orgs.avatar.remove(org);
+      invalidate(key());
+      invalidate(`profile:${org}`);
+    } catch (err) {
+      reportError(err, key());
+      setAvatarNote(String(err?.message ?? err));
+    }
+  };
+
   return (
     <Show when={getOrg()} fallback={<p class="muted">loading…</p>}>
       {(o) => (
         <>
-          {seed(o())}
+          {seedAll(o())}
           <section class="card p-4">
             <h3 class="mb-2 font-semibold">Profile</h3>
             {/* Forgejo #348: non-owners see the profile read-only (the
@@ -57,24 +143,78 @@ function ProfileTab(props) {
               fallback={
                 <>
                   <p class="muted text-sm">read-only — org owner required to edit the profile.</p>
-                  <Show when={o().display_name}>
-                    <p class="mt-2 text-sm"><span class="muted">display name:</span> {o().display_name}</p>
+                  <div class="mt-2 flex items-center gap-3">
+                    <OrgAvatar org={org} doc={o} size={48} />
+                    <div>
+                      <Show when={o().display_name}>
+                        <p class="text-sm"><span class="muted">display name:</span> {o().display_name}</p>
+                      </Show>
+                      <Show when={o().description}>
+                        <p class="mt-1 text-sm"><span class="muted">description:</span> {o().description}</p>
+                      </Show>
+                    </div>
+                  </div>
+                  <Show when={o().location || o().timezone}>
+                    <p class="mt-1 text-sm"><span class="muted">location/timezone:</span> {[o().location, o().timezone].filter(Boolean).join(" · ")}</p>
                   </Show>
-                  <Show when={o().description}>
-                    <p class="mt-1 text-sm"><span class="muted">description:</span> {o().description}</p>
+                  <Show when={o().bio_markdown}>
+                    <div class="markdown-body mt-2" innerHTML={renderBody(o().bio_markdown)} />
                   </Show>
                 </>
               }
             >
             <div class="flex max-w-lg flex-col gap-2">
+              <div class="flex items-center gap-3">
+                <OrgAvatar org={org} doc={o} size={48} />
+                <div class="flex flex-col gap-1 text-sm">
+                  <label class="text-xs">
+                    <span class="muted block">avatar (PNG/JPEG/GIF/WebP, ≤ 2 MiB)</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/gif,image/webp"
+                      onChange={(e) => {
+                        uploadAvatar(e.currentTarget.files?.[0]);
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  <Show when={o().avatar_content_type}>
+                    <button type="button" class="btn self-start px-2 py-0.5 text-xs" onClick={removeAvatar}>
+                      remove avatar
+                    </button>
+                  </Show>
+                  <Show when={getAvatarNote()}><p class="text-sm text-amber-700 dark:text-amber-300">{getAvatarNote()}</p></Show>
+                </div>
+              </div>
               <label class="text-sm">
                 <span class="muted block text-xs">display name</span>
-                <input class="input w-full" value={getName()} onInput={(e) => setName(e.currentTarget.value)} />
+                <input class="input w-full" maxlength="200" value={getName()} onInput={(e) => setName(e.currentTarget.value)} />
               </label>
               <label class="text-sm">
                 <span class="muted block text-xs">description</span>
                 <input class="input w-full" value={getDesc()} onInput={(e) => setDesc(e.currentTarget.value)} />
               </label>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <label class="text-sm">
+                  <span class="muted block text-xs">location</span>
+                  <input class="input w-full" maxlength="200" value={getLoc()} onInput={(e) => setLoc(e.currentTarget.value)} placeholder="City, Country" />
+                </label>
+                <label class="text-sm">
+                  <span class="muted block text-xs">timezone</span>
+                  <select class="input w-full" value={getTz()} onChange={(e) => setTz(e.currentTarget.value)}>
+                    <option value="">— unset —</option>
+                    <For each={zones}>{(z) => <option value={z}>{z}</option>}</For>
+                  </select>
+                </label>
+              </div>
+              <label class="text-sm">
+                <span class="muted block text-xs">bio (markdown)</span>
+                <textarea class="input w-full font-mono text-sm" rows="5" value={getBio()} onInput={(e) => setBio(e.currentTarget.value)} placeholder="A few lines about this organization…" />
+              </label>
+              <Show when={getBio()}>
+                <p class="muted text-xs">Preview</p>
+                <div class="markdown-body card p-3" innerHTML={renderBody(getBio())} />
+              </Show>
               <div>
                 <button type="button" class="btn px-3 py-1" onClick={save}>save profile</button>
               </div>
@@ -474,6 +614,12 @@ export default function Org() {
     () => `profile:${org()}`,
     () => repos.owners.profile(org()).catch(() => null)
   );
+  // Forgejo #359: the settings header shows the org avatar (same
+  // `org:{org}` cache entry the ProfileTab edits — one fetch, shared).
+  const [getOrgDoc] = useData(
+    () => `org:${org()}`,
+    () => repos.orgs.get(org()).catch(() => null)
+  );
   const canManage = () => !!getProfile()?.can_edit;
   // Forgejo #358: owners get the Danger Zone tab; non-owners see nothing
   // (server still gates the delete).
@@ -481,8 +627,9 @@ export default function Org() {
 
   return (
     <div class="mx-auto max-w-6xl px-4 py-4">
-      <h2 class="mb-1 text-lg font-semibold">
-        <span class="muted font-normal">org</span> {org()}
+      <h2 class="mb-1 flex items-center gap-2 text-lg font-semibold">
+        <OrgAvatar org={org()} doc={getOrgDoc} size={32} />
+        <span><span class="muted font-normal">org</span> {org()}</span>
       </h2>
       <Show when={getProfile() && !canManage()}>
         <p class="muted mb-3 text-sm">read-only — org owner required to make changes.</p>

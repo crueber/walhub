@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"git.packden.us/crueber/walhub/internal/store"
 )
@@ -23,13 +25,110 @@ func readBody(r io.Reader) ([]byte, error) {
 }
 
 // Org is orgs/<org>/org.json.
+//
+// Append-only (law 5): location/timezone/bio_markdown (Forgejo #359) and
+// the avatar pointer fields were added after display_name/description.
+// Old readers unmarshal with a smaller struct and ignore the new keys;
+// old writers never emit them, and a new reader sees zero values for
+// orgs last written before the fields existed. Never renumber or reuse
+// a key. No website field: the owner-profile spelling (the parity target)
+// has none, and description stays the tagline (decision recorded in
+// docs/features/01_identity_permissions.md).
 type Org struct {
 	Version     int    `json:"version"`
 	Org         string `json:"org"`
 	DisplayName string `json:"display_name"`
 	Description string `json:"description"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// Location, Timezone, BioMarkdown mirror the owner-profile spelling
+	// and limits (internal/api/profile.go). omitempty keeps bytes
+	// byte-identical for orgs never given a profile until first edit.
+	Location    string `json:"location,omitempty"`
+	Timezone    string `json:"timezone,omitempty"`
+	BioMarkdown string `json:"bio_markdown,omitempty"`
+	// AvatarContentType is the magic-sniffed image type of
+	// orgs/<org>/avatar ("" = no avatar — the render gate, so GET org
+	// answers avatar presence in its single round trip).
+	AvatarContentType string `json:"avatar_content_type,omitempty"`
+	AvatarUpdatedAt   string `json:"avatar_updated_at,omitempty"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
+}
+
+// OrgEdit is the editable org profile surface (PUT
+// /api/v1/orgs/{org}): full-document replace, same as the owner-profile
+// PUT — absent fields clear. Description carries no length budget
+// (pre-existing field, never validated — adding one now could 400
+// long-standing orgs).
+type OrgEdit struct {
+	DisplayName string
+	Description string
+	Location    string
+	Timezone    string
+	BioMarkdown string
+}
+
+// Org profile field budgets: exact mirror of the owner-profile limits
+// (internal/api/profile.go) — same spelling, same numbers, same 400s.
+// Duplicated (not imported) because identity must not import the api
+// package (law 8: no upward imports).
+const (
+	maxOrgName     = 200   // display_name / location, runes
+	maxOrgTimezone = 64    // timezone, bytes
+	maxOrgBio      = 65536 // bio_markdown, bytes
+)
+
+// orgTZShape is the server-side timezone contract, same as the
+// owner-profile tzShape: one to four slash-separated IANA-style segments
+// (shape check, not time.LoadLocation — the runtime image carries no tz
+// database).
+var orgTZShape = regexp.MustCompile(`^[A-Za-z0-9_+\-]{1,32}(/[A-Za-z0-9_+\-]{1,32}){0,3}$`)
+
+// validateOrgEdit enforces the field budgets (400 on overflow, plain-text
+// errors). Empty strings are "unset" — clearing a field is PUTting "".
+func validateOrgEdit(e *OrgEdit) string {
+	if len([]rune(e.DisplayName)) > maxOrgName {
+		return "display_name too long (max 200 characters)"
+	}
+	if len([]rune(e.Location)) > maxOrgName {
+		return "location too long (max 200 characters)"
+	}
+	if len(e.Timezone) > maxOrgTimezone || (e.Timezone != "" && !orgTZShape.MatchString(e.Timezone)) {
+		return "timezone must be an IANA zone name (e.g. Europe/Berlin)"
+	}
+	if len(e.BioMarkdown) > maxOrgBio || !utf8.ValidString(e.BioMarkdown) {
+		return "bio_markdown too long (max 64 KiB)"
+	}
+	return ""
+}
+
+// maxOrgAvatarBytes caps one avatar upload (2 MiB → 413 over cap).
+// Avatars render at a few hundred px; 2 MiB is generous without letting
+// one org's logo become a bulk transfer (attachments allow 8 MiB because
+// issue images are content, not chrome).
+const maxOrgAvatarBytes = int64(2 << 20)
+
+// sniffOrgAvatarType sniffs the PNG/JPEG/GIF/WebP allowlist from magic
+// bytes (never the extension, never the client Content-Type) — the same
+// allowlist and rationale as issue attachments (SVG rejected: same-origin
+// served SVG executes script in our origin).
+func sniffOrgAvatarType(head []byte) (string, bool) {
+	if len(head) >= 8 &&
+		head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4E && head[3] == 0x47 &&
+		head[4] == 0x0D && head[5] == 0x0A && head[6] == 0x1A && head[7] == 0x0A {
+		return "image/png", true
+	}
+	if len(head) >= 3 && head[0] == 0xFF && head[1] == 0xD8 && head[2] == 0xFF {
+		return "image/jpeg", true
+	}
+	if len(head) >= 6 && head[0] == 'G' && head[1] == 'I' && head[2] == 'F' &&
+		head[3] == '8' && (head[4] == '7' || head[4] == '9') && head[5] == 'a' {
+		return "image/gif", true
+	}
+	if len(head) >= 12 && head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F' &&
+		head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P' {
+		return "image/webp", true
+	}
+	return "", false
 }
 
 // Member is one roster row.
@@ -229,8 +328,13 @@ func (s *Service) GetOrg(ctx context.Context, org string) (*Org, error) {
 	return parseOrg(raw)
 }
 
-// PutOrg edits the org profile (CAS).
-func (s *Service) PutOrg(ctx context.Context, org, displayName, description string) (*Org, error) {
+// PutOrg replaces the org profile (CAS, full-document: absent fields
+// clear). New profile fields are validated against the owner-profile
+// mirror budgets (400 on overflow); description stays unbudgeted.
+func (s *Service) PutOrg(ctx context.Context, org string, e OrgEdit) (*Org, error) {
+	if msg := validateOrgEdit(&e); msg != "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, msg)
+	}
 	var result *Org
 	_, err := s.casUpdate(ctx, OrgKey(org), func(cur []byte, _ store.Version) ([]byte, bool, error) {
 		if cur == nil {
@@ -241,8 +345,11 @@ func (s *Service) PutOrg(ctx context.Context, org, displayName, description stri
 			return nil, false, perr
 		}
 		prev.Version++
-		prev.DisplayName = displayName
-		prev.Description = description
+		prev.DisplayName = e.DisplayName
+		prev.Description = e.Description
+		prev.Location = e.Location
+		prev.Timezone = e.Timezone
+		prev.BioMarkdown = e.BioMarkdown
 		prev.UpdatedAt = s.nowUTC().Format(time.RFC3339)
 		result = prev
 		return encodeOrg(prev), true, nil
@@ -250,6 +357,131 @@ func (s *Service) PutOrg(ctx context.Context, org, displayName, description stri
 	if err != nil {
 		return nil, err
 	}
+	return result, nil
+}
+
+// PutOrgAvatar stores raw avatar bytes at orgs/<org>/avatar and points
+// org.json at them (bytes first, pointer second — the attachments/release
+// philosophy: an orphaned avatar object after a crashed pointer write is
+// inert bytes, while a pointer without bytes can never render). Owner-only
+// (checked by the handler). The upload is size-capped (413) and
+// magic-sniffed (415); the sniffed type (never the client Content-Type)
+// is both the object ContentType and the org.json render gate.
+//
+// Round trips: 1 PUT (bytes) + 1 CAS loop on org.json (human-rate, not a
+// git hot path — law 6 budgets don't cover collab mutations).
+//
+// ### Concurrency
+//
+// Hazard: two concurrent avatar uploads interleaving bytes and pointer
+// writes (A's bytes + B's pointer). Avoidance: last-writer-wins on both
+// objects independently — either pointer always names bytes that exist
+// (each PUT completes before its pointer CAS starts), so the render is
+// always a real image, just possibly the older upload's. No lock is held
+// across any store call.
+func (s *Service) PutOrgAvatar(ctx context.Context, org string, data []byte) (*Org, error) {
+	if !ValidOrg(org) {
+		return nil, fmt.Errorf("%w: invalid org %q", ErrInvalid, org)
+	}
+	if int64(len(data)) > maxOrgAvatarBytes {
+		return nil, fmt.Errorf("%w: avatar exceeds %d bytes", ErrTooLarge, maxOrgAvatarBytes)
+	}
+	ct, ok := sniffOrgAvatarType(data)
+	if !ok {
+		return nil, fmt.Errorf("%w: only PNG, JPEG, GIF, and WebP avatars are accepted", ErrUnsupportedMedia)
+	}
+	got, err := s.GetOrg(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	if got == nil {
+		return nil, fmt.Errorf("%w: unknown org %q", ErrNotFound, org)
+	}
+	if _, err := store.PutBytes(ctx, s.Store, OrgAvatarKey(org), data,
+		store.PutOptions{Mode: store.PutOverwrite, ContentType: ct}); err != nil {
+		return nil, err
+	}
+	var result *Org
+	_, err = s.casUpdate(ctx, OrgKey(org), func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		if cur == nil {
+			return nil, false, fmt.Errorf("%w: unknown org %q", ErrNotFound, org)
+		}
+		prev, perr := parseOrg(cur)
+		if perr != nil {
+			return nil, false, perr
+		}
+		prev.Version++
+		prev.AvatarContentType = ct
+		prev.AvatarUpdatedAt = s.nowUTC().Format(time.RFC3339)
+		prev.UpdatedAt = prev.AvatarUpdatedAt
+		result = prev
+		return encodeOrg(prev), true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetOrgAvatar reads the raw avatar bytes plus content type; nil bytes
+// when the org has no avatar (pointer unset or object missing — a missing
+// object under a set pointer is treated as unset, never an error, so a
+// manually pruned bucket still renders the org page).
+func (s *Service) GetOrgAvatar(ctx context.Context, org string) ([]byte, string, error) {
+	if !ValidOrg(org) {
+		return nil, "", fmt.Errorf("%w: invalid org %q", ErrInvalid, org)
+	}
+	got, err := s.GetOrg(ctx, org)
+	if err != nil {
+		return nil, "", err
+	}
+	if got == nil || got.AvatarContentType == "" {
+		return nil, "", nil
+	}
+	raw, _, err := store.GetBytes(ctx, s.Store, OrgAvatarKey(org), store.GetOptions{})
+	if err != nil {
+		if store.IsNotFound(err) {
+			return nil, "", nil
+		}
+		return nil, "", err
+	}
+	return raw, got.AvatarContentType, nil
+}
+
+// DeleteOrgAvatar removes the avatar object and clears the org.json
+// pointer (idempotent: unknown org 404s, missing avatar succeeds).
+// Owner-only (checked by the handler).
+func (s *Service) DeleteOrgAvatar(ctx context.Context, org string) (*Org, error) {
+	if !ValidOrg(org) {
+		return nil, fmt.Errorf("%w: invalid org %q", ErrInvalid, org)
+	}
+	var result *Org
+	_, err := s.casUpdate(ctx, OrgKey(org), func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		if cur == nil {
+			return nil, false, fmt.Errorf("%w: unknown org %q", ErrNotFound, org)
+		}
+		prev, perr := parseOrg(cur)
+		if perr != nil {
+			return nil, false, perr
+		}
+		if prev.AvatarContentType == "" {
+			result = prev
+			return nil, false, nil
+		}
+		prev.Version++
+		prev.AvatarContentType = ""
+		prev.AvatarUpdatedAt = ""
+		prev.UpdatedAt = s.nowUTC().Format(time.RFC3339)
+		result = prev
+		return encodeOrg(prev), true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Best-effort: the pointer is already clear, so leftover bytes are
+	// inert (GetOrgAvatar gates on the pointer). Unconditional delete of
+	// an absent key is Ok.
+	_ = s.Store.Delete(ctx, OrgAvatarKey(org), "")
 	return result, nil
 }
 
@@ -614,7 +846,7 @@ func (s *Service) RemoveTeamMember(ctx context.Context, org, slug, principal str
 	return result, nil
 }
 
-// DeleteOrg removes org.json, members.json, teams, and org invitations.
+// DeleteOrg removes org.json, members.json, the avatar object, teams, and org invitations.
 // Owner-only (checked by the handler). Refuses with 409 + count while any
 // repo is owned by the org.
 func (s *Service) DeleteOrg(ctx context.Context, org string) error {
@@ -640,7 +872,7 @@ func (s *Service) DeleteOrg(ctx context.Context, org string) error {
 	if terr != nil {
 		return terr
 	}
-	for _, key := range []string{OrgKey(org), MembersKey(org)} {
+	for _, key := range []string{OrgKey(org), MembersKey(org), OrgAvatarKey(org)} {
 		if derr := s.Store.Delete(ctx, key, ""); derr != nil && !store.IsNotFound(derr) {
 			return derr
 		}

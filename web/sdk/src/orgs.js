@@ -44,6 +44,25 @@ export function attachOrgs(client) {
     /** Delete (owner; 409 while the org owns repos). */
     delete: (org, opts) => call(orgPath(org), { method: "DELETE", ...opts }),
 
+    avatar: {
+      /** Avatar image path (`v` = avatar_updated_at cache-busts the
+       *  immutable max-age response). Callers gate on the org doc's
+       *  avatar_content_type — the client never probes the bytes. */
+      url: (org, v) => `${orgPath(org, "/avatar")}${v ? `?v=${enc(v)}` : ""}`,
+      /** Upload raw image bytes (PUT, owner): PNG/JPEG/GIF/WebP, 2 MiB cap. */
+      upload: async (org, data, { contentType, ...opts } = {}) => {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(await toArrayBuffer(data));
+        return call(orgPath(org, "/avatar"), {
+          method: "PUT",
+          headers: { "Content-Type": contentType ?? "application/octet-stream" },
+          body: bytes,
+          ...opts,
+        });
+      },
+      /** Remove the avatar (DELETE, owner). */
+      remove: (org, opts) => call(orgPath(org, "/avatar"), { method: "DELETE", ...opts }),
+    },
+
     members: {
       /** Roster. */
       list: (org, opts) => call(orgPath(org, "/members"), { method: "GET", ...opts }),
@@ -131,4 +150,13 @@ export function attachOrgs(client) {
       cancel: (org, id, opts) => call(orgPath(org, `/invitations/${enc(id)}`), { method: "DELETE", ...opts }),
     },
   };
+}
+
+/** Coerce upload input to bytes (File/Blob preferred — carries image data). */
+async function toArrayBuffer(data) {
+  if (data instanceof ArrayBuffer) return data;
+  if (data?.buffer instanceof ArrayBuffer) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  if (typeof data === "string") return new TextEncoder().encode(data).buffer;
+  if (data?.arrayBuffer instanceof Function) return data.arrayBuffer();
+  throw new Error("orgs.avatar.upload: data must be bytes, a string, or a Blob/File");
 }

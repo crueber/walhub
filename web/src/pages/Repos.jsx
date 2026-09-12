@@ -32,6 +32,7 @@ import {
   profileSaveBody,
 } from "../lib/profile.js";
 import { renderBody } from "../lib/render-md.js";
+import { OrgAvatar } from "./Org.jsx";
 import { mirrorRowBadge } from "../lib/mirror.js";
 import { visibilityBadge } from "../lib/visibility.js";
 import StarCount from "../components/StarCount.jsx";
@@ -243,7 +244,12 @@ export default function Repos() {
   return (
     <div class="repos-page">
       <div class="mb-1 flex items-center justify-between">
-        <h2 class="text-xl font-semibold">
+        <h2 class="flex items-center gap-2 text-xl font-semibold">
+          {/* Forgejo #359: the org avatar renders from the org doc's
+              pointer (no byte probing; hides itself on 404). */}
+          <Show when={isOrg()}>
+            <OrgAvatar org={owner()} doc={getOrg} size={36} />
+          </Show>
           {isOrg() ? orgName() : displayName()}
           <Show when={isOrg()}>
             <span class="pill org-badge ml-2 align-middle text-xs font-normal" role="img" title="organization" aria-label="organization">
@@ -262,6 +268,20 @@ export default function Repos() {
       </Show>
       <Show when={isOrg() && getOrg()?.description}>
         <p class="mt-1 text-sm">{getOrg().description}</p>
+      </Show>
+      {/* Forgejo #359: the org profile fields (location/timezone/bio)
+          render from the org doc — the owner-profile block below reads
+          the separate owner-slug profile, not the org. */}
+      <Show when={isOrg() && (getOrg()?.location || getOrg()?.timezone)}>
+        <p class="muted mt-1 text-sm">
+          {[getOrg()?.location, getOrg()?.timezone].filter(Boolean).join(" · ")}
+        </p>
+      </Show>
+      <Show when={isOrg() && getOrg()?.bio_markdown}>
+        <div
+          class="markdown-body mt-3"
+          innerHTML={renderBody(getOrg().bio_markdown)}
+        />
       </Show>
       <Show when={canManage()}>
         <p class="mt-3">
