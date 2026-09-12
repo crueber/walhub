@@ -1,5 +1,5 @@
 // web/src/pages/Issues.jsx — route "/:owner/:name/issues" (02 §11): the
-// issue list with a filter bar (state/labels/assignee/milestone/since),
+// issue list with a filter bar (state/assignee/labels/milestone/since),
 // paged divider-separated rows from the index (index-first, LIST fallback
 // server-side), ALWAYS rendered newest-first by number descending (#48).
 // new-issue + labels/milestones links. Rows upsert in place on `issue`
@@ -111,21 +111,21 @@ export default function Issues() {
           </select>
         </label>
         <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-          Labels
-          <input
-            class="input"
-            placeholder="labels (a,b)"
-            value={search.labels || ""}
-            onChange={(e) => setFilter("labels", e.target.value)}
-          />
-        </label>
-        <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
           Assignee
           <input
             class="input"
             placeholder="assignee or *none"
             value={search.assignee || ""}
             onChange={(e) => setFilter("assignee", e.target.value)}
+          />
+        </label>
+        <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+          Labels
+          <input
+            class="input"
+            placeholder="labels (a,b)"
+            value={search.labels || ""}
+            onChange={(e) => setFilter("labels", e.target.value)}
           />
         </label>
         <label class="flex min-w-0 flex-col gap-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
