@@ -81,7 +81,8 @@ Write discipline:
 - Deleting a team or an org: team delete removes the object and its `team:<org>/<slug>` bindings from
   any `access.json` that references it (same handler, sequential CAS per affected repo — bounded by
   repos the team is bound to, discovered from `access.json` itself, never a LIST sweep of all repos).
-  Org delete is owner-only and REFUSES while any repo is owned by the org (409 with the count).
+  Org delete is owner-only and REFUSES while any repo is owned by the org (409 with the count —
+  the message names transfer, which §3.1 provides, so the refusal always names a real next step).
 
 ### Concurrency
 
@@ -270,6 +271,41 @@ the `ReadGate` shape, law 8); nil seam → legacy host-flag gating.
 `CheckRole` is unchanged (its flag-aware contract serves the API
 surfaces); the push path never calls it with host flags set.
 
+### 5.4 Repo transfer between owners (issue #358)
+
+Direct, owner-initiated transfer (v1 — no accept step):
+`POST /{owner}/{repo}/api/transfer` with `{owner, repo?}` moves every
+object under `repos/<src>/<r>/` to `repos/<dst>/<r>/` (repo name defaults
+to the source name, so transfer+rename passes both). Gates, in order:
+repo admin on the source (`CheckRole` admin — binding, source-org
+ownership, or host admin), then `CheckCreateOwner` admission verbatim on
+the destination (self, member org, or host admin — §5.2, same 401/403/503
+shape). The service is principal-free (like `DeleteOrg`); the handler
+gates. Success is `201 {owner, repo}`.
+
+The move is copy-then-delete over opaque bytes (law 4 — no source key is
+deleted before its copy ACKs), streamed (never whole packs in memory).
+Every destination write is `PutCreate`: a lost race aborts 409 with
+best-effort cleanup and the source untouched. The delete pass removes
+exactly the copied set, then re-lists the source prefix — leftovers mean
+a push raced the move and report 409 with the destination complete (a
+mistyped transfer is recoverable by transferring back; a raced transfer
+leaves the named src residue to delete — the destination is already
+complete, so a re-transfer would 409 on the occupied manifest). `access.json`
+is the one interpreted object: visibility and all bindings survive except
+the owner-subject — `user:<src>` bindings drop (the seller keeps no
+admin) and a user destination without a binding gains
+`user:<dst>`/admin (org destinations need none — org-owner resolution
+covers them); `team:` subjects name teams that still exist and move
+untouched. A missing source `access.json` materializes the destination's
+synthesized default for user destinations only; a corrupt one moves
+byte-identical (transfer never fails on it). Repo invitations under
+`meta/` move with the prefix, so pending invites survive. Content types
+restore the writer convention (`.json`/`.pb`, else octet-stream —
+serving MIME comes from sidecars, never object metadata). This is what
+makes the org-delete 409 true: an org that owns repos is deletable once
+each repo is transferred (or deleted) through a real capability.
+
 ## 6. Policy engine integration (Seam 3 amendment)
 
 `policy.json` stays the frozen envelope; effects are untouched. The amendment is to **group member
@@ -387,14 +423,16 @@ proxy; 08 §6 owns the cache keys, 12 §2.3.1 the page contract).
 | `POST …/invitations` | admin | `{subject, role}` → 201 `{id, accept_url}` |
 | `GET …/invitations` | admin | → pending list |
 | `DELETE …/invitations/{id}` | admin | → 204 |
+| `POST …/transfer` | admin (source) + #346 admission (destination) | `{owner, repo?}` → 201 `{owner, repo}`; 401 anon; 403 non-admin / foreign destination; 404 unknown source; 409 occupied destination or mid-transfer race (§3.1) |
 | `DELETE …/api` | admin | → 204 (core §9.1 lifecycle; delete + fork/GC semantics §5.1) |
 
 ## 9. UI and SDK
 
 Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
 
-- **Org settings** `/:org/settings` — sub-tabs profile / members / teams / invitations; member rows
-  inline role `<select>`; invite form shows the returned accept link.
+- **Org settings** `/:org/settings` — sub-tabs profile / members / teams / invitations, plus an
+  owner-only Danger Zone tab (typed-confirm delete-org; non-owners see no affordance, server still
+  gates); member rows inline role `<select>`; invite form shows the returned accept link.
 - **Team page** `/:org/teams/:slug` — member list, add/remove, and the repos this team is bound to
   (derived by reading that org's repos' `access.json`; bounded by the org's repo count, P5-acceptable).
 - **Repo Access tab** `/:owner/:repo/settings/access` — a fourth settings sub-tab: visibility toggle,
@@ -404,7 +442,8 @@ Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
 
 SDK additions (submodules under `web/sdk/src/`, bundled by esbuild into `repos.js`; JSDoc typedefs in
 `types.js`): `users.js` (`users.get/put`), `orgs.js` (`orgs.*`, members, teams), `access.js`
-(`repo.access.get/put`), `invites.js` (`invites.list/mine/accept/cancel`).
+(`repo.access.get/put`), `invites.js` (`invites.list/mine/accept/cancel`), `transfer.js`
+(`repo.transfer({owner, repo?})` — issue #358).
 
 ## 10. Migration of existing repos
 
@@ -481,6 +520,14 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   `user:anonymous` — fails subject validation) and relies on flag-driven grants. Sidecar
   classification, the flag shape, and discovery live in 07_api.md §14 (this doc owns the gate +
   the default, not the marker).
+- **Repo transfer + delete-org UI (issue #358, §5.4):** direct owner-initiated transfer
+  (`POST /{owner}/{repo}/api/transfer`, repo admin on source + `CheckCreateOwner` on
+  destination, copy-then-delete over opaque bytes with the owner-subject rewrite) lands
+  together with the owner-only org Danger Zone, so the DeleteOrg 409 ("transfer or delete
+  them first") names a capability that exists — no wording change needed. Rationale: the
+  409 referenced a missing feature, making orgs with repos undeletable; v1 skips the
+  transfer+accept dance (Forgejo parity deferred) because both gates already exist and
+  the owner initiating the move holds admin on both ends by construction.
 
 ## Explicitly out of scope
 

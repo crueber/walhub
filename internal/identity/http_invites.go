@@ -207,6 +207,11 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request, owner, repo
 		return h.routePerms(w, r, owner, repo, rest)
 	case "invitations":
 		return h.routeRepoInvites(w, r, owner, repo, rest[1:])
+	case "transfer":
+		if len(rest) != 1 {
+			return false
+		}
+		return h.routeTransfer(w, r, owner, repo)
 	}
 	return false
 }

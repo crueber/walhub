@@ -27,6 +27,7 @@ import { attachReleases } from "./releases.js";
 import { attachTags } from "./tags.js";
 import { attachSocial, attachSocialTop } from "./social.js";
 import { attachOrgs } from "./orgs.js";
+import { attachTransfer } from "./transfer.js";
 import { attachUsers } from "./users.js";
 import { attachImports } from "./import.js";
 import { attachMirrors, attachMirror } from "./mirror.js";
@@ -205,6 +206,7 @@ export class ReposClient {
     const r = new RepoClient(this, fullName);
     attachAdmin(r);
     attachAccess(r);
+    attachTransfer(r);
     attachCollab(r);
     attachRepoInvites(r);
     attachIssues(r);

@@ -30,6 +30,7 @@ func TestExposedTemplatesExact(t *testing.T) {
 		"/{owner}/{repo}/api/assignables",
 		"/{owner}/{repo}/api/invitations",
 		"/{owner}/{repo}/api/invitations/{id}",
+		"/{owner}/{repo}/api/transfer",
 	}
 	if len(ExposedTemplates) != len(want) {
 		t.Fatalf("ExposedTemplates = %v, want %v", ExposedTemplates, want)
@@ -114,6 +115,8 @@ func TestExposedCoversRoutes(t *testing.T) {
 		{"repo invites list", "GET", "/o/r/api/invitations", true, "/{owner}/{repo}/api/invitations"},
 		{"repo invites create", "POST", "/o/r/api/invitations", true, "/{owner}/{repo}/api/invitations"},
 		{"repo invite cancel", "DELETE", "/o/r/api/invitations/abc123", true, "/{owner}/{repo}/api/invitations/{id}"},
+		{"repo transfer", "POST", "/o/r/api/transfer", true, "/{owner}/{repo}/api/transfer"},
+		{"repo transfer browser lane", "POST", "/o/r/api-browser/transfer", true, "/{owner}/{repo}/api/transfer"},
 		// Anything else must NOT claim the identity surface (falls through
 		// to the core mux): uncovered paths need no template.
 		{"unknown top", "GET", "/api/v1/nope", false, ""},

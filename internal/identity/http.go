@@ -45,6 +45,7 @@ var ExposedTemplates = []string{
 	"/{owner}/{repo}/api/assignables",
 	"/{owner}/{repo}/api/invitations",
 	"/{owner}/{repo}/api/invitations/{id}",
+	"/{owner}/{repo}/api/transfer",
 }
 
 // Handler is the Seam 1 surface: every §8 endpoint on both lanes.

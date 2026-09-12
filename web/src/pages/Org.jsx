@@ -3,10 +3,11 @@
 // inline role <select>; the invite form shows the returned accept link.
 
 import { createSignal, For, Show } from "solid-js";
-import { useParams } from "@solidjs/router";
+import { useParams, useNavigate } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import DateTime from "../components/DateTime.jsx";
+import { DangerConfirm } from "./Settings.jsx";
 
 const ORG_ROLES = ["owner", "member"];
 const TABS = ["Profile", "Members", "Teams", "Invitations"];
@@ -418,6 +419,48 @@ function InvitesTab(props) {
   );
 }
 
+// DangerTab is the owner-only Danger Zone (Forgejo #358): delete-org
+// with the typed-confirm idiom from Settings.jsx. Non-owners never see
+// the tab (canManage is server-authoritative via can_edit); the server
+// still gates (owner-only, 409 while the org owns repos — the message
+// names transfer, which now exists, and surfaces verbatim in the
+// confirm's error line).
+function DangerTab(props) {
+  const navigate = useNavigate();
+  const org = props.org;
+
+  async function deleteOrg() {
+    // No reportError here: the throw lands in DangerConfirm's
+    // plain-text error line (tray + inline would surface it twice).
+    await repos.orgs.delete(org);
+    invalidate(`org:${org}`);
+    invalidate(`profile:${org}`);
+    invalidate("owners");
+    navigate("/");
+  }
+
+  return (
+    <section class="card border-red-500/60 p-4" aria-label="Danger Zone">
+      <h3 class="mb-1 font-semibold text-red-700 dark:text-red-400">Danger Zone</h3>
+      <p class="muted mb-3 text-sm">Irreversible actions. Each requires typing the organization name.</p>
+      <div class="rounded border border-red-500/40 p-3">
+        <h4 class="font-medium text-red-700 dark:text-red-400">Delete Organization</h4>
+        <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+          Permanently deletes this organization, its roster, teams, and pending
+          invitations. Repos owned by the organization block deletion — transfer
+          them to another owner (repo settings → Danger Zone) or delete them first.
+          This cannot be undone.
+        </p>
+        <DangerConfirm
+          expected={org}
+          confirmLabel="Delete this organization"
+          onConfirm={deleteOrg}
+        />
+      </div>
+    </section>
+  );
+}
+
 export default function Org() {
   const params = useParams();
   const org = () => (params.org ?? "").toLowerCase();
@@ -432,6 +475,9 @@ export default function Org() {
     () => repos.owners.profile(org()).catch(() => null)
   );
   const canManage = () => !!getProfile()?.can_edit;
+  // Forgejo #358: owners get the Danger Zone tab; non-owners see nothing
+  // (server still gates the delete).
+  const tabs = () => (canManage() ? [...TABS, "Danger"] : TABS);
 
   return (
     <div class="mx-auto max-w-6xl px-4 py-4">
@@ -442,7 +488,7 @@ export default function Org() {
         <p class="muted mb-3 text-sm">read-only — org owner required to make changes.</p>
       </Show>
       <nav class="subtabs mb-4 flex flex-wrap gap-1.5" aria-label="organization sections">
-        <For each={TABS}>
+        <For each={tabs()}>
           {(t) => (
             <button
               type="button"
@@ -462,6 +508,9 @@ export default function Org() {
         <Show when={getTab() === "Members"}><MembersTab org={org()} canManage={canManage} /></Show>
         <Show when={getTab() === "Teams"}><TeamsTab org={org()} canManage={canManage} /></Show>
         <Show when={getTab() === "Invitations"}><InvitesTab org={org()} canManage={canManage} /></Show>
+        <Show when={getTab() === "Danger"}>
+          <Show when={canManage()}><DangerTab org={org()} /></Show>
+        </Show>
       </div>
     </div>
   );
