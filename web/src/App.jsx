@@ -4,10 +4,13 @@
 
 import { createEffect, createSignal, Show, For } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
-import { usePending, trayErrors, dismissError } from "./lib/data.js";
+import repos from "../sdk/src/index.js";
+import { usePending, useData, trayErrors, dismissError } from "./lib/data.js";
 import { theme, toggleTheme } from "./lib/store.js";
+import { navModel } from "./lib/identity.js";
 import { refreshUnread, unreadCount } from "./pages/Notifications.jsx";
 import NotificationTray from "./components/NotificationTray.jsx";
+import IdentityMenu from "./components/IdentityMenu.jsx";
 
 export default function App(props) {
   const location = useLocation();
@@ -37,6 +40,15 @@ export default function App(props) {
     refreshUnread();
   });
 
+  // Forgejo #371: navbar identity surface. me() rides the shared "me"
+  // cache key pages already fetch (zero new requests); discovery (AuthOpen)
+  // carries the auth mode + browser-login advertisement. Both swallow
+  // auth failures to null (signed out / offline → legacy nav, never a
+  // spinner or tray entry).
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const nav = () => navModel({ me: getMe(), discovery: getDiscovery() }, location.pathname + location.search);
+
   return (
     <div class="flex min-h-screen flex-col">
       <div class="progress" classList={{ hidden: !barVisible() }} aria-hidden="true">
@@ -57,19 +69,39 @@ export default function App(props) {
           <nav aria-label="Site" class="site-nav flex min-w-0 flex-1 items-center gap-3 overflow-x-auto whitespace-nowrap sm:gap-4">
             <A href="/explore">explore</A>
             <A href="/import">import</A>
-            <A href="/keys">keys</A>
+            {/* Forgejo #371: signed-in users (outside none mode) find keys
+                in the identity menu — the primary nav keeps it for
+                signed-out visitors. */}
+            <Show when={nav().showKeysInNav}>
+              <A href="/keys">keys</A>
+            </Show>
             {/* Forgejo #362: the invitee inbox. Gated on the shared unread
                 signal — non-null means the authenticated unread_count probe
                 succeeded, so this adds no request of its own (law 6);
                 anonymous visitors never see the link and the page itself
-                explains sign-in. */}
-            <Show when={unreadCount() !== null}>
+                explains sign-in. Forgejo #371: signed-in users find it in
+                the identity menu instead. */}
+            <Show when={nav().showInvitationsInNav && unreadCount() !== null}>
               <A href="/invitations">invitations</A>
             </Show>
-            <A href="/setup">setup</A>
+            {/* Forgejo #371: setup stays in the primary nav for signed-out
+                visitors and in none mode (first-run discoverability);
+                signed-in users find it in the identity menu (admin-only). */}
+            <Show when={nav().showSetupInNav}>
+              <A href="/setup">setup</A>
+            </Show>
           </nav>
           <div class="ml-auto flex shrink-0 items-center gap-2">
             <A href="/api" class="nav-link">API</A>
+            {/* Forgejo #371: signed-out + browser login available → Login
+                through the OIDC pathway, returning to the current page. */}
+            <Show when={nav().showLogin}>
+              <a href={nav().loginHref} class="btn primary px-2 py-1">Login</a>
+            </Show>
+            {/* Forgejo #371: signed-in → avatar-or-username identity menu. */}
+            <Show when={nav().showIdentity}>
+              <IdentityMenu username={nav().username} items={nav().menuItems} />
+            </Show>
             <NotificationTray />
             <button
               type="button"

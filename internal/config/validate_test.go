@@ -62,15 +62,21 @@ func TestValidateOIDC(t *testing.T) {
 		t.Fatalf("valid oidc config must pass: %v", errs)
 	}
 
-	c := base()
-	c.Server.Auth.AnonymousRead = true
-	_, errs := Validate(c)
-	errsContain(t, errs, "anonymous_read must be false")
+	// Forgejo #371: anonymous_read is allowed in oidc mode either way —
+	// true is the default recommendation (public browsing per #345),
+	// false the everything-requires-login hard-lock.
+	for _, anon := range []bool{true, false} {
+		c := base()
+		c.Server.Auth.AnonymousRead = anon
+		if _, errs := Validate(c); len(errs) != 0 {
+			t.Fatalf("oidc with anonymous_read=%v must pass: %v", anon, errs)
+		}
+	}
 
-	c = base()
+	c := base()
 	c.Server.Auth.AllowedDomains = nil
 	c.Server.Auth.AllowedEmails = nil
-	_, errs = Validate(c)
+	_, errs := Validate(c)
 	errsContain(t, errs, "allowed_domains or server.auth.allowed_emails")
 
 	c = base()
@@ -142,6 +148,55 @@ func TestValidateOIDCTrioMissing(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Rule 2c — the #371 validation matrix (oidc × anonymous_read ×
+// login-enabled): anonymous_read passes either way in oidc mode; the trio
+// (browser login enabled) is what decides boot, independent of the flag.
+func TestValidateOIDCAnonTrioMatrix(t *testing.T) {
+	base := func() *Config {
+		c := Defaults()
+		c.Server.Auth.Mode = "oidc"
+		c.Server.Auth.AllowedDomains = []string{"example.com"}
+		c.Server.Auth.OAuthClientID = "id"
+		c.Server.Auth.OAuthClientSecret = "secret"
+		c.Server.Auth.SessionSecret = strings.Repeat("x", 32)
+		return c
+	}
+	for _, anon := range []bool{true, false} {
+		for _, trio := range []bool{true, false} {
+			name := ""
+			if anon {
+				name += "anon-read "
+			} else {
+				name += "hard-lock "
+			}
+			if trio {
+				name += "login-enabled"
+			} else {
+				name += "login-disabled"
+			}
+			t.Run(name, func(t *testing.T) {
+				c := base()
+				c.Server.Auth.AnonymousRead = anon
+				if !trio {
+					c.Server.Auth.SessionSecret = ""
+				}
+				_, errs := Validate(c)
+				if trio && len(errs) != 0 {
+					t.Fatalf("oidc anon=%v trio complete must pass: %v", anon, errs)
+				}
+				if !trio {
+					errsContain(t, errs, "server.auth.session_secret")
+					for _, err := range errs {
+						if strings.Contains(err.Error(), "anonymous_read") {
+							t.Fatalf("trio failure must not blame anonymous_read: %v", errs)
+						}
+					}
+				}
+			})
+		}
+	}
 }
 
 // Rule 3 — bundle strategy validation.

@@ -213,8 +213,8 @@ export const FIELDS = [
   { key: "server.accel_redirect", type: "bool", ex: "true", advanced: true, note: "only honoured behind an edge that announces accel-redirect" },
   { key: "server.public_url", type: "url", ex: "https://git.example.com" },
   { key: "server.cors_origins", type: "list", ex: "https://git.example.com", advanced: true },
-  { key: "server.auth.mode", type: "enum", enum: ["none", "token", "oidc"], ex: "token", note: "oidc additionally needs issuer, an allowlist, and anonymous_read=false" },
-  { key: "server.auth.anonymous_read", type: "bool", ex: "false", modes: ["token", "oidc"], note: "must be false in oidc mode" },
+  { key: "server.auth.mode", type: "enum", enum: ["none", "token", "oidc"], ex: "token", note: "oidc additionally needs issuer, an allowlist, and the browser-login trio" },
+  { key: "server.auth.anonymous_read", type: "bool", ex: "true", modes: ["token", "oidc"], note: "oidc: true (public browsing) recommended; false = everything requires login" },
   { key: "server.auth.tokens", type: "toml", modes: ["token", "oidc"], tomlKeys: TOKEN_KEYS, ex: '[[tokens]]\nprincipal = "ci"\ntoken_env = "WALHUB_CI_TOKEN"\nwrite = true', note: "robots/static credentials — one [[tokens]] table each; admin = true grants admin" },
   { key: "server.auth.session_secret", type: "string", ex: "b3f1c0a9d8e27f645c31b0a98d7e6f5c4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d", modes: ["oidc"], note: "any random ≥ 32 bytes (openssl rand -hex 32); rotating revokes sessions" },
   { key: "server.auth.session_ttl", type: "duration", ex: "12h", modes: ["oidc"] },
@@ -457,11 +457,11 @@ export function validateSetup(values) {
   if (authMode === "none" && listen && !isLoopback(listen.host)) {
     warn("server.auth.mode", `auth.mode=none on non-loopback listen ${listen.host}:${listen.port}; anyone who can reach this port can read and write every repository — set server.auth.mode = "token" (or oidc) and restart`);
   }
-  // §5 rule 2 — oidc allowlist + oauth pair + session secret length
+  // §5 rule 2 — oidc allowlist + oauth pair + session secret length.
+  // (Forgejo #371: anonymous_read is allowed either way in oidc mode —
+  // true = public browsing alongside login (recommended), false = the
+  // everything-requires-login hard-lock — so no anon check here.)
   if (authMode === "oidc") {
-    // the effective default of anonymous_read is true — unset also fails in oidc mode
-    const anon = get("server.auth.anonymous_read");
-    if (anon === "" || /^(true|1|on|yes)$/i.test(anon)) fail("server.auth.anonymous_read", `server.auth.anonymous_read must be false in oidc mode`);
     if (asList(values["server.auth.allowed_domains"]).length === 0 && asList(values["server.auth.allowed_emails"]).length === 0) {
       fail("server.auth.allowed_domains", `oidc mode requires a non-empty server.auth.allowed_domains or server.auth.allowed_emails allowlist`);
     }

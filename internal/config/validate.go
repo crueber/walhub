@@ -103,9 +103,11 @@ func checkOIDC(c *Config) []error {
 		return nil
 	}
 	var errs []error
-	if a.AnonymousRead {
-		errs = append(errs, fmt.Errorf("server.auth.anonymous_read must be false when auth.mode = \"oidc\""))
-	}
+	// Forgejo #371: anonymous_read is ALLOWED in oidc mode (the default
+	// recommendation — visitors browse public repos per #345's visibility
+	// semantics without logging in). anonymous_read = false remains the
+	// "everything requires login" hard-lock for non-repo surfaces; repo
+	// reads additionally resolve per-repo visibility first.
 	if len(a.AllowedDomains) == 0 && len(a.AllowedEmails) == 0 {
 		errs = append(errs, fmt.Errorf("auth.mode = \"oidc\" requires server.auth.allowed_domains or server.auth.allowed_emails"))
 	}
