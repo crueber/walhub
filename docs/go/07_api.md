@@ -119,7 +119,7 @@ routes directly — so twins would widen the browser-lane (cookie) surface for n
 |---|---|
 | **sha-addressed** (full 40/64-hex in the `{sha}`/`{rev}` position): `tree/{sha}/…`, `blob/{sha}/…`, `commits?ref={sha}`, `commit/{sha}` | `Cache-Control: private, max-age=31536000, immutable` |
 | **ref-dependent**: `owners*`, `refs*`, `resolve`, and any tree/blob/commits/commit addressed by a NAME | `Cache-Control: private, max-age=0, stale-while-revalidate=60` + `ETag: "<resolved sha>"` + `If-None-Match` → `304` |
-| **mutable collab** (issue #280) + the repo summary (Forgejo #381) + the repos/detailed listing (Forgejo #384): any GET whose resource can change via a direct user action — issue/PR threads (`ETag: "v<version>"`), social counters, single/latest/list releases, the pull view, identity profiles/orgs/teams/invites/access docs, the repo summary (visibility, open counts, description, mirror state all mutate with no ref movement), and the repos/detailed rows (visibility, mirror + mirror_upstream mutate with no ref movement; the ETag is a content hash over the rendered rows) | `Cache-Control: private, no-cache` + the existing version ETag + `If-None-Match` → `304` |
+| **mutable collab** (issue #280) + the repo summary (Forgejo #381) + the repos/detailed listing (Forgejo #384) + the owner profile (Forgejo #385): any GET whose resource can change via a direct user action — issue/PR threads (`ETag: "v<version>"`), social counters, single/latest/list releases, the pull view, identity profiles/orgs/teams/invites/access docs, the repo summary (visibility, open counts, description, mirror state all mutate with no ref movement), the repos/detailed rows (visibility, mirror + mirror_upstream mutate with no ref movement; the ETag is a content hash over the rendered rows), and the owner profile (display name, location, timezone, bio all PUT-editable with no ref movement; the ETag is a content hash over the served doc) | `Cache-Control: private, no-cache` + the existing version ETag + `If-None-Match` → `304` |
 
 - Mutability, not addressability, decides the class: SWR's stale-serve window is for content whose
   staleness is bounded by ref movement (refs move rarely; seconds-old is fine). User-mutable state
@@ -461,7 +461,14 @@ hint*, not an ACL.
   `{owner, display_name, location, timezone, bio_markdown, updated_at?, can_edit?}` (all strings,
   `""` = unset; `can_edit` is request-scoped, never stored). AuthRead (public bio). Unknown owners
   read as an empty profile (`200`, the `ownerRepos` 200-[] convention — never 404); only a
-  syntactically invalid slug (outside the repo-id owner charset) 404s. SWR class.
+  syntactically invalid slug (outside the repo-id owner charset) 404s.
+  Mutable-collab class (`private, no-cache`, Forgejo #385 — the #381 pattern:
+  every projection on the response is PUT-editable with no ref movement, so
+  SWR's stale-serve window painted the pre-edit bio on refresh; the ETag is
+  a content hash over the served doc covering display_name, location,
+  timezone, bio_markdown, updated_at, and can_edit, so unchanged profiles
+  still 304). There is no avatar projection on this route: avatars ride
+  `GET /api/v1/me`'s `avatar_url` (Forgejo #376).
 - `PUT /api/v1/owners/{o}/profile` (Forgejo #234 — same triple twins, SDK `owners.updateProfile`) —
   idempotent full-document replace `{display_name, location, timezone, bio_markdown}` (body-carried
   `owner`/`updated_at`/`can_edit` ignored; the key names the owner, the server stamps `updated_at`);
@@ -1251,3 +1258,27 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   behind the rows are unchanged). SWR was not kept-and-documented because
   the flags mutate with no ref movement by construction (sidecar
   create/delete, access.json PUT), exactly the mutability rule §4 states.
+- **Owner profile joins the mutable-collab class (Forgejo #385 — the
+  #381 pattern, amends the §4 scope and the §8 "SWR class" line).** The
+  profile route served the PUT-editable bio (plus display name,
+  location, timezone) under `ccSWR` with no ETag at all — the same
+  stale-serve trap class #381 fixed on the summary, worse (no
+  revalidation story, so an edit stayed stale for the whole SWR window
+  instead of one refresh). Fix (a) from the issue: serve `private,
+  no-cache` (the existing per-package `ccMutable` — no new constant)
+  with a content ETag (`p<fnv1a32hex>` over the served doc's JSON, the
+  #384 `detailedETag` shape — no `~suffix` discipline, since the profile
+  has no single head sha to hang suffixes on). The hash covers every
+  mutable projection (display_name, location, timezone, bio_markdown,
+  updated_at — enumerated in the `profileETag` doc comment) plus the
+  request-scoped `can_edit`, so a grant-only change busts the
+  revalidation too instead of 304ing a stale Edit affordance.
+  Unchanged profiles still 304 with zero body (law 6: ETag/304 economics
+  kept, and the route is off the push/sync/checkpoint budgets — the
+  single exact-key sidecar GET behind the read is unchanged). The
+  issue's "avatar?" question is answered in the §8 profile line: there
+  is no avatar projection on this route (avatars ride `me.avatar_url`,
+  Forgejo #376), so SWR was not kept-and-documented — every field on
+  the response mutates via PUT by construction, exactly the mutability
+  rule §4 states. The SPA needs no change: it already invalidates its
+  `profile:{owner}` client entry on save.
