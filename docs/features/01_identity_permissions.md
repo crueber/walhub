@@ -604,3 +604,18 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   and no doc or `web/src` UI affordance promises one (verified — the only `rename`
   hits are filesystem tmp+rename, git rename detection, label delete+create, and
   repo transfer+rename). Revisit only on a concrete rename need.
+- **Team-subject picker on the Access tab (issue #361, survey #349 candidate 4).**
+  `team:<org>/<slug>` bindings were fully supported server-side (`validSubject`,
+  team expansion in `Resolve`, `DeleteTeam` stripping) but undiscoverable — the
+  add-binding form was free text only. On org-owned repos the form now offers a
+  native team `<select>` fed by one `client.orgs.teams.list` GET on the owner org
+  (cached under its own data key; email owners skip the GET — an org slug can
+  never contain `@` — while 404 / 403 / empty all degrade to the text-only
+  form, so non-org owners see no change). Choosing a
+  team composes the normalized `team:org/slug` spelling into the subject field
+  (still editable — free text stays the fallback); the add path validates through
+  the headless `web/src/lib/access.js` helpers (charset mirrors of
+  `identity.ValidOrg`/`ValidSlug`, typo-catching email shape) with a friendly
+  note on invalid, and the server revalidates on PUT as before. Native select,
+  not a popover: no new CSS, no #278 viewport concern, no team mutations from
+  the picker (the access PUT owns the save). No backend change, no new deps.
