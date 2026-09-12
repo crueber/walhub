@@ -192,12 +192,13 @@ test("App renders Login through the OIDC pathway with next", () => {
   assert.ok(APP.includes(">Login<"), "Login button label kept");
 });
 
-test("App renders the identity control left of the tray", () => {
+test("App renders the identity control far-right in the cluster", () => {
   assert.ok(APP.includes("<IdentityMenu"), "identity menu mounted");
   assert.ok(APP.includes("nav().showIdentity"), "menu gated on signed-in");
   assert.ok(APP.includes("avatarUrl={nav().avatarUrl}"), "stable avatar URL passed through (#376)");
   const right = APP.slice(APP.indexOf('<div class="ml-auto'));
-  assert.ok(right.indexOf("<IdentityMenu") < right.indexOf("<NotificationTray"), "identity sits left of the tray");
+  assert.ok(right.indexOf("<NotificationTray") < right.indexOf("<IdentityMenu"), "identity sits right of the tray (#390 far-right)");
+  assert.ok(right.indexOf("Toggle dark mode") < right.indexOf("<IdentityMenu"), "identity sits right of the theme toggle (#390 far-right)");
 });
 
 test("App moves keys/invitations/setup out of the primary nav when signed in", () => {
@@ -235,6 +236,49 @@ test("IdentityMenu: avatar-or-username + logout as session-clearing anchor", () 
 });
 
 test("IdentityMenu: long usernames cannot widen the 390px header", () => {
-  assert.ok(MENU.includes("truncate"), "username truncates instead of pushing the row");
-  assert.ok(MENU.includes("max-w-"), "username width capped");
+  assert.ok(MENU.includes("max-w-"), "trigger width capped");
+  // The no-avatar fallback is a single-initial chip, so a long username
+  // can never stretch the trigger row.
+  assert.ok(MENU.includes("slice(0, 1)"), "fallback renders one initial, not the full name");
+});
+
+// --- Forgejo #390: bare-circle trigger + profile avatar ---------------------
+
+test("IdentityMenu #390: trigger is a bare circle, not a button box", () => {
+  const btn = MENU.slice(MENU.indexOf("<button"), MENU.indexOf("onClick={toggle}"));
+  assert.ok(!btn.includes('"btn ') && !btn.includes('"btn"'), "no btn container class on the trigger");
+  assert.ok(btn.includes("rounded-full"), "trigger itself is round");
+});
+
+test("IdentityMenu #390: avatar is larger than 20px with a light ring + hover emphasis", () => {
+  assert.ok(!MENU.includes("h-5 w-5"), "the 20px inline image is gone");
+  assert.ok(MENU.includes("h-8 w-8"), "avatar circle at h-8 w-8");
+  assert.ok(MENU.includes("ring-1 ring-zinc-300"), "light outer ring (light theme)");
+  assert.ok(MENU.includes("dark:ring-zinc-600"), "ring treatment in dark theme");
+  assert.ok(MENU.includes("group-hover:ring-2"), "hover ring emphasis");
+});
+
+test("IdentityMenu #390: dropdown affordance survives the box removal", () => {
+  assert.ok(MENU.includes("▾"), "caret beside the circle");
+  assert.ok(MENU.includes('aria-haspopup="menu"'), "trigger advertises the menu");
+  assert.ok(MENU.includes("aria-expanded"), "trigger exposes expanded state");
+});
+
+test("IdentityMenu #390: initials fallback keeps the same circle shape", () => {
+  const fb = MENU.slice(MENU.indexOf("fallback={"), MENU.indexOf("</Show>", MENU.indexOf("fallback={")));
+  assert.ok(fb.includes("rounded-full"), "fallback is a circle");
+  assert.ok(fb.includes("h-8 w-8"), "fallback matches the avatar size");
+  assert.ok(fb.includes("ring-1"), "fallback shares the ring treatment");
+});
+
+test("Repos #390: profile page shows a large avatar above the New-repository row", () => {
+  const REPOS = srcOf("../../src/pages/Repos.jsx");
+  assert.ok(REPOS.includes("h-24 w-24"), "avatar at 96px (>= 72px)");
+  assert.ok(REPOS.includes("justify-end"), "avatar floated right");
+  const large = REPOS.indexOf("h-24 w-24");
+  const headerRow = REPOS.indexOf("justify-between");
+  const newBtn = REPOS.indexOf("New repository");
+  assert.ok(large < headerRow && headerRow < newBtn, "large avatar renders above the title + New-repository row");
+  assert.ok(REPOS.includes("ring-zinc-300"), "ring treatment consistent with the navbar");
+  assert.ok(!REPOS.includes("width={36}"), "the small inline user avatar is gone (org avatar keeps its own size)");
 });

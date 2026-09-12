@@ -288,18 +288,29 @@ export default function Repos() {
   const canManage = () => isOrg() && !!getProfile()?.can_edit;
   return (
     <div class="repos-page">
+      {/* Forgejo #390: the user avatar at profile scale (h-24 w-24),
+          right-aligned in its own row above the title + New-repository
+          row — its own block, so it never collides with the title,
+          the #345 visibility badges, the description, or the button at
+          desktop or 390px widths. Orgs keep the org avatar in the
+          title row below, never both. */}
+      <Show when={!isOrg() && userSrc()}>
+        <div class="mb-3 flex justify-end">
+          <img
+            src={userSrc()}
+            alt=""
+            width={96}
+            height={96}
+            class="h-24 w-24 rounded-full ring-1 ring-zinc-300 dark:ring-zinc-600"
+          />
+        </div>
+      </Show>
       <div class="mb-1 flex items-center justify-between">
         <h2 class="flex items-center gap-2 text-xl font-semibold">
           {/* Forgejo #359: the org avatar renders from the org doc's
               pointer (no byte probing; hides itself on 404). */}
           <Show when={isOrg()}>
             <OrgAvatar org={owner()} doc={getOrg} size={36} />
-          </Show>
-          {/* Forgejo #376: the user avatar renders from the user
-              profile's pointer (same no-probing rule; orgs keep the
-              org avatar above, never both). */}
-          <Show when={!isOrg() && userSrc()}>
-            <img src={userSrc()} alt="" width={36} height={36} class="inline rounded-full" />
           </Show>
           {isOrg() ? orgName() : displayName()}
           <Show when={isOrg()}>

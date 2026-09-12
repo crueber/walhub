@@ -100,10 +100,11 @@ export default function App(props) {
             </Show>
             {/* Forgejo #371: signed-in → avatar-or-username identity menu.
                 Forgejo #376: the avatar URL rides me().avatar_url (stable,
-                cache-busted) — "" renders the username fallback. */}
-            <Show when={nav().showIdentity}>
-              <IdentityMenu username={nav().username} avatarUrl={nav().avatarUrl} items={nav().menuItems} />
-            </Show>
+                cache-busted) — "" renders the initials fallback.
+                Forgejo #390: the identity control is the far-right
+                element (after the tray and theme toggle); the bare
+                circle freed the btn-box width, so the cluster still
+                fits at 390px (#273). */}
             <NotificationTray />
             <button
               type="button"
@@ -115,6 +116,9 @@ export default function App(props) {
                 <span aria-hidden="true">☾</span>
               </Show>
             </button>
+            <Show when={nav().showIdentity}>
+              <IdentityMenu username={nav().username} avatarUrl={nav().avatarUrl} items={nav().menuItems} />
+            </Show>
           </div>
         </div>
       </header>
