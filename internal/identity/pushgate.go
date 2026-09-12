@@ -53,8 +53,10 @@ func (s *Service) CheckPush(ctx context.Context, owner, repo string, p auth.Prin
 		return nil
 	}
 	// The name is the whole identity here: host flags stay off (see
-	// above), so owner/org/binding resolution decides alone.
-	role, _ := s.Resolve(ctx, owner, repo, auth.Principal{Name: p.Name})
+	// above), so owner/org/binding resolution decides alone. The email
+	// rides along for the stored-email alias (matchPrincipal) — flags
+	// stay stripped.
+	role, _ := s.Resolve(ctx, owner, repo, auth.Principal{Name: p.Name, Email: p.Email})
 	if role.atLeast(RoleWrite) {
 		return nil
 	}

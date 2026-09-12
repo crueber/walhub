@@ -24,6 +24,7 @@ import (
 
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/identity"
+	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
@@ -262,10 +263,10 @@ func writeImportDoc(ctx context.Context, st store.ObjectStore, owner, repo strin
 // ensureImporterAdmin writes the importer as admin on access.json (S7):
 // read-modify-write over the current (or synthesized) doc, bounded CAS
 // retries, then the BootstrapRepo backstop. Visibility is preserved —
-// import never flips a repo public/private. A non-email importer (auth
+// import never flips a repo public/private. A non-principal importer (auth
 // none's "anon", service principals) cannot be bound (identity requires
-// user:<email> subjects) — the backstop covers those; the caller narrates
-// the skip.
+// user:<username|email> subjects) — the backstop covers those; the caller
+// narrates the skip.
 func ensureImporterAdmin(ctx context.Context, roles RoleService, owner, repo, importer string) error {
 	if roles == nil {
 		return nil // no identity surface (CLI without wiring): the read
@@ -273,7 +274,10 @@ func ensureImporterAdmin(ctx context.Context, roles RoleService, owner, repo, im
 		// materializes it (documented backstop).
 	}
 	if !identity.ValidPrincipal(importer) {
-		return nil // user:<email> subjects only — backstop covers the rest
+		return nil // user: subjects only — backstop covers the rest
+	}
+	if auth.Synthetic(importer) {
+		return nil // modes, not users (auth-none's "anon") — backstop covers
 	}
 	doc, ver, err := roles.GetAccess(ctx, owner, repo)
 	if err != nil {

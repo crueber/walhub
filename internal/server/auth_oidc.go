@@ -200,7 +200,10 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		s.mapAuthStatus(w, aerr)
 		return
 	}
-	sess, merr := s.authSvc.MintSession(p.Name)
+	// The session wire carries the verified EMAIL (existing sessions
+	// stay valid; law 5) — the username resolves from it on every
+	// request via principalFromEmail.
+	sess, merr := s.authSvc.MintSession(emailOf(p))
 	if merr != nil {
 		plainStatus(w, http.StatusServiceUnavailable, "session mint failed")
 		return
@@ -208,7 +211,9 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	if isLoopbackHost(hostOnly(r.Host)) {
 		// Loopback: bounce through /_auth/claimed with a 60 s signed ticket so
 		// the cookie lands on walgit.localhost (different cookie host).
-		ticket := s.signState(p.Name+"|"+sess.Wire, s.Now())
+		// The ticket names the verified email (the cookie itself only
+		// carries the wire, whose payload re-resolves it).
+		ticket := s.signState(emailOf(p)+"|"+sess.Wire, s.Now())
 		ticket = strings.ReplaceAll(ticket, "\n", "") // wire form is url-safe already
 		target := requestScheme(r) + "://walgit." + hostOnlyPortSuffix(r.Host) + "/_auth/claimed?ticket=" +
 			url.QueryEscape(ticket) + "&next=" + url.QueryEscape(next)
@@ -375,7 +380,10 @@ func (s *Server) authTokensMint(w http.ResponseWriter, r *http.Request) {
 		plainStatus(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	tok, merr := s.authSvc.MintToken(p.Name)
+	// Mint against the verified email when the principal carries one
+	// (OIDC — the token wire keeps the email, the username resolves
+	// from it); else the name (static-token behavior, unchanged).
+	tok, merr := s.authSvc.MintToken(emailOf(p))
 	if merr != nil {
 		plainStatus(w, http.StatusServiceUnavailable, "token mint failed")
 		return

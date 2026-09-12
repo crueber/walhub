@@ -15,8 +15,13 @@ type Profile struct {
 	Principal   string `json:"principal"`
 	DisplayName string `json:"display_name"`
 	Bio         string `json:"bio"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// Email is NEVER stored: the GET /users/{u} handler fills it only
+	// when the caller IS the subject (Forgejo #370 — the verified
+	// email is visible to its owner alone, nowhere else). omitempty
+	// keeps stored docs and foreign views byte-identical.
+	Email     string `json:"email,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 func encodeProfile(p *Profile) []byte {

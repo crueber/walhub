@@ -498,6 +498,16 @@ clean.
   UI: the Import owner field is a self+orgs dropdown (server 403 is the
   real gate). Push-side reuse (auto-create-on-push) lands in #347 against
   the same helper.
+- **Owner dropdown is usernames+orgs; back-to-form lives on the outcome view
+  (Forgejo #370).** The owner options are `[self, ...memberOrgs]` filtered
+  to valid owner segments (`isValidOwnerPart`, the `ParseRepoId` owner
+  charset) — with username principals the dropdown holds usernames + org
+  slugs only, so the email-owner `bad target` failure cannot be selected
+  into existence (the server 400 stays the real gate). "Back to form"
+  renders only on the done/outcome view (a genuine non-form view), never
+  on the form itself where the inline error already renders in place.
+  Rationale: the email-as-owner failure, the owner-as-email leak, and the
+  dead button shared one root (the principal name was the raw email).
 
 ## Explicitly out of scope
 

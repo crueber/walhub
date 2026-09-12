@@ -30,7 +30,7 @@ func (h *Handler) routeInvites(w http.ResponseWriter, r *http.Request, rest []st
 			writePlain(w, http.StatusUnauthorized, "authentication required")
 			return true
 		}
-		entries, err := h.Svc.MyInvites(r.Context(), normPrincipal(p.Name))
+		entries, err := h.Svc.MyInvitesFor(r.Context(), p)
 		if err != nil {
 			writeErr(w, err)
 			return true
@@ -60,7 +60,7 @@ func (h *Handler) routeInvites(w http.ResponseWriter, r *http.Request, rest []st
 			return true
 		}
 		token := r.URL.Query().Get("token")
-		inv, err := h.Svc.PreviewInvite(r.Context(), normPrincipal(p.Name), id, token)
+		inv, err := h.Svc.PreviewInviteFor(r.Context(), p, id, token)
 		if err != nil {
 			writeErr(w, err)
 			return true
@@ -76,7 +76,7 @@ func (h *Handler) routeInvites(w http.ResponseWriter, r *http.Request, rest []st
 			writePlain(w, http.StatusUnauthorized, "authentication required")
 			return true
 		}
-		bound, err := h.Svc.AcceptInvite(r.Context(), normPrincipal(p.Name), id)
+		bound, err := h.Svc.AcceptInviteFor(r.Context(), p, id)
 		if err != nil {
 			writeErr(w, err)
 			return true
@@ -109,12 +109,11 @@ func (h *Handler) routeInvites(w http.ResponseWriter, r *http.Request, rest []st
 // the caller's own inbox.
 func (h *Handler) cancelInvite(w http.ResponseWriter, r *http.Request, principal string, p auth.Principal, id string) error {
 	_ = w
-	_ = p
-	inv, err := h.Svc.findInvite(r.Context(), principal, id)
+	inv, err := h.Svc.findInviteFor(r.Context(), p, id)
 	if err != nil {
 		return err
 	}
-	if normPrincipal(inv.Subject) != principal {
+	if !matchPrincipal(inv.Subject, p) {
 		return ErrForbidden
 	}
 	_, cerr := h.Svc.CancelInvite(r.Context(), principal, id)

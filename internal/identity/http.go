@@ -265,6 +265,19 @@ func (h *Handler) routeUsers(w http.ResponseWriter, r *http.Request, rest []stri
 			writePlain(w, http.StatusNotFound, "unknown principal")
 			return true
 		}
+		// Forgejo #370: the verified email is visible to its owner
+		// alone. A username subject resolves via the registry; a
+		// legacy email spelling IS the address (the caller matched
+		// it, so it is theirs). Every other view omits it.
+		if !p.Anonymous && matchPrincipal(principal, p) {
+			if auth.ValidUsername(principal) {
+				if em, emerr := h.Svc.EmailForUsername(r.Context(), principal); emerr == nil {
+					prof.Email = em
+				}
+			} else {
+				prof.Email = principal
+			}
+		}
 		writeCached(w, r, ccMutable, etagOf("user", prof.Version), http.StatusOK, prof)
 		return true
 	case http.MethodPut:

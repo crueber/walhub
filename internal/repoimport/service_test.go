@@ -284,6 +284,10 @@ func TestPostValidationMatrix(t *testing.T) {
 		{name: "unknown field", body: `{"source_url":"file:///x","owner":"a","name":"b","nope":1}`, want: 400, part: "unknown field"},
 		{name: "missing owner", body: `{"source_url":"file:///x","name":"b"}`, want: 400},
 		{name: "bad target chars", body: `{"source_url":"file:///x","owner":"a c","name":"b"}`, want: 400},
+		// Forgejo #370: an email owner is a bad target (the import
+		// form never offers one — owners are usernames + orgs — and
+		// the backend refuses it fail-closed).
+		{name: "email owner refused", body: `{"source_url":"file:///x","owner":"crueber@gmail.com","name":"b"}`, want: 400, part: "bad target"},
 		{name: "bad url", body: `{"source_url":"notaurl","owner":"a","name":"b"}`, want: 400},
 		{name: "embedded creds", body: `{"source_url":"https://u:p@github.com/a/b.git","owner":"a","name":"b"}`, want: 400, part: "must not embed credentials"},
 		{name: "ssh refused", body: `{"source_url":"ssh://example.com/a/b.git","owner":"a","name":"b"}`, want: 400, part: "not supported"},

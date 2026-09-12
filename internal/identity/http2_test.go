@@ -33,7 +33,7 @@ func TestMembersTeamsEndpoints(t *testing.T) {
 	if w := doReq(h, "GET", "/api/v1/orgs/acme/members/ghost%40x.c", ""); w.Code != http.StatusNotFound {
 		t.Errorf("GET non-member = %d", w.Code)
 	}
-	if w := doReq(h, "GET", "/api/v1/orgs/acme/members/nope", ""); w.Code != http.StatusBadRequest {
+	if w := doReq(h, "GET", "/api/v1/orgs/acme/members/bad!!principal", ""); w.Code != http.StatusBadRequest {
 		t.Errorf("GET bad principal = %d", w.Code)
 	}
 	// PUT as non-owner → 403.
@@ -104,7 +104,7 @@ func TestMembersTeamsEndpoints(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT team member = %d: %s", w.Code, w.Body.String())
 	}
-	if w := doReq(h, "PUT", "/api/v1/orgs/acme/teams/platform/members/nope", ""); w.Code != http.StatusBadRequest {
+	if w := doReq(h, "PUT", "/api/v1/orgs/acme/teams/platform/members/bad!!principal", ""); w.Code != http.StatusBadRequest {
 		t.Errorf("PUT team member bad = %d", w.Code)
 	}
 	if w := doReq(hc, "PUT", "/api/v1/orgs/acme/teams/platform/members/x%40y.z", ""); w.Code != http.StatusForbidden {

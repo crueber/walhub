@@ -475,7 +475,7 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
 
 - **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §9 page sketches read in the shipped idiom: Solid components under `@solidjs/router`, state via Solid signals/stores, Tailwind styling. Routes, gating, and wire shapes are unchanged.
 
-- **Principal = email; profiles are the only identity objects here** — keys/tokens/sessions stay auth-provider territory (Seam 2); this doc owns zero credentials.
+- **Principal = email; profiles are the only identity objects here** — keys/tokens/sessions stay auth-provider territory (Seam 2); this doc owns zero credentials. (SUPERSEDED by the #370 entry below: the principal NAME is now the username; the email rides `Principal.Email` for alias matching only.)
 - **`visibility` lives in `access.json`** — one CAS'd object already admin-write and read at every authz decision; a separate visibility object would double the read.
 - **Private-repo read gating via the named `require_read` hook** (14 §14.10.1) — policy.json stays push-only (its frozen contract), the gate is a registered hook, not a policy effect.
 - **`members.json` is one CAS object; team `members[]` is a string array** — human-rate writes, owner checks in one GET, and mention/policy expansion needs principals only.
@@ -632,3 +632,38 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   JSON addition is append-only (no fixture/round-trip break: no golden pins
   the inbox shape). The `/invitations` inbox page and the org-tab expiry
   column are specified in 12_web_ui.md.
+- **Usernames are the identity key; emails are owner-visible only (Forgejo #370).**
+  The principal NAME is the immutable username (derived at first OIDC login
+  from the verified email's local part — `auth.DeriveUsername` — uniquified
+  on collision: crueber, crueber2, …), never the raw email: the repo-id
+  owner segment cannot carry `@`, and every `Principal.Name` render surface
+  (repo paths, explore/owner listings, issue/PR authorship, timeline,
+  notifications, invite subjects, deny messages, org-hook titles) leaked the
+  address. The binding lives on the bucket (law 4):
+  `users/<username>/user.json` {username, email} (CAS on creation = the
+  collision-uniqueness commit point) plus `users/by-email/<enc>/ref.json`
+  (repeat logins cost one alias GET; law 6). `ValidPrincipal` accepts both
+  spellings so pre-#370 state (rosters, access subjects, invite subjects,
+  inboxes, profiles) keeps resolving via the pure `matchPrincipal`
+  name-or-email alias — no extra store round trip on push paths. Grant
+  sites (`SynthesizeOwner`, transfer rewrite/destination default, eager
+  `EnsureRepoAccess`) bind `user:<owner>` only for user namespaces
+  (`isUserNamespace`: legacy email, or registry-backed username that is
+  not an org and not synthetic) — a `user:<orgslug>` binding would be a
+  latent grant to whoever later claims that username, and synthesis must
+  not manufacture authority for unclaimed names (the #346 pin holds:
+  writeless self on a foreign/unclaimed namespace still 403s).
+  `GET /users/{u}` fills `email` (never stored, `omitempty`) only when
+  the caller IS the subject. Affected pre-#370 keys (no renames — the
+  alias reads both): `users/<enc-email>/profile.json`,
+  `users/<enc-email>/invitations/index.json`, `orgs/<o>/members.json`
+  entries, `access.json` `user:<email>` subjects, team `members[]`,
+  invite issuer objects + subjects, issue/PR author strings, notification
+  recipient keys, `ssh-keys/k/<fp>` key docs (their `principal` still
+  resolves through the email branch, so existing keys keep working; the
+  per-user `ssh-keys/u/<email>/` list splits from the new
+  `ssh-keys/u/<username>/` list). Operator-authored `policy.json` email spellings fail
+  closed (deny) until rewritten to usernames — manual migration.
+  Rationale: fail closed on the leak axis (worst case is a non-uniquified
+  base, never an exposed email); additive keys (law 5); the registry
+  doubles as the "does this user exist" probe.

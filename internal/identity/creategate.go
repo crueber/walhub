@@ -74,23 +74,23 @@ func (s *Service) CheckCreateOwner(ctx context.Context, owner string, p auth.Pri
 		return &auth.AuthError{Kind: auth.ErrUnavailable, Why: "org membership unavailable"}
 	}
 	if m != nil {
-		want := normPrincipal(p.Name)
 		for _, e := range m.Members {
-			if normPrincipal(e.Principal) == want {
+			if matchPrincipal(e.Principal, p) {
 				return nil
 			}
 		}
 	}
-	return &auth.AuthError{Kind: auth.ErrForbidden, Why: s.ownerDenyMessage(ctx, owner, p.Name)}
+	return &auth.AuthError{Kind: auth.ErrForbidden, Why: s.ownerDenyMessage(ctx, owner, p)}
 }
 
 // ownerDenyMessage names the allowed owners for the 403: the principal's
 // own username plus their member orgs (deny-path only cost). A roster LIST
 // failure degrades to the generic shape — the deny itself never depends on
-// the enumeration.
-func (s *Service) ownerDenyMessage(ctx context.Context, owner, principal string) string {
-	self := normPrincipal(principal)
-	orgs, err := s.MemberOrgs(ctx, principal)
+// the enumeration. The message carries the username only — never the
+// email (leak axis, fail closed).
+func (s *Service) ownerDenyMessage(ctx context.Context, owner string, p auth.Principal) string {
+	self := normPrincipal(p.Name)
+	orgs, err := s.MemberOrgsFor(ctx, p)
 	if err != nil || len(orgs) == 0 {
 		return fmt.Sprintf("owner %q not permitted: use %q or an org you belong to", owner, self)
 	}
@@ -104,11 +104,17 @@ func (s *Service) ownerDenyMessage(ctx context.Context, owner, principal string)
 // over orgs/ plus one exact-key members.json GET per org — human-rate
 // callers only (deny messages, form loads), never a git hot path.
 func (s *Service) MemberOrgs(ctx context.Context, principal string) ([]string, error) {
+	return s.MemberOrgsFor(ctx, auth.Principal{Name: principal})
+}
+
+// MemberOrgsFor is MemberOrgs over a full principal: stored email
+// spellings match the username principal carrying that email (the #370
+// migration alias).
+func (s *Service) MemberOrgsFor(ctx context.Context, p auth.Principal) ([]string, error) {
 	orgs, err := s.ListOrgs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	want := normPrincipal(principal)
 	out := []string{}
 	for _, org := range orgs {
 		m, _, gerr := s.getMembers(ctx, org)
@@ -119,7 +125,7 @@ func (s *Service) MemberOrgs(ctx context.Context, principal string) ([]string, e
 			continue
 		}
 		for _, e := range m.Members {
-			if normPrincipal(e.Principal) == want {
+			if matchPrincipal(e.Principal, p) {
 				out = append(out, org)
 				break
 			}
@@ -142,7 +148,7 @@ func (s *Service) MemberOrgs(ctx context.Context, principal string) ([]string, e
 // twin 400s unknown spellings before this runs).
 //
 // Auth-none behavior (R1 B5): no eager "user:anonymous"/"user:anon"
-// binding — user: subjects are emails and such a binding fails subject
+// binding — user: subjects are usernames and such a binding fails subject
 // validation. When the creator is not a valid principal, materialize a
 // visibility-only doc (no bindings); when even that races, adopt. Callers
 // with no store-backed need pass a nil Store at their own risk (no-op).
@@ -155,7 +161,11 @@ func (s *Service) EnsureRepoAccess(ctx context.Context, owner, repo, creator, vi
 		vis = VisibilityPrivate
 	}
 	doc := &AccessDoc{Version: 1, Visibility: vis, RoleBindings: []AccessBinding{}}
-	if ValidPrincipal(creator) {
+	// The creator binding is a GRANT: only for user namespaces (a
+	// registry-backed username, or a legacy email). Synthetic
+	// principals, orgs, and unclaimed names materialize a
+	// visibility-only doc (see isUserNamespace).
+	if s.isUserNamespace(ctx, creator) {
 		doc.RoleBindings = append(doc.RoleBindings, AccessBinding{
 			Subject: "user:" + normPrincipal(creator),
 			Role:    RoleAdmin,

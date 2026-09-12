@@ -15,7 +15,7 @@ func TestProfiles(t *testing.T) {
 	if p, err := s.GetProfile(ctx, "ghost@example.com"); err != nil || p != nil {
 		t.Errorf("GetProfile ghost: %v %+v", err, p)
 	}
-	if _, err := s.EnsureProfile(ctx, "not-an-email"); !errors.Is(err, ErrInvalid) {
+	if _, err := s.EnsureProfile(ctx, "bad!!principal"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("EnsureProfile bad principal: %v", err)
 	}
 	p, err := s.EnsureProfile(ctx, "Jane@Example.com")

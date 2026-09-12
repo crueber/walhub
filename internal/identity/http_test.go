@@ -59,7 +59,7 @@ func TestUsersEndpoints(t *testing.T) {
 		t.Errorf("GET ghost = %d", w.Code)
 	}
 	// GET invalid principal → 400.
-	if w := doReq(h, "GET", "/api/v1/users/not-an-email", ""); w.Code != http.StatusBadRequest {
+	if w := doReq(h, "GET", "/api/v1/users/bad!!principal", ""); w.Code != http.StatusBadRequest {
 		t.Errorf("GET invalid = %d", w.Code)
 	}
 	// Anon denied when anonymous_read=false.

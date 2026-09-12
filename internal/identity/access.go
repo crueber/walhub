@@ -38,10 +38,12 @@ type accessFile struct {
 	UpdatedAt   string          `json:"updated_at"`
 }
 
-// validSubject reports whether subject is user:<email> or team:<org>/<slug>.
+// validSubject reports whether subject is user:<username|email> or team:<org>/<slug>.
 func validSubject(sub string) error {
 	if rest, ok := strings.CutPrefix(sub, "user:"); ok {
-		if !ValidPrincipal(rest) {
+		// Synthetic principals (anonymous/anon) are never bound —
+		// they are modes, not users.
+		if !ValidPrincipal(rest) || auth.Synthetic(rest) {
 			return fmt.Errorf("%w: invalid user subject %q", ErrInvalid, sub)
 		}
 		return nil
@@ -53,7 +55,7 @@ func validSubject(sub string) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("%w: subject must be user:<email> or team:<org>/<slug>, got %q", ErrInvalid, sub)
+	return fmt.Errorf("%w: subject must be user:<username|email> or team:<org>/<slug>, got %q", ErrInvalid, sub)
 }
 
 // normalizeAccess validates a full access document body: visibility, roles,
@@ -88,17 +90,77 @@ func normalizeAccess(vis string, bindings []AccessBinding) (Visibility, []Access
 
 // SynthesizeDefault returns the §10 legacy default for a repo with no
 // access.json: public, with the owner namespace as admin when the owner is
-// an email principal. Org-owned repos need no binding (org-owner resolution
-// covers them); a non-email, non-org owner namespace yields empty bindings
-// with host flags (P6 step 3) still applying. Reads synthesize without
-// writing; the access-bootstrap task materializes.
+// a legacy email spelling (pre-#370 user namespaces). It is the no-store
+// fallback (Resolve on a store error): without an org probe an org slug
+// is indistinguishable from a username, so username owners bind NOTHING
+// here (fail closed) — the probed SynthesizeOwner is the production
+// path. Reads synthesize without writing; the access-bootstrap task
+// materializes.
 func SynthesizeDefault(owner string) *AccessDoc {
 	doc := &AccessDoc{
 		Version:      0,
 		Visibility:   VisibilityPublic,
 		RoleBindings: []AccessBinding{},
 	}
-	if ValidPrincipal(owner) {
+	if isEmailOwner(owner) {
+		doc.RoleBindings = append(doc.RoleBindings, AccessBinding{Subject: "user:" + normPrincipal(owner), Role: RoleAdmin})
+	}
+	return doc
+}
+
+// isEmailOwner reports whether owner is an email spelling (a pre-#370
+// user namespace — @ can never appear in an org slug or username).
+func isEmailOwner(owner string) bool {
+	owner = normPrincipal(owner)
+	if !strings.Contains(owner, "@") {
+		return false
+	}
+	return ValidPrincipal(owner)
+}
+
+// orgExists probes orgs/<org>/org.json (one exact-key GET): the
+// user-vs-org verdict for owner namespaces. Absent or error reads as
+// non-org (callers use the fail-closed pure fallback on store outage).
+// NOTE: Head's absent contract is (nil, nil) — not a NotFound error —
+// on every backend; the meta-nil check is load-bearing.
+func (s *Service) orgExists(ctx context.Context, org string) bool {
+	if s == nil || s.Store == nil || !ValidOrg(strings.ToLower(strings.TrimSpace(org))) {
+		return false
+	}
+	meta, err := s.Store.Head(ctx, OrgKey(strings.ToLower(strings.TrimSpace(org))))
+	return err == nil && meta != nil
+}
+
+// isUserNamespace reports whether owner is a USER namespace (grant
+// sites consult this before manufacturing a user:<owner> binding): a
+// legacy email spelling, or a username backed by the registry (a
+// first-login binding proves the user exists). Orgs, synthetic
+// principals, and unclaimed usernames are never user namespaces —
+// manufacturing a binding for those would be a latent grant (org
+// delete / later username claim) or authority for a foreign
+// namespace (the #346 pin).
+func (s *Service) isUserNamespace(ctx context.Context, owner string) bool {
+	if !ValidPrincipal(owner) || auth.Synthetic(owner) {
+		return false
+	}
+	if isEmailOwner(owner) {
+		return true
+	}
+	return !s.orgExists(ctx, owner) && s.userExists(ctx, owner)
+}
+
+// SynthesizeOwner is the store-backed SynthesizeDefault: public, with a
+// user:<owner> admin binding when the owner namespace is a USER (see
+// isUserNamespace). Costs up to two exact-key probes (org.json,
+// user.json) on top of the access.json miss, only for repos with no
+// access.json (cold/legacy — never a git hot path).
+func (s *Service) SynthesizeOwner(ctx context.Context, owner string) *AccessDoc {
+	doc := &AccessDoc{
+		Version:      0,
+		Visibility:   VisibilityPublic,
+		RoleBindings: []AccessBinding{},
+	}
+	if s.isUserNamespace(ctx, owner) {
 		doc.RoleBindings = append(doc.RoleBindings, AccessBinding{Subject: "user:" + normPrincipal(owner), Role: RoleAdmin})
 	}
 	return doc
@@ -119,7 +181,7 @@ func (s *Service) GetAccess(ctx context.Context, owner, repo string) (*AccessDoc
 	res, err := s.Store.Get(ctx, key, store.GetOptions{IfNoneMatch: known})
 	if err != nil {
 		if store.IsNotFound(err) {
-			return SynthesizeDefault(owner), "", nil
+			return s.SynthesizeOwner(ctx, owner), "", nil
 		}
 		return nil, "", err
 	}
@@ -238,19 +300,21 @@ func (s *Service) Resolve(ctx context.Context, owner, repo string, p auth.Princi
 	}
 	best := Role("")
 	if !p.Anonymous {
-		name := normPrincipal(p.Name)
 		for _, b := range doc.RoleBindings {
 			var match bool
 			if sub, ok := strings.CutPrefix(b.Subject, "user:"); ok {
-				match = normPrincipal(sub) == name
+				// Username-or-email alias: a stored email spelling
+				// matches the username principal carrying that
+				// email and vice versa (the #370 migration).
+				match = matchPrincipal(sub, p)
 			} else if team, ok := strings.CutPrefix(b.Subject, "team:"); ok {
-				match = s.inTeam(ctx, team, name)
+				match = s.inTeamFor(ctx, team, p)
 			}
 			if match && b.Role.rank() > best.rank() {
 				best = b.Role
 			}
 		}
-		if best == "" && s.isOrgOwner(ctx, owner, name) {
+		if best == "" && s.isOrgOwnerFor(ctx, owner, p) {
 			best = RoleAdmin
 		}
 	}
@@ -270,12 +334,19 @@ func (s *Service) Resolve(ctx context.Context, owner, repo string, p auth.Princi
 
 // isOrgOwner reports whether principal is an owner in orgs/<org>/members.json.
 func (s *Service) isOrgOwner(ctx context.Context, org, principal string) bool {
+	return s.isOrgOwnerFor(ctx, org, auth.Principal{Name: principal})
+}
+
+// isOrgOwnerFor is isOrgOwner over a full principal: a stored email
+// spelling matches the username principal carrying that email (the
+// #370 migration alias).
+func (s *Service) isOrgOwnerFor(ctx context.Context, org string, p auth.Principal) bool {
 	m, _, err := s.getMembers(ctx, org)
 	if err != nil || m == nil {
 		return false
 	}
 	for _, e := range m.Members {
-		if normPrincipal(e.Principal) == normPrincipal(principal) && e.Role == OrgOwner {
+		if matchPrincipal(e.Principal, p) && e.Role == OrgOwner {
 			return true
 		}
 	}
@@ -284,6 +355,13 @@ func (s *Service) isOrgOwner(ctx context.Context, org, principal string) bool {
 
 // inTeam reports whether principal is in orgs/<org>/teams/<slug>.json.
 func (s *Service) inTeam(ctx context.Context, team, principal string) bool {
+	return s.inTeamFor(ctx, team, auth.Principal{Name: principal})
+}
+
+// inTeamFor is inTeam over a full principal (the #370 migration alias:
+// stored email spellings match username principals carrying that
+// email).
+func (s *Service) inTeamFor(ctx context.Context, team string, p auth.Principal) bool {
 	org, slug, ok := strings.Cut(team, "/")
 	if !ok {
 		return false
@@ -293,7 +371,7 @@ func (s *Service) inTeam(ctx context.Context, team, principal string) bool {
 		return false
 	}
 	for _, m := range t.Members {
-		if normPrincipal(m) == normPrincipal(principal) {
+		if matchPrincipal(m, p) {
 			return true
 		}
 	}

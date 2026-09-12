@@ -58,8 +58,25 @@ export function isOrgRow(row) {
 }
 
 /**
+ * isValidOwnerPart(name) → whether name is usable as a repo owner segment.
+ * Mirrors git.validPart for the owner half of ParseRepoId (ASCII
+ * [A-Za-z0-9._-], 1–100 chars, no leading dot, not ".."): Forgejo #370 —
+ * raw emails (or any @-carrying principal) can never be an owner, so the
+ * import/new-repo dropdowns filter them out (the server 400s bad targets
+ * regardless — the dropdown is honesty, never the gate).
+ */
+export function isValidOwnerPart(name) {
+  const s = String(name ?? "");
+  if (s.length === 0 || s.length > 100 || s === ".." || s[0] === ".") return false;
+  return /^[A-Za-z0-9._-]+$/.test(s);
+}
+
+/**
  * allowedOwners(client, principal) → Promise<string[]>.
- * The #346 owner-dropdown options: `[self, ...memberOrgs]` (sorted).
+ * The #346 owner-dropdown options: `[self, ...memberOrgs]` (sorted),
+ * filtered to valid owner segments (#370 — a stale email principal
+ * never reaches the options, so the bad-target import failure cannot
+ * be selected into existence).
  * Resolves via `client.orgs.list()` + one `client.orgs.members.get(org,
  * principal)` probe per org (the SDK maps 404 → null = not a member).
  * Any failure degrades to `[self]` — the SERVER is authoritative (a
@@ -70,11 +87,12 @@ export function isOrgRow(row) {
 export async function allowedOwners(client, principal) {
   const self = String(principal ?? "").trim();
   if (!self) return [];
+  const keep = (list) => list.filter(isValidOwnerPart);
   let orgs;
   try {
     orgs = (await client.orgs.list()) ?? [];
   } catch {
-    return [self];
+    return keep([self]);
   }
   const mine = [];
   for (const entry of orgs) {
@@ -87,5 +105,5 @@ export async function allowedOwners(client, principal) {
       // A failed probe is "not proven a member" — skip, keep the rest.
     }
   }
-  return [self, ...mine.sort()];
+  return keep([self, ...mine.sort()]);
 }
