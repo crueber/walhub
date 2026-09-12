@@ -82,7 +82,7 @@ test("imports.start forwards the dangerous confirm flag (dialog checkbox)", asyn
   assert.equal(sent.dangerous, true);
 });
 
-test("normalizeSource: shorthand, GitHub URL, passthrough, ssh warning", () => {
+test("normalizeSource: shorthand, GitHub URL, generic canonical hint, ssh warning", () => {
   assert.deepEqual(normalizeSource("acme/monorepo"), {
     url: "https://github.com/acme/monorepo.git",
     kind: "github",
@@ -95,8 +95,62 @@ test("normalizeSource: shorthand, GitHub URL, passthrough, ssh warning", () => {
     owner: "acme",
     name: "monorepo",
   });
-  assert.equal(normalizeSource("https://git.example.com/a/b.git").url, "https://git.example.com/a/b.git");
+  assert.deepEqual(normalizeSource("https://git.example.com/a/b.git"), {
+    url: "https://git.example.com/a/b",
+    kind: "generic",
+    owner: "a",
+    name: "b",
+  });
   const ssh = normalizeSource("git@github.com:acme/monorepo.git");
   assert.ok(ssh.error);
   assert.equal(normalizeSource("").error !== undefined, true);
+});
+
+// Forgejo #401: the generic hint mirrors the server's canonicalGenericURL
+// (internal/repoimport/url.go:196-208) — the EXACT variant rows from
+// issue237_test.go:27-35 plus the bare canonical form must all collapse
+// to the single canonical string the server gates and clones.
+test("normalizeSource: generic variants collapse to the server canonical form (#401)", () => {
+  const canon = "https://git.packden.us/crueber/dotfiles";
+  const variants = [
+    "https://git.packden.us/crueber/dotfiles.git",
+    "https://git.packden.us:443/crueber/dotfiles.git",
+    "https://git.packden.us/crueber/dotfiles/",
+    "https://git.packden.us/crueber/dotfiles.git/",
+    "https://GIT.PACKDEN.US/crueber/dotfiles.git",
+    "https://git.packden.us/crueber/dotfiles",
+  ];
+  for (const v of variants) {
+    const got = normalizeSource(v);
+    assert.equal(got.url, canon, `normalizeSource(${v})`);
+    assert.equal(got.kind, "generic", `kind(${v})`);
+    assert.equal(got.owner, "crueber", `owner(${v})`);
+    assert.equal(got.name, "dotfiles", `name(${v})`);
+  }
+  // http twin stays a distinct canonical source (scheme preserved), with
+  // its default :80 folded — same as the server.
+  assert.equal(
+    normalizeSource("http://git.packden.us/crueber/dotfiles.git").url,
+    "http://git.packden.us/crueber/dotfiles"
+  );
+  assert.equal(
+    normalizeSource("http://git.packden.us:80/crueber/dotfiles.git").url,
+    "http://git.packden.us/crueber/dotfiles"
+  );
+  // GitHub-path behavior is unchanged (canonical .git form).
+  assert.equal(
+    normalizeSource("https://github.com/acme/monorepo").url,
+    "https://github.com/acme/monorepo.git"
+  );
+  // Anything the server would refuse stays verbatim for the server to
+  // 400 (non-default port, embedded credentials) — the hint never
+  // pretends a refused string is canonical.
+  assert.equal(
+    normalizeSource("https://git.packden.us:8443/crueber/dotfiles.git").url,
+    "https://git.packden.us:8443/crueber/dotfiles.git"
+  );
+  assert.equal(
+    normalizeSource("https://user:token@git.packden.us/crueber/dotfiles.git").url,
+    "https://user:token@git.packden.us/crueber/dotfiles.git"
+  );
 });

@@ -14,9 +14,78 @@
  * Never throws: `{url}` is always set; `{error}` names a client-side
  * problem; owner/name are suggestions when derivable.
  *
+ * Generic-URL mirror contract (Forgejo #401): the non-GitHub branch
+ * mirrors the server's `canonicalGenericURL`
+ * (`internal/repoimport/url.go:196-208`, header contract url.go:4-13) —
+ * lowercase host, strip default port, trim trailing slashes, remove one
+ * trailing `.git` — so the "canonical:" hint shows the same string the
+ * server will gate and clone. GitHub behavior is unchanged (canonical
+ * `.git` form). Anything the server would refuse (embedded credentials,
+ * a non-default explicit port, an unsupported scheme) passes through
+ * verbatim — the server 400s it, and the hint must not pretend
+ * otherwise.
+ *
  * @param {string} raw pasted URL or `owner/repo` shorthand
  * @returns {{url: string, kind: string, owner?: string, name?: string, error?: string}}
  */
+// Default ports folded into the canonical form — mirrors `isDefaultPort`
+// (`internal/repoimport/url.go`); a non-default explicit port is refused
+// by the server, so the hint passes it through verbatim (see above).
+const GENERIC_DEFAULT_PORTS = { https: "443", http: "80", ssh: "22", git: "9418" };
+
+const ID_PART = /^[A-Za-z0-9._-]{1,100}$/;
+const validIdPart = (s) => ID_PART.test(s) && !s.startsWith(".") && s !== "..";
+
+/**
+ * Mirror of the server's `canonicalGenericURL`
+ * (`internal/repoimport/url.go:196-208`): rebuild `scheme://host/path`
+ * with the host lowercased, any default port stripped, trailing slashes
+ * trimmed, then one trailing `.git` removed. Query and fragment are
+ * preserved verbatim (distinct strings, same host gate — never silently
+ * dropped), exactly like the server. Returns `null` when the input is
+ * not canonicalizable here (unparseable, unsupported scheme, embedded
+ * credentials, or a non-default port the server would refuse) so the
+ * caller falls back to the verbatim hint.
+ *
+ * @param {string} s trimmed source string
+ * @returns {{url: string, owner?: string, name?: string} | null}
+ */
+function canonicalGenericHint(s) {
+  let u;
+  try {
+    u = new URL(s);
+  } catch {
+    return null;
+  }
+  const scheme = u.protocol.replace(/:$/, "").toLowerCase();
+  const defPort = GENERIC_DEFAULT_PORTS[scheme];
+  if (defPort === undefined) return null;
+  if (u.username || u.password) return null;
+  const host = u.hostname.toLowerCase();
+  if (!host) return null;
+  if (u.port && u.port !== defPort) return null;
+  let p = u.pathname.replace(/\/+$/, "");
+  if (p.endsWith(".git")) p = p.slice(0, -".git".length);
+  const hostPart = host.startsWith("[") || !host.includes(":") ? host : `[${host}]`;
+  const url = `${scheme}://${hostPart}${p}${u.search}${u.hash}`;
+  const segs = p.split("/").filter(Boolean);
+  let owner;
+  let name;
+  if (segs.length >= 2) {
+    const [o, n] = segs.slice(-2);
+    if (validIdPart(o) && validIdPart(n)) {
+      owner = o;
+      name = n;
+    }
+  } else if (segs.length === 1 && validIdPart(segs[0])) {
+    name = segs[0];
+  }
+  const out = { url };
+  if (owner !== undefined) out.owner = owner;
+  if (name !== undefined) out.name = name;
+  return out;
+}
+
 export function normalizeSource(raw) {
   const s = (raw ?? "").trim();
   if (!s) return { url: "", kind: "generic", error: "paste a git URL or owner/repo" };
@@ -37,7 +106,15 @@ export function normalizeSource(raw) {
   if (/^[^:@\s]+@[^:\s]+:.+$/.test(s)) {
     return { url: s, kind: "generic", error: "server-side ssh is not supported in v1 — use https with a token" };
   }
-  return { url: s, kind: s.startsWith("file://") ? "file" : "generic" };
+  if (s.startsWith("file://")) return { url: s, kind: "file" };
+  const generic = canonicalGenericHint(s);
+  if (generic) {
+    const out = { url: generic.url, kind: "generic" };
+    if (generic.owner !== undefined) out.owner = generic.owner;
+    if (generic.name !== undefined) out.name = generic.name;
+    return out;
+  }
+  return { url: s, kind: "generic" };
 }
 
 /**

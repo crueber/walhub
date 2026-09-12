@@ -508,6 +508,20 @@ clean.
   on the form itself where the inline error already renders in place.
   Rationale: the email-as-owner failure, the owner-as-email leak, and the
   dead button shared one root (the principal name was the raw email).
+- **SPA canonical-hint parity (Forgejo #401).** `normalizeSource`
+  (`web/sdk/src/import.js`) mirrors the server's `canonicalGenericURL`
+  (`internal/repoimport/url.go:196-208`) for non-GitHub URLs — lowercase
+  host, default-port strip, trailing-slash trim, one trailing `.git`
+  removed — so the import form's "canonical:" hint and its owner/name
+  prefill show the same string the server gates and clones. The server
+  needed no change (#398 does not reproduce; the gate and the clone URL
+  were already correct). Anything the server would refuse (embedded
+  credentials, non-default port, unsupported scheme) passes through
+  verbatim for the server to 400. GitHub-path behavior is unchanged.
+  The two sides are cross-referenced by a comment in import.js naming the
+  server contract (the JS/Go split cannot share code, and the server
+  side is intentionally untouched); the headless test pins the exact
+  `issue237_test.go:27-35` variant rows on the JS side.
 
 ## Explicitly out of scope
 
