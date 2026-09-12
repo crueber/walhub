@@ -593,3 +593,14 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   identity). Server mutation gates are untouched (`CheckOrgOwner` still 403s non-owners);
   the UI's read-only views and Manage affordances key on the org-slug profile's
   `can_edit` (cosmetic-on-top, 12_web_ui.md).
+- **Org rename is display-name-only for v1 (issue #360, survey #349 candidate 1).**
+  The org id (slug) is immutable: keys are `orgs/<org>/` (`org.json`, `members.json`,
+  `teams/*.json`, invitations) with no rename service, and every `repos/<org>/*` owner
+  segment is pinned to it — a rename-with-redirect must move all of those under CAS
+  plus rewrite `team:` subjects, which is expensive and CAS-heavy for an operation
+  that is rare. `display_name` on `org.json` is already editable via
+  `PUT /api/v1/orgs/{org}` (full-document replace, `PutOrg`), so display-name-only
+  needs no new surface: no rename endpoint, no old-name tombstone/redirect record,
+  and no doc or `web/src` UI affordance promises one (verified — the only `rename`
+  hits are filesystem tmp+rename, git rename detection, label delete+create, and
+  repo transfer+rename). Revisit only on a concrete rename need.
