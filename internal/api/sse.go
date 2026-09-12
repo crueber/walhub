@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"git.packden.us/crueber/walhub/internal/cachepolicy"
 )
 
 // SSE is the §9.3 envelope writer (07_api.md §6, stdlib only): headers first,
@@ -38,7 +40,7 @@ func NewSSE(w http.ResponseWriter, r *http.Request) (*SSE, bool) {
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
-	h.Set("Cache-Control", "no-store")
+	h.Set("Cache-Control", cachepolicy.NoStore)
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, ": walgit\n\n")
@@ -248,7 +250,7 @@ func newRefStream(w http.ResponseWriter) (*refStream, bool) {
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
-	h.Set("Cache-Control", "no-store")
+	h.Set("Cache-Control", cachepolicy.NoStore)
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	return &refStream{w: w, fl: fl, rc: http.NewResponseController(w)}, true
