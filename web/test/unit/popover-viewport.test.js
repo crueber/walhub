@@ -79,11 +79,19 @@ test("390px arithmetic: capped panels fit inside the viewport", () => {
 });
 
 test("milestone picker carries the opaque panel treatment like label picker", () => {
+  // Structural default since Forgejo #405: opacity no longer rides a
+  // hand-maintained enumeration (which is how IdentityMenu slipped through)
+  // but applies to every floating .card. The milestone dropdown is
+  // `milestone-drop ... card absolute ...`, so the structural rule covers it.
   const milestone = srcOf("../../src/components/MilestonePicker.jsx");
   assert.ok(milestone.includes("milestone-drop"), "milestone dropdown keeps its hook class");
+  assert.ok(
+    milestone.includes("card") && milestone.includes("absolute"),
+    "milestone dropdown is a floating .card, hence opaque via the structural rule",
+  );
   assert.match(
     liveCss(),
-    /\.clone-body, \.ref-drop, \.tasks-drop, \.notif-drop, \.reaction-drop, \.label-drop, \.milestone-drop, \.close-drop, \.tag-drop \{/,
-    "opaque-popover rule covers .milestone-drop (same shape as .label-drop)",
+    /\.card\.absolute, \.card\.fixed \{\s*\n?\s*@apply bg-white dark:bg-zinc-900;/,
+    "structural opaque-popover rule covers every floating .card (incl. .milestone-drop)",
   );
 });
