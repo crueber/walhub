@@ -10,10 +10,12 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"git.packden.us/crueber/walhub/internal/api"
 	"git.packden.us/crueber/walhub/internal/checks"
 	"git.packden.us/crueber/walhub/internal/config"
+	"git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/issues"
 	"git.packden.us/crueber/walhub/internal/mirror"
@@ -231,8 +233,42 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 		c.ident.OrgEvent = func(ctx context.Context, org, action, actor, title string) {
 			c.notifySvc.EmitOrgEvent(ctx, org, action, actor, title)
 		}
+		// Forgejo #364: repo births land in the same org log (the
+		// "repo-create" leg of the org activity surface). The wal
+		// registry is the single birth choke (API creates, push
+		// auto-creates, imports all commit the manifest there), and it
+		// cannot import notify (law 8 — core never imports upward), so
+		// the observer is injected here (orgBirthObserver, tested
+		// without buildCollab — task-kind registrations panic on a
+		// second buildCollab in one test binary).
+		reg.OnCreate = orgBirthObserver(c.ident, c.notifySvc)
 	}
 	return c
+}
+
+// orgBirthObserver returns the wal registry birth observer: org-owned
+// births emit repo_created, user-owned births stay silent. One GetOrg
+// probe per birth decides (cold path, once per repo lifetime); a
+// missing/unreadable org reads as "not an org" — a birth is never failed
+// by its audit event. The spelling pre-check is free (local — an org
+// name can never carry uppercase or dots, unlike user principals), so
+// non-org spellings skip the probe entirely; warm pushes never birth.
+func orgBirthObserver(ident *identity.Service, notifier *notify.Service) func(ctx context.Context, id string) {
+	return func(ctx context.Context, id string) {
+		rid, err := git.ParseRepoId(id)
+		if err != nil {
+			return
+		}
+		owner := strings.ToLower(rid.Owner)
+		if !identity.ValidOrg(owner) {
+			return
+		}
+		got, err := ident.GetOrg(ctx, owner)
+		if err != nil || got == nil {
+			return
+		}
+		notifier.EmitOrgEvent(ctx, owner, notify.OrgActionRepoCreated, "", "repo "+id+" created")
+	}
 }
 
 // chainCollab fronts the server mux with every collab surface (Seam 1,

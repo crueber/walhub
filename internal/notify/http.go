@@ -47,6 +47,8 @@ var ExposedTemplates = []string{
 	"/api/v1/orgs/{org}/webhooks/{id}",
 	"/api/v1/orgs/{org}/webhooks/{id}/ping",
 	"/api/v1/orgs/{org}/webhooks/{id}/deliveries",
+	"/api/v1/orgs/{org}/activity",
+	"/api/v1/orgs/{org}/activity/stream",
 	"/{owner}/{repo}/api/watch",
 	"/{owner}/{repo}/api/webhooks",
 	"/{owner}/{repo}/api/webhooks/{id}",
@@ -79,9 +81,18 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) bool {
 		h.handleUser(w, r, segs[3:])
 		return true
 	}
-	if len(segs) >= 5 && (segs[0] == "api" || segs[0] == "api-browser") && segs[1] == "v1" && segs[2] == "orgs" && segs[4] == "webhooks" {
-		h.handleOrg(w, r, segs[3], segs[5:])
-		return true
+	// The activity tail re-roots at segs[4] so handleOrg sees
+	// rest=["activity"] / ["activity","stream"] (the webhooks tail
+	// re-roots past "webhooks" as before).
+	if len(segs) >= 5 && (segs[0] == "api" || segs[0] == "api-browser") && segs[1] == "v1" && segs[2] == "orgs" {
+		switch segs[4] {
+		case "webhooks":
+			h.handleOrg(w, r, segs[3], segs[5:])
+			return true
+		case "activity":
+			h.handleOrg(w, r, segs[3], segs[4:])
+			return true
+		}
 	}
 	if len(segs) >= 4 && (segs[2] == "api" || segs[2] == "api-browser") {
 		owner, repo := segs[0], strings.TrimSuffix(segs[1], ".git")
@@ -221,14 +232,18 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, who string) {
 
 // --- org routes ------------------------------------------------------------------
 
-// handleOrg serves the org-hook surface (Forgejo #363):
+// handleOrg serves the org-hook surface (Forgejo #363) plus the org
+// activity surface (Forgejo #364):
 // GET/POST /api/v1/orgs/{org}/webhooks, GET/PATCH/DELETE
 // /api/v1/orgs/{org}/webhooks/{id}, POST …/{id}/ping,
-// GET …/{id}/deliveries — on both lanes (the caller normalizes the
-// lane before dispatch). Every route is owner-gated: anonymous gets a
-// real 401, authenticated-but-insufficient a 403; unknown hook ids are
-// 404 (never 403, which would leak existence). Secrets are never
-// returned (secret_set instead).
+// GET …/{id}/deliveries, GET …/activity, GET …/activity/stream — on both
+// lanes (the caller normalizes the lane before dispatch). Every route is
+// owner-gated: anonymous gets a real 401, authenticated-but-insufficient
+// a 403; unknown hook ids are 404 (never 403, which would leak
+// existence). Secrets are never returned (secret_set instead). The
+// activity routes precede the {id} routes: hook ids are server-minted
+// ULIDs, so "activity" never names a hook, and the literal wins
+// deterministically anyway.
 func (h *Handler) handleOrg(w http.ResponseWriter, r *http.Request, org string, rest []string) {
 	org = strings.ToLower(strings.TrimSpace(org))
 	if !validOrgHookOrg(org) {
@@ -249,6 +264,10 @@ func (h *Handler) handleOrg(w http.ResponseWriter, r *http.Request, org string, 
 		return
 	}
 	switch {
+	case len(rest) == 1 && rest[0] == "activity" && r.Method == "GET":
+		h.orgActivity(w, r, org)
+	case len(rest) == 2 && rest[0] == "activity" && rest[1] == "stream":
+		h.orgActivityStream(w, r, org, p)
 	case len(rest) == 0 && r.Method == "GET":
 		hooks, err := h.Svc.ListOrgHooks(r.Context(), org)
 		if err != nil {

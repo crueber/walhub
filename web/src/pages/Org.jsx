@@ -1,13 +1,16 @@
 // web/src/pages/Org.jsx — org settings (features/01 §9, `/:org/settings`):
-// sub-tabs profile / members / teams / invitations. Member rows carry an
+// sub-tabs profile / members / teams / invitations / activity (Forgejo
+// #364, owner-only like danger) / danger. Member rows carry an
 // inline role <select>; the invite form shows the returned accept link.
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import { mountStreamRetry } from "../lib/sse.js";
 import DateTime from "../components/DateTime.jsx";
 import { isInviteExpired, invitePageLink } from "../lib/invites.js";
+import { mergeOrgActivity } from "../lib/orgs.js";
 import { timeZones } from "../lib/timezone.js";
 import { normalizeOrgProfile, orgSaveBody } from "../lib/org-profile.js";
 import { renderBody } from "../lib/render-md.js";
@@ -616,6 +619,90 @@ function DangerTab(props) {
   );
 }
 
+// ActivityTab is the owner-only org audit log (Forgejo #364): the
+// org-event log paged newest-first with an "older" cursor plus the live
+// org_activity stream prepended by seq (mergeOrgActivity dedups the
+// overlap — the same merge serves both paths). Mounting opens one SSE
+// connection (mountStreamRetry: capped reconnect, unmount cancels);
+// the table stays the backfill truth and frames only prepend.
+function ActivityTab(props) {
+  const org = props.org;
+  const [getEvents, setEvents] = createSignal([]);
+  const [getMore, setMore] = createSignal(false);
+  const [getNote, setNote] = createSignal("");
+  const [getLoading, setLoading] = createSignal(true);
+
+  const load = async (after) => {
+    setNote("");
+    try {
+      const res = await repos.orgs.activity.list(org, after ? { after } : {});
+      setEvents((prev) => mergeOrgActivity(prev, res.events ?? []));
+      setMore(!!res.more);
+    } catch (err) {
+      setNote(err?.status === 403 ? "org owner required" : String(err?.message ?? err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  createEffect(() => {
+    const o = typeof org === "function" ? org() : org;
+    setEvents([]);
+    setMore(false);
+    setLoading(true);
+    load(0);
+    const stream = mountStreamRetry(
+      (signal) => repos.orgs.activity.stream(o, (frame) => {
+        if (frame?.seq == null) return;
+        setEvents((prev) => mergeOrgActivity(prev, [frame]));
+      }, { signal }),
+      () => {},
+    );
+    stream.run();
+    onCleanup(() => stream.cancel());
+  });
+
+  const older = () => {
+    const evs = getEvents();
+    if (!evs.length) return;
+    load(evs[evs.length - 1].seq);
+  };
+
+  return (
+    <section class="card p-4" aria-label="Organization activity">
+      <h3 class="mb-1 font-semibold">Activity</h3>
+      <p class="muted mb-2 text-sm">member, team, repository, and invitation events — newest first, live.</p>
+      <Show when={getLoading()} fallback={
+        <Show when={getEvents().length > 0} fallback={<p class="muted text-sm">no org events yet.</p>}>
+          <div class="overflow-x-auto">
+            <table class="data-table">
+              <thead><tr><th>time</th><th>event</th><th>actor</th><th>detail</th></tr></thead>
+              <tbody>
+                <For each={getEvents()}>
+                  {(e) => (
+                    <tr>
+                      <td><DateTime value={e.at} /></td>
+                      <td><code class="font-mono text-xs">{e.action}</code></td>
+                      <td><code class="font-mono text-xs">{e.actor || "—"}</code></td>
+                      <td class="text-sm">{e.title}</td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </div>
+          <Show when={getMore()}>
+            <button type="button" class="btn mt-3 px-3 py-1" onClick={older}>older</button>
+          </Show>
+        </Show>
+      }>
+        <p class="muted">loading…</p>
+      </Show>
+      <Show when={getNote()}><p class="mt-2 text-sm text-amber-700 dark:text-amber-300">{getNote()}</p></Show>
+    </section>
+  );
+}
+
 export default function Org() {
   const params = useParams();
   const org = () => (params.org ?? "").toLowerCase();
@@ -637,8 +724,10 @@ export default function Org() {
   );
   const canManage = () => !!getProfile()?.can_edit;
   // Forgejo #358: owners get the Danger Zone tab; non-owners see nothing
-  // (server still gates the delete).
-  const tabs = () => (canManage() ? [...TABS, "Danger"] : TABS);
+  // (server still gates the delete). Forgejo #364: owners also get the
+  // Activity audit tab (the API is owner-gated — a read-only variant
+  // would 403 on every load).
+  const tabs = () => (canManage() ? [...TABS, "Activity", "Danger"] : TABS);
 
   return (
     <div class="mx-auto max-w-6xl px-4 py-4">
@@ -670,6 +759,9 @@ export default function Org() {
         <Show when={getTab() === "Members"}><MembersTab org={org()} canManage={canManage} /></Show>
         <Show when={getTab() === "Teams"}><TeamsTab org={org()} canManage={canManage} /></Show>
         <Show when={getTab() === "Invitations"}><InvitesTab org={org()} canManage={canManage} /></Show>
+        <Show when={getTab() === "Activity"}>
+          <Show when={canManage()}><ActivityTab org={org()} /></Show>
+        </Show>
         <Show when={getTab() === "Danger"}>
           <Show when={canManage()}><DangerTab org={org()} /></Show>
         </Show>

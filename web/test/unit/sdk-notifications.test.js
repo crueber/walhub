@@ -31,6 +31,8 @@ const SURFACE = [
   { name: "orgs.webhooks.remove", run: (c) => c.orgs.webhooks.remove("acme", "abc"), method: "DELETE", path: "/api/v1/orgs/acme/webhooks/abc" },
   { name: "orgs.webhooks.ping", run: (c) => c.orgs.webhooks.ping("acme", "abc"), method: "POST", path: "/api/v1/orgs/acme/webhooks/abc/ping" },
   { name: "orgs.webhooks.deliveries", run: (c) => c.orgs.webhooks.deliveries("acme", "abc"), method: "GET", path: "/api/v1/orgs/acme/webhooks/abc/deliveries" },
+  { name: "orgs.activity.list", run: (c) => c.orgs.activity.list("acme"), method: "GET", path: "/api/v1/orgs/acme/activity" },
+  { name: "orgs.activity.list paged", run: (c) => c.orgs.activity.list("ACME", { n: 10, after: 7 }), method: "GET", path: "/api/v1/orgs/acme/activity?n=10&after=7" },
 ];
 
 test("notifications surface: every member hits its exact endpoint and method", async () => {
@@ -69,5 +71,23 @@ test("notifications.stream delivers notification frames and cancels", async () =
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(seen.length, 1);
   assert.equal(seen[0].id, "abc");
+  await cancel();
+});
+
+test("orgs.activity.stream delivers org_activity frames and cancels", async () => {
+  const frames = [
+    ": walgit\n\n",
+    'event: org_activity\ndata: {"seq":3,"org":"acme","action":"member_added"}\n\n',
+    'event: ping\ndata: {}\n\n',
+  ];
+  const { fetch, calls } = fakeFetch(() => sseResponse(frames));
+  const client = new ReposClient({ base: BASE, fetch, token: "t" });
+  const seen = [];
+  const cancel = await client.orgs.activity.stream("ACME", (e) => seen.push(e));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].seq, 3);
+  assert.equal(seen[0].action, "member_added");
+  assert.equal(calls[0].url, `${BASE}/api/v1/orgs/acme/activity/stream`);
   await cancel();
 });

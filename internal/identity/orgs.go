@@ -233,6 +233,11 @@ func (s *Service) CreateOrg(ctx context.Context, org, displayName, description, 
 		_ = s.Store.Delete(ctx, OrgKey(org), orgMeta.Version)
 		return nil, err
 	}
+	// Org-hook fan-out (Forgejo #364): the fresh-create path only — the
+	// resume/confirm paths re-create an already-reserved org, not a
+	// birth. Post-commit, P8 — org.json + the roster are the backfill
+	// truth.
+	s.emitOrgEvent(ctx, org, "org_created", normPrincipal(creator), "org "+org+" created")
 	return o, nil
 }
 
@@ -357,6 +362,9 @@ func (s *Service) PutOrg(ctx context.Context, org string, e OrgEdit) (*Org, erro
 	if err != nil {
 		return nil, err
 	}
+	// Org-hook fan-out (Forgejo #364): post-commit, P8. No actor
+	// parameter on this method — the subject (the org) rides the title.
+	s.emitOrgEvent(ctx, org, "org_updated", "", "org "+org+" profile updated")
 	return result, nil
 }
 
@@ -759,6 +767,8 @@ func (s *Service) PutTeam(ctx context.Context, org, slug, name, description stri
 		return nil, err
 	}
 	s.teams.invalidate(org, slug)
+	// Org-hook fan-out (Forgejo #364): post-commit, P8.
+	s.emitOrgEvent(ctx, org, "team_updated", "", "team "+org+"/"+slug+" updated")
 	return result, nil
 }
 
@@ -910,6 +920,12 @@ func (s *Service) DeleteOrg(ctx context.Context, org string) error {
 	if terr != nil {
 		return terr
 	}
+	// Org-hook fan-out (Forgejo #364): emitted BEFORE the deletes so the
+	// record survives the org — the orgevents/ prefix is not removed
+	// below, and members/teams docs stay the backfill truth. A delete
+	// that fails after this point leaves one audit event for a surviving
+	// org (fail-open toward audit, never toward data).
+	s.emitOrgEvent(ctx, org, "org_deleted", "", "org "+org+" deleted")
 	for _, key := range []string{OrgKey(org), MembersKey(org), OrgAvatarKey(org)} {
 		if derr := s.Store.Delete(ctx, key, ""); derr != nil && !store.IsNotFound(derr) {
 			return derr

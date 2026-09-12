@@ -23,6 +23,15 @@ type Registry struct {
 	cfg       *config.Config
 	cacheRoot string // cache.dir; repo dir = <root>/<owner>/<name>.git
 
+	// OnCreate observes repo births after the manifest Create commits
+	// (nil = no-op; composition wires the org activity emission).
+	// Synchronous post-commit fan-out per P8 — the manifest is the
+	// backfill truth, so a drop in the observer loses one audit event,
+	// never data. The observer must never block on delivery (queue +
+	// wake only) and runs once per birth: singleflight joiners and
+	// 412 losers never reach it. No lock is held when it runs.
+	OnCreate func(ctx context.Context, id string)
+
 	mu       sync.Mutex // guards the maps below only; never held across I/O
 	repos    map[string]*RepoHandle
 	opens    Group // per-repo open single-flight (13 §3)
@@ -258,7 +267,14 @@ func (r *Registry) createSlow(ctx context.Context, id string, format git.ObjectF
 		return existing, nil
 	}
 	r.repos[id] = h
+	onCreate := r.OnCreate
 	r.mu.Unlock()
+	// The manifest Create above committed: this is a birth. The observer
+	// runs outside the lock and fires exactly once (singleflight losers
+	// and 412 races never reach here).
+	if onCreate != nil {
+		onCreate(ctx, id)
+	}
 	return h, nil
 }
 

@@ -1,6 +1,7 @@
 // Package notify implements docs/features/06_notifications.md: the
 // fan-out layer of the collaboration family — notifications,
-// subscriptions, mentions, per-user SSE, repo webhooks, and retention.
+// subscriptions, mentions, per-user SSE, repo webhooks, org webhooks,
+// the org activity surface, and retention.
 //
 // 09 §2 dispatch name is `internal/notify` (the 06 text says
 // `internal/notifications`; the dispatch name wins — see the 06

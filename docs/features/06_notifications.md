@@ -274,18 +274,29 @@ org's membership lifecycle, instead of one per-repo hook per repo. Scope decisio
 - **Member-repo half:** every member repo's `collab-events/` log (§5.3) is delivered through the
   per-(hook, repo) cursor. This is the collab activity family (issues, PRs, reviews, checks,
   releases, pings) — NOT git pushes, which stay on the WAL events-bridge TOML sinks (Seam 4;
-  the bridge is git-only by law), and NOT repo creation, which surfaces as the new repo's
-  first activity event rather than a synthetic record (a record without an author or a
-  timestamp would be a lie; the create twin and the PUT lane share no single seam).
+  the bridge is git-only by law). Repo creation IS covered, but not from this half: births
+  append `repo_created` to the org log itself (Forgejo #364 — the wal registry manifest
+  commit is the single seam §5.4 originally missed; see the Decisions entry), so a new repo
+  surfaces even before its first activity event.
 - **Org-log half:** `orgs/<org>/orgevents/<seq:012x>.json` carries `member_added`,
-  `member_removed`, `member_role_changed`, `team_created`, `team_deleted`,
+  `member_removed`, `member_role_changed`, `team_created`, `team_updated`, `team_deleted`,
   `team_member_added`, `team_member_removed`, `invite_created`, `invite_accepted`,
-  `invite_cancelled` (`Kind: "org"`, `Repo` = the org name). The identity mutations append
-  through a nil-safe `OrgEvent` observer after their CAS commits (P8 — the
+  `invite_cancelled`, plus the lifecycle transitions `org_created` (fresh `CreateOrg` only —
+  idempotent re-creates and 409 losers stay silent), `org_updated` (`PutOrg`), `org_deleted`
+  (emitted before the deletes; the `orgevents/` prefix survives the org), and `repo_created`
+  (Forgejo #364 — every birth through the wal registry: API creates, push auto-creates,
+  imports; user-owned births emit nothing) (`Kind: "org"`, `Repo` = the org name). The identity
+  mutations append through a nil-safe `OrgEvent` observer after their CAS commits (P8 — the
   members/teams/invitation docs stay the backfill truth; composition wires it to
   `EmitOrgEvent`, which reserves, appends, and wakes but never blocks on delivery).
   Actor is best-effort: invite paths carry the inviter/invitee the service method knows;
-  member/team methods report the system actor with the subject in the title. Owner-cancel
+  member/team methods report the system actor with the subject in the title; `org_created`
+  carries the creator. Repo births bypass the identity observer: composition injects a
+  nil-safe `OnCreate` hook on the wal registry (law 8 — core never imports notify) that
+  probes org existence once per birth (one exact-key GET, cold path, once per repo
+  lifetime — the warm push path never births) and emits `repo_created` only for org-owned
+  repos; the registry choke carries no principal, so the actor is system with the repo in
+  the title. Owner-cancel
   of an org invite runs through `DeleteOrgInvite` (read + delete + inbox drop + emit) so
   both cancel paths — invitee decline and owner cancel — emit; repo-invite cancels stay
   silent (not org scope).
@@ -320,6 +331,33 @@ parallel under the pre-acquired semaphore while repos inside one hook stay seque
 one hook's burst is one goroutine wide. A dedicated org wake channel (not the repo one)
 keeps a repo owned by `orgs` from ever misrouting. No new locks, no lock held across I/O.
 
+### 5.5 Org activity surface (Forgejo #364)
+
+The org audit log owners asked for: the §5.4 org log paged as newest-first JSON plus a live
+tail, served owner-gated on both lanes and rendered as the org-settings Activity tab.
+
+- **Read:** `GET /api/v1/orgs/{org}/activity?n=&after=` → `{events: [ActivityEvent], more}`
+  (owner; `n` default 50, max 200 — the tray page convention; `after` is an exclusive seq
+  cursor). Cost is one `orghook_state` GET for the head plus one exact-key GET per probed
+  seq — never a LIST (law 6): pages walk downward from the head (or `after - 1`) collecting
+  up to `n`, skipping gaps (crash-reserved seqs, retention-deleted prefixes). A page walks
+  at most `n + 64` probes, so a deep page into a retention-deleted prefix comes back short
+  with `more: true` instead of burning GETs to the floor — the client keeps paging and
+  converges. Member-repo `collab-events/` are deliberately NOT merged here: fanning N
+  repo logs per read would cost a LIST + N probes on every page, and the per-repo surfaces
+  plus org webhooks already cover that half (the read stays O(page)).
+- **Live:** `GET /api/v1/orgs/{org}/activity/stream` (SSE, the §5.1 envelope verbatim:
+  keepalives, no-store). `EmitOrgEvent` publishes one `org_activity` frame per committed
+  event on the existing repo frame bus — keyed by the bare org name (repo keys always carry
+  a slash, so the namespaces are disjoint), with the bus's recent-ring replay for late
+  attachers. The stream is live-only cache: a restart drops the ring and the client
+  backfills via the read. No new bus, no new task kind.
+- **Retention/caps (§9):** the `notify-retention` pass compacts the org log with the repo
+  floor contract — events below the minimum active org-hook cursor AND older than 7 days
+  are deleted (same 500-delete/600-scan per-pass caps); hookless orgs compact everything
+  past the floor, keeping the head. The member-repo floor already folds org cursors in
+  (§5.4), so the two compactions never delete under an undelivered org pass.
+
 ## 6. API endpoints
 
 Auth levels per P6. User notification routes are top-level (`/api/v1/…` + `/api-browser/v1` twins); webhook
@@ -352,6 +390,8 @@ RouteProvider (Seam 1).
 | `DELETE /api/v1/orgs/{org}/webhooks/{id}` | org owner | → 204 | also deletes both cursor families + deliveries |
 | `POST /api/v1/orgs/{org}/webhooks/{id}/ping` | org owner | → `{delivery: true}` | enqueues org-log `ping` (§5.4) |
 | `GET /api/v1/orgs/{org}/webhooks/{id}/deliveries` | org owner | → `{updated_at, entries: [...]}` | no-store |
+| `GET /api/v1/orgs/{org}/activity?n=&after=` | org owner | → `{events: [ActivityEvent], more}` (n default 50, max 200) | both lanes; 401 anon, 403 non-owner; no-store; newest-first, gaps skipped (§5.5) |
+| `GET /api/v1/orgs/{org}/activity/stream` | org owner | SSE `org_activity` frames (§5.5) | no-store; recent-ring replay, then live |
 
 `Notification` (wire) = the §1.1 object; `Hook` = the §1.4 object minus `secret` plus `secret_set`. Auth
 detail: `{id}` routes resolve only for the owning principal — a foreign `id` is `404` (never `403`,
@@ -367,6 +407,7 @@ UI surfaces (full SPA patterns in 08/12_web_ui; these are the notification-speci
 | Chrome badge | every page | Unread count from `unread_count`, refreshed on stream frames; badge links to the tray |
 | Watch toggle | repo header | `PUT/DELETE /{o}/{r}/api/watch`; optimistic flip, reconcile on error |
 | Webhooks settings | `/{o}/{r}/settings/webhooks` (admin only) | CRUD table + `ping` button + recent deliveries expander; secret shown once at creation |
+| Org activity | `/:org/settings` → Activity (owner only) | newest-first org-event table (member/team/repo/invite) with an "older" cursor; live rows prepend over the `org_activity` stream (one connection per mount, capped reconnect) |
 | Mention autocomplete | comment composer | suggests `@principal` from F1 user search and `@org/team` from F1 teams; purely advisory — the server re-parses |
 
 SDK additions (`web/sdk/src/notifications.js`, bundled by esbuild into `repos.js` per 12 §1.0):
@@ -379,6 +420,7 @@ client.notifications.stream(onNotification)              // fetch-based SSE read
 client.watch.get(o, r) / client.watch.set(o, r, on)      // PUT/DELETE watch
 client.webhooks.list(o, r) / create(o, r, spec) / update(o, r, id, patch) / remove(o, r, id) / ping(o, r, id) / deliveries(o, r, id)
 client.orgs.webhooks.list(org) / create(org, spec) / get(org, id) / update(org, id, patch) / remove(org, id) / ping(org, id) / deliveries(org, id)
+client.orgs.activity.list(org, {n, after}) / stream(org, onEvent)   // GET …/activity + fetch-based SSE reader, cancel fn returned
 ```
 
 Streaming uses the SDK's fetch-based reader (never `EventSource`; 12 §2.5 lane/auth rules apply — the
@@ -441,6 +483,11 @@ only the map and is never held across a store or network call.
   Org hooks (§5.4) hold the same floor through their per-(hook, repo) cursors: an org pass that has not
   delivered an event yet keeps it, and a brand-new org hook (cursor 0) holds member-repo compaction
   only until its first pass advances every member cursor.
+- Org event logs (`orgevents/`, §5.5) are compacted by the same pass with the same floor contract:
+  events below the minimum active org-hook org cursor AND older than 7 days are deleted (same
+  500-delete/600-scan per-pass caps, same stop-at-first-new scan, same never-delete-unseen rule).
+  Hookless orgs compact everything past the floor — the audit read needs no cursor, but the
+  floor and the caps keep the growth bounded; the head event always survives either way.
 
 ### Concurrency
 
@@ -665,6 +712,29 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   contract (exactly 1 LIST). Rationale: law 4 (no LIST on hot paths, P5) and law 6 (round
   trips are the cost model) — the tray is the highest-frequency user-private read.
 
+- **Org activity surface (Forgejo #364, 2026-09-12):** the §5.4 org log becomes a readable
+  audit surface (§5.5): owner-gated `GET …/activity` (newest-first `{events, more}`, seq
+  cursor, n default 50 / max 200 — the tray convention; head GET + exact-key probes, never
+  a LIST; at most n+64 probes per page so deep pages into retention-deleted prefixes come
+  back short with `more` instead of burning GETs) plus `GET …/activity/stream` (the §5.1
+  SSE envelope verbatim; `EmitOrgEvent` publishes one `org_activity` frame per committed
+  event on the existing repo frame bus, keyed by the bare org — disjoint from `owner/repo`
+  keys — with ring replay; no new bus, no new task kind). The log gains the missing
+  org-object transitions — `org_created` (fresh `CreateOrg` only), `org_updated` (`PutOrg`),
+  `org_deleted` (pre-delete; the prefix survives), `team_updated` (`PutTeam`) — and
+  `repo_created`, which reverses the #363 "no single seam" clause: the wal registry manifest
+  commit IS the single birth choke (API creates, push auto-creates, imports), observed
+  through a nil-safe `OnCreate` hook injected by composition (law 8 — core never imports
+  notify) that probes org existence once per birth (cold path; warm pushes never birth —
+  the push-budget test sanctions exactly that GET shape, ≤ 1) and stays silent for
+  user-owned repos. Retention compacts the log on the `notify-retention` pass with the repo
+  floor contract (min active org cursor + 7 days, same per-pass caps; hookless compacts past
+  the floor, head survives). The org-settings Activity tab (owner-only, like Danger —
+  the API 403s non-owners) pages with an "older" cursor and prepends live frames deduped
+  by seq. Rationale: owners get member/team/repo/invite history in one place over the
+  substrate #363 already pays for (same objects feed webhooks, reads, and the stream).
+  No new dependencies; pushes stay out (events-bridge TOML sinks remain git-only).
+
 - **Org-level webhook configs (Forgejo #363, 2026-09-12):** one owner-gated config per org
   (`orgs/<org>/webhooks/`, §1.5) fans out over the org-log (§5.4: member/team/invite transitions
   appended post-commit through the nil-safe identity `OrgEvent` observer) plus every member repo's
@@ -672,8 +742,8 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   HMAC, lane); the minute sweep gates per org (hooks LIST + org-state GET, member
   `collab_state` probes only for orgs with active hooks); retention folds org cursors into the
   compaction floor. Deliberately out of scope: git pushes (events-bridge TOML sinks stay
-  git-only) and repo creation (no synthetic record — the first activity event is the signal).
-  Owner-cancel of org invites runs through `DeleteOrgInvite` so both cancel paths emit.
+  git-only) and repo creation (no synthetic record — the first activity event is the signal;
+  AMENDED by #364 below, which found the single birth seam). Owner-cancel of org invites runs through `DeleteOrgInvite` so both cancel paths emit.
   No new dependencies; API + SDK only (no org-settings hooks tab — deferred). Rationale:
   owners should not register N per-repo hooks to watch membership; the per-scope cursor keeps
   the §5.3 at-least-once contract without a second delivery implementation.
@@ -682,7 +752,7 @@ a read notification while its tray page is open is harmless (404 → UI drops th
 
 - Email delivery (§5.2 seam), push notifications, mobile.
 - Per-thread mute/snooze and per-repo notification settings UI (GitHub's "participating vs all" dial) — v1 emits for participants + watchers; a preference object is the natural extension.
-- An org-settings webhooks tab in the SPA (the API + SDK surface in §6/§7 is the v1 contract; the tab is a pure UI follow-up).
+- An org-settings webhooks tab in the SPA (the API + SDK surface in §6/§7 is the v1 contract; the tab is a pure UI follow-up). The org-settings Activity tab (§5.5/§7) is NOT covered by this exclusion — it landed with #364.
 - Notification digest batching, threading/grouping rules beyond the (user, thread, reason) dedup.
 - Webhook retry-with-backoff schedules (v1 is at-least-once via cursor; a failed delivery retries on the next pass), delivery payload customization/templates, and bot signatures.
 - In-repo "notifications" for git events (pushes) — those stay on the WAL events bridge (09).

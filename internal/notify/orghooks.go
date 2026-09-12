@@ -59,30 +59,42 @@ import (
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
-// Org-level webhook actions: membership, team, and invite transitions.
-// Repo collab actions (activityActions) are additionally valid org-hook
-// filters — they select the member repos' activity events.
+// Org-level webhook actions: membership, team, and invite transitions
+// (Forgejo #363) plus org-object lifecycle transitions (Forgejo #364:
+// org profile/org lifecycle/team edits/repo births, emitted into the
+// same org log so the activity surface and the webhooks share one
+// backfill truth). Repo collab actions (activityActions) are
+// additionally valid org-hook filters — they select the member repos'
+// activity events.
 const (
 	OrgActionMemberAdded       = "member_added"
 	OrgActionMemberRemoved     = "member_removed"
 	OrgActionMemberRoleChanged = "member_role_changed"
 	OrgActionTeamCreated       = "team_created"
+	OrgActionTeamUpdated       = "team_updated"
 	OrgActionTeamDeleted       = "team_deleted"
 	OrgActionTeamMemberAdded   = "team_member_added"
 	OrgActionTeamMemberRemoved = "team_member_removed"
 	OrgActionInviteCreated     = "invite_created"
 	OrgActionInviteAccepted    = "invite_accepted"
 	OrgActionInviteCancelled   = "invite_cancelled"
+	OrgActionOrgCreated        = "org_created"
+	OrgActionOrgUpdated        = "org_updated"
+	OrgActionOrgDeleted        = "org_deleted"
+	OrgActionRepoCreated       = "repo_created"
 )
 
 // orgActions is the org-log action enum (repo actions ride alongside).
 var orgActions = map[string]bool{
 	OrgActionMemberAdded: true, OrgActionMemberRemoved: true,
 	OrgActionMemberRoleChanged: true,
-	OrgActionTeamCreated:       true, OrgActionTeamDeleted: true,
+	OrgActionTeamCreated:       true, OrgActionTeamUpdated: true,
+	OrgActionTeamDeleted:     true,
 	OrgActionTeamMemberAdded: true, OrgActionTeamMemberRemoved: true,
 	OrgActionInviteCreated: true, OrgActionInviteAccepted: true,
 	OrgActionInviteCancelled: true,
+	OrgActionOrgCreated:      true, OrgActionOrgUpdated: true,
+	OrgActionOrgDeleted: true, OrgActionRepoCreated: true,
 }
 
 // OrgHookKind marks ActivityEvents appended to the org log (Repo carries
@@ -509,6 +521,15 @@ func (s *Service) EmitOrgEvent(ctx context.Context, org, action, actor, title st
 			"org", org, "action", action, "seq", seq, "err", err)
 		return
 	}
+	// Live tail (Forgejo #364): the org activity stream reuses the repo
+	// frame bus verbatim (Name "org_activity", keyed by the bare org —
+	// repo keys always carry a slash, so the namespaces are disjoint).
+	// Publish never blocks (drop-oldest); the log stays the backfill
+	// truth, so a shed frame loses nothing durable.
+	s.PublishFrame(RepoFrame{
+		Name: OrgActivityFrameKind, Repo: org, Action: action,
+		Title: title, At: at, Actor: normPrincipal(actor), Seq: seq,
+	})
 	s.wakeOrg(org)
 }
 
