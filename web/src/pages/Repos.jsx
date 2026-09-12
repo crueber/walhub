@@ -336,7 +336,11 @@ export default function Repos() {
                 {[profile().location, profile().timezone].filter(Boolean).join(" · ")}
               </p>
             </Show>
-            <Show when={profile().bio_markdown}>
+            {/* Forgejo #420: the rendered bio hides while the edit
+                form is open — the form's own inline preview is the only
+                rendered surface during editing. onDone restores via
+                setEditing(false); non-editors never set editing. */}
+            <Show when={profile().bio_markdown && !getEditing()}>
               <div
                 class="markdown-body mt-3"
                 innerHTML={renderBody(profile().bio_markdown)}

@@ -96,7 +96,7 @@ test("all Show gates byte-identical to pre-change", () => {
     "<Show when={userSrc() || isSelf()}>",
     "<Show when={profile().display_name}>",
     "<Show when={profile().location || profile().timezone}>",
-    "<Show when={profile().bio_markdown}>",
+    "<Show when={profile().bio_markdown && !getEditing()}>", // #420: rendered bio hides while the edit form is open
     "<Show when={getEditing() && getProfile()?.can_edit}>",
   ]) {
     assert.ok(REPOS.includes(gate), `gate kept byte-identical: ${gate}`);
