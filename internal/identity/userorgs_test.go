@@ -210,3 +210,31 @@ func TestUserOrgsFreshAfterBioEdit(t *testing.T) {
 		t.Errorf("orgs after bio edit = %v, want [acme]", orgs)
 	}
 }
+
+// TestUserOrgsUsernameSpelling pins the #370 alias on the rail: a username
+// spelling matches roster rows held under its verified email (the
+// profile-GET precedent). seedOrg holds email spellings; binding the
+// username via ResolveUsername must make GET /users/<username>/orgs answer
+// the same rail as the email spelling. Unbound usernames answer [] (200,
+// never 404).
+func TestUserOrgsUsernameSpelling(t *testing.T) {
+	s := testService()
+	seedOrg(t, s) // acme: alice owner, bob member (email spellings)
+	ctx := reqCtx()
+	bobName, err := s.ResolveUsername(ctx, "bob@example.com")
+	if err != nil {
+		t.Fatalf("ResolveUsername: %v", err)
+	}
+	h := testHandler(s, admin)
+
+	code, orgs, _ := getUserOrgs(t, h, "/api/v1/users/"+bobName+"/orgs")
+	if code != http.StatusOK || len(orgs) != 1 || orgs[0] != "acme" {
+		t.Errorf("GET %s/orgs = %d %v, want 200 [acme]", bobName, code, orgs)
+	}
+
+	// Unbound username: empty rail, still 200.
+	code, orgs, _ = getUserOrgs(t, h, "/api/v1/users/nobody/orgs")
+	if code != http.StatusOK || len(orgs) != 0 {
+		t.Errorf("GET nobody/orgs = %d %v, want 200 []", code, orgs)
+	}
+}

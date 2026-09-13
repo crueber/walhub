@@ -372,7 +372,19 @@ func (h *Handler) routeUserOrgs(w http.ResponseWriter, r *http.Request, principa
 		writePlain(w, http.StatusUnauthorized, "authentication required")
 		return true
 	}
-	orgs, err := h.Svc.MemberOrgsFor(r.Context(), auth.Principal{Name: principal})
+	// Forgejo #370: a username spelling carries its verified email so
+	// roster rows held under the email match (the profile-GET precedent
+	// above); a legacy email spelling matches itself. Unbound usernames
+	// resolve "" — the rail answers what the bare spelling matches
+	// (never 404). Lookup errors are ignored like the profile GET: the
+	// MemberOrgsFor LIST below is the fail-closed verdict.
+	qp := auth.Principal{Name: principal}
+	if auth.ValidUsername(principal) {
+		if em, emerr := h.Svc.EmailForUsername(r.Context(), principal); emerr == nil && em != "" {
+			qp.Email = em
+		}
+	}
+	orgs, err := h.Svc.MemberOrgsFor(r.Context(), qp)
 	if err != nil {
 		writeErr(w, err)
 		return true
