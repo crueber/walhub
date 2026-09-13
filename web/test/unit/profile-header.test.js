@@ -50,7 +50,10 @@ test("page grid: main content left, sidebar right, stacked below on narrow", () 
 });
 
 test("identity column: username h1, handle, location · timezone, bio — no actions", () => {
-  const grid = block(REPOS, '<div class="profile-header', "</div>\n            <Show when={getEditing()");
+  // Forgejo #442: the edit form moved out of the profile-view gate into
+  // the main column above the per-view Shows — scope the identity pins to
+  // the header div's own close (the bio div inside is self-closing).
+  const grid = block(REPOS, '<div class="profile-header', "</div>");
   assert.ok(grid.includes("<h1"), "username is the page h1 (was the shared h2)");
   assert.ok(grid.includes("{displayName()}"), "h1 renders the display name (owner slug when unset)");
   assert.ok(grid.includes("@{owner()}"), "handle renders under the name");

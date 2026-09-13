@@ -15,7 +15,10 @@
 // when the server says so (`can_edit`: host admin, name-matched principal,
 // or org-owner role — the client never decides); the form (display name /
 // location / timezone picker from Intl.supportedValuesOf, never free text /
-// markdown bio with live preview) saves through the SDK and invalidates the
+// markdown bio with live preview) renders in the main column on all three
+// owner views (Forgejo #442: hoisted out of the profile-view gate — the
+// button toggles the shared-scope setEditing signal on every tab) and saves
+// through the SDK, invalidating the
 // `profile:{owner}` cache entry so the page reflects the update without a
 // full reload (the Access-tab save→invalidate shape).
 //
@@ -429,11 +432,29 @@ function OwnerPage(props) {
           away on every owner route, then the gated #421 avatar asides. */}
       <div class="profile-layout grid grid-cols-1 gap-6 sm:grid-cols-[minmax(0,1fr)_12rem]">
         <div class="profile-main min-w-0">
+          {/* Forgejo #442: the profile edit form renders in the main column
+              on ALL THREE owner views (above the per-view Shows), not inside
+              the profile-view gate — setEditing already lives at this shared
+              OwnerPage scope (toggled by the sidebar button on every view),
+              so flipping it on the repositories/organizations tabs reveals
+              the form instead of a dead button. Gate and onDone byte-identical
+              (editors only; save invalidates `profile:{owner}`); the #420 bio
+              hide-while-editing gate stays profile-view-only below. */}
+          <Show when={getEditing() && getProfile()?.can_edit}>
+            <ProfileForm
+              owner={owner()}
+              doc={getProfile()}
+              onDone={(saved) => {
+                setEditing(false);
+                if (saved) invalidate(`profile:${owner()}`);
+              }}
+            />
+          </Show>
           <Show when={view() === "profile"}>
-      {/* Forgejo #421 (#413/#403/#395 follow-up): the profile view keeps the
-          identity block in the main column — display name/handle/location/
-          bio (with the #420 hide-while-editing gate intact), the edit form
-          opening in place. Below sm: the grid is one column so the sidebar
+      {/* Forgejo #421 (#413/#403/#395 follow-up; #442 hoisted the edit form
+          above the per-view Shows so it opens on every tab): the profile view
+          keeps the identity block in the main column — display name/handle/
+          location/bio (with the #420 hide-while-editing gate intact). Below sm: the grid is one column so the sidebar
           stacks below the main column at 390px with no horizontal overflow
           (#273-#278: min-w-0 columns, no fixed widths beside the avatar);
           DOM order stays main-first so the h1 keeps heading order. The
@@ -467,16 +488,6 @@ function OwnerPage(props) {
                 />
               </Show>
             </div>
-            <Show when={getEditing() && getProfile()?.can_edit}>
-              <ProfileForm
-                owner={owner()}
-                doc={getProfile()}
-                onDone={(saved) => {
-                  setEditing(false);
-                  if (saved) invalidate(`profile:${owner()}`);
-                }}
-              />
-            </Show>
             {/* Forgejo #430: the profile view is rail-free — the #423
                 membership list moved verbatim to the organizations tab
                 (the view="orgs" branch below). Planner's call per the
