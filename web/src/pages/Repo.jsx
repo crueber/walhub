@@ -616,9 +616,13 @@ export default function Repo(props) {
               {(s) => (
                 <>
                   {/* Issue #424: Fork sits in the Clone pill row — same
-                      vocabulary, count from the summary (no extra fetch). */}
+                      vocabulary, count from the summary (no extra fetch).
+                      Forgejo #438: text-only matched pair — the Fork pill and
+                      the CloneMenu summary share the pill class at the same
+                      size/weight with no icon glyph (the Star/Watch toggles
+                      already set the row's text-pill idiom). */}
                   <A class="pill" href={`/${full()}/fork`} title={`Fork ${full()}`}>
-                    ⑂ Fork{(s().forks ?? 0) > 0 ? ` ${s().forks}` : ""}
+                    Fork{(s().forks ?? 0) > 0 ? ` ${s().forks}` : ""}
                   </A>
                   <CloneMenu full={full()} summary={s()} />
                 </>

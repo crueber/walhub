@@ -1,10 +1,14 @@
-// web/src/pages/Fork.jsx — route "/:owner/:name/fork" (issue #424):
+// web/src/pages/Fork.jsx — top-level route "/:owner/:name/fork" (issue #424
+// form, hoisted out of the Repo shell by Forgejo #438):
 // fork-creation form → 202 polls the child summary, then navigates to
 // /{targetOwner}/{name}. Sibling New.jsx is the reference implementation
 // for field layout, the visibility control, and the submit pattern.
 // Solid signals only (D-WEB-6); every call through the SDK (dogfood
 // rule); taken-name conflicts and validation 400s render inline
 // (expected control flow ≠ reportError).
+// Standalone page (site header + centered form, no repo tab strip or
+// sidebar — the PullNew page-level framing, but NOT nested under Repo:
+// owner/name come from route params, so no repo context is needed).
 
 import { createSignal, Show, For, onCleanup } from "solid-js";
 import { A, useParams, useNavigate } from "@solidjs/router";
@@ -65,7 +69,7 @@ export default function Fork() {
       if (alive) setOwners([]);
     });
 
-  // Branches: the starting-branch options (default = parent HEAD).
+  // Branches: the default-branch options (default = parent HEAD).
   repoClient
     .branches({ n: 100 })
     .then((page) => {
@@ -175,7 +179,7 @@ export default function Fork() {
   };
 
   return (
-    <div class="fork-page grid max-w-2xl gap-4">
+    <div class="fork-page mx-auto grid max-w-2xl gap-4">
       <h2 class="text-xl font-semibold">
         Fork <A class="hover:underline" href={`/${full()}`}>{full()}</A>
       </h2>
@@ -184,7 +188,7 @@ export default function Fork() {
         to either side stay independent. Issues and pull requests start fresh.
       </p>
       <form class="card grid gap-3 p-4" onSubmit={submit} aria-label="Fork repository">
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label class="grid gap-1">
             <span class="text-sm font-medium">Owner</span>
             <Show
@@ -204,7 +208,6 @@ export default function Fork() {
                 <For each={getOwners() ?? []}>{(o) => <option value={o}>{o}</option>}</For>
               </select>
             </Show>
-            <span class="muted text-xs">you and your orgs only</span>
           </label>
           <label class="grid gap-1">
             <span class="text-sm font-medium">Name</span>
@@ -222,7 +225,7 @@ export default function Fork() {
         <Show when={fieldError() && getName()}>
           <p class="text-xs text-red-700 dark:text-red-400">{fieldError()}</p>
         </Show>
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label class="grid gap-1">
             <span class="text-sm font-medium">Visibility</span>
             <select
@@ -237,19 +240,18 @@ export default function Fork() {
             </select>
           </label>
           <label class="grid gap-1">
-            <span class="text-sm font-medium">Starting branch</span>
-            <Show when={getBranches() !== null} fallback={<select class="input font-mono" disabled aria-label="Starting branch"><option>…</option></select>}>
+            <span class="text-sm font-medium">Default branch</span>
+            <Show when={getBranches() !== null} fallback={<select class="input font-mono" disabled aria-label="Default branch"><option>…</option></select>}>
               <select
                 class="input font-mono"
                 value={getBranch()}
                 onChange={(e) => setBranch(e.currentTarget.value)}
-                aria-label="Starting branch"
+                aria-label="Default branch"
               >
                 <option value="">parent default</option>
                 <For each={branchOptions()}>{(b) => <option value={b}>{forkBranchShort(b)}</option>}</For>
               </select>
             </Show>
-            <span class="muted text-xs">becomes the fork's default branch</span>
           </label>
         </div>
         <label class="grid gap-1">
