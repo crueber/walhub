@@ -91,6 +91,13 @@ function LabelsFilter(props) {
         disabled={props.pending}
         onClick={() => setOpen(!getOpen())}
       >
+        {/* Forgejo #485: the label icon leads the summary text, inside the
+            existing flex row (decorative aria-hidden via the shared svg —
+            the button's aria-label/title stay the accessible signal). The
+            summary span stays the truncating element (min-w-0 flex-1
+            truncate) so the shrink-0 icon is never clipped and the
+            summary truncation is intact; the caret is untouched. */}
+        <Icon name="label" />
         <span class="min-w-0 flex-1 truncate">{summary()}</span>
         <span aria-hidden="true" class="shrink-0">
           ▾

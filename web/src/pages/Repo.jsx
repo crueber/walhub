@@ -190,6 +190,24 @@ function isMilestonesPath(pathname) {
   return (segs[2] ?? "").toLowerCase() === "milestones";
 }
 
+// Forgejo #485 — repo strip decision, option (a) in the #484 sense: the
+// label icon rides INSIDE the existing Issues tab (shown only while the
+// current path is under /labels), NOT as a new TABS entry. A standalone
+// Labels tab was rejected for two reasons: (1) lib/tabs.js maps
+// labels→issues, so a new Labels id that activeTab never returns would
+// split highlight from navigation (the exact reason #484 rejected its
+// option (b)); (2) it would make Labels the only tab with a permanent
+// icon, which the issue itself flags as inconsistent (fall back to (b)).
+// The conditional keeps TABS, tabs.js, the #319 badge, and the #274
+// scroll behavior byte-identical — and it matches the established strip
+// idiom, since the Issues tab already carries a conditional icon under
+// /milestones (#484). First segment after /:owner/:name decides (the
+// activeTab convention), so blob/tree filenames can never trigger it.
+function isLabelsPath(pathname) {
+  const segs = String(pathname ?? "").split(/[?#]/, 1)[0].split("/").filter(Boolean);
+  return (segs[2] ?? "").toLowerCase() === "labels";
+}
+
 // --- watch toggle (06 §7): optimistic flip, reconcile on error -------------
 
 function WatchToggle(props) {
@@ -788,6 +806,13 @@ export default function Repo(props) {
                       unchanged, so the accessible name is untouched). */}
                   <Show when={t.id === "issues" && isMilestonesPath(location.pathname)}>
                     <Icon name="milestone-open" />{" "}
+                  </Show>
+                  {/* Forgejo #485, option (a): the label icon leads
+                      the Issues label while under /labels (decorative
+                      aria-hidden via the shared svg — the label text is
+                      unchanged, so the accessible name is untouched). */}
+                  <Show when={t.id === "issues" && isLabelsPath(location.pathname)}>
+                    <Icon name="label" />{" "}
                   </Show>
                   {t.label}
                   <Show when={n() > 0}>

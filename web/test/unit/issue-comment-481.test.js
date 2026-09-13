@@ -53,8 +53,8 @@ test("issue-comment exists in the ICONS map, path transcribed verbatim", () => {
   assert.ok(!code.includes("rgb("), "no rgb() literal in the entry");
 });
 
-test("map grows to fourteen entries on the one shared svg, no fetch/innerHTML", () => {
-  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 14, "fourteen icon entries, no more");
+test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", () => {
+  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 15, "fifteen icon entries, no more");
   assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 1, "a single shared <svg> renders every icon");
   const code = codeOf(ICONS);
   assert.ok(!code.includes("fetch("), "no runtime fetches — icons ship inside the bundle");
@@ -63,11 +63,11 @@ test("map grows to fourteen entries on the one shared svg, no fetch/innerHTML", 
 });
 
 test("icons.jsx header comment reflects the new entry and consumer", () => {
-  assert.ok(ICONS.includes("all eleven surfaces"), "consumer count updated to eleven");
+  assert.ok(ICONS.includes("all twelve surfaces"), "consumer count updated to twelve");
   assert.ok(ICONS.includes("pages/Issues.jsx"), "the issue-list consumer is named");
-  assert.ok(ICONS.includes("The 14 icon bodies"), "body count updated to fourteen");
+  assert.ok(ICONS.includes("The 15 icon bodies"), "body count updated to fifteen");
   assert.ok(ICONS.includes("issue-comment") && ICONS.includes("#481"), "the twelfth body is attributed to #481");
-  assert.ok(ICONS.includes("fourteen icon names"), "ICON_NAMES comment updated to fourteen");
+  assert.ok(ICONS.includes("fifteen icon names"), "ICON_NAMES comment updated to fifteen");
 });
 
 test("Issues.jsx renders the shared icon instead of the emoji, count after", () => {

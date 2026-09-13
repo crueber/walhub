@@ -63,8 +63,8 @@ test("milestone-open/milestone-done exist in the ICONS map, paths transcribed ve
   }
 });
 
-test("map grows to fourteen entries on the one shared svg, no fetch/innerHTML", () => {
-  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 14, "fourteen icon entries, no more");
+test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", () => {
+  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 15, "fifteen icon entries, no more");
   assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 1, "a single shared <svg> renders every icon");
   const code = codeOf(ICONS);
   assert.ok(code.includes("currentColor"), "icons inherit text color via currentColor");
@@ -75,12 +75,12 @@ test("map grows to fourteen entries on the one shared svg, no fetch/innerHTML", 
 });
 
 test("icons.jsx header comment reflects the new entries and consumers", () => {
-  assert.ok(ICONS.includes("all eleven surfaces"), "consumer count updated to eleven");
+  assert.ok(ICONS.includes("all twelve surfaces"), "consumer count updated to twelve");
   assert.ok(ICONS.includes("pages/Milestones.jsx"), "the milestones-page consumer is named");
-  assert.ok(ICONS.includes("The 14 icon bodies"), "body count updated to fourteen");
+  assert.ok(ICONS.includes("The 15 icon bodies"), "body count updated to fifteen");
   assert.ok(ICONS.includes("milestone") && ICONS.includes("#484"), "the new bodies are attributed to #484");
   assert.ok(ICONS.includes("AS LABELED"), "the prose/files viewBox discrepancy decision is noted");
-  assert.ok(ICONS.includes("fourteen icon names"), "ICON_NAMES comment updated to fourteen");
+  assert.ok(ICONS.includes("fifteen icon names"), "ICON_NAMES comment updated to fifteen");
 });
 
 test("Milestones.jsx: open chip carries the state-mapped icon, closed rows the done icon", () => {

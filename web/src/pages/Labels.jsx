@@ -7,6 +7,7 @@ import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { LABEL_PACKS, missingFromPack } from "../lib/label-packs.js";
 import LabelColorPicker from "../components/LabelColorPicker.jsx";
+import Icon from "../lib/icons.jsx";
 
 export default function Labels() {
   const ctx = useRepo();
@@ -76,7 +77,10 @@ export default function Labels() {
 
   return (
     <div class="labels-page mx-auto max-w-2xl">
-      <h2 class="mb-3 text-lg font-semibold">Labels</h2>
+      {/* Forgejo #485: the label icon composes into the heading flow
+          (inline row with gap, not its own row — decorative aria-hidden
+          via the shared svg, heading text unchanged). */}
+      <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold"><Icon name="label" />Labels</h2>
       <Show when={getSet()} fallback={<p class="muted">loading…</p>}>
         {(s) => (
           <>
