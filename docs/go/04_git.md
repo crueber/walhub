@@ -760,3 +760,24 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   (exit 0 = servable) joins §12's argv for the mirror sync/heal loop. Rationale: law 2 pins exact
   argv — a new spawn needs its doc line in the same change; `-e` (existence only, no output) is
   the cheapest object proof.
+- **Merge-tip pack argv (issue #424, 2026-09-13, `internal/pulls` PackTip +
+  the `RefPack` publish seam):** server-made merge/update-branch commits
+  must reach the bucket atomically with their ref update (a merged ref
+  without its objects bricks clones AND fork children — found live: the
+  parent itself failed `upload-pack: not our ref`). Three pinned argv, all
+  run in the serving copy (`GIT_DIR=<repo>`, pool + ctx timeout, 8 KiB
+  stderr discipline per §2):
+  `git for-each-ref --format=%(refname)` (the exclusion set),
+  `<tip>\n^<ref>\n… | git pack-objects --revs --stdout` (caret negation
+  rides stdin — pack-objects takes no `--not/--all`, verified live; the
+  pack is thick and complete), and
+  `<pack> | git index-pack --stdin --fsck-objects` in a hand-built
+  scratch git-dir (the ingest shape: `objects/pack/`, `refs/`,
+  `objects/info/`, `HEAD` seed, serving config copy — index-pack
+  requires a recognizable layout). Empty (header-only) output means the
+  tip is fully contained and the publish stays ref-only. The pair feeds
+  the unchanged funnel as a PUSH entry (txn + `PreparedPack`, tier 0)
+  through `RefPublisher.UpdateRefWithPack` — the #263 tag-pack precedent,
+  one entry, never a dangling ref. Rationale: `--not --all` (the
+  rev-list spelling) is a usage error in pack-objects (exit 129); caret
+  lines are the stdin-native exclusion.

@@ -125,6 +125,13 @@ func (m *Maintainer) gcSuperseded(ctx context.Context, rep Repo, snap *Snapshot)
 			live[p.Checksum] = true
 		}
 	}
+	// Fork-network rule (03 §7, issue #424): a pack still referenced by
+	// any live fork-network manifest is never deleted, even when this
+	// repo superseded it. An unreadable parent index aborts the sweep
+	// (fail closed — the index is the only map to the network).
+	if err := m.forkNetworkLive(ctx, rep, live); err != nil {
+		return 0, err
+	}
 	// supersededAt: checksum → created_at of the COMPACT entry that
 	// superseded it (the retained log window is the provenance record).
 	supersededAt := map[string]time.Time{}

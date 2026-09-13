@@ -218,7 +218,10 @@ func TestCover5MergeMore(t *testing.T) {
 		e.seedRefs("o/r", map[string]string{"refs/heads/main": hexSHA(5), "refs/heads/topic": hexSHA(2)})
 		e.refs.Refs["o/r"] = map[string]string{"refs/heads/topic": hexSHA(2)}
 		e.refs.UpdateErr = errors.New("wal down")
-		if _, err := e.svc.runUpdateBranch(ctx(), "o", "r", 1, writer(), &TaskRecord{}); !errors.Is(err, ErrConflict) {
+		// Backend outages surface verbatim (never mislabeled as a CAS
+		// conflict — the pack-carrying publish has non-conflict failure
+		// modes, so only genuine CAS wording maps to "retry").
+		if _, err := e.svc.runUpdateBranch(ctx(), "o", "r", 1, writer(), &TaskRecord{}); err == nil || !strings.Contains(err.Error(), "wal down") {
 			t.Fatalf("publish: %v", err)
 		}
 	})

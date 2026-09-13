@@ -153,6 +153,18 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 			return api.CollabCounts{OpenIssues: oi, OpenPulls: op, Version: ver}, true
 		}
 	}
+	// Issue #424: the summary fork projection behind the Env hook (api
+	// renders ForkSummary without importing the feature, law 8 — the
+	// CollabCounts shape). Two exact-key probes (fork.json parent +
+	// meta/forks.json count/version, never a LIST); both absent →
+	// ok=false → fields omitted with the byte-identical ETag. Store
+	// errors fail open to absent (display metadata must never fail the
+	// summary — the CollabCounts precedent).
+	if apiEnv != nil {
+		apiEnv.ForkInfo = func(ctx context.Context, owner, repo string) (api.ForkSummary, bool) {
+			return forkSummaryOf(ctx, st, owner, repo)
+		}
+	}
 	// Wave C1 pulls (docs/features/03): PR threads over the shared
 	// numbering/thread/index family, pr.json sidecars, the stamped
 	// mergeable.json cache, the pull-merge/pull-mergeable/pull-fork

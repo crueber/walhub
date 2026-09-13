@@ -558,7 +558,14 @@ type Env struct {
 	// this package never imports the feature (law 8).
 	CollabCounts func(ctx context.Context, owner, repo string) (CollabCounts, bool)
 
-	// RepoVisibility is the per-repo visibility projection (Forgejo #345):
+	// ForkInfo is the fork-network projection (issue #424): the fork
+	// parent ("o/r", "" when not a fork) plus the direct-children count,
+	// read index-first (fork.json + meta/forks.json, exact-key GETs;
+	// absent → ok=false). Nil → the summary omits the fields with no
+	// ETag suffix (instances without the collab surface wired). Wired by
+	// composition (cmd/walhub) so this package never imports the feature
+	// (law 8).
+	ForkInfo func(ctx context.Context, owner, repo string) (ForkSummary, bool) // RepoVisibility is the per-repo visibility projection (Forgejo #345):
 	// "public"|"private" for the summary badge and listing rows, ok=false
 	// when unknown. Nil → the projections omit the field (instances
 	// without the identity surface wired). Wired by composition
@@ -658,6 +665,21 @@ type CollabCounts struct {
 	OpenIssues int `json:"open_issues"`
 	OpenPulls  int `json:"open_pulls"`
 	Version    int `json:"-"`
+}
+
+// ForkSummary is the fork-network projection on the repo summary (issue
+// #424): Parent is the fork parent ("o/r", "" when not a fork — omitempty
+// on the wire; old clients ignore both fields per 14 §14.12); Count is
+// the direct-children count derived from the meta/forks.json index (never
+// independently maintained — the index is the source of truth); Version
+// is the index version — the summary ETag suffix that busts the cache
+// when a fork lands with no ref move (the #235/#240/#319 suffix
+// precedent). Counts are user-mutable → the summary's mutable-collab
+// class (Forgejo #382), never a stale-serve window.
+type ForkSummary struct {
+	Parent  string
+	Count   int
+	Version int
 }
 
 // --- request context ---------------------------------------------------------

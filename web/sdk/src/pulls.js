@@ -72,13 +72,25 @@ export function attachPulls(repo) {
     /**
      * Fork: `POST /api/v1/repos/{owner}/{repo}/forks` (lane twin
      * `/api-browser/v1/…`) → `202 {task, repo}`. The fork shares the
-     * parent's packs by construction (§7).
+     * parent's packs by construction (§7). opts: {target_owner?, name?,
+     * visibility?, branch?, description?} (issue #424).
      */
     create: (opts = {}, callOpts) => {
       const lane = client.lane === "browser" ? "api-browser" : "api";
       return client._call(`/${lane}/v1/repos/${repo.owner}/${repo.name}/forks`, {
         method: "POST",
         ...json(opts),
+        ...callOpts,
+      });
+    },
+    /**
+     * Fork list: `GET /api/v1/repos/{owner}/{repo}/forks?n=&after=`
+     * → `{forks: [{repo, forked_at}], more}` (the live index, read).
+     */
+    list: (query = {}, callOpts) => {
+      const lane = client.lane === "browser" ? "api-browser" : "api";
+      return client._call(`/${lane}/v1/repos/${repo.owner}/${repo.name}/forks${qs(query)}`, {
+        method: "GET",
         ...callOpts,
       });
     },

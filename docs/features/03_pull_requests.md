@@ -199,11 +199,15 @@ Steps (git is always the subprocess with exact argv, `docs/go/04_git.md`):
    consulted when the rule carries it — unmet required checks on the head sha reject the merge with the
    named checks in the narration. Bypass lists (e.g. `svc:merge-queue`) apply unchanged. Evaluation is
    pure and local (already-loaded policy per `14_extensibility.md` Seam 3); no network in eval.
-5. **Publish:** REF_UPDATE WAL entry for `refs/heads/<base>`: `old = <base_sha at start of publish>,
-   new = <merge commit>`. The WAL publish CAS (doc 05) arbitrates against concurrent pushes: if the live
-   base sha moved between step 4 and publish (409 on the CAS), re-verify §4 once and either recompute or
-   fail with narration — the merge task NEVER force-publishes (a non-ff base outcome is a task failure,
-   never a rewrite of history).
+5. **Publish:** one WAL entry moving `refs/heads/<base>`: `old = <base_sha at start of publish>,
+   new = <merge commit>`, carrying the server-made objects with it (issue #424 amendment below: the
+   merge commit (+ its tree) exist only in the serving copy, so the task packs `tip --not --all`
+   (the PackTip argv, `docs/go/04_git.md`) and uploads txn+pack atomically — a PUSH entry when a
+   pack rides along, REF_UPDATE when the tip is fully contained). The WAL publish CAS (doc 05)
+   arbitrates against concurrent pushes: if the live base sha moved between step 4 and publish
+   (409 on the CAS), re-verify §4 once and either recompute or fail with narration — the merge
+   task NEVER force-publishes (a non-ff base outcome is a task failure, never a rewrite of
+   history). A merged ref without its objects bricks clones and fork children (found live).
 6. **Commit (P3/P4/P8):** append `merged` event to the thread (state → `closed`, `merged:true`),
    CAS-update `pr.json` (`merged`, `merge_commit_sha`, `merged_by`, `merged_at`), update the shared
    `issues/index.json`, fan out notifications + the PR-closing cross-ref event per 02's contract: the
@@ -290,7 +294,8 @@ starts. Auth levels are P6 roles resolved per P6 §1–4.
 | `POST …/pulls/{num}/merge` | maintain | `{strategy, commit_title?, commit_message?, delete_head?}` → SSE task attach (`pull-merge`) | RouteProvider + task kind `pull-merge` |
 | `POST …/pulls/{num}/update-branch` | write | `{expected_head_sha?}` → task `pull-update-branch` (merge base→head; 409 if dirty or sha mismatch) | task kind |
 | `DELETE …/pulls/{num}/head` | maintain | delete the head branch post-merge (policy-checked like any ref delete) | RouteProvider |
-| `POST /api/v1/repos/{owner}/{repo}/forks` | write (+create rights on target) | `{target_owner?, name?}` → `202` + `TaskRecord` (`pull-fork`) | RouteProvider (top-level) + task kind `pull-fork` |
+| `POST /api/v1/repos/{owner}/{repo}/forks` | write (+create rights on target) | `{target_owner?, name?, visibility?, branch?, description?}` → `202` + `TaskRecord` (`pull-fork`; sync 409 when taken) | RouteProvider (top-level) + task kind `pull-fork` |
+| `GET /api/v1/repos/{owner}/{repo}/forks?n=&after=` | read | → `{forks:[{repo, forked_at}], more}` (the live index, mutable-collab class + version ETag) | RouteProvider (top-level) |
 
 SSE: long work (`pull-merge`, `pull-fork`, `pull-mergeable` cold recompute) is a task with the §9.3
 envelope; live PR events ride the repo collaboration SSE stream (the single stream endpoint named by
@@ -319,7 +324,6 @@ every call goes through the SDK).
 ## Decisions
 
 - **Frontend idiom is the SolidJS SPA (D-WEB-6; docs fix for issue #76).** The §9 page sketches read in the shipped idiom: `.jsx` route components, `useData` two-step on Solid primitives, SSE via the SDK readers. Routes, notes, and wire shapes are unchanged.
-
 - PR threads reuse the issue thread pattern and numbering wholesale (P2/P3) — one conversation
   implementation, `kind` is the only difference. The conversation renders oldest → newest through
   the shared ThreadTimeline (issue #225; 02/08 Decisions own the convention) — no PR-side order
@@ -368,6 +372,70 @@ every call goes through the SDK).
   still reads as both. Resolution lives in `web/src/lib/pullState.js`
   (`resolvePullState`/`pullListState`, `node --test`) — a mirror of 02's
   `issueState.js` (issue #323).
+- **Merge commits upload their objects (issue #424, 2026-09-13).**
+  `commit-tree`/`replay` mint objects only the serving copy holds, and the
+  merge task published the ref alone — the merged ref dangled
+  bucket-missing objects (found live: a merged parent failed
+  `upload-pack: not our ref`, unclonable; the fork of such a parent
+  inherited the break and its first push failed connectivity). The task
+  now packs `tip --not --all` (the `PackTip` argv, `docs/go/04_git.md`)
+  and publishes txn+pack in ONE entry through the new `RefPublisher`
+  seam (`UpdateRefWithPack`; nil pack = the old ref-only path). A pack
+  failure fails the task LOUD — a ref without its objects is never
+  published. The same treatment covers `update-branch` (identical
+  commit-tree shape). Pre-fix merges stay dangling (their objects were
+  never uploaded anywhere recoverable — operators can inject them with
+  `wal add-pack`); the fix is self-sustaining going forward
+  (`--not --all` is exact once every merge uploads).
+- **Fork operation completed (issue #424, 2026-09-13).** The §7
+  manifest-sharing step is implemented (`internal/pulls/forkexec.go` +
+  the `ForkExecutor` seam, wired at composition over the WAL registry):
+  parent manifest copied with the pack set verbatim, fresh refs snapshot
+  (+ branch override) + checkpoint under the child prefix, child
+  `manifest.pb` Created with `min_seq = seq+1` (empty parents fork to a
+  fresh empty manifest). Commit order is share → access → provenance →
+  index → counter: everything before the `fork.json` commit is retryable
+  (share adopts when the occupying manifest is ours, access adopts
+  unconditionally), everything after is committed-or-narrated. A taken
+  name fails fast (sync 409 on `fork.json` or child manifest — the form
+  renders it inline); the CAS steps still arbitrate true races. Inputs
+  `visibility` (threaded to `EnsureRepoAccess`, fail-loud pre-commit),
+  `branch` (shape-checked sync, existence-checked under the task, tags
+  rejected explicitly), and `description` (threaded into the child
+  manifest's inline settings TOML atomically at Create — the same store
+  the summary reads, so no post-create write exists to fail) close the
+  input gaps. Target admission rides the #346 owner gate (self or member
+  org, admin bypass; the #328 scope rule). `fork.json` gains additive
+  `root` (immediate parent + network root at every node); the parent
+  index is listable (`GET …/forks`, index-first pagination). The summary
+  carries `fork_parent` (omitempty) + `forks` (index-derived, always
+  present) with a `~f<version>.<count>.<parent-hash>` ETag suffix under
+  the mutable-collab class (#382); the UI shows "forked from", the Fork
+  pill with count, and a `/forks` list page.
+- **Fork pack sharing is by read fallback, not by key magic (issue #424,
+  same change — law 12 amendment to §7).** As written, §7's "verbatim
+  pack set" cannot serve: pack objects live under repo-prefixed keys
+  (`repos/<o>/<r>/wal/…`), so a child manifest referencing the parent's
+  checksums finds nothing under its own prefix. Copying bytes at fork
+  time would honor the letter ("servable child") but kill the intent
+  (the GC rule would be vacuous — a copy can never be "collected out
+  from under a live fork"). Instead the WAL read path falls back across
+  the fork ancestry (`internal/wal/forkread.go`): own prefix first with
+  byte-identical non-fork semantics, then each ancestor outward (Parent
+  + Root pointers at every level, depth-capped, visited-set) —
+  materialization fetches, side files, the remote-index build, and the
+  remote block reader. The fallback runs on the failure path only (law
+  6: hot paths are unchanged when the object is where it says it is),
+  and a total miss keeps the degraded/fsck contract. The fork-network
+  GC rule (`internal/maintain/forknet.go`, transitive walk, probe cap)
+  is therefore genuinely load-bearing. The sweep is fail-closed: a
+  deleted child (manifest 404) pins nothing and skips its subtree, but
+  any other doubt — transport error, corrupt manifest/index, or probe-cap
+  exhaustion with unvisited children remaining — aborts the sweep with
+  nothing deleted (deleted packs are unrecoverable; a deferred sweep just
+  retries). Known hole, documented not
+  fixed: deleting a fork-network member strands descendants the
+  transitive walk can no longer reach (delete-guard is follow-up work).
 
 ## Explicitly out of scope
 
@@ -480,3 +548,28 @@ every call goes through the SDK).
   never unset; a merge-completion retry keeps fresh editorial/head fields).
   Rationale: the outcome is not re-derivable from live refs, while head sha
   self-heals via drift detection — so the outcome gets the hard guarantee.
+
+## Wave #424 implementation notes (2026-09-13, fork operation completed)
+
+- **Seams, all nil-safe:** `Service.ForkExec` (§7 manifest share),
+  `Service.OwnerGate` (#346 target admission), `Service.AccessBoot`
+  (child `access.json`), `api.Env.ForkInfo` (summary projection). Nil
+  every seam and the wave-C1 behavior returns verbatim (narrated
+  delegation, legacy-open, no projection) — the unit suite pins both
+  sides.
+- **Executor shape contract** (`internal/wal/forkread_test.go`
+  `TestForkChildRefsSync`): the executor-produced manifest (HeadSeq P,
+  MinSeq P+1, empty segments, checkpoint-held state) opens and refs-syncs
+  on the real engine path — neither side can drift the shape silently.
+- **Budgets:** fork creation adds no hot-path trip (share verification
+  HEADs ride the rare fork task, never push/sync/checkpoint; the read
+  fallback fires only on a child-prefix miss). The publish path itself
+  is untouched (the executor writes store objects directly; no WAL entry
+  is published by any fork step), and the `sim` tier (fault-injection +
+  round-trip budgets) passes unchanged with the fallback in place.
+- **UI routes** `/fork` (form: owner ∘ name ∘ visibility ∘ branch ∘
+  description, inline taken-name via pre-flight + sync 409, 202 → child
+  poll → navigate) and `/forks` (index-first list) under the repo shell;
+  the Fork pill (with count) sits in the Clone row; "forked from" links
+  the parent from the identity block. SDK `repo.forks.create/list`
+  (dogfood rule); Apidocs rows updated.

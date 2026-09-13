@@ -99,6 +99,11 @@ type FakeGit struct {
 	LogErr       error
 	Subjects     map[string]string
 
+	// PackTipErr fails PackTip (tests only: merge-object outage);
+	// PackTipEmpty reports no new objects (ref-only publish path).
+	PackTipErr   error
+	PackTipEmpty bool
+
 	// Barrier pauses the first TrialMerge until BarrierHold closes
 	// (tests only: proves single-flight collapse under true concurrency).
 	BarrierOnce sync.Once
@@ -317,6 +322,22 @@ func (f *FakeGit) Subject(_ context.Context, dir, sha string) (string, error) {
 	return "head subject", nil
 }
 
+// PackTipErr fails PackTip (tests only: merge-object outage).
+// PackTipEmpty makes PackTip report no new objects (ref-only publish).
+func (f *FakeGit) PackTip(_ context.Context, dir, tip string) (*TipPack, error) {
+	defer f.enter("packtip")()
+	_, _ = dir, tip
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.PackTipErr != nil {
+		return nil, f.PackTipErr
+	}
+	if f.PackTipEmpty {
+		return nil, nil
+	}
+	return &TipPack{Checksum: strings.Repeat("c", 40), PackSize: 10, IdxSize: 5, ObjectCount: 2}, nil
+}
+
 // TrialOutcome scripts one TrialMerge call.
 type TrialOutcome struct {
 	Tree      string
@@ -354,6 +375,8 @@ type RefCall struct {
 	Old  string
 	New  string
 	Meta map[string]string
+	// Pack carries the UpdateRefWithPack checksum ("" for pack-less ops).
+	Pack string
 }
 
 // FakeRefs is an in-memory RefPublisher: refs per repo, CAS-fail-once knob
@@ -433,13 +456,45 @@ func (f *FakeRefs) DeleteRef(_ context.Context, repo, ref string, meta map[strin
 	return nil
 }
 
-// updatesFor returns update calls for a ref (never-force proof: Old != "").
+// UpdateRefWithPack mirrors UpdateRef (same CAS), recording the pack
+// checksum alongside (the merge-durability proof: the ref never moves
+// without its objects).
+func (f *FakeRefs) UpdateRefWithPack(_ context.Context, repo, ref, old, newSHA string, pack *RefPack, meta map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sum := ""
+	if pack != nil {
+		sum = pack.Checksum
+	}
+	f.Calls = append(f.Calls, RefCall{Op: "update-pack", Repo: repo, Ref: ref, Old: old, New: newSHA, Meta: meta, Pack: sum})
+	if f.UpdateErr != nil {
+		return f.UpdateErr
+	}
+	if f.UpdateConflictOnce {
+		f.UpdateConflictOnce = false
+		return fmt.Errorf("CAS conflict: %s moved", ref)
+	}
+	m := f.Refs[repo]
+	if m == nil {
+		return fmt.Errorf("CAS conflict: %s has no ref %s", repo, ref)
+	}
+	cur, ok := m[ref]
+	if !ok || cur != old {
+		return fmt.Errorf("CAS conflict: expected %s, found %s", old, cur)
+	}
+	m[ref] = newSHA
+	return nil
+}
+
+// updatesFor returns update calls for a ref (never-force proof: Old != "";
+// both plain and pack-carrying updates — a pack publish moves the ref with
+// the identical CAS contract, so gate/blocked assertions cover both).
 func (f *FakeRefs) updatesFor(ref string) []RefCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []RefCall
 	for _, c := range f.Calls {
-		if c.Op == "update" && c.Ref == ref {
+		if (c.Op == "update" || c.Op == "update-pack") && c.Ref == ref {
 			out = append(out, c)
 		}
 	}

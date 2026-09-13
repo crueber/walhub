@@ -150,6 +150,32 @@ func TestSubprocessGitReal(t *testing.T) {
 	if err != nil || len(sha) != 40 {
 		t.Fatalf("commit-tree = %q %v", sha, err)
 	}
+	// PackTip packs the server-made tip minus everything any ref holds
+	// (§5 durability): the merge commit is unreferenced, so the pack
+	// carries it; a contained tip packs nothing (ref-only path).
+	tp, err := g.PackTip(ctx, dir, sha)
+	if err != nil || tp == nil {
+		t.Fatalf("packtip = %+v %v", tp, err)
+	}
+	defer os.RemoveAll(tp.Scratch)
+	if tp.ObjectCount == 0 {
+		t.Fatalf("packtip count = 0")
+	}
+	vout, verr := exec.Command("git", "verify-pack", "-v", tp.IdxPath).Output()
+	if verr != nil || !strings.Contains(string(vout), sha) {
+		t.Fatalf("packtip pack misses %s: %v %s", sha, verr, vout)
+	}
+	contained, err := g.PackTip(ctx, dir, base)
+	if err != nil || contained != nil {
+		t.Fatalf("contained tip must pack nothing: %+v %v", contained, err)
+	}
+	// Bad tip shape + missing dir fail closed (never an empty success).
+	if _, err := g.PackTip(ctx, dir, "notasha"); err == nil {
+		t.Fatal("bad tip must fail")
+	}
+	if _, err := g.PackTip(ctx, "/nonexistent-dir", base); err == nil {
+		t.Fatal("missing dir must fail")
+	}
 	// Replay is the §5 rebase plumbing: stock git 2.53 ships experimental
 	// `git replay`, but a pure-SHA range is a silent no-op (exit 0, empty
 	// stdout), so Replay plants a temp branch and runs with

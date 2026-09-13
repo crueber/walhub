@@ -37,7 +37,13 @@ type summaryBody struct {
 	// "public"|"authenticated"|"private" when the identity surface is wired, "" when it
 	// is not (never null — old clients ignore it, 14 §14.12). Missing
 	// access.json resolves public (the §10 legacy default).
-	Visibility  string `json:"visibility"`
+	Visibility string `json:"visibility"`
+	// ForkParent is the fork parent ("o/r", issue #424): "" when not a
+	// fork (omitempty — old clients ignore it, 14 §14.12). Forks is the
+	// direct-children count from the meta/forks.json index (always
+	// present, 0 = none — the #319 badge discipline).
+	ForkParent  string `json:"fork_parent,omitempty"`
+	Forks       int    `json:"forks"`
 	CloneURL    string `json:"clone_url"`
 	SSHCloneURL string `json:"ssh_clone_url,omitempty"`
 	HTMLURL     string `json:"html_url"`
@@ -122,6 +128,17 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 	// the same trip the dispatch read gate already paid). Unwired →
 	// "" (the badge hides, exactly like an absent mirror view).
 	visibility, _ := h.env.repoVisibility(r.Context(), id.Owner, id.Name)
+	// The fork projection (issue #424): two exact-key probes behind the
+	// Env hook (nil/absent → empty, +0 round trips). The parent renders
+	// the "forked from" line; the count renders next to the Fork button
+	// (same payload, no extra fetch — the mirror badge pattern).
+	var forkSum ForkSummary
+	forkOK := false
+	if h.env.ForkInfo != nil {
+		if fs, ok := h.env.ForkInfo(r.Context(), id.Owner, id.Name); ok {
+			forkSum, forkOK = fs, true
+		}
+	}
 	body := summaryBody{
 		Owner:        id.Owner,
 		Name:         id.Name,
@@ -137,6 +154,8 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		OpenIssues:   counts.OpenIssues,
 		OpenPulls:    counts.OpenPulls,
 		Visibility:   visibility,
+		ForkParent:   forkSum.Parent,
+		Forks:        forkSum.Count,
 		CloneURL:     base + "/" + id.Owner + "/" + id.Name + ".git",
 		SSHCloneURL:  h.env.sshCloneURL(r, id.Owner, id.Name),
 		HTMLURL:      base + "/" + id.Owner + "/" + id.Name,
@@ -179,6 +198,13 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// client 304s and keeps showing the stale badge.
 		etag += "~v" + visibility
 	}
+	if forkOK {
+		// Same trap once more (issue #424): a fork landing moves no
+		// parent ref, so the ETag covers the index version + count +
+		// parent or the fork count and "forked from" line go stale
+		// behind a 304.
+		etag += "~f" + strconv.Itoa(forkSum.Version) + "." + strconv.Itoa(forkSum.Count) + forkParentHash(forkSum.Parent)
+	}
 	// Forgejo #381: the summary serves the mutable-collab class
 	// (private, no-cache), NOT SWR. The ~d/~m/~c/~v suffixes above make
 	// *revalidation* correct, but SWR's stale-serve window still licensed
@@ -210,6 +236,20 @@ func mirrorHash(v MirrorView) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" + v.LastSyncedAt + "\x00" + v.LastResult + "\x00" + v.DegradedReason))
 	return strconv.FormatUint(uint64(h.Sum32()), 16)
+}
+
+// forkParentHash is the short ETag suffix covering the fork parent
+// (issue #424): the parent pointer never changes post-create, but the
+// ETag must still cover the field — same FNV-1a discipline as
+// descriptionHash, so a revalidating client never 304s a changed
+// "forked from" line.
+func forkParentHash(parent string) string {
+	if parent == "" {
+		return ".0"
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(parent))
+	return "." + strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 
 // repoPut creates a repo (?object_format=sha1|sha256, ?placeholder=true);

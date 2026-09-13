@@ -39,6 +39,20 @@ func newPullsService(st store.ObjectStore, ident *identity.Service, issuesSvc *i
 	if issuesSvc != nil {
 		svc.Closer = issuesSvc
 	}
+	// Issue #424: the completed fork operation. The manifest-sharing
+	// executor runs over the WAL registry (already-on-bucket mode —
+	// shared packs verbatim, fresh refs snapshot + checkpoint, Create
+	// child manifest); the target namespace rides the #346 admission
+	// gate and the child access.json rides the placeholder-create
+	// bootstrap (both owned by identity, fail-open nils only in tests
+	// without the surface).
+	if ident != nil {
+		svc.OwnerGate = ident
+		svc.AccessBoot = ident
+	}
+	if reg != nil {
+		svc.ForkExec = &pulls.ShareExecutor{Store: st, Refs: &forkRefsReader{reg: reg}, Host: reg.InstanceID()}
+	}
 	h := &pulls.Handler{Svc: svc}
 	return svc, h
 }
@@ -169,6 +183,47 @@ func (p *pullsPublisher) UpdateRef(ctx context.Context, repo, ref, old, newSHA s
 	return p.publish(ctx, repo, []*proto.RefUpdate{{Name: ref, OldOid: old, NewOid: newSHA}}, agent)
 }
 
+// UpdateRefWithPack moves ref old → new together with a server-made pack
+// (merge/update-branch commits, 03 §5 durability): the pack uploads and
+// the txn commits in ONE WAL entry — the merged ref never dangles
+// bucket-missing objects. The pack files must survive until this returns
+// (the funnel uploads synchronously); the caller removes them after.
+func (p *pullsPublisher) UpdateRefWithPack(ctx context.Context, repo, ref, old, newSHA string, pack *pulls.RefPack, meta map[string]string) error {
+	h, err := p.reg.Open(ctx, repo)
+	if err != nil {
+		return err
+	}
+	var pp *wal.PreparedPack
+	if pack != nil {
+		pp = &wal.PreparedPack{
+			Checksum: pack.Checksum, PackPath: pack.PackPath, IdxPath: pack.IdxPath,
+			PackSize: pack.PackSize, IdxSize: pack.IdxSize, ObjectCount: pack.ObjectCount,
+			Tier: 0,
+		}
+	}
+	agent := map[string]string{}
+	for k, v := range meta {
+		agent[k] = v
+	}
+	res, err := h.Publish(ctx, wal.PublishRequest{
+		Txn:  &proto.RefTransaction{Updates: []*proto.RefUpdate{{Name: ref, OldOid: old, NewOid: newSHA}}},
+		Pack: pp,
+		Meta: agent,
+	})
+	if err != nil {
+		return err
+	}
+	for _, rr := range res.PerRef {
+		if rr.Err != nil {
+			if rr.Err.Kind == wal.RefErrConflict || rr.Err.Kind == wal.RefErrStale {
+				return fmt.Errorf("CAS conflict: %s", rr.Err.Detail)
+			}
+			return fmt.Errorf("publish %s: %s", rr.Name, rr.Err.Detail)
+		}
+	}
+	return nil
+}
+
 // DeleteRef deletes ref (policy-checked like any ref delete).
 func (p *pullsPublisher) DeleteRef(ctx context.Context, repo, ref string, meta map[string]string) error {
 	live, _ := p.liveSHA(ctx, repo, ref)
@@ -224,10 +279,13 @@ func splitOwnerRepo(repo string) (string, string, bool) {
 // compile-time seam assertions: the composition consumes exactly the
 // narrow interfaces pulls defines (core never imports pulls).
 var (
-	_ pulls.GitRunner    = (*pulls.SubprocessGit)(nil)
-	_ pulls.RepoDirs     = (*pullsDirs)(nil)
-	_ pulls.RefPublisher = (*pullsPublisher)(nil)
-	_ pulls.IssueCloser  = (*issues.Service)(nil)
-	_ pulls.RoleService  = (*identity.Service)(nil)
-	_ events.Sink        = (*pullsSinkAdapter)(nil)
+	_ pulls.GitRunner          = (*pulls.SubprocessGit)(nil)
+	_ pulls.RepoDirs           = (*pullsDirs)(nil)
+	_ pulls.RefPublisher       = (*pullsPublisher)(nil)
+	_ pulls.IssueCloser        = (*issues.Service)(nil)
+	_ pulls.RoleService        = (*identity.Service)(nil)
+	_ pulls.OwnerGate          = (*identity.Service)(nil)
+	_ pulls.AccessBootstrapper = (*identity.Service)(nil)
+	_ pulls.ForkRefsReader     = (*forkRefsReader)(nil)
+	_ events.Sink              = (*pullsSinkAdapter)(nil)
 )

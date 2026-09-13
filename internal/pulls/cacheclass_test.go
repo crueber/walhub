@@ -33,6 +33,10 @@ func TestCacheClassContract(t *testing.T) {
 		{"list", "/{owner}/{repo}/api/pulls", "/o/r/api/pulls", ccNoStore, false},
 		{"diff", "/{owner}/{repo}/api/pulls/{num}/diff", "/o/r/api/pulls/1/diff", ccSWR, false},
 		{"commits", "/{owner}/{repo}/api/pulls/{num}/commits", "/o/r/api/pulls/1/commits", ccNoStore, false},
+		// Fork list (issue #424 amendment): the live index grows on fork
+		// creation, so it is mutable-collab (no stale window) with a
+		// version-folded ETag — never a 304 that hides a new fork.
+		{"forks", "/api/v1/repos/{owner}/{repo}/forks", "/api/v1/repos/o/r/forks", ccMutable, true},
 	}
 	covered := map[string]bool{}
 	for _, row := range rows {
@@ -90,7 +94,6 @@ func TestCacheClassContract(t *testing.T) {
 	// Mutation-only templates serve no 200-GET (routePulls/handleTop
 	// method gates): no class applies.
 	noGET := map[string]bool{
-		"/api/v1/repos/{owner}/{repo}/forks":            true, // POST only
 		"/{owner}/{repo}/api/pulls/{num}/comments":      true, // POST only
 		"/{owner}/{repo}/api/pulls/{num}/merge":         true, // POST only
 		"/{owner}/{repo}/api/pulls/{num}/update-branch": true, // POST only

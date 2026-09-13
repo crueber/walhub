@@ -456,22 +456,12 @@ func TestFork(t *testing.T) {
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
-		rec2, _, err := e.svc.StartFork(ctx(), "o", "r", writer(), ForkInput{Name: "r-fork"})
-		if err != nil {
-			t.Fatalf("second start: %v", err)
-		}
-		_ = rec2
-		deadline = time.Now().Add(5 * time.Second)
-		var done *TaskRecord
-		for time.Now().Before(deadline) {
-			if r := e.svc.tasks.get("o/r-fork", TaskKindFork); r != nil && r.State != TaskRunning {
-				done = r
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		if done == nil || done.State != TaskError || !strings.Contains(done.Error, "already exists") {
-			t.Fatalf("task = %+v", done)
+		// Fail fast: a claimed name (fork.json committed by the first
+		// fork) reports 409 synchronously, so the form renders it inline.
+		// The CAS arbitration for true races is still covered at the task
+		// level (runFork share-adopt/conflict tests).
+		if _, _, err := e.svc.StartFork(ctx(), "o", "r", writer(), ForkInput{Name: "r-fork"}); !errors.Is(err, ErrConflict) {
+			t.Fatalf("second start = %v, want conflict", err)
 		}
 	})
 	t.Run("bad names + gates", func(t *testing.T) {

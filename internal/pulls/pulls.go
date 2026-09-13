@@ -178,7 +178,19 @@ type Service struct {
 	// Forks is the 07-provided fork counter (docs/features/07 §6).
 	// Wired in composition (cmd/walhub); nil skips the increment.
 	Forks ForksCounter
-	Now   func() time.Time
+	// ForkExec performs the §7 manifest-sharing step (docs/features/03
+	// §7). Wired in composition (cmd/walhub) over the WAL registry;
+	// nil narrates the delegation (pre-#424 behavior, tests).
+	ForkExec ForkExecutor
+	// OwnerGate admits the fork target namespace (Forgejo #346: self or
+	// member org, host admin bypass). Wired in composition (cmd/walhub);
+	// nil skips the check (legacy-open, tests).
+	OwnerGate OwnerGate
+	// AccessBoot materializes the child's access.json at fork time (the
+	// placeholder-create EnsureRepoAccess). Wired in composition
+	// (cmd/walhub); nil skips the write.
+	AccessBoot AccessBootstrapper
+	Now        func() time.Time
 
 	// ServerID is the committer identity for merge commits
 	// ("walhub <server.identity_email>", default "walhub@localhost").
