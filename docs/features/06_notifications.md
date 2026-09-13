@@ -145,8 +145,18 @@ an optimization; the idempotent Create is the backstop. A **read** notification 
 
 Runs **once, at event write time**, inside the mutating handler (P8) on the new event's text body:
 
-- Token grammar: `@<principal>` and `@<org>/<team>`, matched only at word boundaries
-  (`(?:^|[^a-z0-9-])@(…)`), case-insensitive match, canonical lowercase keys.
+- Token grammar: `@<username>` (bare username, the ValidUsername shape:
+  lowercase `[a-z0-9._-]`, 1..64 chars, no leading dot), `@<email>`
+  (legacy email-shaped principal) and `@<org>/<team>`, matched only at
+  word boundaries (`(?:^|[^A-Za-z0-9_@-])@(…)` — so `a@b.com`, `@@x`,
+  `x@bob` never match), case-insensitive match, canonical lowercase
+  keys. Email is tried first so `@bob@example.com` matches whole, team
+  before bare so `@org/team` matches whole. A bare-username token glued
+  directly to `/` (a team spelling or its malformed tail) or `@` (a
+  broken email), or with a leading dot, is never a mention; trailing
+  sentence punctuation (`.,;:!?"')]}`, the same strip set the renderer
+  uses) is trimmed. Fenced code blocks and inline code spans are
+  skipped — the same stance as the renderer's code exemption.
 - Validation is a bucket probe, per 01's contract: a plain GET of `users/<principal>/profile.json`
   (404/NotFound = no such principal — mention invalid); teams via `orgs/<org>/teams/<slug>.json`,
   whose `members` is an array of principal strings read directly (no API hop). An unresolvable
@@ -760,6 +770,29 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   dependencies; every `renderBody` consumer (issue/PR/review threads) inherits it. Rationale:
   the notification half already lands mentioned/team_mention with tray deep links — the thread
   body must link the handle it notifies about, deterministically and headless-testable.
+
+- **Bare-username mentions notify (Forgejo #444, 2026-09-13):** decision (a) — extend the
+  server grammar to bare `@username` tokens (notification parity is the coherent end-state;
+  narrowing the #440 renderer would remove useful links). Both server parsers grow the same
+  bare-username alternative (`identity.ParseMentions` mentionTok and the issues-local
+  `mentionRe`, which feeds the issues emitter while pulls/review read the identity parser),
+  with the renderer's guards mirrored cell-by-cell: same left boundary (the issues parser
+  additionally gains the `-` the identity parser and renderer already excluded, so `x-@bob`
+  stays plain everywhere), `/`- or `@`-glued tokens never match, leading-dot tokens never
+  match, same trailing-punct strip, same code exemptions. Emitters are unchanged in shape:
+  bare names flow through the existing ValidPrincipal probe + team expansion + silent-drop
+  contract. Verified parity battery (every class below renders AND notifies identically, or
+  is a documented residual): `@bob`, `@BOB` (href lowercased, display as typed), bounds,
+  trailing punct, `@bob` + `@bob@example.com` side by side, `@bob/!`, `@bob@x`, `@.bob`,
+  `@..`, `@@x` / `a@b.com` / `x@bob`, bare `jane@example.com` (mailto only). Deliberate
+  residuals (all pre-existing shapes the bare extension inherits, never introduces):
+  `@org/team` notifies (team_mention) but never renders as a link (team URLs out of scope,
+  #440); the parser reads source text so markdown-link interiors (`[see @bob](x)`) and
+  autolinked URLs notify while the renderer skips them; the glued-email corner `@a@b.com@c`
+  renders plain but still parses as an email mention. Rationale: no render-without-notify
+  and no notify-without-render for any bare-username token class; unresolvable bare names
+  render as (dead, GitHub-style) profile links and drop silently from fan-out, exactly the
+  #440 decision-(a) contract.
 
 ## Explicitly out of scope
 

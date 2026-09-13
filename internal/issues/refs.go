@@ -89,9 +89,14 @@ var (
 	// crossRepoRef matches owner/repo#digits (same skipper; recorded as
 	// cross_referenced only — cross-repo closing keywords are out of scope).
 	crossRepoRef = regexp.MustCompile(`((?:[A-Za-z0-9_.-]+)/(?:[A-Za-z0-9_.-]+))#([0-9]+)`)
-	// mentionRe matches @principal mentions (@-form of the §6 parser;
-	// principals are emails, so require an @-address shape).
-	mentionRe = regexp.MustCompile(`(?:^|[^A-Za-z0-9_@])@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})`)
+	// mentionRe matches @principal mentions (@-form of the §6 parser:
+	// a bare username or a legacy email principal; email first so
+	// @bob@example.com matches whole). The left boundary mirrors
+	// identity.mentionTok (Forgejo #444: render/notify parity); the
+	// bare-username guards (no "/"- or "@"-glued token, no leading
+	// dot, trailing-punct strip) live in code below, mirroring the
+	// renderer's linkifyMentionText.
+	mentionRe = regexp.MustCompile(`(?:^|[^A-Za-z0-9_@-])@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9_.-]+)`)
 	// closingRe is the §5 keyword grammar (case-insensitive):
 	// (close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#N.
 	// The keyword itself needs a left boundary ("encloses #3" must not
@@ -181,11 +186,30 @@ func ParseMentions(body string) []string {
 	clean := stripCode(body)
 	seen := map[string]bool{}
 	var out []string
-	for _, m := range mentionRe.FindAllStringSubmatch(clean, -1) {
+	for _, loc := range mentionRe.FindAllStringSubmatchIndex(clean, -1) {
 		if len(out) >= MaxRefsPerBody {
 			break
 		}
-		p := strings.ToLower(m[1])
+		raw := clean[loc[2]:loc[3]]
+		if !strings.Contains(raw, "@") {
+			// Bare-username candidate (Forgejo #444): a token glued
+			// to "/" (team spelling or its tail) or "@" (broken
+			// email) is never a mention, and a leading dot is
+			// never a username — the renderer's stance. The "."
+			// rides inside the token class, so strip trailing
+			// sentence punctuation like the identity parser.
+			if loc[3] < len(clean) && (clean[loc[3]] == '/' || clean[loc[3]] == '@') {
+				continue
+			}
+			if strings.HasPrefix(raw, ".") {
+				continue
+			}
+			raw = strings.TrimRight(raw, ".,;:!?\"')]}")
+			if raw == "" {
+				continue
+			}
+		}
+		p := strings.ToLower(raw)
 		if !seen[p] {
 			seen[p] = true
 			out = append(out, p)
