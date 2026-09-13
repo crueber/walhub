@@ -284,8 +284,29 @@ func (r *Registry) createSlow(ctx context.Context, id string, format git.ObjectF
 // open). The manifest delete is the linearization point; it happens FIRST so
 // new opens fail immediately, then the repo's objects page away and the local
 // dir goes (05 §5.1.2 delete).
+//
+// Fork-deletion safety (Forgejo #451): when live fork children still
+// reference the repo's pack set, the prefix is CONVERTED to a meta
+// repository instead of wiped — the tombstone records the conversion
+// first (informational history marker), then the manifest delete
+// linearizes, then every servable key is swept while wal/, the fork
+// index, fork.json, and the tombstone are preserved. The parent id
+// never changes, so children's fork.json pointers stay correct with no
+// child write. A corrupt fork index or a probe error aborts BEFORE the
+// linearization point (fail closed — the prefix is untouched); an
+// absent/empty index, or an index whose children are all gone, deletes
+// exactly as before (full prefix wipe, tombstone included — that wipe
+// is the tombstone GC that absorbs away the marker with the prefix).
 func (r *Registry) Delete(ctx context.Context, id string) (*RepoHandle, error) {
 	if _, err := git.ParseRepoId(id); err != nil {
+		return nil, err
+	}
+
+	// The fork check runs BEFORE the handle teardown and the
+	// linearization point: a fail-closed abort must leave the repo
+	// fully servable (no lock is held — pure store probes, 13 §2.4).
+	live, err := r.liveForkChildren(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -300,6 +321,30 @@ func (r *Registry) Delete(ctx context.Context, id string) (*RepoHandle, error) {
 	rid, _ := git.ParseRepoId(id)
 	prefix := rid.StorePrefix()
 
+	if len(live) > 0 {
+		// Meta conversion: the tombstone records the conversion first
+		// (informational — re-create absorbs the prefix rather than
+		// probing it, so create-vs-delete races converge without
+		// closing; see metarepo.go), then the manifest delete
+		// linearizes, then the selective sweep preserves the pack set.
+		if err := r.writeTombstone(ctx, id, live); err != nil {
+			return h, err
+		}
+		// Linearization point: delete the manifest first.
+		if err := r.st.Delete(ctx, prefix+store.Manifest, ""); err != nil && !store.IsNotFound(err) {
+			return h, &WalError{Kind: WalErrStore, Detail: prefix + store.Manifest, Wrapped: err}
+		}
+		// Selective sweep: servable state goes, the preserve set stays.
+		if err := r.sweepPrefix(ctx, prefix); err != nil {
+			return h, err
+		}
+		if err := os.RemoveAll(rid.LocalDir(r.cacheRoot)); err != nil {
+			return h, &WalError{Kind: WalErrIo, Detail: rid.LocalDir(r.cacheRoot), Wrapped: err}
+		}
+		return h, nil
+	}
+
+	// No live children: the historical full wipe, byte-identical.
 	// Linearization point: delete the manifest first.
 	if err := r.st.Delete(ctx, prefix+store.Manifest, ""); err != nil && !store.IsNotFound(err) {
 		return h, &WalError{Kind: WalErrStore, Detail: prefix + store.Manifest, Wrapped: err}
