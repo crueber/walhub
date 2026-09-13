@@ -65,12 +65,18 @@ test("gate and save path byte-identical: editors only, onDone closes + invalidat
   assert.ok(REPOS.includes("repos.owners.updateProfile("), "profile save still rides the SDK");
 });
 
-test("editing signal already at the shared scope: no plumbing", () => {
-  const signal = REPOS.indexOf("const [getEditing, setEditing] = createSignal(false);");
-  const main = REPOS.indexOf('<div class="profile-main');
-  assert.ok(signal !== -1 && main !== -1 && signal < main, "setEditing lives at the OwnerPage scope above the layout");
-  assert.ok(REPOS.includes("onClick={() => setEditing(true)}"), "the sidebar button still opens the form");
-  const buttons = [...REPOS.matchAll(/onClick=\{\(\) => setEditing\(true\)\}/g)];
+test("editing state at module scope: survives tab navigation, no plumbing", () => {
+  // Forgejo #455: the three owner routes are sibling Route components, so
+  // tab navigation remounts OwnerPage — a local signal would reset. The
+  // truth lives at module scope (per-owner slug), derived through local
+  // accessors; still no plumbing between components.
+  const signal = REPOS.indexOf("const [getEditingOwner, setEditingOwner] = createSignal(null);");
+  const page = REPOS.indexOf("function OwnerPage(props) {");
+  assert.ok(signal !== -1 && page !== -1 && signal < page, "the edit-open signal lives at module scope above OwnerPage");
+  assert.ok(REPOS.includes("const getEditing = () => getEditingOwner() === owner();"), "per-owner read accessor in OwnerPage");
+  assert.ok(REPOS.includes("const setEditing = (open) => setEditingOwner(open ? owner() : null);"), "per-owner write accessor in OwnerPage");
+  assert.ok(REPOS.includes("onClick={openEditor}"), "the sidebar button opens the form through openEditor (#455)");
+  const buttons = [...REPOS.matchAll(/onClick=\{openEditor\}/g)];
   assert.equal(buttons.length, 1, "exactly one edit opener (the shared sidebar button)");
 });
 
