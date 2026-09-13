@@ -76,23 +76,26 @@ For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml
 - [x] [tags](internal/tags)
 - [ ] [releases](internal/releases)
 - [ ] packages
-- [ ] [actions](https://git.packden.us/crueber/walhub/issues/288)
 - [x] [fork](internal/social)
 - [x] [webhooks](internal/notify)
-- [ ] [cli](cmd/walhub)
 - [x] [oidc](internal/server)
+
+## v1.1
+
+- [ ] [cli](cmd/walhub)
+- [ ] [actions](https://git.packden.us/crueber/walhub/issues/288)
 
 ## Backlog
 
-- file edit
-- projects
-- wiki
-- insights
-- moderation
-- sponsorships
-- forum
-- ownership transfer
-- pr/merge protection rules
+- [ ] file edit
+- [ ] pr/merge protection rules
+- [ ] projects
+- [ ] wiki
+- [ ] insights
+- [ ] moderation
+- [ ] sponsorships
+- [ ] forum
+- [ ] ownership transfer
 
 ## Development
 
