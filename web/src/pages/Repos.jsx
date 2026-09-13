@@ -2,7 +2,7 @@
 // "/:owner/repositories" (the repositories tab, Forgejo #422), and
 // "/:owner/organizations" (the organizations tab, Forgejo #430): the owner's
 // profile + repositories + org memberships. The profile page is the dedicated identity view
-// (header, tab strip, repository-count teaser linking to the tab); the
+// (tab strip first per Forgejo #435, then header, then the repository-count teaser linking to the tab); the
 // repositories tab keeps the Repositories toolbar + New repository CTA +
 // grid + import link exactly as they rendered before the split (a move, not
 // a redesign).
@@ -297,14 +297,16 @@ function ProfileForm(props) {
 }
 
 /** The owner page in all three views (Forgejo #422; third view Forgejo
- *  #430): `view="profile"` is the `/:owner` identity page (header, tab
- *  strip, repository-count teaser — no grid, no membership list); `view=
- *  "repos"` is the `/:owner/repositories` tab (tab strip plus the toolbar +
- *  grid + import link moved verbatim); `view="orgs"` is the
- *  `/:owner/organizations` tab (tab strip plus the #423 membership list
- *  moved verbatim). One component so the header, sidebar (#421), gates,
- *  fetches, and cache keys stay shared by construction — the listing and
- *  membership markups are never forked. */
+ *  #430; strip-first layout Forgejo #435): the tab strip leads the page
+ *  (first in flow, below the navbar) on every view. `view="profile"` is
+ *  the `/:owner` identity page (identity header + sidebar grid, tab strip,
+ *  repository-count teaser — no grid, no membership list); `view="repos"`
+ *  is the `/:owner/repositories` tab (tab strip plus the toolbar + grid +
+ *  import link moved verbatim, no identity block, no sidebar); `view=
+ *  "orgs"` is the `/:owner/organizations` tab (tab strip plus the #423
+ *  membership list moved verbatim, likewise rail-free). One component so
+ *  the header, sidebar (#421), gates, fetches, and cache keys stay shared
+ *  by construction — the listing and membership markups are never forked. */
 function OwnerPage(props) {
   const view = () => props.view ?? "profile";
   const params = useParams();
@@ -411,9 +413,22 @@ function OwnerPage(props) {
   };
   return (
     <div class="repos-page">
+      {/* Forgejo #435: the owner tab strip is the first element of the
+          page flow — directly below the navbar, above the identity
+          content — on all three owner routes (Profile ⇄ Repositories ⇄
+          Organizations; Profile | Repositories for org profiles). The
+          tab-bar anatomy, active underline, and aria-current are
+          untouched; no view or variant gate hides the strip. */}
+      <OwnerTabs owner={owner()} count={repoCount()} isOrg={isOrg()} />
+      {/* Forgejo #435: the two-column identity layout below (identity
+          header + sidebar) renders ONLY on the profile view — the
+          repositories and organizations tabs render the strip above
+          plus their own view content below, with no profile identity
+          header and no profile sidebar. */}
+      <Show when={view() === "profile"}>
       {/* Forgejo #421 (#413/#403/#395 follow-up): the profile page is a
           GitHub-style two-column grid — main content left (identity,
-          edit form, Repositories toolbar, listing), a narrow sidebar
+          edit form, teaser), a narrow sidebar
           right carrying the avatar with the owner actions grouped
           vertically beneath it (Edit profile / Regenerate avatar /
           Remove avatar, each full-width, an <hr> in the header divider
@@ -509,15 +524,6 @@ function OwnerPage(props) {
         />
       </Show>
       </Show>
-      {/* Forgejo #422; third tab Forgejo #430: the owner tab strip —
-          Profile ⇄ Repositories ⇄ Organizations, on all three routes
-          (outside every isOrg Show) so each view links to the others. The
-          anatomy reuses the repo page's tab bar (Repo.jsx); the count badge
-          rides repoCount() above; isOrg hides the Organizations tab on org
-          profiles (#370). */}
-      <div class="mt-6">
-        <OwnerTabs owner={owner()} count={repoCount()} isOrg={isOrg()} />
-      </div>
       {/* Forgejo #422: the profile view keeps the identity above and swaps
           the listing for a repository-count teaser linking to the tab — no
           grid, no toolbar, no import footer here. Forgejo #430: no
@@ -540,95 +546,6 @@ function OwnerPage(props) {
             );
           }}
         </Show>
-      </Show>
-      {/* Forgejo #422: the repositories tab — the listing moved verbatim
-          (toolbar + grid + import footer); only this Show gate is new. */}
-      <Show when={view() === "repos"}>
-      {/* Forgejo #413: the Repositories toolbar — the section heading
-          with the New-repository CTA right-anchored (the same flex
-          items-center justify-between title-row shape the org header
-          used; flex-wrap gap-2 per #273-#278 so 390px wraps without
-          overflow). The single surface owning repo creation for both
-          user and org variants; gate and href unchanged. */}
-      <div class="repos-toolbar mb-2 mt-6 flex flex-wrap items-center justify-between gap-2">
-        <h3 class="text-base font-semibold">Repositories</h3>
-        <Show when={canWrite()}>
-          <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
-            New repository
-          </A>
-        </Show>
-      </div>
-      <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
-        {(doc) => {
-          const rows = orderByActivity(doc().repos);
-          return (
-            <>
-              <p class="muted mb-4">
-                {rows.length} repositor{rows.length === 1 ? "y" : "ies"}
-              </p>
-              <Show
-                when={rows.length > 0}
-                fallback={<p class="muted">nothing under {owner()} yet</p>}
-              >
-                <ul class="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
-                  <For each={rows}>
-                    {(row) => <RepoRow owner={owner()} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} mirror={row.mirror} mirrorUpstream={row.mirror_upstream} visibility={row.visibility} />}
-                  </For>
-                </ul>
-              </Show>
-            </>
-          );
-        }}
-      </Show>
-      <p class="muted mt-4 text-xs">
-        <A class="hover:underline" href={`/import?owner=${encodeURIComponent(owner())}`}>import into {owner()}</A>
-        {/* Forgejo #348: the settings link is an org-owner affordance
-            (same canManage gate as the sidebar button below); user
-            namespaces never had an org settings page to link to. */}
-        <Show when={canManage()}>
-          {' · '}
-          <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
-        </Show>
-      </p>
-      </Show>
-      {/* Forgejo #430: the organizations tab — the #423 membership list
-          moved verbatim from the profile rail (links + explicit empty
-          state + loading fallback, same memberorgs:{owner} key, same
-          normalizeMemberOrgs shape). This route shows ONLY the list under
-          the tab strip: no identity block repeat, no repos grid. The
-          branch is ungated by owner variant like the repos tab above —
-          the tab itself is user-profiles-only (isOrg hides it), so org
-          owners never navigate here from the UI. */}
-      <Show when={view() === "orgs"}>
-        <section class="orgs-rail mt-6" aria-label="Organizations">
-          <h3 class="text-base font-semibold">Organizations</h3>
-          <Show when={getMemberOrgs()} fallback={<p class="muted mt-1 text-sm">loading…</p>}>
-            {(orgs) => {
-              const names = () => normalizeMemberOrgs(orgs());
-              return (
-                <Show
-                  when={names().length > 0}
-                  fallback={<p class="muted mt-1 text-sm">No organizations</p>}
-                >
-                  <ul class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                    <For each={names()}>
-                      {(org) => (
-                        <li>
-                          <A
-                            class="text-emerald-700 hover:underline dark:text-emerald-400"
-                            href={`/${org}`}
-                          >
-                            {org}
-                          </A>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </Show>
-              );
-            }}
-          </Show>
-        </section>
       </Show>
         </div>
         {/* Forgejo #421: the owner-action sidebar — avatar on top, then
@@ -716,6 +633,96 @@ function OwnerPage(props) {
           </aside>
         </Show>
       </div>
+      </Show>
+      {/* Forgejo #422 (#435: the identity layout above is profile-view-only,
+          so this branch renders the strip plus the listing moved verbatim —
+          toolbar + grid + import footer, no identity block, no sidebar). */}
+      <Show when={view() === "repos"}>
+      {/* Forgejo #413: the Repositories toolbar — the section heading
+          with the New-repository CTA right-anchored (the same flex
+          items-center justify-between title-row shape the org header
+          used; flex-wrap gap-2 per #273-#278 so 390px wraps without
+          overflow). The single surface owning repo creation for both
+          user and org variants; gate and href unchanged. */}
+      <div class="repos-toolbar mb-2 mt-6 flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-base font-semibold">Repositories</h3>
+        <Show when={canWrite()}>
+          <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
+            New repository
+          </A>
+        </Show>
+      </div>
+      <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
+        {(doc) => {
+          const rows = orderByActivity(doc().repos);
+          return (
+            <>
+              <p class="muted mb-4">
+                {rows.length} repositor{rows.length === 1 ? "y" : "ies"}
+              </p>
+              <Show
+                when={rows.length > 0}
+                fallback={<p class="muted">nothing under {owner()} yet</p>}
+              >
+                <ul class="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+                  <For each={rows}>
+                    {(row) => <RepoRow owner={owner()} name={row.name} at={row.last_commit_time} empty={row.size_bytes === 0} mirror={row.mirror} mirrorUpstream={row.mirror_upstream} visibility={row.visibility} />}
+                  </For>
+                </ul>
+              </Show>
+            </>
+          );
+        }}
+      </Show>
+      <p class="muted mt-4 text-xs">
+        <A class="hover:underline" href={`/import?owner=${encodeURIComponent(owner())}`}>import into {owner()}</A>
+        {/* Forgejo #348: the settings link is an org-owner affordance
+            (same canManage gate as the sidebar button below); user
+            namespaces never had an org settings page to link to. */}
+        <Show when={canManage()}>
+          {' · '}
+          <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
+        </Show>
+      </p>
+      </Show>
+      {/* Forgejo #430 (#435: like the repositories branch above, this renders
+          the strip plus the #423 membership list moved verbatim — links +
+          explicit empty state + loading fallback, same memberorgs:{owner}
+          key, same normalizeMemberOrgs shape; no identity block, no repos
+          grid, no sidebar). The branch is ungated by owner variant like the
+          repos tab above — the tab itself is user-profiles-only (isOrg hides
+          it), so org owners never navigate here from the UI. */}
+      <Show when={view() === "orgs"}>
+        <section class="orgs-rail mt-6" aria-label="Organizations">
+          <h3 class="text-base font-semibold">Organizations</h3>
+          <Show when={getMemberOrgs()} fallback={<p class="muted mt-1 text-sm">loading…</p>}>
+            {(orgs) => {
+              const names = () => normalizeMemberOrgs(orgs());
+              return (
+                <Show
+                  when={names().length > 0}
+                  fallback={<p class="muted mt-1 text-sm">No organizations</p>}
+                >
+                  <ul class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                    <For each={names()}>
+                      {(org) => (
+                        <li>
+                          <A
+                            class="text-emerald-700 hover:underline dark:text-emerald-400"
+                            href={`/${org}`}
+                          >
+                            {org}
+                          </A>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+              );
+            }}
+          </Show>
+        </section>
+      </Show>
     </div>
   );
 }

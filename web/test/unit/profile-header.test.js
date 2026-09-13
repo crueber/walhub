@@ -81,7 +81,9 @@ test("avatar renders for the doc; actions stay self-gated with #376 invalidation
 
 test("action group carries Edit profile only from the header; New repository stays in the toolbar (#413)", () => {
   const userMain = block(REPOS, '<div class="profile-main', "profile-sidebar");
-  const above = userMain.slice(0, userMain.indexOf("repos-toolbar"));
+  // Forgejo #435: the toolbar left the main column for the repositories
+  // view — scope "above" to the identity region (through the teaser gate).
+  const above = userMain.slice(0, userMain.indexOf('<Show when={view() === "profile"}>'));
   assert.ok(!above.includes("New repository"), "no CTA above the toolbar");
   assert.ok(!above.includes("justify-end"), "no orphan right-aligned row above the toolbar");
   const side = block(REPOS, 'aria-label="Profile actions"', "</aside>");
@@ -103,7 +105,7 @@ test("light + dark share the treatment", () => {
 
 test("org header keeps its fields (#359) with the same sidebar treatment (#421)", () => {
   const main = block(REPOS, '<div class="profile-main', "profile-sidebar");
-  const org = main.slice(main.indexOf("<Show when={isOrg()}>"), main.indexOf("repos-toolbar"));
+  const org = main.slice(main.indexOf("<Show when={isOrg()}>"), main.indexOf('<Show when={view() === "profile"}>'));
   assert.ok(!org.includes("<OrgAvatar"), "org avatar left the title row for the sidebar");
   assert.ok(org.includes("org-badge"), "org badge kept");
   assert.ok(org.includes("{orgName()}"), "org display name kept");
@@ -120,7 +122,7 @@ test("org header keeps its fields (#359) with the same sidebar treatment (#421)"
 
 test("no #345 collision surface: header carries no repo badges", () => {
   const userMain = block(REPOS, '<div class="profile-main', "profile-sidebar");
-  const head = userMain.slice(0, userMain.indexOf("repos-toolbar"));
+  const head = userMain.slice(0, userMain.indexOf('<Show when={view() === "profile"}>'));
   assert.ok(!head.includes("visibility-badge"), "visibility badges live on RepoRow only, never in the header");
   assert.ok(!head.includes("mirror-badge"), "mirror badges live on RepoRow only, never in the header");
 });

@@ -57,20 +57,21 @@ test("two-column page grid: main left, sidebar right, stacked below on narrow", 
   assert.ok(REPOS.indexOf("<h1") < sideIdx, "identity precedes the sidebar in DOM order");
 });
 
-test("identity block stays atop the main column above the toolbar", () => {
+test("identity block stays atop the main column; the toolbar lives in the repositories view", () => {
   const main = block(REPOS, '<div class="profile-main', "profile-sidebar");
   assert.ok(main.includes("<h1"), "display name is the page h1");
   assert.ok(main.includes("{displayName()}"), "h1 renders the display name (owner slug when unset)");
   assert.ok(main.includes("@{owner()}"), "handle renders under the name");
   assert.ok(main.includes('join(" · ")'), "location · timezone separator kept");
   assert.ok(main.includes("renderBody(profile().bio_markdown)"), "bio renders through the shared markdown pipeline");
-  assert.ok(main.indexOf("profile-header") < main.indexOf("repos-toolbar"), "identity renders above the Repositories toolbar");
-  // Forgejo #422: the profile-view teaser counts via orderByActivity too —
-  // scope the toolbar-above-listing pin to the repositories view.
+  // Forgejo #435: the toolbar left the main column for the repositories
+  // view — the profile main column carries identity + teaser only.
+  assert.ok(!main.includes("repos-toolbar"), "no Repositories toolbar inside the profile main column (#435)");
+  assert.ok(!main.includes("<RepoRow"), "no repo grid inside the profile main column (#435)");
+  assert.ok(main.includes("<Show when={getEditing() && getProfile()?.can_edit}>"), "the edit form opens in place in the main column");
   const reposView = REPOS.slice(REPOS.indexOf('<Show when={view() === "repos"}>'));
   assert.ok(reposView.indexOf("repos-toolbar") !== -1, "toolbar lives in the repositories view");
   assert.ok(reposView.indexOf("repos-toolbar") < reposView.indexOf("orderByActivity"), "toolbar renders above the listing");
-  assert.ok(main.includes("<Show when={getEditing() && getProfile()?.can_edit}>"), "the edit form opens in place in the main column");
 });
 
 test("avatar + all owner actions live grouped in the sidebar, none in the identity block", () => {
@@ -150,7 +151,10 @@ test("390px safety: no fixed widths beside the avatar, no orphan rows", () => {
 
 test("org variant: org header in main, avatar + Manage grouped in the sidebar", () => {
   const main = block(REPOS, '<div class="profile-main', "profile-sidebar");
-  const org = main.slice(main.indexOf("<Show when={isOrg()}>"), main.indexOf("repos-toolbar"));
+  // Forgejo #435: the toolbar left the main column for the repositories
+  // view — scope the org slice to the identity region (through the teaser
+  // gate), not the toolbar.
+  const org = main.slice(main.indexOf("<Show when={isOrg()}>"), main.indexOf('<Show when={view() === "profile"}>'));
   assert.ok(org.includes("<h2"), "org keeps the h2 title row (only the user header promotes to h1)");
   assert.ok(org.includes("{orgName()}"), "org display name kept");
   assert.ok(org.includes("org-badge"), "org badge kept");
