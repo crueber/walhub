@@ -116,7 +116,11 @@ export default function Milestones() {
 
   return (
     <div class="milestones-page mx-auto max-w-2xl">
-      <h2 class="mb-3 text-lg font-semibold">Milestones</h2>
+      {/* Forgejo #495: the milestone-open icon composes into the heading flow
+          (inline row with gap, not its own row — decorative aria-hidden
+          via the shared svg, heading text unchanged; mirrors the Labels
+          page heading icon from #485). */}
+      <h2 class="mb-3 flex items-center gap-2 text-lg font-semibold"><Icon name="milestone-open" />Milestones</h2>
       <Show when={getSet()} fallback={<p class="muted">loading…</p>}>
         {(s) => {
           const split = () => splitMilestones(s().milestones);

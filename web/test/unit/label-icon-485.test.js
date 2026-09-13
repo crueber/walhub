@@ -1,11 +1,12 @@
 // web/test/unit/label-icon-485.test.js — Forgejo #485: the user-provided
 // label/tag SVG joins the shared #465 icons.jsx mechanism and renders on
 // three label surfaces: the issues-list labels filter trigger, the labels
-// page heading, and the repo tab strip (option (a) in the #484 sense — the
-// icon rides INSIDE the existing Issues tab while under /labels, not as a
-// new TABS entry; TABS, tabs.js, the #319 badge, and the #274 scroll stay
-// byte-identical). No DOM: the icon map + JSX pinned as source text,
-// mirroring icons-465.test.js / milestone-icons-484.test.js.
+// page heading, and (Forgejo #495) the issues-toolbar Labels link — the
+// repo tab-strip option-(a) placement was wrong (it painted the icon on
+// the Issues tab instead of the Labels link) and is gone; TABS, tabs.js,
+// the #319 badge, and the #274 scroll stay byte-identical. No DOM: the
+// icon map + JSX pinned as source text, mirroring icons-465.test.js /
+// milestone-icons-484.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -85,7 +86,10 @@ test("Issues.jsx: labels filter trigger shows the icon left of the summary, a11y
   assert.ok(trigger.includes("title={summary()}"), "the button title stays");
   // The dropdown rows are untouched: color dot + check per label, clear row.
   assert.ok(ISSUES.includes('role="menuitemcheckbox"'), "the dropdown rows keep their menuitemcheckbox roles");
-  assert.ok(!ISSUES.slice(ISSUES.indexOf('role="menu"')).includes('<Icon name="label"'), "the icon is on the closed trigger only, not the dropdown rows");
+  // The icon is on the closed trigger only, not the dropdown rows (and the
+  // #495 toolbar link below is out of scope here — pinned by its own test).
+  const menuToToolbar = ISSUES.slice(ISSUES.indexOf('role="menu"'), ISSUES.indexOf("ml-auto flex gap-2"));
+  assert.ok(!menuToToolbar.includes('<Icon name="label"'), "no label icon in the dropdown rows");
 });
 
 test("Labels.jsx: page heading carries the icon composed into the heading flow", () => {
@@ -98,18 +102,31 @@ test("Labels.jsx: page heading carries the icon composed into the heading flow",
   assert.ok(heading.includes("flex items-center gap-2"), "the icon composes into the heading flow (inline row with gap, not its own row)");
 });
 
-test("Repo.jsx: option (a) — icon inside the existing Issues tab under /labels, TABS untouched", () => {
+test("Repo.jsx: no strip icon (Forgejo #495) — TABS untouched, helpers gone", () => {
   const tabs = block(REPO, "const TABS = [", "];");
-  assert.ok(!tabs.includes("labels"), "no new Labels tab entry (option (a), not a new tab)");
+  assert.ok(!tabs.includes("labels"), "no Labels tab entry");
+  assert.ok(!tabs.includes("milestones"), "no Milestones tab entry");
   assert.ok(!tabs.includes("<Icon"), "TABS stays data (no JSX in the array)");
   assert.equal((tabs.match(/\{ id: "/g) ?? []).length, 7, "still seven tab entries — no tab added");
-  assert.ok(REPO.includes("function isLabelsPath(pathname)"), "the labels-path helper exists");
-  assert.ok(REPO.includes('t.id === "issues" && isLabelsPath(location.pathname)'), "the icon shows only on the Issues tab, only under /labels");
-  assert.ok(REPO.includes('<Icon name="label"'), "the strip affordance is the label icon through the shared mechanism");
+  assert.ok(!REPO.includes("isLabelsPath"), "the labels-path helper is gone");
+  assert.ok(!REPO.includes("isMilestonesPath"), "the milestones-path helper is gone");
+  assert.ok(!REPO.includes('<Icon name="label"'), "no label icon anywhere on the tab strip");
+  assert.ok(!REPO.includes('<Icon name="milestone'), "no milestone icon anywhere on the tab strip");
   assert.ok(TABS.includes('labels: "issues"'), "labels route still highlights the Issues tab");
+  assert.ok(TABS.includes('milestones: "issues"'), "milestones route still highlights the Issues tab");
 });
 
-test("#319 badge + #274 scroll intact around the strip icon", () => {
+test("Issues.jsx toolbar: Labels link leads with the label icon, Milestones link with milestone-open", () => {
+  assert.ok(ISSUES.includes('<Icon name="label" /> Labels'), "the Labels button leads with the label icon");
+  assert.ok(ISSUES.includes('<Icon name="milestone-open" /> Milestones'), "the Milestones button leads with the open icon");
+  const toolbar = block(ISSUES, '<div class="ml-auto flex gap-2">', "</div>");
+  assert.ok(toolbar.includes("/labels"), "Labels link href intact");
+  assert.ok(toolbar.includes("/milestones"), "Milestones link href intact");
+  assert.ok(toolbar.indexOf('<Icon name="label"') < toolbar.indexOf("/> Labels"), "label icon sits before the Labels text");
+  assert.ok(toolbar.indexOf('<Icon name="milestone-open"') < toolbar.indexOf("/> Milestones"), "milestone icon sits before the Milestones text");
+});
+
+test("#319 badge + #274 scroll intact, no strip icon", () => {
   assert.ok(REPO.includes("const n = () => tabBadge(getSummary(), t.id)"), "badge numerator still derives per tab from the shared summary");
   assert.ok(REPO.includes('<span class="tab-badge"'), "the badge element is untouched");
   assert.ok(REPO.includes("tabsNav?.querySelector?.('[aria-current=\"page\"]')"), "scroll still targets the active tab");
