@@ -645,15 +645,17 @@ type ForkExecutor interface {
 	ShareManifest(ctx context.Context, parent, child string, opt ForkOptions) error
 	// RollbackShare deletes exactly the child-prefix keys ShareManifest
 	// Creates (child manifest.pb, its checkpoint objects, and the
-	// bootstrapped access.json when no fork.json disputes the prefix),
-	// and only when the child manifest is provably still this attempt's
+	// bootstrapped access.json only when accessCreated reports this
+	// attempt created it — an adopted pre-existing access.json survives,
+	// issue #458 — and only when no fork.json disputes the prefix), and
+	// only when the child manifest is provably still this attempt's
 	// (Repo == child, Revision == 1). Anything else — absent, foreign, or
 	// WAL-advanced manifest — refuses without deleting (absent is a nil
 	// no-op). Failure-path only: never packs, never parent keys, never
 	// the parent index (a rolled-back child was never listed, so the
 	// fork-network GC walk in internal/maintain cannot reference it; a
 	// racing pass reads manifest-404 and skips the subtree).
-	RollbackShare(ctx context.Context, parent, child string) error
+	RollbackShare(ctx context.Context, parent, child string, accessCreated bool) error
 }
 
 // OwnerGate is the creation owner-admission gate the fork target inherits
@@ -667,10 +669,12 @@ type OwnerGate interface {
 
 // AccessBootstrapper materializes the child's access.json at fork time
 // (the placeholder-create path's EnsureRepoAccess, Forgejo #210 §3):
-// Create-wins, adopt-don't-overwrite. Satisfied by *identity.Service;
-// nil skips the write (read-time synthesis only).
+// Create-wins, adopt-don't-overwrite. The bool reports whether THIS call
+// Created the doc (the fork rollback deletes it only then — adopted
+// pre-existing docs survive, Forgejo #458). Satisfied by
+// *identity.Service; nil skips the write (read-time synthesis only).
 type AccessBootstrapper interface {
-	EnsureRepoAccess(ctx context.Context, owner, repo, creator, visibility string) error
+	EnsureRepoAccessCreated(ctx context.Context, owner, repo, creator, visibility string) (bool, error)
 }
 
 // StartFork starts (or joins) the pull-fork task.
@@ -798,7 +802,9 @@ func manifestKey(owner, repo string) string {
 // best-effort social counter, the child access bootstrap, and the event.
 //
 // Order matters for convergence: everything before the fork.json commit is
-// retryable (share adopts when the manifest is ours, access adopts
+// retryable (share adopts when the manifest is ours — by provenance, or,
+// with no fork.json on the prefix, by orphan evidence when the occupying
+// manifest provably tracks this parent, issue #458 — access adopts
 // unconditionally); everything after is committed-or-narrated (the social
 // counter shortfall precedent). A share-412 with our own provenance
 // adopts and continues; a share-412 owned by anyone else (a real repo, or
@@ -877,13 +883,18 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 	// later pre-commit step fails (issue #432). It runs only when THIS
 	// attempt Created the keys (never on an adopted share, never when no
 	// executor ran); the executor re-verifies ownership before deleting.
-	// Best-effort by design: a rollback shortfall is narrated, never
-	// masking the root error the task returns.
+	// accessCreated (issue #458) records whether THIS attempt Created the
+	// child's access.json — only then may the rollback delete it. It is
+	// declared before the closure so the rollback carries the value the
+	// bootstrap below records. Best-effort by design: a rollback
+	// shortfall is narrated, never masking the root error the task
+	// returns.
+	accessCreated := false
 	rollback := func(step string) {
 		if !sharedThisAttempt || s.ForkExec == nil {
 			return
 		}
-		if rerr := s.ForkExec.RollbackShare(ctx, parentID, child); rerr != nil {
+		if rerr := s.ForkExec.RollbackShare(ctx, parentID, child, accessCreated); rerr != nil {
 			rec.notice("fork rollback after %s failure shortfall: %s", step, rerr.Error())
 			return
 		}
@@ -893,7 +904,9 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 	// retry). A store failure here fails the task LOUD — an unreadable or
 	// mis-visible child is never a silent shortfall.
 	if s.AccessBoot != nil {
-		if aerr := s.AccessBoot.EnsureRepoAccess(ctx, in.TargetOwner, in.Name, who, in.Visibility); aerr != nil {
+		var aerr error
+		accessCreated, aerr = s.AccessBoot.EnsureRepoAccessCreated(ctx, in.TargetOwner, in.Name, who, in.Visibility)
+		if aerr != nil {
 			rollback("access bootstrap")
 			return aerr
 		}

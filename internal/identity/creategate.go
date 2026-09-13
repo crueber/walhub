@@ -154,8 +154,21 @@ func (s *Service) MemberOrgsFor(ctx context.Context, p auth.Principal) ([]string
 // visibility-only doc (no bindings); when even that races, adopt. Callers
 // with no store-backed need pass a nil Store at their own risk (no-op).
 func (s *Service) EnsureRepoAccess(ctx context.Context, owner, repo, creator, visibility string) error {
+	_, err := s.EnsureRepoAccessCreated(ctx, owner, repo, creator, visibility)
+	return err
+}
+
+// EnsureRepoAccessCreated is EnsureRepoAccess reporting whether THIS call
+// Created the doc (true) or adopted a pre-existing one (false — the 412
+// adopt or the missing-prefix backend quirk). The fork rollback (Forgejo
+// #458) deletes the child's access.json only when the forking attempt
+// created it: an adopted pre-existing access.json is someone else's object
+// and must survive. The Create result itself is the ownership proof — no
+// probe-before race (a rival Create between a probe and this call would
+// 412 here and correctly report adopted).
+func (s *Service) EnsureRepoAccessCreated(ctx context.Context, owner, repo, creator, visibility string) (bool, error) {
 	if s == nil || s.Store == nil {
-		return nil
+		return false, nil
 	}
 	vis := VisibilityPublic
 	switch visibility {
@@ -179,10 +192,13 @@ func (s *Service) EnsureRepoAccess(ctx context.Context, owner, repo, creator, vi
 	_, err := s.Store.Put(ctx, AccessKey(owner, repo), store.PutBody{Bytes: raw},
 		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"})
 	if err != nil && store.IsPreconditionFailed(err) {
-		return nil // 412 = someone raced us — adopt, don't overwrite
+		return false, nil // 412 = someone raced us — adopt, don't overwrite
 	}
 	if err != nil && store.IsNotFound(err) {
-		return nil // backend quirk on missing prefix — synthesis covers reads
+		return false, nil // backend quirk on missing prefix — synthesis covers reads
 	}
-	return err
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

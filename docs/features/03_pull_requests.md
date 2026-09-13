@@ -494,11 +494,42 @@ every call goes through the SDK).
   rollback shortfall is narrated, never masking the root error. Companion
   change: a provenance-412 whose occupying `fork.json` is already ours
   (stale reservation from a deleted fork) adopts and continues — ownership
-  there is certain (Parent == parent), foreign stays 409. Known residual,
-  documented not fixed: a process crash between the share and the
-  rollback still strands the prefix (same crash-window class as the merge
-  publish-then-event); repair is deleting the ≤ 4 exact child keys, and a
-  retry 409s loudly (fail-closed, never hijacks).
+   there is certain (Parent == parent), foreign stays 409. Known residual,
+   documented not fixed: a process crash between the share and the
+   rollback still strands the prefix (same crash-window class as the merge
+   publish-then-event); repair is deleting the ≤ 4 exact child keys, and a
+   retry 409s loudly (fail-closed, never hijacks).
+- **Fork failure-path residue fixed (issue #458, 2026-09-13 — child of
+  audit #449, F4+F5).** Closes the #432 known residual above for the
+  checkpoint case, and hardens the rollback's access.json handling. (1)
+  Crash-safe retry: a crashed attempt's orphan checkpoint pair no longer
+  wedges the name — `ShareManifest` adopts an occupying checkpoint key
+  when its bytes are semantically identical to this parent's (timestamps
+  and writer ignored; a retry re-stamps), and adopts an occupying child
+  manifest with no `fork.json` on the prefix when it provably tracks the
+  just-read parent (Repo == child, Revision == 1, HeadSeq/MinSeq/packs/
+  checkpoint-ref verbatim — the checkpoint pair was just
+  adopted-or-created, so it matches too). A present `fork.json` still
+  defers to the service's ours-vs-theirs adopt check (unchanged). Sweeping
+  (delete + recreate) was rejected: an unmanifested occupant is unowned
+  garbage to us but a live reservation to a racing rival — deleting it
+  would corrupt the rival's retry, which adopts by the same rule (law 4;
+  doubt keeps objects, the loser 409s). Fail-closed residuals, documented
+  not fixed: an empty-parent orphan (HeadSeq 0, byte-identical to a fresh
+  repo manifest — the #432 hijack case) still 409s, and an orphan from an
+  older parent state (parent moved under the crash) 409s naming the stale
+  seq — replacing either would need a delete this layer must not issue on
+  doubt; repair stays the documented exact-key delete. (2) Rollback
+  access.json ownership: the rollback deletes `access.json` only when this
+  attempt created it — `EnsureRepoAccessCreated` reports created-vs-adopted
+  (the Create result itself is the proof; no probe-before race), threaded
+  through `runFork` into `RollbackShare`; an adopted pre-existing doc
+  survives and the retry re-adopts it. The `fork.json`-disputed downgrade
+  is unchanged (dispute spares access regardless). Failure-path only (law
+  6: the share adds exact-key GETs solely on the 412 path; the
+  created-flag rides existing calls, zero new trips); GC coordination
+  unchanged (pre-commit keys are never indexed, so `forknet.go` still
+  cannot reference them).
 - **Fork→base object bridge (issue #456, 2026-09-13).** Cross-fork PRs whose
   head holds fork-unique commits had no fork-to-base object bridge: `OpenPR`
   mapped the missing-object rev-list failure to 503 (missing objects are an

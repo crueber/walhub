@@ -71,29 +71,29 @@ func childKeys432(owner, name string, seq uint64) []string {
 // must refuse to touch the advanced (live) manifest.
 type advancingAccessBoot struct{ svc *Service }
 
-func (f *advancingAccessBoot) EnsureRepoAccess(ctx context.Context, owner, repo, creator, visibility string) error {
+func (f *advancingAccessBoot) EnsureRepoAccessCreated(ctx context.Context, owner, repo, creator, visibility string) (bool, error) {
 	_, _ = creator, visibility
 	raw, meta, err := store.GetBytes(ctx, f.svc.Store, manifestKey(owner, repo), store.GetOptions{})
 	if err != nil || raw == nil {
-		return errors.New("access store down")
+		return false, errors.New("access store down")
 	}
 	cm, err := proto.UnmarshalManifest(raw)
 	if err != nil {
-		return errors.New("access store down")
+		return false, errors.New("access store down")
 	}
 	cm.Revision = 2
 	if _, err := store.PutBytes(ctx, f.svc.Store, manifestKey(owner, repo), cm.Marshal(),
 		store.PutOptions{Mode: store.PutUpdate, IfVersion: meta.Version, ContentType: "application/x-protobuf"}); err != nil {
-		return errors.New("access store down")
+		return false, errors.New("access store down")
 	}
-	return errors.New("access store down")
+	return false, errors.New("access store down")
 }
 
 func TestFork432AccessFailureRollsBackAndReusesName(t *testing.T) {
 	e := newTestEnv()
 	wireRealFork(e)
 	seedParentManifest(t, e.store, "o", "r", 7, []string{"p1"})
-	ab := &fakeAccessBoot{err: errors.New("access store down")}
+	ab := &fakeAccessBoot{created: true, err: errors.New("access store down")}
 	e.svc.AccessBoot = ab
 	rec := &TaskRecord{Progress: []string{}}
 	in := ForkInput{TargetOwner: "f", Name: "c", Visibility: "private"}
@@ -336,7 +336,7 @@ func TestFork432RollbackSharePrefixScoping(t *testing.T) {
 			store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
 			t.Fatalf("seed access: %v", err)
 		}
-		if err := ex.RollbackShare(ctx(), "o/r", "f/c"); err != nil {
+		if err := ex.RollbackShare(ctx(), "o/r", "f/c", true); err != nil {
 			t.Fatalf("rollback: %v", err)
 		}
 		for _, k := range append(childKeys432("f", "c", 7), "repos/f/c/access.json") {
@@ -356,7 +356,7 @@ func TestFork432RollbackSharePrefixScoping(t *testing.T) {
 				t.Fatalf("seed %s: %v", k, err)
 			}
 		}
-		if err := ex.RollbackShare(ctx(), "o/r", "f/c"); err != nil {
+		if err := ex.RollbackShare(ctx(), "o/r", "f/c", true); err != nil {
 			t.Fatalf("rollback: %v", err)
 		}
 		// Share keys released; the disputed reservation's own keys stay.
@@ -372,7 +372,7 @@ func TestFork432RollbackSharePrefixScoping(t *testing.T) {
 		if err := ex.ShareManifest(ctx(), "o/r", "f/c", ForkOptions{}); err != nil {
 			t.Fatalf("share: %v", err)
 		}
-		if err := ex.RollbackShare(ctx(), "o/r", "f/c"); err != nil {
+		if err := ex.RollbackShare(ctx(), "o/r", "f/c", false); err != nil {
 			t.Fatalf("rollback: %v", err)
 		}
 		mustAbsent432(t, st, manifestKey("f", "c"))
@@ -380,7 +380,7 @@ func TestFork432RollbackSharePrefixScoping(t *testing.T) {
 	})
 	t.Run("absent manifest is a nil no-op", func(t *testing.T) {
 		ex, _ := mk(t)
-		if err := ex.RollbackShare(ctx(), "o/r", "f/c"); err != nil {
+		if err := ex.RollbackShare(ctx(), "o/r", "f/c", false); err != nil {
 			t.Fatalf("rollback: %v", err)
 		}
 	})
@@ -403,7 +403,7 @@ func TestFork432RollbackSharePrefixScoping(t *testing.T) {
 			store.PutOptions{Mode: store.PutUpdate, IfVersion: meta.Version, ContentType: "application/x-protobuf"}); err != nil {
 			t.Fatalf("advance: %v", err)
 		}
-		if err := ex.RollbackShare(ctx(), "o/r", "f/c"); !errors.Is(err, ErrConflict) {
+		if err := ex.RollbackShare(ctx(), "o/r", "f/c", false); !errors.Is(err, ErrConflict) {
 			t.Fatalf("advanced manifest: %v", err)
 		}
 		for _, k := range childKeys432("f", "c", 7) {
@@ -425,7 +425,7 @@ func TestFork432RollbackSharePrefixScoping(t *testing.T) {
 			store.PutOptions{Mode: store.PutCreate, ContentType: "application/x-protobuf"}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if err := ex.RollbackShare(ctx(), "o/r", "f/c"); !errors.Is(err, ErrConflict) {
+		if err := ex.RollbackShare(ctx(), "o/r", "f/c", false); !errors.Is(err, ErrConflict) {
 			t.Fatalf("foreign manifest: %v", err)
 		}
 		mustPresent432(t, st, manifestKey("f", "c"))
@@ -436,14 +436,14 @@ func TestFork432RollbackSharePrefixScoping(t *testing.T) {
 			store.PutOptions{Mode: store.PutCreate, ContentType: "application/octet-stream"}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if err := ex.RollbackShare(ctx(), "o/r", "f/c"); !errors.Is(err, ErrCorrupt) {
+		if err := ex.RollbackShare(ctx(), "o/r", "f/c", false); !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("corrupt manifest: %v", err)
 		}
 		mustPresent432(t, st, manifestKey("f", "c"))
 	})
 	t.Run("bad child shape is invalid", func(t *testing.T) {
 		ex, _ := mk(t)
-		if err := ex.RollbackShare(ctx(), "o/r", "bogus"); !errors.Is(err, ErrInvalid) {
+		if err := ex.RollbackShare(ctx(), "o/r", "bogus", false); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("bad child: %v", err)
 		}
 	})
