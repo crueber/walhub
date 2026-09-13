@@ -110,6 +110,13 @@ func (s *Service) ListForks(ctx context.Context, owner, repo string, actor auth.
 func (s *Service) UnlistFork(ctx context.Context, owner, repo, child string) (bool, error) {
 	removed := false
 	_, err := s.casUpdate(ctx, ForksKey(owner, repo), 10, func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		// Reset per attempt: only the landed write may report a removal.
+		// A losing attempt that found the row (412, row gone on re-read)
+		// must not report removed — otherwise two concurrent sweeps of
+		// the same child would decrement the social counter twice for
+		// one row (Registry.Delete is idempotent-success, so concurrent
+		// double-deletes both reach the sweep).
+		removed = false
 		if cur == nil {
 			return nil, false, nil
 		}

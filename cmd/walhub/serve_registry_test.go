@@ -10,6 +10,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"git.packden.us/crueber/walhub/internal/config"
@@ -289,6 +290,7 @@ func TestRepoRegistryDeleteSweepsForkProvenance(t *testing.T) {
 
 // fakeForksSeam records DecForks through the pulls.ForksCounter seam.
 type fakeForksSeam struct {
+	mu     sync.Mutex
 	decs   [][2]string
 	decErr error
 }
@@ -296,8 +298,16 @@ type fakeForksSeam struct {
 func (f *fakeForksSeam) IncForks(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakeForksSeam) DecForks(_ context.Context, owner, repo string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.decs = append(f.decs, [2]string{owner, repo})
 	return f.decErr
+}
+
+func (f *fakeForksSeam) decCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.decs)
 }
 
 // TestForkDeleteSweepTable pins the forkDeleteSweep wiring (the
@@ -338,7 +348,7 @@ func TestForkDeleteSweepTable(t *testing.T) {
 		if got := readRaw(t, st); !strings.Contains(got, `"forks":[]`) {
 			t.Fatalf("index = %q", got)
 		}
-		if len(fc.decs) != 1 || fc.decs[0] != [2]string{"o", "r"} {
+		if fc.decCount() != 1 || fc.decs[0] != [2]string{"o", "r"} {
 			t.Fatalf("decs = %v", fc.decs)
 		}
 	})
@@ -350,7 +360,7 @@ func TestForkDeleteSweepTable(t *testing.T) {
 		if got := readRaw(t, st); got != before {
 			t.Fatalf("index moved: %q → %q", before, got)
 		}
-		if len(fc.decs) != 0 {
+		if fc.decCount() != 0 {
 			t.Fatalf("decs = %v", fc.decs)
 		}
 	})
@@ -358,7 +368,7 @@ func TestForkDeleteSweepTable(t *testing.T) {
 	t.Run("absent index skips counter", func(t *testing.T) {
 		_, svc, fc := setup(t, "")
 		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
-		if len(fc.decs) != 0 {
+		if fc.decCount() != 0 {
 			t.Fatalf("decs = %v", fc.decs)
 		}
 	})
@@ -366,7 +376,7 @@ func TestForkDeleteSweepTable(t *testing.T) {
 	t.Run("corrupt index skips counter", func(t *testing.T) {
 		_, svc, fc := setup(t, "{oops")
 		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
-		if len(fc.decs) != 0 {
+		if fc.decCount() != 0 {
 			t.Fatalf("decs = %v", fc.decs)
 		}
 	})
@@ -377,7 +387,7 @@ func TestForkDeleteSweepTable(t *testing.T) {
 		if got := readRaw(t, st); !strings.Contains(got, `"version":1`) {
 			t.Fatalf("index = %q", got)
 		}
-		if len(fc.decs) != 0 {
+		if fc.decCount() != 0 {
 			t.Fatalf("decs = %v", fc.decs)
 		}
 	})
@@ -402,8 +412,34 @@ func TestForkDeleteSweepTable(t *testing.T) {
 		if got := readRaw(t, st); !strings.Contains(got, `"forks":[]`) {
 			t.Fatalf("index = %q", got)
 		}
-		if len(fc.decs) != 1 {
-			t.Fatalf("decs = %v", fc.decs)
+		if fc.decCount() != 1 {
+			t.Fatalf("decs = %d, want 1", fc.decCount())
+		}
+	})
+
+	t.Run("concurrent double sweep decrements once", func(t *testing.T) {
+		// Two concurrent deletes of the same child both reach the sweep
+		// (Registry.Delete is idempotent-success). Exactly one UnlistFork
+		// lands the row removal, so exactly one DecForks must fire — a
+		// stale per-attempt flag would double-decrement here.
+		st, svc, fc := setup(t, `{"version":1,"forks":[{"repo":"f/c","forked_at":"2026-09-04T12:00:00Z"}]}`)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if got := readRaw(t, st); !strings.Contains(got, `"forks":[]`) {
+			t.Fatalf("index = %q", got)
+		}
+		if fc.decCount() != 1 {
+			t.Fatalf("decs = %d, want exactly 1", fc.decCount())
 		}
 	})
 }
