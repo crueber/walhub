@@ -9,6 +9,13 @@
 //
 // Pure and dependency-free so `node --test` covers the derivation headlessly
 // (no SolidJS install, same rule as lib/collab.js).
+//
+// Forgejo #482: the pinned default-branch row derives here too — the picker
+// already holds the summary head (the default-branch target), so the pin is
+// client composition with no wire change: pinnedDefault returns the {name,
+// sha} to hoist when kind is branches and the head names a refs/heads/ ref,
+// and dedupeRefs drops the streamed duplicate (small repos) so the pin never
+// renders twice.
 
 /** Strip the refs/heads|tags prefix for display (moved from Repo.jsx — the single definition). */
 export function shortRef(name) {
@@ -38,4 +45,31 @@ export function pillLabel(head) {
   const name = shortRef(head.name ?? "");
   if (!name || name === sha) return sha.slice(0, 10);
   return `${name} @ ${sha.slice(0, 10)}`;
+}
+
+/**
+ * pinnedDefault(head, kind) → the ref object to pin as the first row of the
+ * branch list, or null. Pins only when kind === "branches" and head carries
+ * a refs/heads/ name with a sha (the summary head is the default-branch
+ * target — HeadTarget — so no wire change is needed to reach a default that
+ * sorts past the 50-ref page window). Tags never pin (a heads/ name is not
+ * a tag); empty/sha-addressed heads pin nothing.
+ */
+export function pinnedDefault(head, kind) {
+  if (kind !== "branches") return null;
+  if (!head || !head.sha) return null;
+  const name = String(head.name ?? "");
+  if (!name.startsWith("refs/heads/")) return null;
+  return { name, sha: head.sha };
+}
+
+/**
+ * dedupeRefs(pinned, refs) → refs minus the pinned row (matched by full
+ * ref name), so small repos whose streamed page already contains the default
+ * branch never render it twice. Null pinned returns the list untouched.
+ */
+export function dedupeRefs(pinned, refs) {
+  const list = refs ?? [];
+  if (!pinned) return list;
+  return list.filter((r) => r && r.name !== pinned.name);
 }

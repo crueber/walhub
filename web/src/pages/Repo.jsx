@@ -13,7 +13,7 @@ import { visibilityBadge } from "../lib/visibility.js";
 import { activeTab, tabBadge } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 import Icon from "../lib/icons.jsx";
-import { shortRef, pillHead, pillLabel } from "../lib/ref-pill.js";
+import { shortRef, pillHead, pillLabel, pinnedDefault, dedupeRefs } from "../lib/ref-pill.js";
 export { shortRef };
 
 export const BUSY_MS = 5000; // poll cadence while something runs (Forgejo #396: 1.5 s hammered …/tasks — the hottest endpoint — while maintenance/follow tasks ran; progress percentages stay live at 5 s)
@@ -259,6 +259,24 @@ function RefPicker(props) {
     navigate(`/${props.full}/tree/${kind === "tag" ? r.name : shortRef(r.name)}`);
   };
 
+  // Forgejo #482: the kind pills share the old dropdown behavior exactly —
+  // setKind + clear + re-stream, query untouched so the typed filter follows
+  // the user between Branches and Tags.
+  const switchKind = (kind) => {
+    if (getKind() === kind) return;
+    setKind(kind);
+    setRefs([]);
+    stream.run();
+  };
+
+  // Forgejo #482: the pinned default-branch row derives from the summary
+  // head (the default-branch target — HeadTarget), which the picker already
+  // holds. The server pages refs name-sorted at n=50 with no default hoist,
+  // so a default sorting late (main at ~115 on walhub itself) is otherwise
+  // structurally unreachable. Pins branches only; dedupes vs the stream.
+  const pinned = () => pinnedDefault(head(), getKind());
+  const visibleRefs = () => dedupeRefs(pinned(), getRefs());
+
   // Esc dismisses the picker and returns focus to the pill trigger. The
   // trigger button is the keyboard baseline otherwise: it toggles on
   // Enter/Space natively and Tab walks the dialog controls.
@@ -290,17 +308,35 @@ function RefPicker(props) {
       </button>
       <Show when={getOpen()}>
         <div class="ref-drop card absolute left-0 z-30 mt-2 w-80 p-2" role="listbox" aria-label="Branches and tags">
-          <div class="ref-controls mb-2 flex gap-2">
-            <select
-              class="input"
-              value={getKind()}
-              onChange={(e) => { setKind(e.currentTarget.value); setRefs([]); stream.run(); }}
-            >
-              <option value="branches">branches</option>
-              <option value="tags">tags</option>
-            </select>
+          {/* Forgejo #482: the kind dropdown becomes a two-pill segmented
+              toggle above the filter input (.ref-controls is a column —
+              pills row on top, input full width below). Each pill is a real
+              button with aria-pressed in a role="group"; Tab walks pill 1 →
+              pill 2 → filter input → rows natively. Esc/outside-click close
+              (the onKey/document handlers above) are untouched. */}
+          <div class="ref-controls mb-2 flex flex-col gap-2">
+            <div class="flex gap-2" role="group" aria-label="Ref type">
+              <button
+                type="button"
+                class="btn px-2 py-1 text-sm"
+                classList={{ primary: getKind() === "branches" }}
+                aria-pressed={getKind() === "branches"}
+                onClick={() => switchKind("branches")}
+              >
+                Branches
+              </button>
+              <button
+                type="button"
+                class="btn px-2 py-1 text-sm"
+                classList={{ primary: getKind() === "tags" }}
+                aria-pressed={getKind() === "tags"}
+                onClick={() => switchKind("tags")}
+              >
+                Tags
+              </button>
+            </div>
             <input
-              class="input"
+              class="input w-full"
               type="search"
               placeholder="filter refs…"
               autocomplete="off"
@@ -310,7 +346,28 @@ function RefPicker(props) {
             />
           </div>
           <div class="ref-list scroll-slim max-h-72 space-y-0.5 overflow-y-auto" classList={{ "stream-error": stream.state() === "error" }}>
-            <For each={getRefs()}>
+            {/* Forgejo #482: pinned default row — first in .ref-list under a
+                one-line "default" group label, badged with the .pill chip
+                idiom, clicking through the same pick() tree path. Renders
+                from the summary head even when the 50-ref streamed page
+                cannot contain it; dedupeRefs drops the streamed duplicate. */}
+            <Show when={pinned()}>
+              {(p) => (
+                <>
+                  <div class="ref-default-label text-xs">default</div>
+                  <button
+                    type="button"
+                    class="ref-row ref-pinned flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    onClick={() => pick(p())}
+                  >
+                    <span class="ref-name font-mono">{shortRef(p().name)} <span class="pill ml-1">default</span></span>
+                    <span class="ref-sha muted font-mono text-xs">{String(p().sha ?? "").slice(0, 10)}</span>
+                  </button>
+                  <div class="ref-divider my-1 border-t border-zinc-200 dark:border-zinc-700" aria-hidden="true" />
+                </>
+              )}
+            </Show>
+            <For each={visibleRefs()}>
               {(r) => (
                 <button
                   type="button"
