@@ -55,7 +55,8 @@ test("milestone segment renders only when the card has one", () => {
 
 test("pending set never flashes a raw hex id; unknown ids self-heal to the bare id", () => {
   const s = rows();
-  assert.ok(s.includes("milestoneDisplay(getMilestoneSet()?.milestones, issue.milestone)"), "title resolves via milestoneDisplay");
+  assert.ok(s.includes("const set = () => getMilestoneSet()?.milestones;"), "chip reads the page-owned cached set once (#484 state-aware icon shares it)");
+  assert.ok(s.includes("milestoneDisplay(set(), issue.milestone)"), "title resolves via milestoneDisplay");
   assert.ok(s.includes('<Show when={!d().pending} fallback={<span class="muted">…</span>}>'), "cold load renders a placeholder, never the bare id");
   assert.ok(!s.includes("{issue.milestone} comments") && !s.includes(">{issue.milestone}<") , "the raw id never renders directly");
 });

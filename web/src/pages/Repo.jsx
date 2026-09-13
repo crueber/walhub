@@ -175,6 +175,21 @@ const TABS = [
 // derives from the first path segment after /:owner/:name, so blob/tree
 // paths with tab-word filenames (checks.go, …) still highlight Code.
 
+// Forgejo #484 — repo strip decision, option (a): the icon rides INSIDE the
+// existing Issues tab (shown only while the current path is under
+// /milestones), instead of promoting Milestones to its own tab entry (option
+// (b)). (b) would need a new TABS id that activeTab never returns
+// (lib/tabs.js maps milestones→issues, and the highlight/badge/scroll
+// contracts below all key off that mapping), so it would split highlight
+// from navigation for zero gain; (a) keeps TABS, tabs.js, the #319 badge,
+// and the #274 scroll behavior byte-identical. First segment after
+// /:owner/:name decides (the activeTab convention), so blob/tree filenames
+// can never trigger the icon.
+function isMilestonesPath(pathname) {
+  const segs = String(pathname ?? "").split(/[?#]/, 1)[0].split("/").filter(Boolean);
+  return (segs[2] ?? "").toLowerCase() === "milestones";
+}
+
 // --- watch toggle (06 §7): optimistic flip, reconcile on error -------------
 
 function WatchToggle(props) {
@@ -767,6 +782,13 @@ export default function Repo(props) {
                   classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": activeTab(location.pathname) === t.id }}
                   aria-current={activeTab(location.pathname) === t.id ? "page" : undefined}
                 >
+                  {/* Forgejo #484, option (a): the milestone-open icon leads
+                      the Issues label while under /milestones (decorative
+                      aria-hidden via the shared svg — the label text is
+                      unchanged, so the accessible name is untouched). */}
+                  <Show when={t.id === "issues" && isMilestonesPath(location.pathname)}>
+                    <Icon name="milestone-open" />{" "}
+                  </Show>
                   {t.label}
                   <Show when={n() > 0}>
                     <span class="tab-badge" aria-label={`${n()} open`}>{n()}</span>
