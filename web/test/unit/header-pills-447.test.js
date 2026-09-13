@@ -53,15 +53,17 @@ test("every count renders left of its label; Clone is label-only", () => {
   const watch = block(REPO, "function WatchToggle(props)", "function RefPicker");
   const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
   const clone = block(REPO, "<summary class=\"btn", "</summary>");
-  assert.ok(star.includes("★ {s().stars ?? 0} Star"), "Star reads {n} Star (glyph kept, count left of label)");
-  assert.ok(watch.includes("👁 {w().watchers ?? 0} Watch"), "Watch reads {n} Watch (glyph kept, count left of label)");
+  assert.ok(star.includes('{s().stars ?? 0} Star'), "Star reads {n} Star (count left of label)");
+  assert.ok(star.includes('<Icon name={s().viewer?.starred ? "star-on" : "star-off"}'), "Star leads with the shared Icon (on/off swap, #465)");
+  assert.ok(watch.includes('{w().watchers ?? 0} Watch'), "Watch reads {n} Watch (count left of label)");
+  assert.ok(watch.includes('<Icon name={w().watching ? "watch-on" : "watch-off"}'), "Watch leads with the shared Icon (on/off swap, #465)");
   assert.ok(fork.includes("{s().forks ?? 0}"), "Fork count reads the summary source (renders at 0, #464)");
   const countAt = fork.indexOf("{s().forks ?? 0}");
   const labelAt = fork.indexOf("Fork\n                    </A>");
   assert.ok(countAt !== -1 && labelAt !== -1 && countAt < labelAt, "Fork reads {n} Fork (count left of label, split across the two #464 links)");
   assert.ok(!fork.includes("Fork{"), "Fork never renders label-then-count");
-  assert.ok(clone.endsWith(">Clone"), "Clone renders the bare label, no count");
-  assert.ok(!clone.includes("{") && !clone.includes("}"), "Clone summary carries no count interpolation");
+  assert.ok(clone.endsWith('<Icon name="clone" /> Clone'), "Clone renders the shared icon left of the bare label (#465), no count");
+  assert.ok(!clone.includes("{s().") && !clone.includes("{w()."), "Clone summary carries no count interpolation");
 });
 
 test("Fork shows its count at zero, like Star/Watch show 0", () => {
@@ -116,12 +118,14 @@ test("Fork navigation + Clone popover untouched", () => {
 });
 
 test("390px arithmetic: the four-button row fits the phone viewport", () => {
-  // Generous upper bounds at text-sm (14px): "★ 12 Star" ~80px, "👁 34
-  // Watch" ~95px, "5 Fork" ~65px, "Clone" ~70px, cluster gaps 3 × 8px =
-  // 24px, page padding px-4 = 32px. Total ≈ 366px < 390px, so the cluster
-  // holds one row at phone widths; the parent flex-wrap is only the safety
-  // net for large counts or the transient tasks indicator.
+  // Generous upper bounds at text-sm (14px): 1em shared icons (~14px) lead
+  // each control — "icon 12 Star" ~80px, "icon 34 Watch" ~95px (the old color
+  // emoji was wider than the svg, so Watch holds), "icon 5 Fork" ~80px,
+  // "icon Clone" ~75px, cluster gaps 3 × 8px = 24px, page padding px-4 =
+  // 32px. Total ≈ 386px < 390px, so the cluster holds one row at phone
+  // widths; the parent flex-wrap is only the safety net for large counts or
+  // the transient tasks indicator.
   const viewport = 390;
-  const row = 80 + 95 + 65 + 70 + 24 + 32;
+  const row = 80 + 95 + 80 + 75 + 24 + 32;
   assert.ok(row < viewport, `action row ${row}px fits in ${viewport}px (single row, no orphans)`);
 });

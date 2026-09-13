@@ -1,7 +1,8 @@
 // web/test/unit/fork-page-438.test.js — Forgejo #438 regression: the fork
 // form is a standalone top-level page (site header only, no repo tab
 // strip/sidebar), with cleaned-up copy, single-column fields at phone
-// widths, and a text-only Fork/Clone action pair in the repo header.
+// widths, and a Fork/Clone action pair in the repo header (text-only per
+// #438, led by the shared #465 icons since #465).
 // No DOM: routes/JSX/copy pinned as source text, mirroring
 // repo-tabs-narrow.test.js. The SDK is untouched by #438 (fork.test.js
 // pins the wire shapes); summary.forks still feeds the pill count.
@@ -88,21 +89,25 @@ test("390px arithmetic: stacked fields fit the viewport", () => {
   assert.ok(FORK.includes('class="card grid gap-3 p-4"'), "form keeps its fluid card shape (no fixed width)");
 });
 
-test("repo header Fork and Clone are a text-only matched pair on the canonical btn idiom", () => {
+test("repo header Fork and Clone carry the shared icons on the canonical btn idiom", () => {
   // Forgejo #447 builds on the #438 text-only pair: Fork and the CloneMenu
   // summary now share the Star/Watch btn metrics (btn px-2 py-1 text-sm) at
-  // the same size/weight with no icon glyph — one action strip, not two
-  // families. The count still reads summary.forks (no extra fetch); the
-  // count-left-of-label shape itself is pinned in header-pills-447.test.js.
+  // the same size/weight — one action strip, not two families. Forgejo #465
+  // supersedes the text-only half: both lead with the shared SVG Icon (the
+  // retired ⑂ mark never comes back). The count still reads summary.forks
+  // (no extra fetch); the count-left-of-label shape itself is pinned in
+  // header-pills-447.test.js.
   const pill = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
   assert.ok(pill.includes('<span class="btn px-2 py-1 text-sm'), "Fork keeps the canonical btn metrics on one pill shell (was pill pre-#447, split links since #464)");
   assert.ok(pill.includes('href={`/${full()}/fork`}'), "Fork label still links to the fork page");
   assert.ok(pill.includes('href={`/${full()}/forks`}'), "Fork count links to the fork-network page (#464 split)");
   assert.ok(pill.includes("summary.forks") || pill.includes("s().forks"), "Fork count still reads summary.forks (no extra fetch)");
-  assert.ok(!pill.includes("⑂"), "Fork pill carries no icon glyph");
+  assert.ok(pill.includes('<Icon name="fork"'), "Fork pill leads with the shared fork icon (#465)");
+  assert.ok(!pill.includes("⑂"), "the retired glyph stays gone");
   const cloneSummary = block(REPO, "<summary class=\"btn", "</summary>");
   assert.ok(cloneSummary.includes("px-2 py-1 text-sm"), "Clone summary keeps the canonical btn metrics (the matched pair)");
-  assert.ok(cloneSummary.endsWith(">Clone"), "Clone summary renders the text-only Clone label");
+  assert.ok(cloneSummary.includes('<Icon name="clone"'), "Clone summary leads with the shared clone icon (#465)");
+  assert.ok(cloneSummary.endsWith('<Icon name="clone" /> Clone'), "Clone summary renders icon left of the Clone label, no count");
 });
 
 test("AGENTS.md carries the normative mobile-viewport rule", () => {

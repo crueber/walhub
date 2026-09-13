@@ -52,8 +52,10 @@ test("ONE pill visually: single container, canonical metrics, single row", () =>
     assert.ok(PILL.includes(cls), `split pill keeps ${cls} (the #447 shared metrics)`);
   }
   assert.ok(PILL.includes("whitespace-nowrap"), "the pill never wraps mid-pill at narrow widths");
-  // Text-only pair preserved (#438): no icon glyph on either half.
-  assert.ok(!PILL.includes("⑂"), "no icon glyph — still the text-only pair");
+  // Icon pair since #465 (supersedes the #438 text-only pair): the static
+  // fork icon leads the pill through the shared mechanism — still no glyph.
+  assert.ok(PILL.includes('<Icon name="fork"'), "the shared fork icon leads the pill");
+  assert.ok(!PILL.includes("⑂"), "no glyph — the retired #438 mark never comes back");
 });
 
 test("metadata line drops the forks link; branches and tags stay", () => {
@@ -84,12 +86,13 @@ test("no new requests: summary is still the single count source", () => {
 });
 
 test("390px arithmetic: the split pill does not wrap or overflow the cluster", () => {
-  // Same copy as the #447 row ("5 Fork" ~65px at text-sm): splitting the
-  // destinations adds no text, so the row total is unchanged (≈366px <
+  // Same copy as the #447 row ("icon 5 Fork" ~80px at text-sm): splitting the
+  // destinations adds no text and the 1em #465 icon is already in the #447
+  // bound, so the row total is unchanged (≈386px <
   // 390px). The shell's whitespace-nowrap keeps the two halves on one line
   // and the repo-header flex-wrap stays the safety net.
   const viewport = 390;
-  const row = 80 + 95 + 65 + 70 + 24 + 32;
+  const row = 80 + 95 + 80 + 75 + 24 + 32;
   assert.ok(row < viewport, `action row ${row}px fits in ${viewport}px (single row, no orphans)`);
   assert.ok(REPO.includes('<div class="repo-header mb-3 flex flex-wrap items-center gap-3">'), "repo-header keeps flex-wrap (cluster collapses below the title, never overflows)");
   assert.ok(REPO.includes('<div class="ml-auto flex items-center gap-2">'), "cluster keeps its single-row flex shape with row-owned gap-2");

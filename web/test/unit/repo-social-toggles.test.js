@@ -1,8 +1,11 @@
 // web/test/unit/repo-social-toggles.test.js — Forgejo #447: the repo header
-// star/watch toggles render icon + count LEFT of a text label ("★ 3 Star",
-// "👁 2 Watch") — the canonical idiom the Fork link and Clone trigger share.
+// star/watch toggles render icon + count LEFT of a text label ("3 Star",
+// "2 Watch" led by the shared #465 Icon) — the canonical idiom the Fork link
+// and Clone trigger share.
 // (Issue #285 pinned icon+count-only with no words; #447 supersedes that
-// direction — the label is what unifies the four controls into one strip.)
+// direction — the label is what unifies the four controls into one strip;
+// #465 retires the ★/👁 glyphs for the shared SVG mechanism, keeping the
+// count-left-of-label order.)
 // The accessible name still carries the verb: title + aria-label keep it and
 // aria-pressed keeps the state for assistive tech. No DOM: JSX is pinned as
 // source text, mirroring clone-outside-close.test.js / nav-api-right.test.js.
@@ -29,12 +32,12 @@ function block(src, startMarker, endMarker) {
 
 test("StarToggle renders count left of the Star label", () => {
   const star = block(repo(), "function StarToggle(props)", "function TasksOverlay");
-  assert.ok(star.includes("★ {s().stars ?? 0} Star"), "star toggle renders ★ + live count + Star label, count first");
+  assert.ok(star.includes('<Icon name={s().viewer?.starred ? "star-on" : "star-off"} /> {s().stars ?? 0} Star'), "star toggle renders shared Icon + live count + Star label, count first");
 });
 
 test("WatchToggle renders count left of the Watch label", () => {
   const watch = block(repo(), "function WatchToggle(props)", "function RefPicker");
-  assert.ok(watch.includes("👁 {w().watchers ?? 0} Watch"), "watch toggle renders 👁 + live count + Watch label, count first");
+  assert.ok(watch.includes('<Icon name={w().watching ? "watch-on" : "watch-off"} /> {w().watchers ?? 0} Watch'), "watch toggle renders shared Icon + live count + Watch label, count first");
 });
 
 test("toggles keep accessible names + pressed state + active styling", () => {

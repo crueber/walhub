@@ -109,18 +109,20 @@ test("sibling audit: no other empty flex items in the row", () => {
     "Clone stays a native <details> popover");
   assert.ok(!menuRet.slice(0, menuRet.indexOf("<details")).includes("<div"),
     "nothing wraps the Clone <details> — the flex item is the pill itself");
-  // Clone details-metrics unchanged by the #463 fix.
-  assert.ok(menu.includes('<summary class="btn cursor-pointer px-2 py-1 text-sm select-none">Clone</summary>'),
+  // Clone details-metrics unchanged by the #463 fix (the #465 icon leads the
+  // label inside the same shape).
+  assert.ok(menu.includes('<summary class="btn cursor-pointer px-2 py-1 text-sm select-none"><Icon name="clone" /> Clone</summary>'),
     "Clone details-metrics unchanged");
 });
 
 test("390px arithmetic: removing the idle item only shrinks the row", () => {
   // The fix strictly REMOVES a flex item when idle, so the loaded row is the
-  // same four pills the #447 test fits in 390px (≈366px); the transient
-  // tasks pill is covered by the parent flex-wrap safety net, and the w-96
-  // tasks popover is capped by the #278 viewport bound like every panel.
+  // same four pills the #447 test fits in 390px (≈386px with the #465 1em
+  // icons); the transient tasks pill is covered by the parent flex-wrap
+  // safety net, and the w-96 tasks popover is capped by the #278 viewport
+  // bound like every panel.
   const viewport = 390;
-  const row = 80 + 95 + 65 + 70 + 24 + 32;
+  const row = 80 + 95 + 80 + 75 + 24 + 32;
   assert.ok(row < viewport, `idle row ${row}px still fits in ${viewport}px`);
   assert.ok(REPO.includes('<div class="repo-header mb-3 flex flex-wrap items-center gap-3">'),
     "repo-header keeps flex-wrap (transient pill collapses, never overflows)");
