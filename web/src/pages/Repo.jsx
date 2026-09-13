@@ -430,61 +430,64 @@ function TasksOverlay(props) {
   document.addEventListener("click", onDoc);
 
   const kind = (s) => String(s ?? "").replaceAll(/[-_]/g, " ");
+  // Forgejo #463: idle renders NOTHING — the <Show> sits ABOVE the wrapper
+  // div so the flex row holds only real pills and its gap-2 owns every gap
+  // (an unconditional wrapper would be an empty flex item doubling one gap
+  // to 2× gap-2). The relative wrapper exists only with the pill and still
+  // anchors the absolute tasks-drop popover when tasks run.
   return (
-    <div class="tasks-indicator relative" ref={root}>
-      <Show when={getRunning().length || getDone().length}>
-        {(list) => {
-          const head = getRunning().find((t) => t.progress) ?? getRunning()[0] ?? getDone()[getDone().length - 1];
-          const pct = percentOf(head);
-          const others = getRunning().length > 1 ? getRunning().length - 1 : 0;
-          const failed = getDone().some((t) => t.ok === false);
-          return (
-            <>
-              <button type="button" class="pill cursor-pointer" classList={{ "!border-amber-500": getRunning().length > 0, "!border-red-500": failed }} onClick={() => setOpen(!getOpen())}>
-                <Show when={getRunning().length > 0} fallback={<span class={`inline-block h-1.5 w-1.5 rounded-full ${failed ? "bg-red-500" : "bg-emerald-500"}`} aria-hidden="true" />}>
-                  <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" aria-hidden="true" />
-                </Show>
-                <span>{kind(head.kind)}</span>
-                <Show when={others > 0}>
-                  <span class="muted">+{others}</span>
-                </Show>
-                <Show when={pct !== undefined}>
-                  <span class="muted tabular">{pct.toFixed(0)}%</span>
-                </Show>
-              </button>
-              <Show when={getOpen()}>
-                <div class="tasks-drop card absolute right-0 z-30 mt-2 w-96 space-y-1 p-3 text-sm">
-                  <strong>{head.hostname ?? ""}</strong>
-                  <For each={getRunning()}>
-                    {(t) => (
-                      <div class="task-row flex items-center gap-2">
-                        <code class="font-mono text-xs">{t.id?.slice(0, 8) ?? ""}</code>
-                        <span>{kind(t.kind)}</span>
-                        <Show when={percentOf(t) !== undefined}>
-                          <span class="muted tabular">{percentOf(t).toFixed(0)}%</span>
-                        </Show>
-                        <Show when={t.summary}>
-                          <span class="muted">{t.summary}</span>
-                        </Show>
-                      </div>
-                    )}
-                  </For>
-                  <For each={getDone()}>
-                    {(t) => (
-                      <div class="task-row flex items-center gap-2" classList={{ "text-red-600 dark:text-red-400": t.ok === false }}>
-                        <code class="font-mono text-xs">{t.id?.slice(0, 8) ?? ""}</code>
-                        <span>{kind(t.kind)}</span>
-                        <span class="muted"> — {t.summary ?? (t.ok === false ? "failed" : "done")}</span>
-                      </div>
-                    )}
-                  </For>
-                </div>
+    <Show when={getRunning().length || getDone().length}>
+      {() => {
+        const head = getRunning().find((t) => t.progress) ?? getRunning()[0] ?? getDone()[getDone().length - 1];
+        const pct = percentOf(head);
+        const others = getRunning().length > 1 ? getRunning().length - 1 : 0;
+        const failed = getDone().some((t) => t.ok === false);
+        return (
+          <div class="tasks-indicator relative" ref={root}>
+            <button type="button" class="pill cursor-pointer" classList={{ "!border-amber-500": getRunning().length > 0, "!border-red-500": failed }} onClick={() => setOpen(!getOpen())}>
+              <Show when={getRunning().length > 0} fallback={<span class={`inline-block h-1.5 w-1.5 rounded-full ${failed ? "bg-red-500" : "bg-emerald-500"}`} aria-hidden="true" />}>
+                <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" aria-hidden="true" />
               </Show>
-            </>
-          );
-        }}
-      </Show>
-    </div>
+              <span>{kind(head.kind)}</span>
+              <Show when={others > 0}>
+                <span class="muted">+{others}</span>
+              </Show>
+              <Show when={pct !== undefined}>
+                <span class="muted tabular">{pct.toFixed(0)}%</span>
+              </Show>
+            </button>
+            <Show when={getOpen()}>
+              <div class="tasks-drop card absolute right-0 z-30 mt-2 w-96 space-y-1 p-3 text-sm">
+                <strong>{head.hostname ?? ""}</strong>
+                <For each={getRunning()}>
+                  {(t) => (
+                    <div class="task-row flex items-center gap-2">
+                      <code class="font-mono text-xs">{t.id?.slice(0, 8) ?? ""}</code>
+                      <span>{kind(t.kind)}</span>
+                      <Show when={percentOf(t) !== undefined}>
+                        <span class="muted tabular">{percentOf(t).toFixed(0)}%</span>
+                      </Show>
+                      <Show when={t.summary}>
+                        <span class="muted">{t.summary}</span>
+                      </Show>
+                    </div>
+                  )}
+                </For>
+                <For each={getDone()}>
+                  {(t) => (
+                    <div class="task-row flex items-center gap-2" classList={{ "text-red-600 dark:text-red-400": t.ok === false }}>
+                      <code class="font-mono text-xs">{t.id?.slice(0, 8) ?? ""}</code>
+                      <span>{kind(t.kind)}</span>
+                      <span class="muted"> — {t.summary ?? (t.ok === false ? "failed" : "done")}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+        );
+      }}
+    </Show>
   );
 }
 
@@ -632,7 +635,17 @@ export default function Repo(props) {
                       the header needs one). Counts ride data already in hand
                       (toggles' social/watch payloads, summary.forks) — no new
                       requests. Toggle behavior, Fork navigation, and the Clone
-                      popover are untouched. */}
+                      popover are untouched.
+                      Forgejo #463 extends the idiom to SPACING: the row's
+                      gap-2 owns every gap — no child adds, removes, or doubles
+                      spacing. TasksOverlay renders nothing when idle (its
+                      relative wrapper exists only with the pill, still
+                      anchoring the tasks-drop popover when tasks run), so the
+                      row holds only real pills. Audited siblings: Star/Watch
+                      return their <button> straight out of <Show> (no
+                      wrapper), Fork is a bare <A>, Clone's <details> IS the
+                      pill — no other empty flex items in this row. Clone
+                      details-metrics unchanged. */}
                   <A class="btn px-2 py-1 text-sm" href={`/${full()}/fork`} title={`Fork ${full()}`}>
                     {s().forks ?? 0} Fork
                   </A>
