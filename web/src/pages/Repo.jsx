@@ -96,7 +96,7 @@ function CloneMenu(props) {
   };
   return (
     <details ref={root} class="clone-menu relative" onToggle={(e) => { setOpen(e.target.open); if (e.target.open) load(); }} onKeyDown={onKey}>
-      <summary class="pill cursor-pointer select-none">Clone</summary>
+      <summary class="btn cursor-pointer px-2 py-1 text-sm select-none">Clone</summary>
       <div class="clone-body card absolute right-0 z-30 mt-2 w-96 space-y-3 p-3">
         <div class="flex items-center gap-2">
           <div role="group" aria-label="Clone protocol" class="flex gap-1">
@@ -211,7 +211,7 @@ function WatchToggle(props) {
           aria-pressed={w().watching}
           aria-label={w().watching ? "Unwatch this repo" : "Watch this repo"}
         >
-          👁 {w().watchers ?? 0}
+          👁 {w().watchers ?? 0} Watch
         </button>
       )}
     </Show>
@@ -366,7 +366,7 @@ function StarToggle(props) {
           aria-pressed={s().viewer?.starred}
           aria-label={s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
         >
-          ★ {s().stars ?? 0}
+          ★ {s().stars ?? 0} Star
         </button>
       )}
     </Show>
@@ -619,14 +619,22 @@ export default function Repo(props) {
             <Show when={getSummary()}>
               {(s) => (
                 <>
-                  {/* Issue #424: Fork sits in the Clone pill row — same
-                      vocabulary, count from the summary (no extra fetch).
-                      Forgejo #438: text-only matched pair — the Fork pill and
-                      the CloneMenu summary share the pill class at the same
-                      size/weight with no icon glyph (the Star/Watch toggles
-                      already set the row's text-pill idiom). */}
-                  <A class="pill" href={`/${full()}/fork`} title={`Fork ${full()}`}>
-                    Fork{(s().forks ?? 0) > 0 ? ` ${s().forks}` : ""}
+                  {/* Forgejo #447: the header action strip speaks ONE idiom —
+                      the Star/Watch btn shape (btn px-2 py-1 text-sm) as
+                      canonical. Fork stays an <A> link and Clone's <summary>
+                      its popover trigger, both styled to the same metrics;
+                      every count sits LEFT of its label ({n} Star, {n} Watch,
+                      {n} Fork; Clone is label-only). The Fork count always
+                      renders — including 0, like Star/Watch show 0 — so the
+                      group reads consistently (the #446 hidden-at-zero badge
+                      direction is absorbed/superseded here, not adopted: a
+                      tab-badge circle would add a second count idiom where
+                      the header needs one). Counts ride data already in hand
+                      (toggles' social/watch payloads, summary.forks) — no new
+                      requests. Toggle behavior, Fork navigation, and the Clone
+                      popover are untouched. */}
+                  <A class="btn px-2 py-1 text-sm" href={`/${full()}/fork`} title={`Fork ${full()}`}>
+                    {s().forks ?? 0} Fork
                   </A>
                   <CloneMenu full={full()} summary={s()} />
                 </>

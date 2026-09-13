@@ -1,9 +1,11 @@
-// web/test/unit/repo-social-toggles.test.js — issue #285: the repo header
-// star/watch toggles render icon + count only (no "star"/"starred"/
-// "watch"/"watching" words). The visible verb is gone, so the accessible
-// name carries it: title + aria-label keep the verb and aria-pressed keeps
-// the state for assistive tech. No DOM: JSX is pinned as source text,
-// mirroring clone-outside-close.test.js / nav-api-right.test.js.
+// web/test/unit/repo-social-toggles.test.js — Forgejo #447: the repo header
+// star/watch toggles render icon + count LEFT of a text label ("★ 3 Star",
+// "👁 2 Watch") — the canonical idiom the Fork link and Clone trigger share.
+// (Issue #285 pinned icon+count-only with no words; #447 supersedes that
+// direction — the label is what unifies the four controls into one strip.)
+// The accessible name still carries the verb: title + aria-label keep it and
+// aria-pressed keeps the state for assistive tech. No DOM: JSX is pinned as
+// source text, mirroring clone-outside-close.test.js / nav-api-right.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -25,18 +27,14 @@ function block(src, startMarker, endMarker) {
   return src.slice(s, e);
 }
 
-test("StarToggle renders icon + count only, no words", () => {
+test("StarToggle renders count left of the Star label", () => {
   const star = block(repo(), "function StarToggle(props)", "function TasksOverlay");
-  assert.ok(!star.includes('? "starred" : "star"'), "star toggle must not render the starred/star words");
-  assert.ok(!star.includes("·"), "star toggle drops the word separator dot");
-  assert.ok(star.includes("★ {s().stars ?? 0}"), "star toggle renders ★ + live count");
+  assert.ok(star.includes("★ {s().stars ?? 0} Star"), "star toggle renders ★ + live count + Star label, count first");
 });
 
-test("WatchToggle renders icon + count only, no words", () => {
+test("WatchToggle renders count left of the Watch label", () => {
   const watch = block(repo(), "function WatchToggle(props)", "function RefPicker");
-  assert.ok(!watch.includes('"👁 watching"') && !watch.includes('"👁 watch"'), "watch toggle must not render the eye + word strings");
-  assert.ok(!watch.includes("·"), "watch toggle drops the word separator dot");
-  assert.ok(watch.includes("👁 {w().watchers ?? 0}"), "watch toggle renders 👁 + live count");
+  assert.ok(watch.includes("👁 {w().watchers ?? 0} Watch"), "watch toggle renders 👁 + live count + Watch label, count first");
 });
 
 test("toggles keep accessible names + pressed state + active styling", () => {
