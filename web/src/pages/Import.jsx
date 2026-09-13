@@ -12,11 +12,15 @@
 // Form-page pattern (Forgejo #479 standing rule — reference: ReleaseNew.jsx):
 // centered mx-auto max-w-2xl column, one h2 + one muted intro, single card
 // form, label.grid.gap-1 fields with id + aria-describedby help, collapsing
-// grid-cols-1 sm:grid-cols-2 rows (never a bare grid-cols-2), inline
+// collapsing
+// grid-cols-1 sm:… rows (never a bare grid-cols-2), inline
 // errors/warnings, primary button with busy swap + cancel to /explore.
 // Forgejo #486: the Name field carries live charset validation (shared
 // lib/repo-name.js rule) in a reserved-height slot — no always-on helper;
 // the submit path gains the matching client gate for one-shot imports.
+// Forgejo #497: the Owner/Name pair is the shared OwnerNameRow component
+// (matched h-9 heights, items-start top alignment, asymmetric 1fr/2fr
+// split, error slot below the grid) — identical on New.jsx.
 // The mirror pull-only paragraph lives here (sole mirror path since
 // Forgejo #487 removed the /new mirror mode — Import's mirror radio label
 // already carries the short "(recurring pull, pushes rejected)" detail and
@@ -30,6 +34,7 @@ import { normalizeSource } from "../../sdk/src/import.js";
 import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
 import { allowedOwners } from "../lib/orgs.js";
 import { validateRepoChars } from "../lib/repo-name.js";
+import OwnerNameRow from "../components/OwnerNameRow.jsx";
 import { reportError, invalidate } from "../lib/data.js";
 
 export default function Import() {
@@ -87,10 +92,10 @@ export default function Import() {
   const suggestion = () => normalizeSource(getUrl());
 
   // Forgejo #486: live name-charset error only (empty → "", required rides
-  // the disabled submit), rendered into a reserved-height slot inside the
-  // name label — never a conditionally-mounted block, so the rows below
-  // never shift while typing. Shared with New.jsx (and both mirror modes,
-  // which use the same name field).
+  // the disabled submit), rendered into the shared OwnerNameRow's
+  // reserved-height slot below the grid — never a conditionally-mounted
+  // block, so the rows below never shift while typing. Shared with New.jsx
+  // (and both mirror modes, which use the same name field).
   const nameCharsError = () => validateRepoChars(getName());
 
   const pushLog = (text) => {
@@ -278,47 +283,16 @@ export default function Import() {
               </p>
             </Show>
           </label>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label class="grid gap-1" for="import-owner">
-              <span class="text-sm font-medium">Owner</span>
-              <Show
-                when={getOwners() !== null}
-                fallback={
-                  <select id="import-owner" class="input font-mono" disabled aria-label="Owner">
-                    <option>{getOwner() || "…"}</option>
-                  </select>
-                }
-              >
-                <select
-                  id="import-owner"
-                  class="input font-mono"
-                  value={getOwner()}
-                  onChange={(e) => setOwner(e.currentTarget.value)}
-                  aria-label="Owner"
-                >
-                  <For each={getOwners() ?? []}>{(o) => <option value={o}>{o}</option>}</For>
-                </select>
-              </Show>
-            </label>
-            <label class="grid gap-1" for="import-name">
-              <span class="text-sm font-medium">Name</span>
-              <input
-                id="import-name"
-                class="input font-mono"
-                value={getName()}
-                onInput={(e) => setName(e.currentTarget.value.trim())}
-                placeholder="monorepo"
-                autocomplete="off"
-                spellcheck={false}
-                aria-label="Name"
-                aria-invalid={!!nameCharsError()}
-                aria-describedby="import-name-error"
-              />
-              <p id="import-name-error" class="min-h-[2rem] text-xs text-red-700 dark:text-red-400" aria-live="polite">
-                {nameCharsError()}
-              </p>
-            </label>
-          </div>
+          <OwnerNameRow
+            prefix="import"
+            getOwner={getOwner}
+            setOwner={setOwner}
+            getOwners={getOwners}
+            getName={getName}
+            setName={setName}
+            namePlaceholder="monorepo"
+            nameCharsError={nameCharsError}
+          />
           <label class="grid gap-1" for="import-token">
             <span class="text-sm font-medium">Token</span>
             <input

@@ -21,16 +21,25 @@ const IMPORT = srcOf("../../src/pages/Import.jsx");
 const ORGNEW = srcOf("../../src/pages/OrgNew.jsx");
 
 test("Owner/Name rows collapse below sm (no bare grid-cols-2)", () => {
+  // Forgejo #497: the row lives in the shared OwnerNameRow component —
+  // both pages render it, so the layout is identical by construction. The
+  // component keeps the collapsing rule (grid-cols-1 below sm:, never a
+  // bare grid-cols-2) with an asymmetric sm: split (Owner 1fr, Name 2fr).
+  const ROW = srcOf("../../src/components/OwnerNameRow.jsx");
   for (const [name, src] of [["New.jsx", NEW], ["Import.jsx", IMPORT]]) {
     assert.ok(
-      src.includes('<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">'),
-      `${name}: Owner/Name row uses the canonical collapsing row class`,
+      src.includes("<OwnerNameRow"),
+      `${name}: Owner/Name row is the shared component`,
     );
     assert.ok(
-      !src.includes("grid-cols-2 gap-3"),
-      `${name}: no unprefixed two-column row may squeeze fields at 390px`,
+      !/<div class="[^"]*grid-cols-2[^"]*">/.test(src),
+      `${name}: no in-page two-column row may squeeze fields at 390px`,
     );
   }
+  assert.ok(
+    ROW.includes('<div class="grid grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">'),
+    "shared row: collapsing base with asymmetric sm: split",
+  );
 });
 
 test("owner hint noise is gone from both owner selects", () => {
