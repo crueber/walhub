@@ -84,6 +84,7 @@ For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml
 
 ## Backlog
 
+- file edit
 - projects
 - wiki
 - insights
