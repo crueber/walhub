@@ -1,12 +1,14 @@
 // web/test/unit/owner-repos-tab-422.test.js — Forgejo #422: the owner
 // repositories listing moves off /:owner into its own tab at
-// /:owner/repositories. /:owner is the profile view (header, tab strip,
-// repository-count teaser — no grid); /:owner/repositories is the
-// repositories tab (tab strip + the toolbar/CTA/grid/import listing moved
-// verbatim). Client-only: routes + Repos.jsx views, no API change, the
-// listing rides the shared `repos:{owner}` key, <RepoRow> stays shared
-// (no fork). Tab-strip (not a simple link) reusing the repo page's tab
-// bar anatomy (Repo.jsx). No DOM: JSX pinned as source text, mirroring
+// /:owner/repositories. /:owner is the profile view (identity only — the
+// #437 sidebar tab list plus the #421 avatar asides live in the shared
+// sidebar shell, no grid, no teaser); /:owner/repositories is the
+// repositories tab (the toolbar/CTA/grid/import listing moved verbatim
+// into the shared main column). Client-only: routes + Repos.jsx views, no
+// API change, the listing rides the shared `repos:{owner}` key, <RepoRow>
+// stays shared (no fork). The tab list (Forgejo #437, superseding the
+// #435 top strip) is a vertical sidebar list, not the repo page's tab bar.
+// No DOM: JSX pinned as source text, mirroring
 // repos-toolbar-413.test.js / profile-sidebar-421.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -21,7 +23,6 @@ function srcOf(rel) {
 
 const REPOS = srcOf("../../src/pages/Repos.jsx");
 const INDEX = srcOf("../../src/index.jsx");
-const REPO = srcOf("../../src/pages/Repo.jsx");
 const OWNERS = srcOf("../../src/pages/Owners.jsx");
 const CSS = srcOf("../../src/ui.css");
 
@@ -56,54 +57,53 @@ test("route: /:owner/repositories registered before /:owner (static before dynam
   assert.ok(comment.includes("repositories"), "the comment names the reservation");
 });
 
-test("tab strip reuses the repo page's tab bar anatomy", () => {
-  assert.ok(REPOS.includes("export function OwnerTabs"), "the strip is a named component (tab strip, not a bare link)");
-  const strip = block(REPOS, "export function OwnerTabs", "function ProfileForm");
-  assert.ok(strip.includes('aria-label="owner sections"'), "the strip is a labelled landmark like the repo tabs");
-  assert.ok(strip.includes("owner-tabs"), "own CSS hook (not the repo-tabs class)");
+test("tab list is the vertical sidebar list (Forgejo #437, not the repo tab bar)", () => {
+  assert.ok(REPOS.includes("export function OwnerTabs"), "the list is a named component (tab list, not a bare link)");
+  const tabs = block(REPOS, "export function OwnerTabs", "function ProfileForm");
+  assert.ok(tabs.includes('aria-label="owner sections"'), "the list is a labelled landmark");
+  assert.ok(tabs.includes("owner-tabs"), "own CSS hook kept");
   const tag = tagOf(REPOS, '<nav\n      class="owner-tabs');
-  for (const token of ["mb-4", "flex", "max-w-full", "gap-1", "overflow-x-auto", "whitespace-nowrap", "border-b"]) {
-    assert.ok(tag.includes(token), `strip carries the repo-tab shape token: ${token}`);
+  for (const token of ["flex", "w-full", "flex-col", "rounded-lg", "border", "border-zinc-200", "dark:border-zinc-700"]) {
+    assert.ok(tag.includes(token), `list carries the sidebar-box token: ${token}`);
   }
-  const repoTag = tagOf(REPO, '<nav ref={tabsNav} class="repo-tabs');
-  for (const token of ["flex", "max-w-full", "gap-1", "overflow-x-auto", "whitespace-nowrap", "border-b"]) {
-    assert.ok(repoTag.includes(token), `repo-tab reference shape carries: ${token}`);
-  }
-  assert.ok(strip.includes("Profile"), "Profile tab present");
-  assert.ok(strip.includes("Repositories"), "Repositories tab present");
-  assert.ok(strip.includes("href={`/${props.owner}`}"), "Profile tab links to /:owner");
-  assert.ok(strip.includes("href={`/${props.owner}/repositories`}"), "Repositories tab links to the tab route");
-  assert.ok(strip.includes("rounded-t px-3 py-1.5 text-sm"), "tab link treatment matches Repo.jsx");
-  assert.ok(strip.includes("!border-b-2 !border-emerald-500"), "active-tab underline matches Repo.jsx");
-  assert.ok(strip.includes('aria-current={active() === "profile" ? "page" : undefined}'), "profile tab marks aria-current");
-  assert.ok(strip.includes('aria-current={active() === "repos" ? "page" : undefined}'), "repositories tab marks aria-current");
-  assert.ok(strip.includes("tab-badge"), "repositories tab carries the count badge hook");
+  assert.ok(tabs.includes("Profile"), "Profile tab present");
+  assert.ok(tabs.includes("Repositories"), "Repositories tab present");
+  assert.ok(tabs.includes("href={`/${props.owner}`}"), "Profile tab links to /:owner");
+  assert.ok(tabs.includes("href={`/${props.owner}/repositories`}"), "Repositories tab links to the tab route");
+  assert.ok(tabs.includes("block w-full rounded-md px-3 py-1.5 text-sm"), "stacked full-width link treatment");
+  assert.ok(tabs.includes('aria-current={active() === "profile" ? "page" : undefined}'), "profile tab marks aria-current");
+  assert.ok(tabs.includes('aria-current={active() === "repos" ? "page" : undefined}'), "repositories tab marks aria-current");
+  assert.ok(tabs.includes("tab-badge"), "repositories tab carries the count badge hook");
 });
 
-test("strip leads the page on all three routes and both variants (first in flow, outside every Show)", () => {
+test("sidebar shell (tabs first) renders on both routes and both variants", () => {
   const use = REPOS.indexOf("<OwnerTabs owner={owner()} count={repoCount()} isOrg={isOrg()} />");
-  assert.ok(use !== -1, "the page renders the strip with owner + shared-payload count + org gating (#430)");
-  // Forgejo #435: the strip moved above the identity layout — it renders
-  // before the profile grid and outside every Show, so no view or variant
-  // gate can hide it on any route.
+  assert.ok(use !== -1, "the sidebar renders the list with owner + shared-payload count + org gating (#430)");
+  // Forgejo #437: one shared profile layout on every owner route — the
+  // layout opens outside every Show, and the sidebar column (tabs first,
+  // then the gated asides) opens after every view branch closes, so no
+  // view or variant gate can hide tab navigation on any route.
   const page = REPOS.indexOf('<div class="repos-page">');
-  assert.ok(page !== -1 && page < use, "the strip renders inside the owner page");
-  const between = REPOS.slice(page, use);
-  const opens = (between.match(/<Show/g) || []).length;
-  const closes = (between.match(/<\/Show>/g) || []).length;
-  assert.ok(opens === closes, "every Show opened since the page root is closed before the strip (strip is outside)");
-  assert.ok(!between.includes("view()"), "no view gate hides the strip on any route");
-  assert.ok(!between.includes("isOrg()"), "no variant gate hides the strip on either variant");
   const layout = REPOS.indexOf('<div class="profile-layout');
-  assert.ok(layout !== -1 && use < layout, "the strip renders before the identity layout (first in page flow)");
+  assert.ok(page !== -1 && page < layout && layout < use, "page root, then the shared layout, then the tab list");
+  const head = REPOS.slice(page, layout);
+  const headOpens = (head.match(/<Show/g) || []).length;
+  const headCloses = (head.match(/<\/Show>/g) || []).length;
+  assert.ok(headOpens === headCloses, "every Show opened since the page root is closed before the layout (layout is outside)");
+  assert.ok(!head.includes("view()"), "no view gate hides the layout on any route");
+  assert.ok(!head.includes("isOrg()"), "no variant gate hides the layout on either variant");
+  const col = REPOS.indexOf('<div class="profile-sidebar-col');
+  assert.ok(col !== -1 && col < use, "the tab list renders inside the sidebar column");
+  const tail = REPOS.slice(col);
+  assert.ok(tail.includes('aria-label="Profile actions"'), "user aside kept below the tabs");
+  assert.ok(tail.includes('aria-label="Organization actions"'), "org aside kept below the tabs");
 });
 
-test("profile view: teaser with count + link, no grid/toolbar/import", () => {
+test("profile view: identity only, no teaser, no grid/toolbar/import", () => {
   const teaser = block(REPOS, '<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>');
-  assert.ok(teaser.includes("orderByActivity"), "teaser count rides the shared listing payload");
-  assert.ok(teaser.includes("repositor"), "teaser names the repository count");
-  assert.ok(teaser.includes("View all →"), "teaser links onward (no dead profile)");
-  assert.ok(teaser.includes("href={`/${owner()}/repositories`}"), "teaser deep-links the tab route");
+  assert.ok(teaser.includes("<h1"), "identity header kept as the page h1");
+  assert.ok(!teaser.includes("View all →"), "the leftover count teaser is deleted (#437)");
+  assert.ok(!teaser.includes("href={`/${owner()}/repositories`}"), "no deep-link to the tab route on the profile view");
   assert.ok(!teaser.includes("repos-toolbar"), "no toolbar on the profile view");
   assert.ok(!teaser.includes("<RepoRow"), "no repo grid on the profile view");
   assert.ok(!teaser.includes("import into {owner()}"), "no import footer on the profile view");
@@ -164,12 +164,10 @@ test("no data-fetch, cache-key, or gating-logic changes", () => {
   assert.ok(!REPOS.includes("repos.owners.list("), "no new endpoint rides along for the count");
 });
 
-test("390px: strip scrolls internally, teaser wraps, no fixed widths", () => {
+test("390px: vertical list stacks full-width, views wrap, no fixed widths", () => {
   const tag = tagOf(REPOS, '<nav\n      class="owner-tabs');
-  assert.ok(tag.includes("max-w-full"), "strip never grows past the viewport");
-  assert.ok(tag.includes("overflow-x-auto"), "strip scrolls internally like the repo tabs");
-  assert.ok(tag.includes("whitespace-nowrap"), "tabs never wrap mid-label");
-  assert.ok(CSS.includes(".owner-tabs { scrollbar-width: none; }"), "strip hides its scrollbar like the repo tabs");
-  assert.ok(CSS.includes(".owner-tabs a { @apply shrink-0; }"), "strip links never shrink to unreadability");
-  assert.ok(!tag.includes("w-["), "no fixed widths on the strip");
+  assert.ok(tag.includes("w-full"), "list fills the sidebar column at every width");
+  assert.ok(tag.includes("flex-col"), "tabs stack vertically (no internal scroll)");
+  assert.ok(CSS.includes(".owner-tabs a { @apply block w-full; }"), "links stack full-width via the hook");
+  assert.ok(!tag.includes("w-["), "no fixed widths on the list");
 });

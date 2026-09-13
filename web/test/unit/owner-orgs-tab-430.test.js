@@ -1,11 +1,11 @@
 // web/test/unit/owner-orgs-tab-430.test.js — Forgejo #430: the owner
-// Organizations tab at /:owner/organizations. /:owner is the rail-free
-// profile view (identity, tab strip, repository-count teaser); the #423
+// Organizations tab at /:owner/organizations. /:owner is the rail-free,
+// teaser-free profile view (identity + the #437 sidebar tab list); the #423
 // membership list moves verbatim into the new view="orgs" branch (links to
 // /:org, explicit "No organizations" empty state, loading state preserved).
 // Client-only: route + Repos.jsx views, no API change, the list rides the
-// shared `memberorgs:{owner}` key. The strip reads Profile | Repositories |
-// Organizations with the same classes/active-underline/aria-current on all
+// shared `memberorgs:{owner}` key. The list reads Profile | Repositories |
+// Organizations with the same classes/active-background/aria-current on all
 // three routes; org profiles keep Profile | Repositories (#370: member
 // principals are email spellings, not routable owner slugs). No DOM: JSX
 // pinned as source text, mirroring owner-repos-tab-422.test.js.
@@ -62,14 +62,14 @@ test("active-tab derivation covers all three routes", () => {
   assert.ok(strip.includes("active()"), "tabs read the shared derivation (no per-tab pathname math)");
 });
 
-test("third tab keeps the strip's classes, underline, and aria-current", () => {
+test("third tab keeps the list's classes, active background, and aria-current", () => {
   const strip = block(REPOS, "export function OwnerTabs", "function ProfileForm");
   assert.ok(strip.includes("Organizations"), "Organizations tab present");
   assert.ok(strip.includes("href={`/${props.owner}/organizations`}"), "Organizations tab links to the tab route");
   assert.ok(strip.includes('aria-current={active() === "orgs" ? "page" : undefined}'), "organizations tab marks aria-current");
   assert.ok(
-    strip.includes('classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": active() === "orgs" }}'),
-    "organizations tab carries the same active underline as the first two"
+    strip.includes('"!bg-zinc-100 !font-medium !text-zinc-900 dark:!bg-zinc-800 dark:!text-zinc-100": active() === "orgs"'),
+    "organizations tab carries the same connected active background as the first two (#437)"
   );
   const orgsLink = strip.indexOf("href={`/${props.owner}/organizations`}");
   const clsDef = strip.indexOf('const cls =');
@@ -109,12 +109,13 @@ test("orgs view: the membership list moved verbatim behind view()===\"orgs\"", (
   assert.ok(!listing.includes("View all →"), "no profile teaser on the organizations tab");
 });
 
-test("profile view: rail-free, teaser intact", () => {
+test("profile view: rail-free and teaser-free, identity kept", () => {
   const teaser = block(REPOS, '<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>');
   assert.ok(!teaser.includes("orgs-rail"), "no membership rail on the profile view (#430 planner's call: rail-free)");
   assert.ok(!teaser.includes("No organizations"), "no membership empty state on the profile view");
-  assert.ok(teaser.includes("View all →"), "teaser links onward (no dead profile)");
-  assert.ok(teaser.includes("href={`/${owner()}/repositories`}"), "teaser deep-links the repositories tab");
+  assert.ok(!REPOS.includes("View all →"), "the leftover count teaser is deleted everywhere (#437)");
+  assert.ok(!teaser.includes("href={`/${owner()}/repositories`}"), "no deep-link to the tab route on the profile view");
+  assert.ok(teaser.includes("<h1"), "identity header kept as the page h1");
   assert.ok(!teaser.includes("repos-toolbar"), "no toolbar on the profile view");
   assert.ok(!teaser.includes("<RepoRow"), "no repo grid on the profile view");
 });
