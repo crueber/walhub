@@ -12,6 +12,7 @@ import { formatNextSync } from "../lib/mirror.js";
 import { visibilityBadge } from "../lib/visibility.js";
 import { activeTab, tabBadge } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
+import Icon from "../lib/icons.jsx";
 import { shortRef, pillHead, pillLabel } from "../lib/ref-pill.js";
 export { shortRef };
 
@@ -96,7 +97,7 @@ function CloneMenu(props) {
   };
   return (
     <details ref={root} class="clone-menu relative" onToggle={(e) => { setOpen(e.target.open); if (e.target.open) load(); }} onKeyDown={onKey}>
-      <summary class="btn cursor-pointer px-2 py-1 text-sm select-none">Clone</summary>
+      <summary class="btn cursor-pointer px-2 py-1 text-sm select-none"><Icon name="clone" /> Clone</summary>
       <div class="clone-body card absolute right-0 z-30 mt-2 w-96 space-y-3 p-3">
         <div class="flex items-center gap-2">
           <div role="group" aria-label="Clone protocol" class="flex gap-1">
@@ -211,7 +212,7 @@ function WatchToggle(props) {
           aria-pressed={w().watching}
           aria-label={w().watching ? "Unwatch this repo" : "Watch this repo"}
         >
-          👁 {w().watchers ?? 0} Watch
+          <Icon name={w().watching ? "watch-on" : "watch-off"} /> {w().watchers ?? 0} Watch
         </button>
       )}
     </Show>
@@ -366,7 +367,7 @@ function StarToggle(props) {
           aria-pressed={s().viewer?.starred}
           aria-label={s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
         >
-          ★ {s().stars ?? 0} Star
+          <Icon name={s().viewer?.starred ? "star-on" : "star-off"} /> {s().stars ?? 0} Star
         </button>
       )}
     </Show>
@@ -658,6 +659,7 @@ export default function Repo(props) {
                       count still lands on the (empty) network page. Counts
                       still ride summary.forks — no new requests. */}
                   <span class="btn px-2 py-1 text-sm whitespace-nowrap" title={`Fork ${full()}`}>
+                    <Icon name="fork" />
                     <A class="hover:underline" href={`/${full()}/forks`} title={`View forks of ${full()}`}>
                       {s().forks ?? 0}
                     </A>

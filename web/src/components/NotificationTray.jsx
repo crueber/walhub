@@ -13,6 +13,7 @@ import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { unreadCount, refreshUnread } from "../pages/Notifications.jsx";
+import Icon from "../lib/icons.jsx";
 
 export default function NotificationTray() {
   const [getOpen, setOpen] = createSignal(false);
@@ -83,7 +84,7 @@ export default function NotificationTray() {
         aria-haspopup="true"
         onClick={() => (getOpen() ? close() : setOpen(true))}
       >
-        <span aria-hidden="true">🔔</span>
+        <Icon name={(unreadCount() ?? 0) > 0 ? "notify-on" : "notify-off"} />
         <Show when={(unreadCount() ?? 0) > 0}>
           <span
             aria-live="polite"

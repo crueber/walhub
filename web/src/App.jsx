@@ -10,6 +10,7 @@ import { theme, toggleTheme } from "./lib/store.js";
 import { navModel } from "./lib/identity.js";
 import { refreshUnread, unreadCount } from "./pages/Notifications.jsx";
 import NotificationTray from "./components/NotificationTray.jsx";
+import Icon from "./lib/icons.jsx";
 import IdentityMenu from "./components/IdentityMenu.jsx";
 
 export default function App(props) {
@@ -112,8 +113,8 @@ export default function App(props) {
               title="Toggle dark mode"
               onClick={() => toggleTheme()}
             >
-              <Show when={theme() === "dark"} fallback={<span aria-hidden="true">☀</span>}>
-                <span aria-hidden="true">☾</span>
+              <Show when={theme() === "dark"} fallback={<Icon name="light-mode" />}>
+                <Icon name="dark-mode" />
               </Show>
             </button>
             <Show when={nav().showIdentity}>
