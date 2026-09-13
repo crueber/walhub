@@ -126,6 +126,20 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 	if err != nil {
 		return nil, fmt.Errorf("%w: unknown head revision %q", ErrUnprocessable, pr.Head.Ref)
 	}
+	// Fork→base object bridge (issue #456): the trial merge, commit-tree,
+	// replay, and the merge-object pack all run in baseDir, so fork-unique
+	// head objects are fetched from the fork serving copy first (local
+	// disk-to-disk, zero bucket trips — and the pack step then carries
+	// those objects to the bucket atomically with the ref move, §5
+	// durability). A bridge failure fails the task loud: a merge without
+	// its objects must never publish.
+	if pr.Head.Repo != pr.Base.Repo {
+		if ferr := s.Git.FetchInto(ctx, baseDir, headDir, headLive); ferr != nil {
+			rec.notice("fork object bridge failed: %s", ferr.Error())
+			return nil, fmt.Errorf("%w: fork object bridge: %v", ErrUnavailable, ferr)
+		}
+		rec.notice("bridged fork objects for %s", shortSHA(headLive))
+	}
 	if headLive != pr.Head.SHA {
 		s.refreshHead(ctx, owner, repo, pr, th, headLive, actor)
 		if npr, _, nerr := s.loadPR(ctx, owner, repo, num); nerr == nil && npr != nil {

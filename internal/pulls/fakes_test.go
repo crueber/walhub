@@ -104,6 +104,12 @@ type FakeGit struct {
 	PackTipErr   error
 	PackTipEmpty bool
 
+	// FetchErr fails FetchInto (tests only: fork-object bridge outage);
+	// FetchNoOp makes FetchInto record the call without marking the sha
+	// reachable (tests only: bridges that change nothing).
+	FetchErr  error
+	FetchNoOp bool
+
 	// Barrier pauses the first TrialMerge until BarrierHold closes
 	// (tests only: proves single-flight collapse under true concurrency).
 	BarrierOnce sync.Once
@@ -336,6 +342,27 @@ func (f *FakeGit) PackTip(_ context.Context, dir, tip string) (*TipPack, error) 
 		return nil, nil
 	}
 	return &TipPack{Checksum: strings.Repeat("c", 40), PackSize: 10, IdxSize: 5, ObjectCount: 2}, nil
+}
+
+// FetchInto scripts the §7 fork→base bridge: it records the call and, on
+// success, marks the sha reachable (the served-copy effect of a real fetch
+// — post-bridge probes in baseDir succeed). FetchErr scripts a bridge
+// outage; FetchNoOp records without marking (bridges that change nothing).
+func (f *FakeGit) FetchInto(_ context.Context, baseDir, srcDir, sha string) error {
+	defer f.enter("fetch:" + sha)()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FetchErr != nil {
+		return f.FetchErr
+	}
+	if !f.FetchNoOp {
+		if f.ReachableMap == nil {
+			f.ReachableMap = map[string]bool{}
+		}
+		f.ReachableMap[sha] = true
+	}
+	_, _, _ = baseDir, srcDir, sha
+	return nil
 }
 
 // TrialOutcome scripts one TrialMerge call.
