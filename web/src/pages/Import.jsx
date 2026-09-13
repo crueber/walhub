@@ -9,6 +9,14 @@
 // dark + light via dark: variants on every surface; permission gating
 // disables the form AND honors server 401/403 (never client-only
 // enforcement).
+// Form-page pattern (Forgejo #479 standing rule — reference: ReleaseNew.jsx):
+// centered mx-auto max-w-2xl column, one h2 + one muted intro, single card
+// form, label.grid.gap-1 fields with id + aria-describedby help, collapsing
+// grid-cols-1 sm:grid-cols-2 rows (never a bare grid-cols-2), inline
+// errors/warnings, primary button with busy swap + cancel to /explore.
+// The mirror pull-only paragraph lives on New.jsx only (not duplicated
+// here — this page's mirror radio label already carries the pull-only
+// detail); the LFS/ssh limits live in a collapsed details, not prose.
 
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import { A, useNavigate, useSearchParams } from "@solidjs/router";
@@ -204,7 +212,7 @@ export default function Import() {
   const heads = () => Object.entries(getOutcome()?.head_shas ?? {});
 
   return (
-    <div class="import-page grid max-w-2xl gap-4">
+    <div class="import-page mx-auto grid max-w-2xl gap-4">
       <h2 class="text-xl font-semibold">Import repository</h2>
       <Show when={getPhase() === "form" || getPhase() === "error"}>
         <form class="card grid gap-3 p-4" onSubmit={start} aria-label="Import repository">
@@ -217,9 +225,10 @@ export default function Import() {
               <input type="radio" name="kind" checked={getMode() === "mirror"} onChange={() => setMode("mirror")} />
               mirror continuously <span class="muted">(recurring pull, pushes rejected)</span>
             </label>
-          </div>          <label class="grid gap-1">
+          </div>          <label class="grid gap-1" for="import-source">
             <span class="text-sm font-medium">Source URL (owner/repo, GitHub URL, or any git URL)</span>
             <input
+              id="import-source"
               class="input font-mono"
               value={getUrl()}
               onInput={(e) => {
@@ -231,28 +240,32 @@ export default function Import() {
               placeholder="acme/monorepo or https://github.com/acme/monorepo.git"
               autocomplete="off"
               spellcheck={false}
+              aria-describedby="import-source-help"
             />
-            <Show when={suggestion().url && getUrl()}>
-              <span class="muted text-xs">
-                canonical: <code>{suggestion().url}</code>
-              </span>
-            </Show>
-            <Show when={suggestion().error && getUrl()}>
-              <span class="text-xs text-amber-700 dark:text-amber-400">{suggestion().error}</span>
+            <Show when={(suggestion().url || suggestion().error) && getUrl()}>
+              <p id="import-source-help" class="muted text-xs">
+                <Show when={suggestion().url}>
+                  canonical: <code>{suggestion().url}</code>
+                </Show>
+                <Show when={suggestion().error}>
+                  <span class="text-amber-700 dark:text-amber-400">{suggestion().error}</span>
+                </Show>
+              </p>
             </Show>
           </label>
-          <div class="grid grid-cols-2 gap-3">
-            <label class="grid gap-1">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label class="grid gap-1" for="import-owner">
               <span class="text-sm font-medium">Owner</span>
               <Show
                 when={getOwners() !== null}
                 fallback={
-                  <select class="input font-mono" disabled aria-label="Owner">
+                  <select id="import-owner" class="input font-mono" disabled aria-label="Owner">
                     <option>{getOwner() || "…"}</option>
                   </select>
                 }
               >
                 <select
+                  id="import-owner"
                   class="input font-mono"
                   value={getOwner()}
                   onChange={(e) => setOwner(e.currentTarget.value)}
@@ -261,32 +274,37 @@ export default function Import() {
                   <For each={getOwners() ?? []}>{(o) => <option value={o}>{o}</option>}</For>
                 </select>
               </Show>
-              <span class="muted text-xs">you and your orgs only</span>
             </label>
-            <label class="grid gap-1">
+            <label class="grid gap-1" for="import-name">
               <span class="text-sm font-medium">Name</span>
               <input
+                id="import-name"
                 class="input font-mono"
                 value={getName()}
                 onInput={(e) => setName(e.currentTarget.value.trim())}
                 placeholder="monorepo"
                 autocomplete="off"
                 spellcheck={false}
+                aria-label="Name"
+                aria-describedby="import-name-help"
               />
+              <span id="import-name-help" class="muted text-xs">Letters, digits, and . _ - — the URL path after the owner.</span>
             </label>
           </div>
-          <label class="grid gap-1">
-            <span class="text-sm font-medium">
-              Token <span class="muted">(private sources only — never stored, never logged)</span>
-            </span>
+          <label class="grid gap-1" for="import-token">
+            <span class="text-sm font-medium">Token</span>
             <input
+              id="import-token"
               class="input font-mono"
               type="password"
               value={getToken()}
               onInput={(e) => setToken(e.currentTarget.value)}
               placeholder="contents:read token for a private source"
               autocomplete="off"
+              aria-label="Token"
+              aria-describedby="import-token-help"
             />
+            <span id="import-token-help" class="muted text-xs">Private sources only — sent once for this import, never stored or logged.</span>
           </label>
           <div class="flex flex-wrap gap-4">
             <Show when={getMode() === "import"}>
@@ -320,16 +338,13 @@ export default function Import() {
               </label>
             </Show>
           </div>
-          <Show when={getMode() === "mirror"}>
-            <p class="muted text-xs">
-              Mirrors are pull-only: pushes are rejected for everyone, and the upstream
-              syncs on the schedule. The first sync starts immediately.
+          <details class="text-xs">
+            <summary class="muted cursor-pointer hover:underline">Import limitations: LFS and ssh</summary>
+            <p class="muted mt-1">
+              LFS-tracked files import as pointer blobs (never smudged). Server-side ssh is not
+              supported in v1 — use https with a token for private sources.
             </p>
-          </Show>
-          <p class="muted text-xs">
-            LFS-tracked files import as pointer blobs (never smudged). Server-side ssh is not
-            supported in v1 — use https with a token for private sources.
-          </p>
+          </details>
           <label class="flex items-start gap-2 text-sm">
             <input type="checkbox" class="mt-0.5" checked={getDangerous()} onChange={(e) => setDangerous(e.currentTarget.checked)} />
             <span>
@@ -360,6 +375,9 @@ export default function Import() {
             <button type="submit" class="btn primary px-3 py-1" disabled={getBusy() || anonymous() || !getUrl() || !getOwner() || !getName()}>
               {getBusy() ? "starting…" : getMode() === "mirror" ? "create mirror" : "start import"}
             </button>
+            <A class="btn px-3 py-1" href="/explore">
+              cancel
+            </A>
           </div>
         </form>
       </Show>

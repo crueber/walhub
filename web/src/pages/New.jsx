@@ -4,6 +4,11 @@
 // dark + light via dark: variants; 409-exists and validation 400s render
 // inline (expected control flow ≠ reportError — the Ticket-1
 // tolerateMissing discipline extended).
+// Form-page pattern (Forgejo #479 standing rule — reference: ReleaseNew.jsx):
+// centered mx-auto max-w-2xl column, one h2 + one muted intro, single card
+// form, label.grid.gap-1 fields with id + aria-describedby help, collapsing
+// grid-cols-1 sm:grid-cols-2 rows (never a bare grid-cols-2), inline
+// errors/warnings, primary button with busy swap + cancel to /explore.
 
 import { createSignal, Show, For, onCleanup } from "solid-js";
 import { A, useNavigate, useSearchParams } from "@solidjs/router";
@@ -155,7 +160,7 @@ export default function New() {
   };
 
   return (
-    <div class="new-page grid max-w-2xl gap-4">
+    <div class="new-page mx-auto grid max-w-2xl gap-4">
       <h2 class="text-xl font-semibold">New repository</h2>
       <p class="muted text-sm">
         Reserve a name and get push instructions. The first push adopts the
@@ -172,18 +177,19 @@ export default function New() {
             mirror from URL <span class="muted">(pull-only, scheduled syncs)</span>
           </label>
         </div>
-        <div class="grid grid-cols-2 gap-3">
-          <label class="grid gap-1">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label class="grid gap-1" for="new-owner">
             <span class="text-sm font-medium">Owner</span>
             <Show
               when={getOwners() !== null}
               fallback={
-                <select class="input font-mono" disabled aria-label="Owner">
+                <select id="new-owner" class="input font-mono" disabled aria-label="Owner">
                   <option>{getOwner() || "…"}</option>
                 </select>
               }
             >
               <select
+                id="new-owner"
                 class="input font-mono"
                 value={getOwner()}
                 onChange={(e) => setOwner(e.currentTarget.value)}
@@ -192,11 +198,11 @@ export default function New() {
                 <For each={getOwners() ?? []}>{(o) => <option value={o}>{o}</option>}</For>
               </select>
             </Show>
-            <span class="muted text-xs">you and your orgs only</span>
           </label>
-          <label class="grid gap-1">
+          <label class="grid gap-1" for="new-name">
             <span class="text-sm font-medium">Name</span>
             <input
+              id="new-name"
               class="input font-mono"
               value={getName()}
               onInput={(e) => setName(e.currentTarget.value.trim())}
@@ -204,13 +210,16 @@ export default function New() {
               autocomplete="off"
               spellcheck={false}
               aria-label="Name"
+              aria-describedby="new-name-help"
             />
+            <span id="new-name-help" class="muted text-xs">Letters, digits, and . _ - — the URL path after the owner.</span>
           </label>
         </div>
         <Show when={getMode() === "mirror"}>
-          <label class="grid gap-1">
+          <label class="grid gap-1" for="new-source">
             <span class="text-sm font-medium">Source URL</span>
             <input
+              id="new-source"
               class="input font-mono"
               value={getSource()}
               onInput={(e) => setSource(e.currentTarget.value)}
@@ -220,13 +229,13 @@ export default function New() {
               aria-label="Source URL"
             />
           </label>
-          <label class="grid gap-1">
+          <label class="grid gap-1" for="new-schedule">
             <span class="text-sm font-medium">Sync schedule</span>
-            <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Sync schedule">
+            <select id="new-schedule" class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Sync schedule" aria-describedby="new-mirror-help">
               <For each={MIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
             </select>
           </label>
-          <p class="muted text-xs">
+          <p id="new-mirror-help" class="muted text-xs">
             Mirrors are pull-only: pushes are rejected for everyone, and the upstream
             syncs on the schedule. The first sync starts immediately.
           </p>
@@ -284,6 +293,9 @@ export default function New() {
           >
             {getBusy() ? "creating…" : getMode() === "mirror" ? "create mirror" : "create repository"}
           </button>
+          <A class="btn px-3 py-1" href="/explore">
+            cancel
+          </A>
         </div>
       </form>
     </div>

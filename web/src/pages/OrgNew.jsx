@@ -6,6 +6,10 @@
 // Name validation mirrors the server (identity.ValidOrg) through the
 // shared lib rule so the form never promises what POST /api/v1/orgs
 // refuses; the server re-validates.
+// Form-page pattern (Forgejo #479 standing rule — reference: ReleaseNew.jsx):
+// centered mx-auto max-w-2xl column, one h2 + one muted intro, single card
+// form, label.grid.gap-1 fields with id + aria-describedby help, inline
+// errors/warnings, primary button with busy swap + cancel to /explore.
 
 import { createSignal, Show, onCleanup } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
@@ -67,16 +71,17 @@ export default function OrgNew() {
   };
 
   return (
-    <div class="new-page grid max-w-2xl gap-4">
+    <div class="new-page mx-auto grid max-w-2xl gap-4">
       <h2 class="text-xl font-semibold">New organization</h2>
       <p class="muted text-sm">
         Reserve an organization namespace. You become its owner and land in
         its settings, where you can edit the profile and add members.
       </p>
       <form class="card grid gap-3 p-4" onSubmit={submit} aria-label="New organization">
-        <label class="grid gap-1">
+        <label class="grid gap-1" for="orgnew-name">
           <span class="text-sm font-medium">Organization name</span>
           <input
+            id="orgnew-name"
             class="input font-mono"
             value={getOrg()}
             onInput={(e) => setOrg(e.currentTarget.value)}
@@ -84,14 +89,17 @@ export default function OrgNew() {
             autocomplete="off"
             spellcheck={false}
             aria-label="Organization name"
+            aria-describedby="orgnew-name-help"
           />
+          <span id="orgnew-name-help" class="muted text-xs">Lowercase letters, digits, and hyphens, 1–39 characters.</span>
         </label>
         <Show when={fieldError() && getOrg()}>
           <p class="text-xs text-red-700 dark:text-red-400">{fieldError()}</p>
         </Show>
-        <label class="grid gap-1">
+        <label class="grid gap-1" for="orgnew-display">
           <span class="text-sm font-medium">Display name</span>
           <input
+            id="orgnew-display"
             class="input"
             value={getDisplay()}
             onInput={(e) => setDisplay(e.currentTarget.value)}
@@ -101,9 +109,10 @@ export default function OrgNew() {
             aria-label="Display name"
           />
         </label>
-        <label class="grid gap-1">
+        <label class="grid gap-1" for="orgnew-desc">
           <span class="text-sm font-medium">Description</span>
           <input
+            id="orgnew-desc"
             class="input"
             value={getDesc()}
             onInput={(e) => setDesc(e.currentTarget.value)}
