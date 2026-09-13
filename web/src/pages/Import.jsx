@@ -312,7 +312,7 @@ export default function Import() {
                 aria-invalid={!!nameCharsError()}
                 aria-describedby="import-name-error"
               />
-              <p id="import-name-error" class="min-h-[1rem] text-xs text-red-700 dark:text-red-400" aria-live="polite">
+              <p id="import-name-error" class="min-h-[2rem] text-xs text-red-700 dark:text-red-400" aria-live="polite">
                 {nameCharsError()}
               </p>
             </label>

@@ -85,10 +85,12 @@ test("both inputs wire aria-invalid + aria-describedby to a live message", () =>
 
 test("no grid shift: the message is a reserved-height slot in the name cell", () => {
   for (const [name, src, id] of [["New.jsx", NEW, "new-name-error"], ["Import.jsx", IMPORT, "import-name-error"]]) {
-    // Always rendered (no <Show> gate around the slot) with one line of
+    // Always rendered (no <Show> gate around the slot) with two lines of
     // reserved height, inside the same label cell — the Owner/Name row
-    // keeps its height whether the message shows or not.
-    assert.ok(src.includes(`<p id="${id}" class="min-h-[1rem]`), `${name}: reserved-height slot`);
+    // keeps its height whether the message shows or not. Two lines, not
+    // one: the 81-char rule text wraps at sm:2-col cell widths (~300px)
+    // and at 390px mobile stacked, so a 1-line reserve would still shift.
+    assert.ok(src.includes(`<p id="${id}" class="min-h-[2rem]`), `${name}: reserved-height slot`);
     const labelIdx = src.indexOf(`for="${id === "new-name-error" ? "new-name" : "import-name"}"`);
     const slotIdx = src.indexOf(`<p id="${id}"`);
     assert.ok(labelIdx !== -1 && slotIdx > labelIdx, `${name}: slot lives inside the name label cell`);
