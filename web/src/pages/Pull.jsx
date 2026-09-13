@@ -20,6 +20,7 @@ import CommentComposer from "../components/CommentComposer.jsx";
 import MergeBox from "../components/MergeBox.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 
 function eventText(ev) {
   switch (ev.type) {
@@ -519,7 +520,7 @@ function FinishReview(props) {
       </Show>
       <label class="field">
         <span>Body (optional)</span>
-        <textarea value={getBody()} onInput={(e) => setBody(e.target.value)} rows="3" />
+        <textarea value={getBody()} onInput={(e) => setBody(e.target.value)} rows="3" onKeyDown={onSubmitKeys(submit, { isBusy: () => getBusy() })} />
       </label>
       <label class="field mt-2">
         <span>Verdict</span>

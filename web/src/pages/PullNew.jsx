@@ -38,6 +38,7 @@ import { A, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { useRepo } from "./Repo.jsx";
 import { reportError } from "../lib/data.js";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 import { mountStream } from "../lib/sse.js";
 import { roleAtLeast } from "../components/perms.jsx";
 import { useRole } from "../components/perms.jsx";
@@ -519,6 +520,7 @@ export default function PullNew() {
                   setBodyTouched(true);
                   setBody(e.target.value);
                 }}
+                onKeyDown={onSubmitKeys(open, { isBusy: () => getBusy() })}
                 aria-label="body"
               />
             </label>

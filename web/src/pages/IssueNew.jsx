@@ -7,6 +7,7 @@ import { useRepo } from "./Repo.jsx";
 import { reportError } from "../lib/data.js";
 import { renderBody } from "../lib/render-md.js";
 import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 
 export default function IssueNew() {
   const ctx = useRepo();
@@ -87,6 +88,7 @@ export default function IssueNew() {
               onInput={(e) => setBody(e.target.value)}
               onPaste={onPaste}
               onDrop={onDrop}
+              onKeyDown={onSubmitKeys(submit, { isBusy: () => getBusy() })}
               placeholder="Steps to reproduce… (markdown; #N links issues)"
             />
           }>

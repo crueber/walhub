@@ -10,6 +10,7 @@ import { A, useNavigate } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, reportError } from "../lib/data.js";
 import { filterTagNames } from "../lib/releases.js";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 
 export default function ReleaseNew() {
   const ctx = useRepo();
@@ -287,6 +288,7 @@ export default function ReleaseNew() {
               rows="10"
               value={getBody()}
               onInput={(e) => setBody(e.currentTarget.value)}
+              onKeyDown={onSubmitKeys(create, { isBusy: () => getBusy() })}
               placeholder="What's new in this release… (markdown-lite)"
               aria-describedby="release-notes-help"
             />

@@ -7,6 +7,7 @@
 import { createSignal, onCleanup, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import DateTime from "../components/DateTime.jsx";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 
 export default function Keys() {
   const [getKeys, setKeys] = createSignal(null);
@@ -138,6 +139,7 @@ export default function Keys() {
                 setKey(e.currentTarget.value);
                 validate(e.currentTarget.value);
               }}
+              onKeyDown={onSubmitKeys(add, { isBusy: () => getBusy() })}
             />
           </div>
           <div>
