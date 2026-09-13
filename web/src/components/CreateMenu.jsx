@@ -36,9 +36,12 @@ export default function CreateMenu(props) {
 
   const toggle = (e) => {
     e.preventDefault();
-    setOpen((o) => !o);
-    if (!getOpen()) {
-      // Focus the first item once the menu renders.
+    const opening = !getOpen();
+    setOpen(opening);
+    if (opening) {
+      // Focus the first item once the menu renders (Forgejo #477: read the
+      // pre-toggle value — getOpen() after setOpen already reflects the new
+      // state, so the old `if (!getOpen())` check never fired on open).
       queueMicrotask(() => menuRef?.querySelector("[role=menuitem]")?.focus());
     }
   };
