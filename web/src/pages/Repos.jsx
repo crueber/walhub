@@ -17,7 +17,9 @@
 // location / timezone picker from Intl.supportedValuesOf, never free text /
 // markdown bio with live preview) renders in the main column on all three
 // owner views (Forgejo #442: hoisted out of the profile-view gate — the
-// button toggles the shared-scope setEditing signal on every tab) and saves
+// button toggles the shared edit-open state on every tab; Forgejo #455: from
+// the repositories/organizations tabs the button also navigates to /{owner}
+// so the Profile tab lights and the form opens on the profile view) and saves
 // through the SDK, invalidating the
 // `profile:{owner}` cache entry so the page reflects the update without a
 // full reload (the Access-tab save→invalidate shape).
@@ -34,7 +36,7 @@
 
 import repos from "../../sdk/src/index.js";
 import { createSignal, createEffect, For, Show } from "solid-js";
-import { useParams, useLocation, A } from "@solidjs/router";
+import { useParams, useLocation, useNavigate, A } from "@solidjs/router";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { orderByActivity } from "../lib/owners.js";
 import { normalizeMemberOrgs } from "../lib/orgs.js";
@@ -306,6 +308,15 @@ function ProfileForm(props) {
   );
 }
 
+/** Forgejo #455: the profile-edit open state — the owner slug currently being
+ *  edited, or null. Module scope (the Notifications unreadCount / lib/store
+ *  theme shape), NOT an OwnerPage-local signal: the three owner routes
+ *  (/:owner, /:owner/repositories, /:owner/organizations) are sibling Route
+ *  components, so navigating between tabs remounts OwnerPage and a local
+ *  signal would reset before the profile view renders. Scoped by owner slug
+ *  so editing one owner never opens the form on another owner's page. */
+const [getEditingOwner, setEditingOwner] = createSignal(null);
+
 /** The owner page in all three views (Forgejo #422; third view Forgejo
  *  #430; sidebar tabs Forgejo #437, superseding the #435 top strip): one
  *  shared profile-layout grid on every view. The main column swaps per
@@ -365,7 +376,20 @@ function OwnerPage(props) {
     if (!u?.avatar_content_type) return null;
     return repos.users.avatar.url(owner(), u.avatar_updated_at);
   };
-  const [getEditing, setEditing] = createSignal(false);
+  // Forgejo #455: edit-open accessors over the module-scope state above — the
+  // component remounts on tab navigation, so the truth lives above it.
+  // Per-owner: only this page's slug counts as open.
+  const getEditing = () => getEditingOwner() === owner();
+  const setEditing = (open) => setEditingOwner(open ? owner() : null);
+  const navigate = useNavigate();
+  // Forgejo #455: opening the editor from a non-profile tab routes to
+  // /{owner} (OwnerTabs derives the Profile tab as active on any
+  // non-repositories/organizations pathname) with the shared form open; on
+  // the profile view this is just setEditing(true) — no navigation.
+  const openEditor = () => {
+    setEditing(true);
+    if (view() !== "profile") navigate(`/${owner()}`);
+  };
   // Writers-only New button (mirrors require_write so the button never
   // promises what POST /api/v1/repos refuses): hidden for anonymous
   // without write. One me() fetch, no tray (missing = hidden).
@@ -436,12 +460,14 @@ function OwnerPage(props) {
         <div class="profile-main min-w-0">
           {/* Forgejo #442: the profile edit form renders in the main column
               on ALL THREE owner views (above the per-view Shows), not inside
-              the profile-view gate — setEditing already lives at this shared
-              OwnerPage scope (toggled by the sidebar button on every view),
-              so flipping it on the repositories/organizations tabs reveals
-              the form instead of a dead button. Gate and onDone byte-identical
-              (editors only; save invalidates `profile:{owner}`); the #420 bio
-              hide-while-editing gate stays profile-view-only below. */}
+              the profile-view gate — the edit-open state lives at module
+              scope (Forgejo #455: toggled by the sidebar button on every
+              view, surviving the tab→profile navigation that remounts this
+              component), so flipping it on the repositories/organizations
+              tabs reveals the form instead of a dead button. Gate and onDone
+              byte-identical (editors only; save invalidates
+              `profile:{owner}`); the #420 bio hide-while-editing gate stays
+              profile-view-only below. */}
           <Show when={getEditing() && getProfile()?.can_edit}>
             <ProfileForm
               owner={owner()}
@@ -675,7 +701,7 @@ function OwnerPage(props) {
               <Show when={(getProfile()?.can_edit && !getEditing()) || isSelf()}>
                 <div class="profile-actions flex w-full flex-col gap-2">
                   <Show when={getProfile()?.can_edit && !getEditing()}>
-                    <button class="btn w-full justify-center px-3 py-1" type="button" onClick={() => setEditing(true)}>
+                    <button class="btn w-full justify-center px-3 py-1" type="button" onClick={openEditor}>
                       Edit profile
                     </button>
                   </Show>
