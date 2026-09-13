@@ -1,13 +1,16 @@
 // web/src/lib/icons.jsx — the shared embedded SVG icon mechanism (Forgejo
-// #465): one component, consumed by all eleven surfaces (Watch/Star/Fork/Clone
+// #465): one component, consumed by all twelve surfaces (Watch/Star/Fork/Clone
 // in pages/Repo.jsx, the notification bell in components/NotificationTray.jsx,
 // the theme toggle in App.jsx, the create button in
 // components/CreateMenu.jsx, the issue-list comment count in
 // pages/Issues.jsx, the milestone state chip + closed rows in
 // pages/Milestones.jsx, the issue-list milestone chip in pages/Issues.jsx,
-// and the repo tab-strip milestones affordance in pages/Repo.jsx).
+// the repo tab-strip milestones affordance in pages/Repo.jsx, the
+// issue-list labels filter trigger in pages/Issues.jsx, the labels page
+// heading in pages/Labels.jsx, and the repo tab-strip labels affordance
+// in pages/Repo.jsx).
 //
-// The 14 icon bodies are embedded below as inline JSX, transcribed verbatim
+// The 15 icon bodies are embedded below as inline JSX, transcribed verbatim
 // from the provided 1em currentColor files (issue comments 4783-4792 — the
 // source of truth for every path but two; each entry keeps its file's viewBox
 // as-is so the mixed viewports 16/24/1024/1200 all scale through width="1em"
@@ -24,6 +27,9 @@
 // swapped (open=24/done=16); the comment labels + files say open=16/done=24,
 // and per the #465 precedent the files are the source of truth, so the
 // entries below are embedded AS LABELED.
+// The fifteenth body is the label/tag icon (Forgejo #485), transcribed
+// verbatim from the issue-provided 24-unit file (viewBox kept as-is,
+// currentColor stroke paint, no color literals).
 // No fetches, no raw imports, no innerHTML: the icons ship
 // inside the vite bundle and render with zero runtime requests. No color
 // literals anywhere in this layer — every body paints via fill="currentColor"
@@ -146,9 +152,19 @@ const ICONS = {
       <path fill="currentColor" d="m22.115 10.055l-8.17-8.17a2.76 2.76 0 0 0-3.89 0l-8.17 8.17a2.76 2.76 0 0 0 0 3.89l8.17 8.17c.535.535 1.24.805 1.945.805s1.41-.27 1.945-.805l8.17-8.17a2.76 2.76 0 0 0 0-3.89m-10.73 5.12a1.25 1.25 0 0 1-.885.365c-.32 0-.64-.12-.885-.365l-2.27-2.27l1.06-1.06L10.5 13.94l5.47-5.47l1.06 1.06z" />
     ),
   },
+  // Forgejo #485: the label/tag icon, transcribed verbatim from the
+  // issue-provided 1em currentColor file (24-unit viewBox kept as-is,
+  // currentColor stroke paint — mixed units scale through the shared
+  // 1em svg, same as every entry above).
+  label: {
+    viewBox: "0 0 24 24",
+    body: (
+      <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m19.293 9.951l-2.333-2.8c-.353-.423-.53-.635-.746-.787a2 2 0 0 0-.632-.295C15.327 6 15.052 6 14.502 6H7.2c-1.12 0-1.68 0-2.108.218a2 2 0 0 0-.874.874C4 7.52 4 8.08 4 9.2v5.6c0 1.12 0 1.68.218 2.108a2 2 0 0 0 .874.874c.427.218.987.218 2.105.218H14.5c.551 0 .826 0 1.081-.069c.226-.06.44-.16.632-.296c.216-.152.393-.363.746-.786l2.333-2.8c.608-.729.91-1.093 1.027-1.5c.102-.359.102-.74 0-1.098c-.116-.407-.42-.77-1.027-1.5" />
+    ),
+  },
 };
 
-/** The fourteen icon names, in asset order (watch, star, fork, clone, bell, theme, plus, issue-comment, milestone open/done). */
+/** The fifteen icon names, in asset order (watch, star, fork, clone, bell, theme, plus, issue-comment, milestone open/done, label). */
 export const ICON_NAMES = Object.keys(ICONS);
 
 /**
