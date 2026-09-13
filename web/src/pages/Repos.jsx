@@ -15,11 +15,15 @@
 // when the server says so (`can_edit`: host admin, name-matched principal,
 // or org-owner role — the client never decides); the form (display name /
 // location / timezone picker from Intl.supportedValuesOf, never free text /
-// markdown bio with live preview) renders in the main column on all three
-// owner views (Forgejo #442: hoisted out of the profile-view gate — the
-// button toggles the shared edit-open state on every tab; Forgejo #455: from
-// the repositories/organizations tabs the button also navigates to /{owner}
-// so the Profile tab lights and the form opens on the profile view) and saves
+// markdown bio with live preview) renders in the main column on the profile
+// view ONLY (Forgejo #498: the #442 hoist above the per-view Shows let the
+// form leak onto the repositories/organizations tabs — re-scoped under
+// view() === "profile"; the sidebar button still toggles the shared
+// edit-open state on every tab and Forgejo #455 still navigates to /{owner}
+// so the Profile tab lights and the form opens on the profile view).
+// Edit mode exits on ANY navigation away (Forgejo #498: a pathname effect +
+// unmount cleanup keyed on the editing slug via lib/owners editStaysOpen —
+// tab switches close it too, discarding unsaved edits) and saves
 // through the SDK, invalidating the
 // `profile:{owner}` cache entry so the page reflects the update without a
 // full reload (the Access-tab save→invalidate shape).
@@ -35,10 +39,10 @@
 // the same component.
 
 import repos from "../../sdk/src/index.js";
-import { createSignal, createEffect, For, Show } from "solid-js";
+import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { useParams, useLocation, useNavigate, A } from "@solidjs/router";
 import { useData, invalidate, reportError } from "../lib/data.js";
-import { orderByActivity } from "../lib/owners.js";
+import { editStaysOpen, orderByActivity } from "../lib/owners.js";
 import { normalizeMemberOrgs } from "../lib/orgs.js";
 import { timeZones } from "../lib/timezone.js";
 import {
@@ -390,6 +394,32 @@ function OwnerPage(props) {
     setEditing(true);
     if (view() !== "profile") navigate(`/${owner()}`);
   };
+  // Forgejo #498: edit mode lives only on the profile view and exits on ANY
+  // navigation away. The module-scope signal (#455) survives tab remounts by
+  // design, so it needs an explicit exit path: this effect re-runs on every
+  // pathname change and clears the state unless the resulting path is the
+  // editing owner's profile view exactly (lib/owners editStaysOpen — tab
+  // routes, other owners, and non-owner pages all exit, discarding the
+  // form's component-local unsaved edits by unmount). The predicate keys on
+  // the EDITING slug, not this page's owner, so owner-to-owner navigation
+  // clears too. No toggle-fight with openEditor above: its set-then-navigate
+  // runs synchronously in one handler, so Solid batches both writes and the
+  // effect observes only the resulting pathname — the #455 tab→profile
+  // landing keeps the form open, never flash-open-then-close. The onCleanup
+  // below covers the unmount half (the router disposes OwnerPage before a
+  // mounted effect could re-run on a leaving navigation): it applies the
+  // same resulting-pathname condition, so the #455 remount (destination IS
+  // /{editing}) keeps the form while a true leave (destination elsewhere)
+  // clears the module state instead of stranding it open for the next visit.
+  // (The RefPicker/TasksOverlay popover onCleanup in Repo.jsx is the
+  // cleanup precedent.)
+  const loc = useLocation();
+  createEffect(() => {
+    if (!editStaysOpen(loc.pathname, getEditingOwner())) setEditingOwner(null);
+  });
+  onCleanup(() => {
+    if (!editStaysOpen(loc.pathname, getEditingOwner())) setEditingOwner(null);
+  });
   // Forgejo #466: the toolbar New-repository CTA (and its canWrite gate)
   // moved to the navbar create (+) button — the me() fetch stays for the
   // avatar self-service gate below.
@@ -452,16 +482,19 @@ function OwnerPage(props) {
           away on every owner route, then the gated #421 avatar asides. */}
       <div class="profile-layout grid grid-cols-1 gap-6 sm:grid-cols-[minmax(0,1fr)_12rem]">
         <div class="profile-main min-w-0">
-          {/* Forgejo #442: the profile edit form renders in the main column
-              on ALL THREE owner views (above the per-view Shows), not inside
-              the profile-view gate — the edit-open state lives at module
-              scope (Forgejo #455: toggled by the sidebar button on every
-              view, surviving the tab→profile navigation that remounts this
-              component), so flipping it on the repositories/organizations
-              tabs reveals the form instead of a dead button. Gate and onDone
-              byte-identical (editors only; save invalidates
-              `profile:{owner}`); the #420 bio hide-while-editing gate stays
-              profile-view-only below. */}
+          <Show when={view() === "profile"}>
+          {/* Forgejo #498 (supersedes the #442 hoist above the per-view
+              Shows, which leaked the form onto the repositories/
+              organizations tabs): the profile edit form renders in the main
+              column of the PROFILE VIEW ONLY — first inside the profile
+              branch, above the identity block. The edit-open state still
+              lives at module scope (Forgejo #455: the sidebar button on
+              every tab sets it, then navigates to /{owner} so the form opens
+              here after the remount); switching to a tab or navigating away
+              clears it via the #498 exit effect above, so the tabs always
+              show their normal content. Gate and onDone byte-identical
+              (editors only; save invalidates `profile:{owner}`); the #420
+              bio hide-while-editing gate stays below. */}
           <Show when={getEditing() && getProfile()?.can_edit}>
             <ProfileForm
               owner={owner()}
@@ -472,9 +505,8 @@ function OwnerPage(props) {
               }}
             />
           </Show>
-          <Show when={view() === "profile"}>
-      {/* Forgejo #421 (#413/#403/#395 follow-up; #442 hoisted the edit form
-          above the per-view Shows so it opens on every tab): the profile view
+      {/* Forgejo #421 (#413/#403/#395 follow-up; #498 scopes the edit form
+          to this profile branch so it opens only here): the profile view
           keeps the identity block in the main column — display name/handle/
           location/bio (with the #420 hide-while-editing gate intact). Below sm: the grid is one column so the sidebar
           stacks below the main column at 390px with no horizontal overflow

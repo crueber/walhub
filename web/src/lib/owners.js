@@ -193,6 +193,33 @@ export function instanceRepoTotal(detailRows) {
 }
 
 /**
+ * editStaysOpen(pathname, editingOwner) → whether profile edit mode survives
+ * the current route (Forgejo #498).
+ *
+ * True exactly when `editingOwner` names an owner AND `pathname` is that
+ * owner's profile view (`/${editingOwner}` exactly — no trailing segments).
+ * Every other route exits edit mode: the repositories/organizations tabs
+ * (`/.../repositories`, `/.../organizations`), another owner's pages, and
+ * every non-owner page. Unsaved edits are discarded by construction —
+ * `ProfileForm` holds its field state in component-local signals, so the
+ * unmount that navigation performs drops them.
+ *
+ * The predicate keys on the EDITING slug, not the page's current owner:
+ * navigating from /alice (editing) to /bob must exit even though /bob is
+ * itself a profile view. Callers evaluate it against the RESULTING pathname
+ * (Solid batches openEditor's synchronous set-then-navigate, so the effect
+ * sees the post-navigation path — the #455 open-then-navigate flow lands on
+ * /{owner} with the form still open, never flash-open-then-close).
+ */
+export function editStaysOpen(pathname, editingOwner) {
+  return (
+    typeof editingOwner === "string" &&
+    editingOwner !== "" &&
+    pathname === `/${editingOwner}`
+  );
+}
+
+/**
  * pageSlice(list, limit?) → {shown, extra}. Split a name list into the rows
  * the page renders (the first `limit`, in the caller's order) and the
  * overflow count folded behind the "+N more" link. Non-array input behaves

@@ -70,17 +70,21 @@ test("identity block stays atop the main column; tab views share the column", ()
   assert.ok(!profile.includes("repos-toolbar"), "no Repositories toolbar inside the profile branch (#437: teaser deleted, toolbar on the tab)");
   assert.ok(!profile.includes("<RepoRow"), "no repo grid inside the profile branch");
   assert.ok(!profile.includes("View all →"), "no count teaser inside the profile branch");
-  // Forgejo #442: the edit form is hoisted out of the profile-view gate —
-  // it renders in the main column above the per-view Shows so Edit profile
-  // works on every tab; the branch below keeps identity only.
-  assert.ok(!profile.includes("<ProfileForm"), "the edit form no longer nests inside the profile-view branch");
+  // Forgejo #498 (supersedes the #442 hoist): the edit form scopes back
+  // under the profile-view gate — first in the profile branch, above the
+  // identity block — so the tabs always show their normal content (the exit
+  // effect clears the module state on any navigation away, pinned in
+  // owner-profile-edit-exit-498.test.js). Reachability from every tab is
+  // kept through openEditor's navigate-to-/{owner} (#455).
+  assert.ok(profile.includes("<ProfileForm"), "the single edit form nests inside the profile-view branch");
   // The main column itself spans all three view branches before the sidebar.
   const mainIdx = REPOS.indexOf('<div class="profile-main');
   const colIdx = REPOS.indexOf('<div class="profile-sidebar-col');
   const main = REPOS.slice(mainIdx, colIdx);
   const form = main.indexOf("<Show when={getEditing() && getProfile()?.can_edit}>");
   assert.ok(form !== -1, "the edit form renders in the main column");
-  assert.ok(form < main.indexOf('<Show when={view() === "profile"}>'), "the form sits above the per-view Shows (reachable from every tab)");
+  assert.ok(main.indexOf('<Show when={view() === "profile"}>') < form, "the form sits inside the profile branch (profile-view-only)");
+  assert.ok(form < main.indexOf('<Show when={view() === "repos"}>'), "the form precedes the repositories branch");
   for (const gate of ['<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>', '<Show when={view() === "orgs"}>']) {
     assert.ok(main.includes(gate), `the main column carries the ${gate} branch`);
   }
