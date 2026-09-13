@@ -68,7 +68,9 @@ function OwnerSection(props) {
   return (
     <section class="py-3">
       <h3 class="text-base font-bold tracking-tight">
-        <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}`}>
+        {/* Forgejo #445: the heading is a repository group — it links to
+            the owner's repositories tab, not the profile. */}
+        <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}/repositories`}>
           {props.owner}
         </A>
         {/* Forgejo #348: org namespaces badge so visitors can tell orgs
@@ -102,7 +104,9 @@ function OwnerSection(props) {
               </Show>
               <Show when={extra > 0}>
                 <p class="mt-2 text-sm">
-                  <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}`}>
+                  {/* Forgejo #445: "more" of what the section shows
+                      (repos) — same repositories-tab target as the heading. */}
+                  <A class="text-emerald-700 hover:underline dark:text-emerald-400" href={`/${props.owner}/repositories`}>
                     +{extra} more →
                   </A>
                 </p>
