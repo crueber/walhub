@@ -221,6 +221,95 @@ func (e *ShareExecutor) ShareManifest(ctx context.Context, parent, child string,
 	return nil
 }
 
+// RollbackShare implements ForkExecutor (issue #432): release a share
+// reservation won by this attempt when a later pre-commit step (access
+// bootstrap, provenance write) fails. Without it the child manifest
+// strands the target name — no data loss, but the fork pre-check 409s
+// every retry until someone hand-deletes the prefix.
+//
+// Ownership proof (law 4: never delete live objects): the manifest Create
+// arbitrates the name — this attempt's ShareManifest succeeded only by
+// winning it — and Revision 1 proves no WAL publish has advanced the
+// child since. Anything else refuses: an absent manifest is a nil no-op;
+// a foreign (Repo mismatch), WAL-advanced (Revision != 1), or corrupt
+// manifest is an error, never a delete.
+//
+// Exact keys only, no LIST: the bootstrapped access.json (skipped when a
+// fork.json disputes the prefix — adopted, not created, so hands off),
+// the checkpoint pair at the shared seq (HeadSeq 0 forks wrote no
+// checkpoints), and the manifest last (its presence is what blocks retry
+// — deleting it last keeps the taken-signal until the prefix is otherwise
+// clean). Never packs (shared packs live under the PARENT prefix), never
+// the parent index (the child was never listed — the fork-network GC walk
+// in internal/maintain cannot reference it; a racing pass reads
+// manifest-404 and skips the subtree).
+//
+// ### Concurrency
+//
+// Hazard: the rollback racing a repo-create (or a second fork) for the
+// same name. Avoidance: the rollback only deletes a manifest that is
+// provably this attempt's (Repo == child, Revision == 1 — verified by a
+// fresh GET immediately before the deletes). A racing creator necessarily
+// lost the manifest Create against this attempt (412) and backed off; any
+// writer that advanced the manifest past Revision 1 aborts the rollback.
+// A racing creator that arrives AFTER the deletes wins a clean, empty
+// prefix — which is exactly the name-reuse the rollback exists for.
+func (e *ShareExecutor) RollbackShare(ctx context.Context, parent, child string) error {
+	cOwner, cName, ok := splitRepo(child)
+	if !ok {
+		return fmt.Errorf("%w: invalid child %q", ErrInvalid, child)
+	}
+	if e.Store == nil {
+		return fmt.Errorf("%w: fork store not wired", ErrUnavailable)
+	}
+	// A fork.json disputes the prefix (a stale foreign reservation, or a
+	// concurrently committed fork): the share keys are still ours to
+	// release, but the bootstrapped access.json may be adopted, not
+	// created — leave it.
+	disputed := false
+	if praw, _, perr := store.GetBytes(ctx, e.Store, "repos/"+cOwner+"/"+cName+"/fork.json", store.GetOptions{}); perr != nil {
+		if !store.IsNotFound(perr) {
+			return perr
+		}
+	} else if praw != nil {
+		disputed = true
+	}
+	raw, _, err := store.GetBytes(ctx, e.Store, manifestKey(cOwner, cName), store.GetOptions{})
+	if err != nil {
+		if store.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if raw == nil {
+		return nil
+	}
+	cm, uerr := proto.UnmarshalManifest(raw)
+	if uerr != nil {
+		return fmt.Errorf("%w: child manifest: %v", ErrCorrupt, uerr)
+	}
+	if cm.Repo != child || cm.Revision != 1 {
+		return fmt.Errorf("%w: child manifest for %s is not this attempt's reservation", ErrConflict, child)
+	}
+	keys := []string{}
+	if !disputed {
+		keys = append(keys, "repos/"+cOwner+"/"+cName+"/access.json")
+	}
+	if cm.HeadSeq != 0 {
+		keys = append(keys,
+			childKey(cOwner, cName, store.CheckpointRefsKey(cm.HeadSeq)),
+			childKey(cOwner, cName, store.CheckpointKey(cm.HeadSeq)),
+		)
+	}
+	keys = append(keys, manifestKey(cOwner, cName))
+	for _, k := range keys {
+		if derr := e.Store.Delete(ctx, k, ""); derr != nil && !store.IsNotFound(derr) {
+			return derr
+		}
+	}
+	return nil
+}
+
 // maxForkConsistentReads bounds the manifest/refs stability retry while
 // the parent is hot (a push racing the share re-reads; continuous push
 // floods fail loud and retryable, never spin).

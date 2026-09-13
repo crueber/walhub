@@ -573,8 +573,21 @@ type ForkOptions struct {
 // snapshot, in already-on-bucket mode; Create on the child manifest
 // arbitrates the target name exactly like repo create). A 412-class
 // failure surfaces as ErrConflict so the caller can run the adopt check.
+// RollbackShare releases a share reservation won by THIS attempt when a
+// later pre-commit step fails (issue #432); see runFork.
 type ForkExecutor interface {
 	ShareManifest(ctx context.Context, parent, child string, opt ForkOptions) error
+	// RollbackShare deletes exactly the child-prefix keys ShareManifest
+	// Creates (child manifest.pb, its checkpoint objects, and the
+	// bootstrapped access.json when no fork.json disputes the prefix),
+	// and only when the child manifest is provably still this attempt's
+	// (Repo == child, Revision == 1). Anything else — absent, foreign, or
+	// WAL-advanced manifest — refuses without deleting (absent is a nil
+	// no-op). Failure-path only: never packs, never parent keys, never
+	// the parent index (a rolled-back child was never listed, so the
+	// fork-network GC walk in internal/maintain cannot reference it; a
+	// racing pass reads manifest-404 and skips the subtree).
+	RollbackShare(ctx context.Context, parent, child string) error
 }
 
 // OwnerGate is the creation owner-admission gate the fork target inherits
@@ -724,6 +737,18 @@ func manifestKey(owner, repo string) string {
 // counter shortfall precedent). A share-412 with our own provenance
 // adopts and continues; a share-412 owned by anyone else (a real repo, or
 // another parent's fork) reports 409 without touching it.
+//
+// A share that SUCCEEDS but is followed by a pre-commit failure (access
+// bootstrap, provenance write) rolls the reservation back (issue #432):
+// without the rollback the child manifest strands the target name — no
+// data loss, but the pre-check 409s every retry until someone hand-deletes
+// the prefix. The rollback deletes only keys this attempt Created (never
+// an adopted share, never anything past the fork.json commit) and the
+// executor re-verifies ownership before deleting, so a raced live repo is
+// never touched; a rollback shortfall is narrated, never masking the root
+// error. A provenance-412 whose occupying fork.json is already ours (stale
+// reservation from a deleted fork) adopts and continues — ownership is
+// certain there (Parent == parent).
 func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput, actor auth.Principal, rec *TaskRecord) error {
 	who := normPrincipal(actor.Name)
 	now := s.nowUTC().Format(dateTimeFmt)
@@ -746,6 +771,7 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 		}
 	}
 	adoptedShare := false
+	sharedThisAttempt := false
 	if s.ForkExec != nil {
 		serr := s.ForkExec.ShareManifest(ctx, parentID, child, ForkOptions{Branch: in.Branch, Description: in.Description, Creator: who})
 		if serr != nil {
@@ -769,6 +795,7 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 				return serr
 			}
 		} else {
+			sharedThisAttempt = true
 			rec.notice("shared manifest for %s", child)
 		}
 	} else {
@@ -780,11 +807,28 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 		// specified now: pack removal consults children's manifests.
 		rec.notice("manifest share delegated: child prefix %s provisioned; packs shared by construction on first sync (fork executor pending)", child)
 	}
+	// rollback releases the share reservation this attempt won when a
+	// later pre-commit step fails (issue #432). It runs only when THIS
+	// attempt Created the keys (never on an adopted share, never when no
+	// executor ran); the executor re-verifies ownership before deleting.
+	// Best-effort by design: a rollback shortfall is narrated, never
+	// masking the root error the task returns.
+	rollback := func(step string) {
+		if !sharedThisAttempt || s.ForkExec == nil {
+			return
+		}
+		if rerr := s.ForkExec.RollbackShare(ctx, parentID, child); rerr != nil {
+			rec.notice("fork rollback after %s failure shortfall: %s", step, rerr.Error())
+			return
+		}
+		rec.notice("rolled back share reservation for %s after %s failure; name reusable", child, step)
+	}
 	// Child access bootstrap (pre-commit: Create-wins/adopt, safe to
 	// retry). A store failure here fails the task LOUD — an unreadable or
 	// mis-visible child is never a silent shortfall.
 	if s.AccessBoot != nil {
 		if aerr := s.AccessBoot.EnsureRepoAccess(ctx, in.TargetOwner, in.Name, who, in.Visibility); aerr != nil {
+			rollback("access bootstrap")
 			return aerr
 		}
 		rec.notice("materialized %s access (%s)", child, in.Visibility)
@@ -794,29 +838,56 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 	if !adoptedShare {
 		if err := s.putCreate(ctx, ForkKey(in.TargetOwner, in.Name), raw); err != nil {
 			if isPrecondition(err) {
-				return fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+				// Provenance lost the Create race. When the
+				// occupying reservation is already ours (a stale
+				// fork.json from a deleted fork, retried by its
+				// owner), adopt and continue — ownership is
+				// certain (Parent == parentID) and the backfill
+				// below converges Root. Anything else —
+				// unreadable, corrupt, or foreign — is 409, and
+				// our share reservation rolls back so the name
+				// is free for its owner to adopt-retry.
+				if existing, _, gerr := s.getJSON(ctx, ForkKey(in.TargetOwner, in.Name)); gerr == nil && existing != nil {
+					var edoc ForkDoc
+					if jerr := json.Unmarshal(existing, &edoc); jerr == nil && edoc.Parent == parentID {
+						rec.notice("adopted existing fork.json for %s", child)
+						adoptedShare = true
+					} else {
+						rollback("provenance arbitration")
+						return fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+					}
+				} else {
+					rollback("provenance arbitration")
+					return fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+				}
+			} else {
+				rollback("provenance write")
+				return err
 			}
+		} else {
+			rec.notice("recorded %s", ForkKey(in.TargetOwner, in.Name))
+		}
+	}
+	if adoptedShare {
+		if _, err := s.casUpdate(ctx, ForkKey(in.TargetOwner, in.Name), 5, func(cur []byte, _ store.Version) ([]byte, bool, error) {
+			// Adopted provenance: backfill Root when a pre-Root wave (or a
+			// crashed run) left it empty. Already-correct docs are untouched.
+			if cur == nil {
+				return nil, false, nil
+			}
+			var doc ForkDoc
+			if jerr := json.Unmarshal(cur, &doc); jerr != nil {
+				return nil, false, jerr
+			}
+			if doc.Root == root {
+				return nil, false, nil
+			}
+			doc.Root = root
+			out, _ := json.Marshal(&doc)
+			return out, true, nil
+		}); err != nil {
 			return err
 		}
-		rec.notice("recorded %s", ForkKey(in.TargetOwner, in.Name))
-	} else if _, err := s.casUpdate(ctx, ForkKey(in.TargetOwner, in.Name), 5, func(cur []byte, _ store.Version) ([]byte, bool, error) {
-		// Adopted provenance: backfill Root when a pre-Root wave (or a
-		// crashed run) left it empty. Already-correct docs are untouched.
-		if cur == nil {
-			return nil, false, nil
-		}
-		var doc ForkDoc
-		if jerr := json.Unmarshal(cur, &doc); jerr != nil {
-			return nil, false, jerr
-		}
-		if doc.Root == root {
-			return nil, false, nil
-		}
-		doc.Root = root
-		out, _ := json.Marshal(&doc)
-		return out, true, nil
-	}); err != nil {
-		return err
 	}
 	_, err := s.casUpdate(ctx, ForksKey(owner, repo), 10, func(cur []byte, ver store.Version) ([]byte, bool, error) {
 		fx := &ForksIndex{Forks: []ForkEntry{}}

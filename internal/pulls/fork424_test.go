@@ -15,9 +15,11 @@ import (
 // fakeForkExec records ShareManifest calls (the §7 manifest step,
 // issue #424).
 type fakeForkExec struct {
-	mu    sync.Mutex
-	calls []forkCall
-	err   error
+	mu          sync.Mutex
+	calls       []forkCall
+	err         error
+	rollbacks   []forkCall
+	rollbackErr error
 }
 
 type forkCall struct {
@@ -39,6 +41,21 @@ func (f *fakeForkExec) last() (forkCall, bool) {
 		return forkCall{}, false
 	}
 	return f.calls[len(f.calls)-1], true
+}
+
+// RollbackShare records rollback calls (issue #432); rollbackErr scripts a
+// rollback shortfall.
+func (f *fakeForkExec) RollbackShare(_ context.Context, parent, child string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rollbacks = append(f.rollbacks, forkCall{parent, child, ForkOptions{}})
+	return f.rollbackErr
+}
+
+func (f *fakeForkExec) rollbackCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.rollbacks)
 }
 
 // fakeOwnerGate scripts the #346 target admission.

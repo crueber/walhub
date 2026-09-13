@@ -436,6 +436,39 @@ every call goes through the SDK).
   retries). Known hole, documented not
   fixed: deleting a fork-network member strands descendants the
   transitive walk can no longer reach (delete-guard is follow-up work).
+- **Failed forks roll back the share reservation (issue #432, 2026-09-13).**
+  Chosen remediation is (1) reserve-then-commit with rollback: the share
+  Create already IS the reservation (it arbitrates the target name exactly
+  like repo create), and a share that succeeds but is followed by a
+  pre-commit failure (access bootstrap, provenance write) now deletes
+  exactly the keys this attempt Created — child `manifest.pb`, its
+  checkpoint pair, and the bootstrapped `access.json` — so the name is
+  immediately reusable and a retry runs the full order again. Adopt-or-fail
+  (2) was rejected: with no marker before the provenance commit, an
+  unprovenanced manifest is indistinguishable from a racing repo create
+  (the empty-parent fork manifest is byte-identical to a fresh repo
+  manifest), so adopting risks hijacking a live repo's prefix. A
+  strand-and-report sweeper (3) was rejected: same ownership-detection
+  problem for the sweeper, plus delayed reuse and new background
+  machinery. Safety shape (law 4): the rollback runs only when THIS
+  attempt won the Creates (never on adopted shares), and the executor
+  re-verifies by fresh GET (Repo == child, Revision == 1 — any WAL advance
+  aborts, nothing deleted; doubt keeps objects). Never packs (shared packs
+  live under the parent prefix), never parent keys, never the parent index
+  — and a `fork.json` on the prefix downgrades the rollback to share keys
+  only (adopted access.json is hands-off). GC coordination (#424
+  fail-closed review): a rolled-back child was never listed in any parent
+  index, so the `forknet.go` walk cannot reference it; a racing pass reads
+  manifest-404 and skips the subtree. Failure-path only (law 6: no
+  hot-path trip — the rollback issues zero store calls on success), and a
+  rollback shortfall is narrated, never masking the root error. Companion
+  change: a provenance-412 whose occupying `fork.json` is already ours
+  (stale reservation from a deleted fork) adopts and continues — ownership
+  there is certain (Parent == parent), foreign stays 409. Known residual,
+  documented not fixed: a process crash between the share and the
+  rollback still strands the prefix (same crash-window class as the merge
+  publish-then-event); repair is deleting the ≤ 4 exact child keys, and a
+  retry 409s loudly (fail-closed, never hijacks).
 
 ## Explicitly out of scope
 
