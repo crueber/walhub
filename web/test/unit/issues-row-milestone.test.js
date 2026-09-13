@@ -1,6 +1,8 @@
 // web/test/unit/issues-row-milestone.test.js — Forgejo #380: the issues
 // list rows show the milestone on each row and the comment count carries
-// a message-bubble indicator instead of the word "comments".
+// a message-bubble indicator instead of the word "comments" (Forgejo #481:
+// the indicator is the shared issue-comment icon from lib/icons.jsx, not
+// the original emoji span).
 //
 // Row meta order is comment count → milestone → updated time; the
 // milestone segment renders only when the card has one
@@ -68,7 +70,9 @@ test("the visible word 'comments' is gone; a decorative bubble precedes the coun
   const s = rows();
   assert.ok(!s.includes("{issue.comment_count} comments ·"), "old literal count text is gone from the row meta");
   assert.ok(!s.includes("comments · <DateTime"), "no literal 'comments' beside the timestamp");
-  assert.ok(s.includes('<span aria-hidden="true">💬 </span>'), "bubble indicator is decorative (aria-hidden)");
+  assert.ok(s.includes('import Icon from "../lib/icons.jsx"'), "bubble comes through the shared icon mechanism");
+  assert.ok(s.includes('<Icon name="issue-comment" />'), "bubble indicator is the shared issue-comment icon (decorative aria-hidden lives on the shared svg)");
+  assert.ok(!s.includes("💬"), "the pre-#481 emoji span is gone");
   assert.ok(
     s.includes("aria-label={`${issue.comment_count} comments`}") && s.includes("title={`${issue.comment_count} comments`}"),
     "the count keeps an accessible label + hover title",

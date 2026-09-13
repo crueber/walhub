@@ -1,17 +1,20 @@
 // web/src/lib/icons.jsx — the shared embedded SVG icon mechanism (Forgejo
-// #465): one component, consumed by all seven controls (Watch/Star/Fork/Clone
+// #465): one component, consumed by all eight surfaces (Watch/Star/Fork/Clone
 // in pages/Repo.jsx, the notification bell in components/NotificationTray.jsx,
 // the theme toggle in App.jsx, the create button in
-// components/CreateMenu.jsx).
+// components/CreateMenu.jsx, the issue-list comment count in
+// pages/Issues.jsx).
 //
-// The 11 icon bodies are embedded below as inline JSX, transcribed verbatim
+// The 12 icon bodies are embedded below as inline JSX, transcribed verbatim
 // from the provided 1em currentColor files (issue comments 4783-4792 — the
-// source of truth for every path but one; each entry keeps its file's viewBox
+// source of truth for every path but two; each entry keeps its file's viewBox
 // as-is so the mixed viewports 16/24/1024/1200 all scale through width="1em"
 // height="1em"). The eleventh body is the create-button plus (Forgejo #466):
 // no plus glyph was provided with #465, so it is a minimal inline stroke
 // drawn here through the same Icon shape (16-unit viewBox, currentColor
 // paint, no color literals) rather than a one-off <svg> at the call site.
+// The twelfth body is the issue-list comment bubble (Forgejo #481),
+// transcribed verbatim from the issue-provided 16-unit file.
 // No fetches, no raw imports, no innerHTML: the icons ship
 // inside the vite bundle and render with zero runtime requests. No color
 // literals anywhere in this layer — every body paints via fill="currentColor"
@@ -110,9 +113,17 @@ const ICONS = {
       <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M8 3v10M3 8h10" />
     ),
   },
+  // Forgejo #481: the issue-list comment bubble, transcribed verbatim from
+  // the issue-provided 16-unit file (viewBox kept as-is, currentColor paint).
+  "issue-comment": {
+    viewBox: "0 0 16 16",
+    body: (
+      <path fill="currentColor" d="M3.5 2A2.5 2.5 0 0 0 1 4.5v5A2.5 2.5 0 0 0 3.5 12H4v1.942a.98.98 0 0 0 1.625.738L8.688 12H12.5A2.5 2.5 0 0 0 15 9.5v-5A2.5 2.5 0 0 0 12.5 2zM2 4.5A1.5 1.5 0 0 1 3.5 3h9A1.5 1.5 0 0 1 14 4.5v5a1.5 1.5 0 0 1-1.5 1.5H8.312L5 13.898V11H3.5A1.5 1.5 0 0 1 2 9.5zM7.5 8h5a.5.5 0 0 0 0-1h-5a.5.5 0 0 0 0 1m-2-1h-2a.5.5 0 0 0 0 1h2a.5.5 0 0 0 0-1m-2 2a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1zm7 1a.5.5 0 0 1 0-1h2a.5.5 0 0 1 0 1z" />
+    ),
+  },
 };
 
-/** The eleven icon names, in asset order (watch, star, fork, clone, bell, theme, plus). */
+/** The twelve icon names, in asset order (watch, star, fork, clone, bell, theme, plus, issue-comment). */
 export const ICON_NAMES = Object.keys(ICONS);
 
 /**

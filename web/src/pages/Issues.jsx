@@ -17,6 +17,7 @@ import { parseLabelsParam, serializeLabelsParam, resolveMilestoneFilter } from "
 import { milestoneDisplay, milestoneFilterHref } from "../lib/milestones.js";
 import { LabelChip } from "../components/LabelPicker.jsx";
 import DateTime from "../components/DateTime.jsx";
+import Icon from "../lib/icons.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 
@@ -353,8 +354,7 @@ export default function Issues() {
                       </Show>
                       <span class="ml-auto shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
                         <span title={`${issue.comment_count} comments`} aria-label={`${issue.comment_count} comments`}>
-                          <span aria-hidden="true">💬 </span>
-                          {issue.comment_count}
+                          <Icon name="issue-comment" /> {issue.comment_count}
                         </span>
                         <Show when={issue.milestone != null}>
                           {" · "}
