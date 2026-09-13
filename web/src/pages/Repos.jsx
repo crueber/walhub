@@ -1,6 +1,7 @@
-// web/src/pages/Repos.jsx — routes "/:owner" (profile) and
-// "/:owner/repositories" (the repositories tab, Forgejo #422): the owner's
-// profile + repositories. The profile page is the dedicated identity view
+// web/src/pages/Repos.jsx — routes "/:owner" (profile),
+// "/:owner/repositories" (the repositories tab, Forgejo #422), and
+// "/:owner/organizations" (the organizations tab, Forgejo #430): the owner's
+// profile + repositories + org memberships. The profile page is the dedicated identity view
 // (header, tab strip, repository-count teaser linking to the tab); the
 // repositories tab keeps the Repositories toolbar + New repository CTA +
 // grid + import link exactly as they rendered before the split (a move, not
@@ -85,19 +86,30 @@ export function RepoRow(props) {
   );
 }
 
-/** Owner tab strip (Forgejo #422): Profile ⇄ Repositories. The tab-strip-vs-
- *  simple-link decision is a strip — it reuses the repo page's tab bar
- *  anatomy (web/src/pages/Repo.jsx: the same flex / overflow-x-auto /
- *  whitespace-nowrap / border-b shape with the same link treatment and
- *  active-tab underline, under its own `owner-tabs` hook so the #274
- *  narrow-width rules apply). The strip renders on BOTH routes (outside
- *  every isOrg Show) so the two views navigate to each other; the active
- *  tab derives from the pathname. The repositories tab carries the listing
- *  count when loaded (the shared `repos:{owner}` payload — no new fetch).
- *  props: owner, count (number|null). */
+/** Owner tab strip (Forgejo #422; third tab Forgejo #430): Profile ⇄
+ *  Repositories ⇄ Organizations. The tab-strip-vs-simple-link decision is a
+ *  strip — it reuses the repo page's tab bar anatomy (web/src/pages/Repo.jsx:
+ *  the same flex / overflow-x-auto / whitespace-nowrap / border-b shape with
+ *  the same link treatment and active-tab underline, under its own
+ *  `owner-tabs` hook so the #274 narrow-width rules apply). The strip
+ *  renders on all three routes (outside every isOrg Show) so the views
+ *  navigate to each other; the active tab derives from the pathname. The
+ *  repositories tab carries the listing count when loaded (the shared
+ *  `repos:{owner}` payload — no new fetch). The Organizations tab is
+ *  user-profiles only (org profiles render Profile | Repositories: member
+ *  principals are email spellings, not routable owner slugs per #370).
+ *  props: owner, count (number|null), isOrg (bool). */
 export function OwnerTabs(props) {
   const loc = useLocation();
-  const active = () => (loc.pathname === `/${props.owner}/repositories` ? "repos" : "profile");
+  // Forgejo #430: three-way derivation — the organizations tab is active
+  // exactly on /{owner}/organizations (the same pathname pattern #422
+  // established for /repositories); anything else falls back to profile.
+  const active = () =>
+    loc.pathname === `/${props.owner}/organizations`
+      ? "orgs"
+      : loc.pathname === `/${props.owner}/repositories`
+        ? "repos"
+        : "profile";
   const cls =
     "rounded-t px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100";
   return (
@@ -124,6 +136,19 @@ export function OwnerTabs(props) {
           <span class="tab-badge" aria-label={`${props.count} repositories`}>{props.count}</span>
         </Show>
       </A>
+      {/* Forgejo #430: the Organizations tab — same link treatment,
+          active underline, and aria-current as the first two tabs. Hidden
+          for org profiles (isOrg): #370 email-principal rationale. */}
+      <Show when={!props.isOrg}>
+        <A
+          href={`/${props.owner}/organizations`}
+          class={cls}
+          classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": active() === "orgs" }}
+          aria-current={active() === "orgs" ? "page" : undefined}
+        >
+          Organizations
+        </A>
+      </Show>
     </nav>
   );
 }
@@ -271,12 +296,15 @@ function ProfileForm(props) {
   );
 }
 
-/** The owner page in both views (Forgejo #422): `view="profile"` is the
- *  `/:owner` identity page (header, tab strip, repository-count teaser —
- *  no grid); `view="repos"` is the `/:owner/repositories` tab (tab strip
- *  plus the toolbar + grid + import link moved verbatim). One component so
- *  the header, sidebar (#421), gates, fetches, and cache keys stay shared
- *  by construction — the listing markup is never forked. */
+/** The owner page in all three views (Forgejo #422; third view Forgejo
+ *  #430): `view="profile"` is the `/:owner` identity page (header, tab
+ *  strip, repository-count teaser — no grid, no membership list); `view=
+ *  "repos"` is the `/:owner/repositories` tab (tab strip plus the toolbar +
+ *  grid + import link moved verbatim); `view="orgs"` is the
+ *  `/:owner/organizations` tab (tab strip plus the #423 membership list
+ *  moved verbatim). One component so the header, sidebar (#421), gates,
+ *  fetches, and cache keys stay shared by construction — the listing and
+ *  membership markups are never forked. */
 function OwnerPage(props) {
   const view = () => props.view ?? "profile";
   const params = useParams();
@@ -437,43 +465,15 @@ function OwnerPage(props) {
                 }}
               />
             </Show>
-            {/* Forgejo #423: Organizations — the membership rail for user
-                profiles. Always rendered for users (never silently absent):
-                the list links each org to /:org; the empty rail renders an
-                explicit "No organizations" line (GitHub parity). Org
-                profiles (the isOrg() branch below) deliberately omit this
-                section: member principals are email spellings, not routable
-                owner slugs (#370), so member links would be dead — the
-                roster is managed at organization settings instead. */}
-            <section class="orgs-rail mt-6" aria-label="Organizations">
-              <h3 class="text-base font-semibold">Organizations</h3>
-              <Show when={getMemberOrgs()} fallback={<p class="muted mt-1 text-sm">loading…</p>}>
-                {(orgs) => {
-                  const names = () => normalizeMemberOrgs(orgs());
-                  return (
-                    <Show
-                      when={names().length > 0}
-                      fallback={<p class="muted mt-1 text-sm">No organizations</p>}
-                    >
-                      <ul class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                        <For each={names()}>
-                          {(org) => (
-                            <li>
-                              <A
-                                class="text-emerald-700 hover:underline dark:text-emerald-400"
-                                href={`/${org}`}
-                              >
-                                {org}
-                              </A>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </Show>
-                  );
-                }}
-              </Show>
-            </section>
+            {/* Forgejo #430: the profile view is rail-free — the #423
+                membership list moved verbatim to the organizations tab
+                (the view="orgs" branch below). Planner's call per the
+                issue: no compact rail kept here; the tab always exists
+                for user profiles so the memberships stay one click away.
+                Org profiles (the isOrg() branch below) never had this
+                section: member principals are email spellings, not
+                routable owner slugs (#370) — the roster is managed at
+                organization settings instead. */}
           </Show>
       {/* Forgejo #359: org landing — the org identity (badge + org
           display name + org doc fields: description/location/timezone/
@@ -509,16 +509,19 @@ function OwnerPage(props) {
         />
       </Show>
       </Show>
-      {/* Forgejo #422: the owner tab strip — Profile ⇄ Repositories, on both
-          routes and both owner variants (outside every isOrg Show) so each
-          view links to the other. The anatomy reuses the repo page's tab
-          bar (Repo.jsx); the count badge rides repoCount() above. */}
+      {/* Forgejo #422; third tab Forgejo #430: the owner tab strip —
+          Profile ⇄ Repositories ⇄ Organizations, on all three routes
+          (outside every isOrg Show) so each view links to the others. The
+          anatomy reuses the repo page's tab bar (Repo.jsx); the count badge
+          rides repoCount() above; isOrg hides the Organizations tab on org
+          profiles (#370). */}
       <div class="mt-6">
-        <OwnerTabs owner={owner()} count={repoCount()} />
+        <OwnerTabs owner={owner()} count={repoCount()} isOrg={isOrg()} />
       </div>
       {/* Forgejo #422: the profile view keeps the identity above and swaps
           the listing for a repository-count teaser linking to the tab — no
-          grid, no toolbar, no import footer here. */}
+          grid, no toolbar, no import footer here. Forgejo #430: no
+          membership list either — that lives on the organizations tab. */}
       <Show when={view() === "profile"}>
         <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
           {(doc) => {
@@ -587,6 +590,45 @@ function OwnerPage(props) {
           <A class="hover:underline" href={`/${owner()}/settings`}>organization settings</A>
         </Show>
       </p>
+      </Show>
+      {/* Forgejo #430: the organizations tab — the #423 membership list
+          moved verbatim from the profile rail (links + explicit empty
+          state + loading fallback, same memberorgs:{owner} key, same
+          normalizeMemberOrgs shape). This route shows ONLY the list under
+          the tab strip: no identity block repeat, no repos grid. The
+          branch is ungated by owner variant like the repos tab above —
+          the tab itself is user-profiles-only (isOrg hides it), so org
+          owners never navigate here from the UI. */}
+      <Show when={view() === "orgs"}>
+        <section class="orgs-rail mt-6" aria-label="Organizations">
+          <h3 class="text-base font-semibold">Organizations</h3>
+          <Show when={getMemberOrgs()} fallback={<p class="muted mt-1 text-sm">loading…</p>}>
+            {(orgs) => {
+              const names = () => normalizeMemberOrgs(orgs());
+              return (
+                <Show
+                  when={names().length > 0}
+                  fallback={<p class="muted mt-1 text-sm">No organizations</p>}
+                >
+                  <ul class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                    <For each={names()}>
+                      {(org) => (
+                        <li>
+                          <A
+                            class="text-emerald-700 hover:underline dark:text-emerald-400"
+                            href={`/${org}`}
+                          >
+                            {org}
+                          </A>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+              );
+            }}
+          </Show>
+        </section>
       </Show>
         </div>
         {/* Forgejo #421: the owner-action sidebar — avatar on top, then
@@ -692,4 +734,19 @@ export default function Repos() {
  *  its git/API paths are unaffected — the same class as /orgs/new. */
 export function OwnerRepositories() {
   return <OwnerPage view="repos" />;
+}
+
+/** Route "/:owner/organizations" (Forgejo #430): the organizations tab (tab
+ *  strip + the #423 membership list moved verbatim from the profile rail —
+ *  links to /:org, explicit "No organizations" empty state, loading state
+ *  preserved). No API change — the list rides the shared `memberorgs:
+ *  {owner}` key, and the server already serves the SPA shell on the
+ *  two-segment shape (repoPageGated), so this stays client-only.
+ *  Reservation note: an org literally named "organizations" loses its UI
+ *  page (the static route wins client-side); its git/API paths are
+ *  unaffected — the same class as /repositories (#422) and /orgs/new. This
+ *  absorbs the remainder of #423 (closed): #423's backend membership
+ *  endpoint stays; only its presentation surface moves to this tab. */
+export function OwnerOrganizations() {
+  return <OwnerPage view="orgs" />;
 }

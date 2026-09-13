@@ -15,7 +15,7 @@ import Landing from "./pages/Landing.jsx";
 import HowItWorks from "./pages/HowItWorks.jsx";
 import Import from "./pages/Import.jsx";
 import New from "./pages/New.jsx";
-import Repos, { OwnerRepositories } from "./pages/Repos.jsx";
+import Repos, { OwnerRepositories, OwnerOrganizations } from "./pages/Repos.jsx";
 import Repo from "./pages/Repo.jsx";
 import Tree from "./pages/Tree.jsx";
 import Blob from "./pages/Blob.jsx";
@@ -77,6 +77,12 @@ render(
           loses its UI page — git/API paths unaffected, same reservation
           class as /orgs/new above). */}
       <Route path="/:owner/repositories" component={OwnerRepositories} />
+      {/* Static before dynamic: /:owner/organizations must not fall into
+          /:owner/:name (Forgejo #430 — the owner organizations tab, never a
+          repo named "organizations"; an org literally named "organizations"
+          loses its UI page — git/API paths unaffected, same reservation
+          class as /:owner/repositories above and /orgs/new). */}
+      <Route path="/:owner/organizations" component={OwnerOrganizations} />
       <Route path="/:owner" component={Repos} />
       <Route path="/:org/settings" component={Org} />
       <Route path="/:owner/teams/:slug" component={Team} />
