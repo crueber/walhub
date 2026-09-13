@@ -4,7 +4,8 @@
 // javascript: URIs straight through, so renderBody MUST NOT be bypassed.
 // DOMPurify needs a DOM, so this module exposes two entry points:
 //   renderMarkdownHtml(src, ctx?) — marked layer + relative-URL resolution
-//     (#182/#185) + issue/PR ref autolinks (#340, needs ctx.owner/ctx.repo);
+//     (#182/#185) + issue/PR ref autolinks (#340, needs ctx.owner/ctx.repo)
+//     + @mention profile autolinks (#440, ctx-free);
 //     Node-importable, covered by node --test (headless-testable logic per
 //     D-WEB-4).
 //   renderBody(src, ctx?) — full pipeline; browser-only, throws without a DOM.
@@ -275,7 +276,154 @@ export function linkifyIssueRefs(html, ctx) {
 
 /** renderMarkdownHtml(src, ctx?) → unsanitized HTML string (marked GFM layer). Never trusted raw. */
 export function renderMarkdownHtml(src, ctx) {
-  return linkifyIssueRefs(resolveMarkdownUrls(marked.parse(String(src ?? "")), ctx), ctx);
+  return linkifyMentions(linkifyIssueRefs(resolveMarkdownUrls(marked.parse(String(src ?? "")), ctx), ctx));
+}
+
+// --- @mention profile autolinks (Forgejo #440) ----------------------------------
+// Rendered @username (and legacy email-principal) tokens link to /{principal}
+// (the profile page is route /:owner, index.jsx — /:owner resolves both
+// spellings via matchPrincipal). Runs over marked's HTML beside the #N ref
+// pass above, with the same scanner shape (skips the contents of
+// <a>/<code>/<pre> plus <script>/<style>) so code spans, fenced blocks, and
+// existing markdown/autolinked links (incl. bare jane@example.com, which
+// marked autolinks into its own <a>) pass through untouched.
+//
+// Grammar mirrors the server parser (identity.ParseMentions, 06 §3):
+//   left boundary — the char before @ must be start-of-text or outside
+//     [A-Za-z0-9_@-] (so a@b.com never matches — the @ is preceded by a
+//     word char — and @@x never matches — the second @ is preceded by @),
+//     implemented as a lookbehind so the boundary char is never consumed.
+//   token — an email-shaped principal ([A-Za-z0-9._%+-]+@…\.[A-Za-z]{2,},
+//     the mentionTok spelling) or a bare username ([A-Za-z0-9_.-]+, the
+//     ValidPrincipal/ValidUsername shape: 1..64 chars, no leading dot).
+//     Email is tried first so @bob@example.com links whole, never as @bob.
+//   trailing punctuation (.,;:!?"')]} — the server's strip set) is trimmed
+//     off the token and re-emitted as plain text ("hi @bob." links bob).
+//   marked autolinks emails first: "@amy@example.com" arrives here as
+//     "@<a href="mailto:amy@example.com">amy@example.com</a>" (the @ stays
+//     text, the address becomes a mailto anchor). linkifyMentions folds that
+//     exact shape — a literal "@" directly before a mailto anchor whose text
+//     IS the address — into the profile link; bare addresses (no leading @)
+//     keep their mailto link, matching the server (never a mention).
+//
+// Deliberate divergences from the server parser, noted per #440:
+//   @org/team is NOT linked — a token followed directly by "/" is a team
+//     spelling, and teams live under /:org/settings/… and /:owner/teams/:slug,
+//     out of scope here; the token (and its /tail) stays plain text.
+//   a bare-username token followed directly by "@" is a broken email
+//     (@bob@x — the server matches nothing there either), never a mention.
+//   render-valid ≠ mention-valid (decision (a)): the renderer links ALL
+//     grammar-valid tokens with no existence probe (the pipeline is
+//     synchronous/headless — no per-token profile fetch), accepting the
+//     occasional dead profile link. GitHub behaves this way; the server still
+//     drops unresolvable mentions from fan-out silently, so notification and
+//     rendering never disagree loudly.
+//   ordering: runs AFTER linkifyIssueRefs (same call, above) so the
+//     resolver — which rewrites every leading-"/" href — never sees the
+//     freshly minted /{principal} hrefs and can never mangle them into
+//     blob/tree URLs (the same reason the ref pass runs last-before). The
+//     pass only ADDS anchors; it never rewrites an existing href/src.
+//   href is the lowercased principal (canonical key, the server's match
+//     spelling); display text keeps the author's case (@Carol links as typed).
+//   sanitizer: generated anchors carry a plain relative href — inside the
+//     DOMPurify allowlist already (a + href, relative kept). No config change.
+
+const MENTION_RE = /(?<![A-Za-z0-9_@-])@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9_.-]+)/g;
+const MENTION_TRAIL_RE = /[.,;:!?"')\]}]+$/;
+
+function validMentionUsername(t) {
+  return (
+    t.length >= 1 &&
+    t.length <= 64 &&
+    t[0] !== "." &&
+    t !== ".." &&
+    /^[a-z0-9._-]+$/.test(t)
+  );
+}
+
+function validMentionEmail(t) {
+  return (
+    t.length <= 254 &&
+    !t.includes("/") &&
+    /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(t)
+  );
+}
+
+/** linkifyMentionText(segment) → segment with @user/@email tokens as profile anchors (pure, Node-safe). */
+export function linkifyMentionText(segment) {
+  return String(segment).replace(MENTION_RE, (match, tok, offset, whole) => {
+    const next = whole[offset + match.length];
+    if (next === "/" || next === "@") return match; // team spelling / broken email — never a mention
+    const principal = String(tok).replace(MENTION_TRAIL_RE, "");
+    if (!principal) return match;
+    const lower = principal.toLowerCase();
+    if (!validMentionEmail(lower) && !validMentionUsername(lower)) return match;
+    const trail = tok.slice(principal.length);
+    return `@<a href="${escAttr(`/${lower}`)}">${principal}</a>${trail}`;
+  });
+}
+
+// A literal "@" directly before a mailto anchor whose text IS the address is
+// an email-principal mention (marked autolinked the address first): fold it
+// into the profile link. Anything else (bare addresses, custom link text,
+// invalid shapes) passes through byte-identical.
+const MAILTO_MENTION_RE = /@(<a\b[^>]*?\shref\s*=\s*(["'])mailto:([^"']+)\2[^>]*>(.*?)<\/a>)/gi;
+
+function foldMailtoMentions(html) {
+  return String(html).replace(MAILTO_MENTION_RE, (whole, anchor, q, hrefAddr, inner) => {
+    const addr = String(inner).replace(/<[^>]*>/g, "");
+    if (addr !== hrefAddr) return whole;
+    const lower = addr.toLowerCase();
+    if (!validMentionEmail(lower)) return whole;
+    return `@<a href="${escAttr(`/${lower}`)}">${inner}</a>`;
+  });
+}
+
+/** linkifyMentions(html) → HTML with @user/@email tokens linked (pure, Node-safe). No ctx needed. */
+export function linkifyMentions(html) {
+  if (html == null) return html;
+  const src = foldMailtoMentions(String(html));
+  let out = "";
+  let depth = 0; // >0 while inside a skip element
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    if (src[i] !== "<") {
+      const j = src.indexOf("<", i);
+      const end = j === -1 ? n : j;
+      const text = src.slice(i, end);
+      out += depth > 0 ? text : linkifyMentionText(text);
+      i = end;
+      continue;
+    }
+    // A tag: scan to the closing ">" honoring single/double quotes so a ">"
+    // inside an attribute value never ends the tag early.
+    let j = i + 1;
+    let quote = null;
+    while (j < n) {
+      const c = src[j];
+      if (quote) {
+        if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === ">") {
+        break;
+      }
+      j++;
+    }
+    const tag = src.slice(i, j < n ? j + 1 : n);
+    const m = /^<\/?\s*([A-Za-z0-9]+)/.exec(tag);
+    if (m && SKIP_RE.test(m[1])) {
+      const selfClosing = /\/>\s*$/.test(tag);
+      if (!selfClosing) {
+        if (tag[1] === "/") depth = Math.max(0, depth - 1);
+        else depth++;
+      }
+    }
+    out += tag;
+    i = j < n ? j + 1 : n;
+  }
+  return out;
 }
 
 /** renderBody(src, ctx?) → HTML safe for innerHTML (marked + resolve + pinned DOMPurify). Browser-only. */
