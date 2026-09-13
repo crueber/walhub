@@ -2,9 +2,13 @@
 // packages that emit "mentioned" fan-out).
 //
 // Runs once, at event write time, inside the mutating handler (P8) on the
-// new event's text body. Token grammar: `@<principal>` (email-shaped, per
+// new event's text body. Token grammar: `@<username>` (bare username, per
+// ValidUsername), `@<email>` (legacy email-shaped principal, per
 // ValidPrincipal) and `@<org>/<team>` (ValidOrg/ValidSlug halves), matched
 // only at word boundaries, case-insensitive, canonical lowercase keys.
+// A bare-username token glued to "/" (team spelling) or "@" (broken
+// email), or with a leading dot, is never a mention — the same stance as
+// the renderer's linkifyMentionText (Forgejo #444: render/notify parity).
 // Fenced code blocks and inline code spans are skipped. Bounded: at most
 // MaxMentionsPerBody tokens per event; beyond that, ignored (the caller
 // counts walhub_mentions_dropped_total{repo}).
@@ -26,11 +30,13 @@ import (
 const MaxMentionsPerBody = 50
 
 var (
-	// mentionTok finds candidate @-tokens after code stripping: either an
-	// email-shaped principal or an org/slug team spelling. The left
-	// boundary keeps `a@b.com` (no leading @-mention) and `@@x` from
-	// matching; classification/validation happens after the match.
-	mentionTok = regexp.MustCompile(`(?:^|[^A-Za-z0-9_@-])@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`)
+	// mentionTok finds candidate @-tokens after code stripping: a bare
+	// username, an email-shaped principal, or an org/slug team spelling
+	// (email first so @bob@example.com matches whole, team before bare
+	// so @org/team matches whole). The left boundary keeps `a@b.com`
+	// (no leading @-mention) and `@@x` from matching;
+	// classification/validation happens after the match.
+	mentionTok = regexp.MustCompile(`(?:^|[^A-Za-z0-9_@-])@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)`)
 )
 
 // ParseMentions extracts mentioned principals and teams from body.
@@ -47,12 +53,29 @@ func ParseMentions(body string) (users []string, teams []string) {
 	seenU := map[string]bool{}
 	seenT := map[string]bool{}
 	n := 0
-	for _, m := range mentionTok.FindAllStringSubmatch(clean, -1) {
+	for _, loc := range mentionTok.FindAllStringSubmatchIndex(clean, -1) {
 		if n >= MaxMentionsPerBody {
 			break
 		}
 		n++
-		tok := strings.ToLower(strings.Trim(m[1], ".,;:!?\"')]}"))
+		raw := clean[loc[2]:loc[3]]
+		if !strings.Contains(raw, "@") && !strings.Contains(raw, "/") {
+			// Bare-username candidate: mirror the renderer's
+			// linkifyMentionText guards. A token glued to "/" is a
+			// team spelling (or its malformed tail), a token glued
+			// to "@" is a broken email — neither is a mention. A
+			// leading dot is never a username (ValidUsername
+			// rejects it, but Trim below would hide it — check
+			// the raw token). Email and team branches keep their
+			// historical shape exactly.
+			if loc[3] < len(clean) && (clean[loc[3]] == '/' || clean[loc[3]] == '@') {
+				continue
+			}
+			if strings.HasPrefix(raw, ".") {
+				continue
+			}
+		}
+		tok := strings.ToLower(strings.Trim(raw, ".,;:!?\"')]}"))
 		if strings.Contains(tok, "/") {
 			parts := strings.SplitN(tok, "/", 2)
 			if len(parts) != 2 || !ValidOrg(parts[0]) || !ValidSlug(parts[1]) {

@@ -108,7 +108,17 @@ func TestParseMentions(t *testing.T) {
 		{"single", "cc @alice@example.com please", []string{"alice@example.com"}},
 		{"dedup case", "@Bob@Example.com and @bob@example.com", []string{"bob@example.com"}},
 		{"code skipped", "`@code@example.com` @real@example.com", []string{"real@example.com"}},
-		{"bare word", "@alice is not an email mention", []string{}},
+		{"bare username", "@alice is now a username mention", []string{"alice"}},
+		{"bare case", "ping @BOB please", []string{"bob"}},
+		{"bare bounds", "@amy leads, thanks @zed", []string{"amy", "zed"}},
+		{"bare trailing punct", "hi @bob. (@zed), @amy,", []string{"amy", "bob", "zed"}},
+		{"bare dedup", "@bob and @bob@example.com and @bob", []string{"bob", "bob@example.com"}},
+		{"bare code skipped", "use `@zed` not @amy", []string{"amy"}},
+		{"bare never team tail", "cc @bob/! and @acme/backend here", []string{}},
+		{"bare never broken email", "@bob@x stays plain", []string{}},
+		{"bare never leading dot", "hi @.bob and @.. here", []string{}},
+		{"bare never doubled or glued", "hi @@x and a@b.com and x@bob here", []string{}},
+		{"bare address still not a mention", "mail me at jane@example.com", []string{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -19,6 +19,56 @@ func TestParseMentions(t *testing.T) {
 			users: []string{"carol@example.com"}, teams: []string{},
 		},
 		{
+			name:  "bare-username",
+			body:  "ping @bob please",
+			users: []string{"bob"}, teams: []string{},
+		},
+		{
+			name:  "bare-username-case",
+			body:  "ping @BOB please",
+			users: []string{"bob"}, teams: []string{},
+		},
+		{
+			name:  "bare-username-bounds",
+			body:  "@amy leads, thanks @zed",
+			users: []string{"amy", "zed"}, teams: []string{},
+		},
+		{
+			name:  "bare-username-trailing-punct",
+			body:  "hi @bob. (@zed), @amy,",
+			users: []string{"amy", "bob", "zed"}, teams: []string{},
+		},
+		{
+			name:  "bare-username-dedup",
+			body:  "@bob and @bob@example.com and @bob",
+			users: []string{"bob", "bob@example.com"}, teams: []string{},
+		},
+		{
+			name:  "bare-username-never-team-tail",
+			body:  "cc @bob/! here",
+			users: []string{}, teams: []string{},
+		},
+		{
+			name:  "bare-username-never-broken-email",
+			body:  "@bob@x stays plain",
+			users: []string{}, teams: []string{},
+		},
+		{
+			name:  "bare-username-never-leading-dot",
+			body:  "hi @.bob and @.. here",
+			users: []string{}, teams: []string{},
+		},
+		{
+			name:  "bare-username-never-doubled-or-glued",
+			body:  "hi @@x and a@b.com and x@bob here",
+			users: []string{}, teams: []string{},
+		},
+		{
+			name:  "bare-username-code-skipped",
+			body:  "hi @amy\n```\n@zed\n```\nuse `@bob` not @carol",
+			users: []string{"amy", "carol"}, teams: []string{},
+		},
+		{
 			name:  "team",
 			body:  "cc @Acme/Backend for review",
 			users: []string{}, teams: []string{"acme/backend"},
