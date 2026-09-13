@@ -38,17 +38,23 @@ test("owner hint noise is gone from both owner selects", () => {
   assert.ok(!IMPORT.includes("you and your orgs only"), "Import.jsx: hint dropped");
 });
 
-test("mirror pull-only copy exists once, on New.jsx", () => {
-  // The paragraph carries the schedule/first-sync detail where the mirror
-  // mode is the secondary option; Import's mirror radio label already says
-  // "(recurring pull, pushes rejected)", so the paragraph adds nothing there.
+test("mirror pull-only copy exists once, on Import.jsx (Forgejo #487)", () => {
+  // Forgejo #487 removed the /new mirror mode: New.jsx carries no mirror
+  // UI at all, and the paragraph moved to Import.jsx — the sole mirror
+  // path. Import's mirror radio label still reads "(recurring pull, pushes
+  // rejected)", and the paragraph below the schedule select carries the
+  // full model (pull-only, pushes rejected, first sync immediate).
   const rejected = (src) => (src.match(/pushes are rejected/g) ?? []).length;
   assert.equal(rejected(NEW) + rejected(IMPORT), 1, "the pull-only paragraph renders exactly once total");
-  assert.ok(NEW.includes("(pull-only, scheduled syncs)"), "New mirror radio label unchanged");
+  assert.ok(!NEW.includes("pull-only, scheduled syncs"), "New mirror radio label gone with the mode");
+  assert.ok(!NEW.includes("new-source") && !NEW.includes("new-schedule"), "New carries no mirror fields");
   assert.ok(IMPORT.includes("(recurring pull, pushes rejected)"), "Import mirror radio label unchanged");
+  assert.ok(IMPORT.includes("pushes are rejected for everyone"), "paragraph carries the push-rejection model");
+  assert.ok(IMPORT.includes("The first sync starts immediately"), "paragraph carries the first-sync model");
   // The kept paragraph is field help, wired to the schedule it explains.
-  assert.ok(NEW.includes('id="new-mirror-help"'), "kept paragraph carries an id");
-  assert.ok(NEW.includes('aria-describedby="new-mirror-help"'), "schedule select references the paragraph");
+  assert.ok(IMPORT.includes('id="import-mirror-help"'), "kept paragraph carries an id");
+  assert.ok(IMPORT.includes('aria-describedby="import-mirror-help"'), "schedule select references the paragraph");
+  assert.ok(!NEW.includes("new-mirror-help"), "New keeps no mirror help wiring");
 });
 
 test("Import LFS/ssh limits collapse into a details, not prose", () => {
@@ -64,7 +70,7 @@ test("help text is field-scoped with id + aria-describedby", () => {
   // guidance on New/Import lives in the live-validation message only
   // (see repo-name-486.test.js) — the name-help pairs are gone by design.
   const pairs = [
-    ["New.jsx", NEW, "new-mirror-help"],
+    ["Import.jsx", IMPORT, "import-mirror-help"],
     ["Import.jsx", IMPORT, "import-source-help"],
     ["Import.jsx", IMPORT, "import-token-help"],
     ["OrgNew.jsx", ORGNEW, "orgnew-name-help"],
@@ -102,8 +108,8 @@ test("layout shell matches the canonical centered column", () => {
 });
 
 test("no behavior change: submit targets, validation, navigation", () => {
-  assert.ok(NEW.includes("repos.repos.create("), "New empty mode still creates via repos.repos.create");
-  assert.ok(NEW.includes("repos.mirrors.create("), "New mirror mode still creates via repos.mirrors.create");
+  assert.ok(NEW.includes("repos.repos.create("), "New still creates via repos.repos.create");
+  assert.ok(!NEW.includes("repos.mirrors.create("), "New mirror mode is gone (Forgejo #487)");
   assert.ok(NEW.includes("navigate(`/${full}`)"), "New still navigates to the created repo");
   assert.ok(IMPORT.includes("repos.imports.start("), "Import still starts via repos.imports.start");
   assert.ok(IMPORT.includes("repos.mirrors.create(payload"), "Import mirror mode still creates via repos.mirrors.create");

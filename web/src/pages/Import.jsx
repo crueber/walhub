@@ -17,9 +17,11 @@
 // Forgejo #486: the Name field carries live charset validation (shared
 // lib/repo-name.js rule) in a reserved-height slot — no always-on helper;
 // the submit path gains the matching client gate for one-shot imports.
-// The mirror pull-only paragraph lives on New.jsx only (not duplicated
-// here — this page's mirror radio label already carries the pull-only
-// detail); the LFS/ssh limits live in a collapsed details, not prose.
+// The mirror pull-only paragraph lives here (sole mirror path since
+// Forgejo #487 removed the /new mirror mode — Import's mirror radio label
+// already carries the short "(recurring pull, pushes rejected)" detail and
+// the paragraph below the schedule select carries the full model); the
+// LFS/ssh limits live in a collapsed details, not prose.
 
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import { A, useNavigate, useSearchParams } from "@solidjs/router";
@@ -358,10 +360,14 @@ export default function Import() {
             <Show when={getMode() === "mirror"}>
               <label class="flex items-center gap-1 text-sm">
                 <span>sync schedule</span>
-                <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Sync schedule">
+                <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Sync schedule" aria-describedby="import-mirror-help">
                   <For each={MIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
                 </select>
               </label>
+              <p id="import-mirror-help" class="muted text-xs">
+                Mirrors are pull-only: pushes are rejected for everyone, and the upstream
+                syncs on the schedule. The first sync starts immediately.
+              </p>
             </Show>
           </div>
           <details class="text-xs">
