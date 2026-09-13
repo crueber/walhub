@@ -402,6 +402,11 @@ export default function Issue() {
                     {t().state === "open" ? "Open" : closedStateLabel(t().state_reason)}
                   </span>
                 </div>
+                {/* Forgejo #481: this byline keeps the bare "{n} comments"
+                    text with no icon on purpose — it is a mid-sentence count,
+                    not a badge, so the shared issue-comment icon would break
+                    the reading flow. The icon lives on the Issues.jsx list
+                    rows (the badge surface). */}
                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                   {t().author} opened <DateTime value={t().created_at} /> · {t().comment_count} comments
                 </p>
