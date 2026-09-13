@@ -21,6 +21,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import { useData, invalidate, reportError } from "../lib/data.js";
+import Icon from "../lib/icons.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { splitMilestones, milestoneFilterHref, milestoneTotal } from "../lib/milestones.js";
 
@@ -132,7 +133,16 @@ export default function Milestones() {
                     <li class="card grid gap-1 p-3">
                       <div class="flex items-baseline gap-2">
                         <h3 class="font-medium">{m.title}</h3>
-                        <span class="chip">{m.state}</span>
+                        {/* Forgejo #484: the open-card state chip carries the
+                            milestone icon left of the state word (state-mapped
+                            off the payload — unknown states fail visible in
+                            this section per splitMilestones, so they read the
+                            open icon; the word stays for the non-icon
+                            signal, the icon is decorative aria-hidden via the
+                            shared svg). */}
+                        <span class="chip items-center gap-1">
+                          <Icon name={m.state === "closed" ? "milestone-done" : "milestone-open"} /> {m.state}
+                        </span>
                         <span class="muted ml-auto text-xs">
                           {m.open_issues} open · {m.closed_issues} closed
                         </span>
@@ -178,6 +188,11 @@ export default function Milestones() {
                   <For each={split().closed}>
                     {(m) => (
                       <li class="card flex flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2">
+                        {/* Forgejo #484: closed rows carry the done icon left
+                            of the title (static — every row in this section is
+                            closed by construction; decorative aria-hidden via
+                            the shared svg). */}
+                        <Icon name="milestone-done" />
                         <A
                           class="min-w-0 flex-1 truncate font-medium text-emerald-700 hover:underline dark:text-emerald-400"
                           href={milestoneFilterHref(ctx.full, m.id)}

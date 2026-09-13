@@ -1,11 +1,13 @@
 // web/src/lib/icons.jsx — the shared embedded SVG icon mechanism (Forgejo
-// #465): one component, consumed by all eight surfaces (Watch/Star/Fork/Clone
+// #465): one component, consumed by all eleven surfaces (Watch/Star/Fork/Clone
 // in pages/Repo.jsx, the notification bell in components/NotificationTray.jsx,
 // the theme toggle in App.jsx, the create button in
 // components/CreateMenu.jsx, the issue-list comment count in
-// pages/Issues.jsx).
+// pages/Issues.jsx, the milestone state chip + closed rows in
+// pages/Milestones.jsx, the issue-list milestone chip in pages/Issues.jsx,
+// and the repo tab-strip milestones affordance in pages/Repo.jsx).
 //
-// The 12 icon bodies are embedded below as inline JSX, transcribed verbatim
+// The 14 icon bodies are embedded below as inline JSX, transcribed verbatim
 // from the provided 1em currentColor files (issue comments 4783-4792 — the
 // source of truth for every path but two; each entry keeps its file's viewBox
 // as-is so the mixed viewports 16/24/1024/1200 all scale through width="1em"
@@ -15,6 +17,13 @@
 // paint, no color literals) rather than a one-off <svg> at the call site.
 // The twelfth body is the issue-list comment bubble (Forgejo #481),
 // transcribed verbatim from the issue-provided 16-unit file.
+// The thirteenth and fourteenth bodies are the milestone open/done pair
+// (Forgejo #484), transcribed verbatim from the issue-provided files —
+// open keeps its 16-unit viewBox, done its 24-unit viewBox (currentColor
+// paint on both). NOTE: the #484 issue body prose lists the viewBoxes
+// swapped (open=24/done=16); the comment labels + files say open=16/done=24,
+// and per the #465 precedent the files are the source of truth, so the
+// entries below are embedded AS LABELED.
 // No fetches, no raw imports, no innerHTML: the icons ship
 // inside the vite bundle and render with zero runtime requests. No color
 // literals anywhere in this layer — every body paints via fill="currentColor"
@@ -121,9 +130,25 @@ const ICONS = {
       <path fill="currentColor" d="M3.5 2A2.5 2.5 0 0 0 1 4.5v5A2.5 2.5 0 0 0 3.5 12H4v1.942a.98.98 0 0 0 1.625.738L8.688 12H12.5A2.5 2.5 0 0 0 15 9.5v-5A2.5 2.5 0 0 0 12.5 2zM2 4.5A1.5 1.5 0 0 1 3.5 3h9A1.5 1.5 0 0 1 14 4.5v5a1.5 1.5 0 0 1-1.5 1.5H8.312L5 13.898V11H3.5A1.5 1.5 0 0 1 2 9.5zM7.5 8h5a.5.5 0 0 0 0-1h-5a.5.5 0 0 0 0 1m-2-1h-2a.5.5 0 0 0 0 1h2a.5.5 0 0 0 0-1m-2 2a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1zm7 1a.5.5 0 0 1 0-1h2a.5.5 0 0 1 0 1z" />
     ),
   },
+  // Forgejo #484: the milestone open/done pair, transcribed verbatim from
+  // the issue-provided 1em currentColor files (viewBoxes kept as-is, mixed
+  // units scale through the shared 1em svg). Embedded AS LABELED (open=16,
+  // done=24) — see the header note on the prose/files discrepancy.
+  "milestone-open": {
+    viewBox: "0 0 16 16",
+    body: (
+      <path fill="currentColor" fill-rule="evenodd" d="M8.354 2.664a.5.5 0 0 0-.708 0L2.664 7.646a.5.5 0 0 0 0 .708l4.982 4.982a.5.5 0 0 0 .708 0l4.982-4.982a.5.5 0 0 0 0-.708zm-1.768-1.06a2 2 0 0 1 2.828 0l4.982 4.982a2 2 0 0 1 0 2.828l-4.982 4.982a2 2 0 0 1-2.828 0L1.604 9.414a2 2 0 0 1 0-2.828z" clip-rule="evenodd" />
+    ),
+  },
+  "milestone-done": {
+    viewBox: "0 0 24 24",
+    body: (
+      <path fill="currentColor" d="m22.115 10.055l-8.17-8.17a2.76 2.76 0 0 0-3.89 0l-8.17 8.17a2.76 2.76 0 0 0 0 3.89l8.17 8.17c.535.535 1.24.805 1.945.805s1.41-.27 1.945-.805l8.17-8.17a2.76 2.76 0 0 0 0-3.89m-10.73 5.12a1.25 1.25 0 0 1-.885.365c-.32 0-.64-.12-.885-.365l-2.27-2.27l1.06-1.06L10.5 13.94l5.47-5.47l1.06 1.06z" />
+    ),
+  },
 };
 
-/** The twelve icon names, in asset order (watch, star, fork, clone, bell, theme, plus, issue-comment). */
+/** The fourteen icon names, in asset order (watch, star, fork, clone, bell, theme, plus, issue-comment, milestone open/done). */
 export const ICON_NAMES = Object.keys(ICONS);
 
 /**

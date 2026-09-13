@@ -364,15 +364,28 @@ export default function Issues() {
                             // the set settles (deleted ids still fall back
                             // to the bare id via milestoneDisplay's unknown
                             // path, same self-heal as the sidebar).
-                            const d = () => milestoneDisplay(getMilestoneSet()?.milestones, issue.milestone);
+                            // Forgejo #484: the chip carries the milestone
+                            // icon left of the title, state-mapped off the
+                            // SAME cached set (no new requests — the set
+                            // already carries per-milestone state; unknown /
+                            // deleted ids fail visible with the open icon).
+                            // The title span stays the truncating element so
+                            // the shrink-0 icon is never clipped.
+                            const set = () => getMilestoneSet()?.milestones;
+                            const d = () => milestoneDisplay(set(), issue.milestone);
+                            const icon = () =>
+                              (set() ?? []).find((m) => m?.id === issue.milestone)?.state === "closed"
+                                ? "milestone-done"
+                                : "milestone-open";
                             return (
                               <Show when={!d().pending} fallback={<span class="muted">…</span>}>
                                 <A
-                                  class="chip max-w-40 truncate align-bottom"
+                                  class="chip max-w-40 truncate items-center gap-1 align-bottom"
                                   href={milestoneFilterHref(ctx.full, issue.milestone)}
                                   title={`issues on milestone ${d().text}`}
                                 >
-                                  {d().text}
+                                  <Icon name={icon()} />
+                                  <span class="truncate">{d().text}</span>
                                 </A>
                               </Show>
                             );
