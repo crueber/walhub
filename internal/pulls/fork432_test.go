@@ -13,11 +13,12 @@ import (
 )
 
 // This file pins issue #432: a fork whose share succeeds but whose later
-// pre-commit step (access bootstrap, provenance write) fails must release
-// the target name — the share reservation rolls back instead of stranding
-// the child manifest. Companion cases prove the rollback never deletes
-// live objects (prefix-scoped, ownership-verified) and pin the retry
-// semantics (reusable after rollback, adopt-or-409 on races).
+// pre-commit step (access bootstrap, provenance write, provenance backfill)
+// fails must release the target name — the share reservation rolls back
+// instead of stranding the child manifest. Companion cases prove the
+// rollback never deletes live objects (prefix-scoped, ownership-verified)
+// and pin the retry semantics (reusable after rollback, adopt-or-409 on
+// races).
 
 // wireRealFork wires the production ShareExecutor over the test store with
 // a scripted refs reader: the #432 tests exercise the real share +
@@ -177,6 +178,40 @@ func TestFork432AdoptedShareNeverRollsBack(t *testing.T) {
 	raw, _, _ := e.svc.getJSON(ctx(), ForkKey("f", "c"))
 	if string(raw) != string(own) {
 		t.Fatalf("provenance must survive: %s", raw)
+	}
+}
+
+func TestFork432BackfillFailureRollsBackShare(t *testing.T) {
+	e := newTestEnv()
+	wireRealFork(e)
+	seedParentManifest(t, e.store, "o", "r", 7, []string{"p1"})
+	// Stale own reservation without Root: the share wins, provenance 412s
+	// into the adopt, and the Root backfill below must converge it.
+	stale, _ := json.Marshal(&ForkDoc{Parent: "o/r", ForkedAt: "t", Version: 1})
+	if err := e.svc.putCreate(ctx(), ForkKey("f", "c"), stale); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	e.svc.AccessBoot = &fakeAccessBoot{}
+	// Every fork.json write 412s: the provenance putCreate loses into the
+	// adopt, then the backfill CAS exhausts its 5 attempts and fails.
+	e.failPut(ForkKey("f", "c"), 99)
+	rec := &TaskRecord{Progress: []string{}}
+	if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c"}, writer(), rec); err == nil {
+		t.Fatal("backfill failure must fail the task")
+	}
+	// This attempt's share keys are released (disputed prefix: fork.json
+	// present, so only share keys); the stale reservation survives for the
+	// owner's retry.
+	for _, k := range childKeys432("f", "c", 7) {
+		mustAbsent432(t, e.store, k)
+	}
+	raw, _, _ := e.svc.getJSON(ctx(), ForkKey("f", "c"))
+	if string(raw) != string(stale) {
+		t.Fatalf("stale fork.json must survive: %s", raw)
+	}
+	joined := strings.Join(rec.Progress, "\n")
+	if !strings.Contains(joined, "rolled back share reservation") || !strings.Contains(joined, "provenance backfill") {
+		t.Fatalf("backfill rollback must be narrated, got:\n%s", joined)
 	}
 }
 

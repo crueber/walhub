@@ -886,6 +886,11 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 			out, _ := json.Marshal(&doc)
 			return out, true, nil
 		}); err != nil {
+			// A backfill failure after THIS attempt won the share still
+			// strands the reservation (issue #432) — roll it back so a
+			// retry re-runs the full order. Pure-adopt runs (share lost,
+			// nothing Created) are a no-op inside rollback.
+			rollback("provenance backfill")
 			return err
 		}
 	}
