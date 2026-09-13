@@ -70,11 +70,17 @@ test("identity block stays atop the main column; tab views share the column", ()
   assert.ok(!profile.includes("repos-toolbar"), "no Repositories toolbar inside the profile branch (#437: teaser deleted, toolbar on the tab)");
   assert.ok(!profile.includes("<RepoRow"), "no repo grid inside the profile branch");
   assert.ok(!profile.includes("View all →"), "no count teaser inside the profile branch");
-  assert.ok(profile.includes("<Show when={getEditing() && getProfile()?.can_edit}>"), "the edit form opens in place in the main column");
+  // Forgejo #442: the edit form is hoisted out of the profile-view gate —
+  // it renders in the main column above the per-view Shows so Edit profile
+  // works on every tab; the branch below keeps identity only.
+  assert.ok(!profile.includes("<ProfileForm"), "the edit form no longer nests inside the profile-view branch");
   // The main column itself spans all three view branches before the sidebar.
   const mainIdx = REPOS.indexOf('<div class="profile-main');
   const colIdx = REPOS.indexOf('<div class="profile-sidebar-col');
   const main = REPOS.slice(mainIdx, colIdx);
+  const form = main.indexOf("<Show when={getEditing() && getProfile()?.can_edit}>");
+  assert.ok(form !== -1, "the edit form renders in the main column");
+  assert.ok(form < main.indexOf('<Show when={view() === "profile"}>'), "the form sits above the per-view Shows (reachable from every tab)");
   for (const gate of ['<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>', '<Show when={view() === "orgs"}>']) {
     assert.ok(main.includes(gate), `the main column carries the ${gate} branch`);
   }
@@ -84,7 +90,10 @@ test("identity block stays atop the main column; tab views share the column", ()
 });
 
 test("tabs lead the sidebar; avatar + all owner actions grouped beneath, none in the identity block", () => {
-  const identity = block(REPOS, '<div class="profile-header', "</div>\n            <Show when={getEditing()");
+  // Forgejo #442: the edit form moved out of the profile-view gate into
+  // the main column above the per-view Shows — scope the identity pins to
+  // the header div's own close (the bio div inside is self-closing).
+  const identity = block(REPOS, '<div class="profile-header', "</div>");
   assert.ok(!identity.includes("Edit profile"), "Edit profile left the identity block");
   assert.ok(!identity.includes("Regenerate avatar"), "Regenerate lives in the sidebar, not the identity block");
   assert.ok(!identity.includes("Remove avatar"), "Remove lives in the sidebar, not the identity block");

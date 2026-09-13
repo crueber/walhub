@@ -39,13 +39,16 @@ test("no full-width row above the header; identity block carries no actions (#41
   assert.ok(!above.includes("New repository"), "no CTA above the header");
   assert.ok(!above.includes("justify-end"), "no orphan right-aligned row above the header");
   assert.ok(!above.includes("mb-3 flex"), "no orphan action row above the header");
-  const identity = block(REPOS, '<div class="profile-header', "</div>\n            <Show when={getEditing()");
+  // Forgejo #442: the edit form moved out of the profile-view gate into
+  // the main column above the per-view Shows — scope the identity pins to
+  // the header div's own close (the bio div inside is self-closing).
+  const identity = block(REPOS, '<div class="profile-header', "</div>");
   assert.ok(!identity.includes("New repository"), "New repository left the header for the toolbar (#413)");
   assert.ok(!identity.includes("Edit profile"), "Edit profile left the identity block for the sidebar (#421)");
 });
 
 test("h1 anchors at text-2xl; handle sits tight beneath it", () => {
-  const grid = block(REPOS, '<div class="profile-header', "</div>\n            <Show when={getEditing()");
+  const grid = block(REPOS, '<div class="profile-header', "</div>");
   assert.ok(grid.includes('<h1 class="text-2xl font-semibold">'), "h1 at text-2xl");
   assert.ok(!grid.includes("text-xl"), "no undersized text-xl left in the header");
   assert.ok(grid.includes('<p class="muted mt-0.5 text-sm">@{owner()}</p>'), "handle tight under the name");
