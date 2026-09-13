@@ -16,7 +16,7 @@ import (
 // TestE2E_ForkDeleteKeepsChildrenWorking:
 // seed parent → push main → fork (pull-fork task) → DELETE the parent →
 // the child's clone/push/read paths keep working, the parent is gone
-// (404 summary, no refs), and the parent name refuses re-create.
+// (404 summary, no refs), and the parent name absorbs on re-create.
 func TestE2E_ForkDeleteKeepsChildrenWorking(t *testing.T) {
 	requireModernGit(t)
 	if testing.Short() {
