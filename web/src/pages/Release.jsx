@@ -12,6 +12,7 @@ import { renderBody } from "../lib/render-md.js";
 import { sha256Hex } from "../../sdk/src/releases.js";
 import { ReleaseBadges } from "./Releases.jsx";
 import DateTime from "../components/DateTime.jsx";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 
 export default function Release() {
   const ctx = useRepo();
@@ -218,6 +219,7 @@ export default function Release() {
                         rows="10"
                         value={getBody()}
                         onInput={(e) => setBody(e.currentTarget.value)}
+                        onKeyDown={onSubmitKeys(() => save({ name: getName(), body: getBody() }), { isBusy: () => getBusy() })}
                         placeholder="What's new in this release… (markdown-lite)"
                         aria-describedby="release-edit-notes-help"
                       />

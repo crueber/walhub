@@ -24,6 +24,7 @@ import { reportError } from "../lib/data.js";
 import { MentionDatalist } from "../pages/Mentions.jsx";
 import { CLOSE_COMPLETED, CLOSE_NOT_PLANNED } from "../lib/issue-events.js";
 import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 
 /** Split-button close control (issue #311, GitHub pattern): the primary
  * segment runs the default action immediately (close as completed — one
@@ -229,6 +230,7 @@ export default function CommentComposer(props) {
 
   return (
     <form class="card mt-3 grid gap-2 p-3" onSubmit={submit} aria-label={props.label ?? "New comment"}>
+      {/* #450: Cmd/Ctrl+Enter posts the primary submit only, never comment-and-close. */}
       <textarea
         ref={textRef}
         class="input min-h-24 font-mono text-sm"
@@ -236,6 +238,7 @@ export default function CommentComposer(props) {
         onInput={(e) => setBody(e.target.value)}
         onPaste={onPaste}
         onDrop={onDrop}
+        onKeyDown={onSubmitKeys(submit, { isBusy: () => getBusy() })}
         placeholder={props.placeholder ?? "Write a comment… (#N links issues, @user mentions)"}
         aria-label="comment body"
         list={listId()}

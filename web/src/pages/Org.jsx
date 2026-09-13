@@ -14,6 +14,7 @@ import { mergeOrgActivity } from "../lib/orgs.js";
 import { timeZones } from "../lib/timezone.js";
 import { normalizeOrgProfile, orgSaveBody } from "../lib/org-profile.js";
 import { initAutogrow, growTextarea } from "../lib/autogrow.js";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 import { renderBody } from "../lib/render-md.js";
 import { DangerConfirm } from "./Settings.jsx";
 
@@ -61,6 +62,7 @@ function ProfileTab(props) {
   const [getBio, setBio] = createSignal("");
   const [getNote, setNote] = createSignal("");
   const [getSeeded, setSeeded] = createSignal(false);
+  const [getSaving, setSaving] = createSignal(false);
   const [getAvatarNote, setAvatarNote] = createSignal("");
   const zones = timeZones();
   // Forgejo #419: bio auto-grow — same shared helper as the owner profile
@@ -83,6 +85,8 @@ function ProfileTab(props) {
   };
 
   const save = async () => {
+    if (getSaving()) return; // double-submit guard (#450: Cmd+Enter during save)
+    setSaving(true);
     setNote("");
     try {
       await repos.orgs.put(
@@ -100,6 +104,8 @@ function ProfileTab(props) {
     } catch (err) {
       reportError(err, key());
       setNote(err?.status === 403 ? "org owner required" : String(err?.message ?? err));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -239,6 +245,7 @@ function ProfileTab(props) {
                     setBio(e.currentTarget.value);
                     growTextarea(e.currentTarget);
                   }}
+                  onKeyDown={onSubmitKeys(() => save(), { isBusy: () => getSaving() })}
                   placeholder="A few lines about this organization…"
                 />
               </label>
@@ -247,7 +254,7 @@ function ProfileTab(props) {
                 <div class="markdown-body card p-3" innerHTML={renderBody(getBio())} />
               </Show>
               <div>
-                <button type="button" class="btn px-3 py-1" onClick={save}>save profile</button>
+                <button type="button" class="btn px-3 py-1" disabled={getSaving()} onClick={save}>{getSaving() ? "saving…" : "save profile"}</button>
               </div>
               <Show when={getNote()}><p class="text-sm text-amber-700 dark:text-amber-300">{getNote()}</p></Show>
             </div>

@@ -46,6 +46,7 @@ import {
 } from "../lib/profile.js";
 import { renderBody } from "../lib/render-md.js";
 import { initAutogrow, growTextarea } from "../lib/autogrow.js";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 import { OrgAvatar } from "./Org.jsx";
 import { mirrorRowBadge } from "../lib/mirror.js";
 import { visibilityBadge } from "../lib/visibility.js";
@@ -278,6 +279,7 @@ function ProfileForm(props) {
             setBio(e.currentTarget.value);
             growTextarea(e.currentTarget);
           }}
+          onKeyDown={onSubmitKeys(() => save(), { isBusy: () => getSaving() })}
           placeholder="A few lines about this owner…"
         />
         <Show when={getBio()}>

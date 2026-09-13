@@ -40,6 +40,7 @@ import { isVisibility } from "../lib/visibility.js";
 import { saveVisibilityOnly, reseedVisibility, friendlyAccessError } from "../lib/accessSave.js";
 import { docVisibility, reseed as reseedVisTrack, rebase as rebaseVisTrack, isDirty as isVisTrackDirty } from "../lib/visibilityReseed.js";
 import { shouldFetchTeams } from "../lib/access.js";
+import { onSubmitKeys } from "../lib/submitKeys.js";
 
 // --- tiny line diff (LCS) for the per-revision "line diff" ----------------------
 
@@ -575,6 +576,7 @@ function PolicyTab(props) {
   const [getResult, setResult] = createSignal(null); // validate result
   const [getDry, setDry] = createSignal(null);
   const [getDryN, setDryN] = createSignal("10");
+  const [getSaving, setSaving] = createSignal(false);
 
   const validateDebounced = debounce(async () => {
     try {
@@ -595,11 +597,13 @@ function PolicyTab(props) {
     } catch (e) { reportError(e, "policy"); }
   }
   async function save() {
+    if (getSaving()) return; // double-submit guard (#450: Cmd+Enter during save)
+    setSaving(true);
     try {
       await props.repo.policy.put(getText());
       setSaved(getText());
       setNote("policy saved");
-    } catch (e) { reportError(e, "policy save"); }
+    } catch (e) { reportError(e, "policy save"); } finally { setSaving(false); }
   }
   async function copy() {
     try { await navigator.clipboard.writeText(getText()); } catch { /* clipboard unavailable */ }
@@ -623,9 +627,10 @@ function PolicyTab(props) {
           placeholder="policy JSON — empty means allow-all"
           value={getText()}
           onInput={(e) => { setText(e.currentTarget.value); validateDebounced(); }}
+          onKeyDown={onSubmitKeys(() => save(), { isBusy: () => getSaving() })}
         />
         <div class="mt-2 flex flex-wrap items-center gap-2">
-          <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={save}>Save</button>
+          <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" disabled={getSaving()} onClick={save}>{getSaving() ? "Saving…" : "Save"}</button>
           <button class="pill cursor-pointer select-none" type="button" onClick={reload}>Discard</button>
           <button class="pill cursor-pointer select-none" type="button" onClick={copy}>Copy</button>
           <span class="flex items-center gap-2">
@@ -692,6 +697,7 @@ function ConfigTab(props) {
   const [getMessage, setMessage] = createSignal("");
   const [getNote, setNote] = createSignal("");
   const [getDiff, setDiff] = createSignal(null); // { rev, rows }
+  const [getBusy, setBusy] = createSignal(false);
 
   const [getEffective] = useData(`settings-effective:${props.ctx.full}`, () => props.repo.settings.effective(), 5000);
   const [getHistory] = useData(`settings-history:${props.ctx.full}`, () => props.repo.settings.history(), 5000);
@@ -712,11 +718,13 @@ function ConfigTab(props) {
   }, 400);
 
   async function publish() {
+    if (getBusy()) return; // double-submit guard (#450: Cmd+Enter during publish)
+    setBusy(true);
     try {
       await props.repo.settings.put(getText(), getMessage());
       setNote("published");
       setMessage("");
-    } catch (e) { setNote(String(e.message ?? e)); }
+    } catch (e) { setNote(String(e.message ?? e)); } finally { setBusy(false); }
   }
   async function clearAll() {
     try {
@@ -746,9 +754,10 @@ function ConfigTab(props) {
           placeholder={"[bundles]\nmain_only = false"}
           value={getText()}
           onInput={(e) => { setText(e.currentTarget.value); validateDebounced(); }}
+          onKeyDown={onSubmitKeys(() => publish(), { isBusy: () => getBusy() })}
         />
         <div class="mt-2 flex flex-wrap items-center gap-2">
-          <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={publish}>Publish</button>
+          <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" disabled={getBusy()} onClick={publish}>{getBusy() ? "Publishing…" : "Publish"}</button>
           <button class="pill cursor-pointer select-none" type="button" onClick={clearAll}>Clear</button>
           <input
             class="input min-w-0 flex-1 basis-48"
