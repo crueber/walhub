@@ -37,30 +37,51 @@ import (
 const maxForkDepth = 8
 
 // forkChain returns ancestor repo ids ("owner/name"), immediate parent
-// outward. Empty for non-forks. Cached per handle: fork.json's parent
-// pointer never moves (its CAS only touches merged_upstream_at), so a
-// handle-lifetime cache is safe — and a cache is all it is (law 4: a
-// wiped instance re-resolves from the bucket).
+// outward. Empty for non-forks. Cached per handle and revalidated on
+// every use against the handle's own fork.json (issue #459): one
+// exact-key GET, Parent+Root+Version compared — a Root backfill (or a
+// delete) under a live handle re-resolves instead of serving the stale
+// chain. Failure path only (sharedGet/downloadShared call it after an
+// own-NotFound), so hot paths pay zero trips (law 6); the cache is still
+// all it is (law 4: a wiped instance re-resolves from the bucket).
 func (h *RepoHandle) forkChain(ctx context.Context) []string {
 	h.forkMu.Lock()
-	if h.forkLoaded {
-		chain := h.forkChainCached
+	loaded := h.forkLoaded
+	cached := h.forkChainCached
+	own := h.forkOwn
+	ownOK := h.forkOwnOK
+	h.forkMu.Unlock()
+	if !loaded {
+		chain, cur, ok := h.resolveForkChain(ctx)
+		h.forkMu.Lock()
+		h.forkChainCached, h.forkLoaded = chain, true
+		h.forkOwn, h.forkOwnOK = cur, ok
 		h.forkMu.Unlock()
 		return chain
 	}
-	h.forkMu.Unlock()
-	chain := h.resolveForkChain(ctx)
-	h.forkMu.Lock()
-	h.forkChainCached, h.forkLoaded = chain, true
-	h.forkMu.Unlock()
-	return chain
+	// Revalidate: the chain is built from the own Parent+Root, and the
+	// adopted-provenance backfill moves Root after create — compare the
+	// live own doc against the cached one (Version included so a pure
+	// merged_upstream_at stamp also refreshes, cheaply converging).
+	if cur, ok := h.readForkDoc(ctx, h.ID); ok != ownOK || cur != own {
+		chain, fresh, freshOK := h.resolveForkChainWithOwn(ctx, cur, ok)
+		h.forkMu.Lock()
+		h.forkChainCached = chain
+		h.forkOwn, h.forkOwnOK = fresh, freshOK
+		h.forkMu.Unlock()
+		return chain
+	}
+	return cached
 }
 
 // forkDoc is the fork.json shape fork reads need (owned by
 // internal/pulls — mirrored here so core never imports upward, law 8).
+// Version rides along so the cache revalidation (issue #459) converges
+// on every fork.json advance, not just Parent/Root moves.
 type forkDoc struct {
-	Parent string `json:"parent"`
-	Root   string `json:"root"`
+	Parent  string `json:"parent"`
+	Root    string `json:"root"`
+	Version int    `json:"version"`
 }
 
 // readForkDoc reads one fork.json by exact key (never LIST, law 4).
@@ -82,11 +103,19 @@ func (h *RepoHandle) readForkDoc(ctx context.Context, id string) (forkDoc, bool)
 }
 
 // resolveForkChain walks Parent+Root pointers outward from the handle's
-// own fork.json (BFS, visited set, depth cap).
-func (h *RepoHandle) resolveForkChain(ctx context.Context) []string {
+// own fork.json (BFS, visited set, depth cap). It returns the chain plus
+// the own doc it was built from, so forkChain can cache both together.
+func (h *RepoHandle) resolveForkChain(ctx context.Context) ([]string, forkDoc, bool) {
 	own, ok := h.readForkDoc(ctx, h.ID)
+	return h.resolveForkChainWithOwn(ctx, own, ok)
+}
+
+// resolveForkChainWithOwn is resolveForkChain over an already-read own
+// doc (the revalidation GET in forkChain doubles as the resolve's own
+// read — no second trip).
+func (h *RepoHandle) resolveForkChainWithOwn(ctx context.Context, own forkDoc, ok bool) ([]string, forkDoc, bool) {
 	if !ok {
-		return nil
+		return nil, own, false
 	}
 	var chain []string
 	seen := map[string]bool{h.ID: true}
@@ -109,7 +138,7 @@ func (h *RepoHandle) resolveForkChain(ctx context.Context) []string {
 			push(doc.Root)
 		}
 	}
-	return chain
+	return chain, own, true
 }
 
 // ancestorKeys returns the fork-ancestor store keys for a repo-relative
