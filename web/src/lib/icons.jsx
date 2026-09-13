@@ -5,10 +5,12 @@
 // components/CreateMenu.jsx, the issue-list comment count in
 // pages/Issues.jsx, the milestone state chip + closed rows in
 // pages/Milestones.jsx, the issue-list milestone chip in pages/Issues.jsx,
-// the repo tab-strip milestones affordance in pages/Repo.jsx, the
+// the issues-toolbar Labels/Milestones links in pages/Issues.jsx (Forgejo
+// #495: the #484/#485 strip icons moved off the tab strip onto the links
+// they navigate to), the milestones page heading in pages/Milestones.jsx
+// (Forgejo #495, mirroring the labels heading), the
 // issue-list labels filter trigger in pages/Issues.jsx, the labels page
-// heading in pages/Labels.jsx, and the repo tab-strip labels affordance
-// in pages/Repo.jsx).
+// heading in pages/Labels.jsx).
 //
 // The 15 icons are embedded below as complete inline <svg> JSX, one factory
 // per entry — each factory returns its OWN svg (own xmlns, width/height 1em,

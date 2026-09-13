@@ -237,11 +237,17 @@ export default function Issues() {
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <h2 class="text-xl font-semibold tracking-tight">Issues</h2>
         <div class="ml-auto flex gap-2">
+          {/* Forgejo #495: the label icon leads the Labels link (decorative
+              aria-hidden via the shared svg — the link text is unchanged,
+              so the accessible name is untouched). */}
           <A class="btn" href={`/${ctx.full}/labels`}>
-            Labels
+            <Icon name="label" /> Labels
           </A>
+          {/* Forgejo #495: the milestone-open icon leads the Milestones link
+              (decorative aria-hidden via the shared svg — the link text is
+              unchanged, so the accessible name is untouched). */}
           <A class="btn" href={`/${ctx.full}/milestones`}>
-            Milestones
+            <Icon name="milestone-open" /> Milestones
           </A>
           <A class="btn primary" href={`/${ctx.full}/issues/new`}>
             New issue
