@@ -88,14 +88,19 @@ test("390px arithmetic: stacked fields fit the viewport", () => {
   assert.ok(FORK.includes('class="card grid gap-3 p-4"'), "form keeps its fluid card shape (no fixed width)");
 });
 
-test("repo header Fork and Clone are a text-only matched pair", () => {
-  const pill = block(REPO, "Issue #424: Fork sits in the Clone pill row", "</A>");
-  assert.ok(pill.includes('class="pill"'), "Fork keeps the pill class");
+test("repo header Fork and Clone are a text-only matched pair on the canonical btn idiom", () => {
+  // Forgejo #447 builds on the #438 text-only pair: Fork and the CloneMenu
+  // summary now share the Star/Watch btn metrics (btn px-2 py-1 text-sm) at
+  // the same size/weight with no icon glyph — one action strip, not two
+  // families. The count still reads summary.forks (no extra fetch); the
+  // count-left-of-label shape itself is pinned in header-pills-447.test.js.
+  const pill = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</A>");
+  assert.ok(pill.includes('class="btn px-2 py-1 text-sm"'), "Fork keeps the canonical btn metrics (was pill pre-#447)");
   assert.ok(pill.includes('href={`/${full()}/fork`}'), "Fork pill still links to the fork page");
   assert.ok(pill.includes("summary.forks") || pill.includes("s().forks"), "Fork count still reads summary.forks (no extra fetch)");
   assert.ok(!pill.includes("⑂"), "Fork pill carries no icon glyph");
-  const cloneSummary = block(REPO, '<summary class="pill', "</summary>");
-  assert.ok(cloneSummary.includes('class="pill'), "Clone summary keeps the pill class (the matched pair)");
+  const cloneSummary = block(REPO, "<summary class=\"btn", "</summary>");
+  assert.ok(cloneSummary.includes("px-2 py-1 text-sm"), "Clone summary keeps the canonical btn metrics (the matched pair)");
   assert.ok(cloneSummary.endsWith(">Clone"), "Clone summary renders the text-only Clone label");
 });
 
