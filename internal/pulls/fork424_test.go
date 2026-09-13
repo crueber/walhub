@@ -19,6 +19,7 @@ type fakeForkExec struct {
 	calls       []forkCall
 	err         error
 	rollbacks   []forkCall
+	access      []bool
 	rollbackErr error
 }
 
@@ -44,11 +45,13 @@ func (f *fakeForkExec) last() (forkCall, bool) {
 }
 
 // RollbackShare records rollback calls (issue #432); rollbackErr scripts a
-// rollback shortfall.
-func (f *fakeForkExec) RollbackShare(_ context.Context, parent, child string) error {
+// rollback shortfall. access records the accessCreated flag each call saw
+// (issue #458: the rollback deletes access.json only when created).
+func (f *fakeForkExec) RollbackShare(_ context.Context, parent, child string, accessCreated bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rollbacks = append(f.rollbacks, forkCall{parent, child, ForkOptions{}})
+	f.access = append(f.access, accessCreated)
 	return f.rollbackErr
 }
 
@@ -67,18 +70,20 @@ func (f *fakeOwnerGate) CheckCreateOwner(_ context.Context, _ string, _ auth.Pri
 	return f.err
 }
 
-// fakeAccessBoot records EnsureRepoAccess calls.
+// fakeAccessBoot records EnsureRepoAccessCreated calls; created scripts
+// the created-this-call flag (issue #458).
 type fakeAccessBoot struct {
-	mu    sync.Mutex
-	calls [][4]string
-	err   error
+	mu      sync.Mutex
+	calls   [][4]string
+	created bool
+	err     error
 }
 
-func (f *fakeAccessBoot) EnsureRepoAccess(_ context.Context, owner, repo, creator, visibility string) error {
+func (f *fakeAccessBoot) EnsureRepoAccessCreated(_ context.Context, owner, repo, creator, visibility string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, [4]string{owner, repo, creator, visibility})
-	return f.err
+	return f.created, f.err
 }
 
 func TestFork424InputValidation(t *testing.T) {

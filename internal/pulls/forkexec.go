@@ -2,6 +2,7 @@ package pulls
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,12 +22,15 @@ import (
 // Hazard: two forks racing one target name (or a fork racing a repo
 // create). Avoidance: the child manifest.pb Create arbitrates — one
 // winner, every loser gets a 412 mapped to ErrConflict (the service's
-// adopt check then decides ours-vs-theirs). No lock of any kind is held:
-// the step is pure store round trips (one manifest GET, N pack HEADs,
-// two checkpoint PUTs, one manifest Create), never across a lock, and the
-// two checkpoint PUTs are independent keys issued sequentially (a crash
-// between them leaves garbage objects, never a hazard — same rule as
-// checkpoint round 1).
+// adopt check then decides ours-vs-theirs). A crashed attempt's orphan
+// checkpoint pair (issue #458) is adopted-or-409'd by semantic compare,
+// never overwritten: overwriting would corrupt the rival retry that
+// adopts by the same rule. No lock of any kind is held: the step is pure
+// store round trips (one manifest GET, N pack HEADs, two checkpoint PUTs,
+// one manifest Create, plus exact-key GETs only on the 412 failure path),
+// never across a lock, and the two checkpoint PUTs are independent keys
+// issued sequentially (a crash between them leaves garbage objects, never
+// a hazard — same rule as checkpoint round 1).
 
 // ForkRef is one live parent ref for the fresh snapshot.
 type ForkRef struct {
@@ -116,7 +120,14 @@ func (e *ShareExecutor) ShareManifest(ctx context.Context, parent, child string,
 			Settings:      settings,
 		}
 		if err := e.putCreatePB(ctx, manifestKey(cOwner, cName), cm.Marshal()); err != nil {
-			return err
+			// Same orphan discipline as the non-empty path (issue
+			// #458): a present fork.json defers to the service's
+			// adopt check; an empty-parent orphan with no fork.json
+			// fails closed (byte-identical to a fresh repo, #432).
+			if !errors.Is(err, ErrConflict) {
+				return err
+			}
+			return e.adoptOrphanManifest(ctx, child, cOwner, cName, pm, nil)
 		}
 		return nil
 	}
@@ -170,7 +181,7 @@ func (e *ShareExecutor) ShareManifest(ctx context.Context, parent, child string,
 		HeadTarget:   head,
 		CreatedAt:    tsPtr(now),
 	}
-	if err := e.putCreatePB(ctx, childKey(cOwner, cName, store.CheckpointRefsKey(pm.HeadSeq)), snap.Marshal()); err != nil {
+	if err := e.putCreateOrAdoptSnapshot(ctx, childKey(cOwner, cName, store.CheckpointRefsKey(pm.HeadSeq)), snap); err != nil {
 		return err
 	}
 	packs := make([]*proto.PackRef, 0, len(pm.Packs))
@@ -190,7 +201,7 @@ func (e *ShareExecutor) ShareManifest(ctx context.Context, parent, child string,
 		CreatedAt:    tsPtr(now),
 		Writer:       host,
 	}
-	if err := e.putCreatePB(ctx, childKey(cOwner, cName, store.CheckpointKey(pm.HeadSeq)), cp.Marshal()); err != nil {
+	if err := e.putCreateOrAdoptCheckpoint(ctx, childKey(cOwner, cName, store.CheckpointKey(pm.HeadSeq)), cp); err != nil {
 		return err
 	}
 	// 6. Child manifest: packs verbatim, empty segment range
@@ -216,7 +227,17 @@ func (e *ShareExecutor) ShareManifest(ctx context.Context, parent, child string,
 		Settings:    settings,
 	}
 	if err := e.putCreatePB(ctx, manifestKey(cOwner, cName), cm.Marshal()); err != nil {
-		return err
+		// A 412 with no fork.json on the prefix may be a crashed
+		// attempt's orphan manifest (issue #458: checkpoints were
+		// adopted-or-created above, so they match this parent) — adopt
+		// it when the evidence holds, else 409. A fork.json on the
+		// prefix defers to the service's adopt check (ours-vs-theirs by
+		// Parent), which already handles that case. Non-412 failures
+		// propagate untouched (a store outage is never an adoption).
+		if !errors.Is(err, ErrConflict) {
+			return err
+		}
+		return e.adoptOrphanManifest(ctx, child, cOwner, cName, pm, packs)
 	}
 	return nil
 }
@@ -232,17 +253,21 @@ func (e *ShareExecutor) ShareManifest(ctx context.Context, parent, child string,
 // winning it — and Revision 1 proves no WAL publish has advanced the
 // child since. Anything else refuses: an absent manifest is a nil no-op;
 // a foreign (Repo mismatch), WAL-advanced (Revision != 1), or corrupt
-// manifest is an error, never a delete.
+// manifest is an error, never a delete. The bootstrapped access.json is
+// deleted only when this attempt created it (accessCreated — the
+// EnsureRepoAccessCreated result, issue #458): an adopted pre-existing
+// access.json is someone else's object and survives the rollback, to be
+// re-adopted by the retry.
 //
-// Exact keys only, no LIST: the bootstrapped access.json (skipped when a
-// fork.json disputes the prefix — adopted, not created, so hands off),
-// the checkpoint pair at the shared seq (HeadSeq 0 forks wrote no
-// checkpoints), and the manifest last (its presence is what blocks retry
-// — deleting it last keeps the taken-signal until the prefix is otherwise
-// clean). Never packs (shared packs live under the PARENT prefix), never
-// the parent index (the child was never listed — the fork-network GC walk
-// in internal/maintain cannot reference it; a racing pass reads
-// manifest-404 and skips the subtree).
+// Exact keys only, no LIST: the bootstrapped access.json (when created by
+// this attempt and no fork.json disputes the prefix — adopted, not
+// created, so hands off), the checkpoint pair at the shared seq (HeadSeq
+// 0 forks wrote no checkpoints), and the manifest last (its presence is
+// what blocks retry — deleting it last keeps the taken-signal until the
+// prefix is otherwise clean). Never packs (shared packs live under the
+// PARENT prefix), never the parent index (the child was never listed —
+// the fork-network GC walk in internal/maintain cannot reference it; a
+// racing pass reads manifest-404 and skips the subtree).
 //
 // ### Concurrency
 //
@@ -253,8 +278,11 @@ func (e *ShareExecutor) ShareManifest(ctx context.Context, parent, child string,
 // lost the manifest Create against this attempt (412) and backed off; any
 // writer that advanced the manifest past Revision 1 aborts the rollback.
 // A racing creator that arrives AFTER the deletes wins a clean, empty
-// prefix — which is exactly the name-reuse the rollback exists for.
-func (e *ShareExecutor) RollbackShare(ctx context.Context, parent, child string) error {
+// prefix — which is exactly the name-reuse the rollback exists for. The
+// access.json delete rides the same proof (created-by-this-attempt); a
+// concurrently re-created access.json after a delete is re-adopted by the
+// retry's bootstrap, never a blocker (Create-wins/adopt).
+func (e *ShareExecutor) RollbackShare(ctx context.Context, parent, child string, accessCreated bool) error {
 	cOwner, cName, ok := splitRepo(child)
 	if !ok {
 		return fmt.Errorf("%w: invalid child %q", ErrInvalid, child)
@@ -292,7 +320,10 @@ func (e *ShareExecutor) RollbackShare(ctx context.Context, parent, child string)
 		return fmt.Errorf("%w: child manifest for %s is not this attempt's reservation", ErrConflict, child)
 	}
 	keys := []string{}
-	if !disputed {
+	// The bootstrapped access.json goes only when this attempt created
+	// it (issue #458) and no fork.json disputes the prefix: an adopted
+	// pre-existing access.json is hands-off either way.
+	if accessCreated && !disputed {
 		keys = append(keys, "repos/"+cOwner+"/"+cName+"/access.json")
 	}
 	if cm.HeadSeq != 0 {
@@ -389,6 +420,168 @@ func escapeTOMLBasic(s string) string {
 	s = strings.ReplaceAll(s, "\n", "\\n")
 	s = strings.ReplaceAll(s, "\t", "\\t")
 	return s
+}
+
+// putCreateOrAdoptSnapshot Creates one refs snapshot; a 412 whose
+// existing bytes are semantically identical to want (timestamps ignored —
+// a retry stamps a new CreatedAt) adopts the crashed attempt's orphan and
+// the retry converges. A 412 with different bytes is a rival attempt's
+// reservation: ErrConflict, never overwritten.
+func (e *ShareExecutor) putCreateOrAdoptSnapshot(ctx context.Context, key string, want *proto.RefSnapshot) error {
+	return e.putCreateOrAdopt(ctx, key, want.Marshal(), func(raw []byte) bool {
+		got := &proto.RefSnapshot{}
+		if err := got.Unmarshal(raw); err != nil {
+			return false
+		}
+		return sameForkSnapshot(got, want)
+	})
+}
+
+// putCreateOrAdoptCheckpoint Creates one checkpoint object; same
+// adopt-or-conflict rule as putCreateOrAdoptSnapshot.
+func (e *ShareExecutor) putCreateOrAdoptCheckpoint(ctx context.Context, key string, want *proto.Checkpoint) error {
+	return e.putCreateOrAdopt(ctx, key, want.Marshal(), func(raw []byte) bool {
+		got := &proto.Checkpoint{}
+		if err := got.Unmarshal(raw); err != nil {
+			return false
+		}
+		return sameForkCheckpoint(got, want)
+	})
+}
+
+// putCreateOrAdopt Creates one object; on a 412 the existing bytes decide:
+// semantically identical (same) adopts, anything else (rival bytes,
+// corrupt bytes, an unreadable key) is ErrConflict. Sweeping (delete +
+// recreate) was rejected: without a manifest the occupying bytes are
+// unowned garbage to us but a live reservation to a racing rival —
+// deleting them would corrupt the rival's retry, which adopts by this
+// same rule. Doubt keeps objects (law 4); the loser fails loud with 409.
+func (e *ShareExecutor) putCreateOrAdopt(ctx context.Context, key string, body []byte, same func([]byte) bool) error {
+	_, err := store.PutBytes(ctx, e.Store, key, body, store.PutOptions{Mode: store.PutCreate, ContentType: "application/x-protobuf"})
+	if err == nil {
+		return nil
+	}
+	if !store.IsPreconditionFailed(err) {
+		return err
+	}
+	raw, _, gerr := store.GetBytes(ctx, e.Store, key, store.GetOptions{})
+	if gerr != nil || raw == nil || !same(raw) {
+		return fmt.Errorf("%w: %s already exists", ErrConflict, key)
+	}
+	return nil
+}
+
+// sameForkSnapshot reports whether two refs snapshots carry the same fork
+// state (timestamps ignored — retries re-stamp).
+func sameForkSnapshot(a, b *proto.RefSnapshot) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Seq != b.Seq || a.ObjectFormat != b.ObjectFormat || a.HeadTarget != b.HeadTarget {
+		return false
+	}
+	if len(a.Refs) != len(b.Refs) {
+		return false
+	}
+	for i := range a.Refs {
+		ar, br := a.Refs[i], b.Refs[i]
+		if ar == nil || br == nil {
+			if ar != br {
+				return false
+			}
+			continue
+		}
+		if ar.Name != br.Name || ar.Oid != br.Oid || ar.Peeled != br.Peeled {
+			return false
+		}
+	}
+	return true
+}
+
+// sameForkCheckpoint reports whether two checkpoints carry the same fork
+// state (timestamps and writer ignored — retries re-stamp).
+func sameForkCheckpoint(a, b *proto.Checkpoint) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Seq != b.Seq || a.ObjectFormat != b.ObjectFormat || a.RefsKey != b.RefsKey || a.RefCount != b.RefCount {
+		return false
+	}
+	return sameForkPacks(a.Packs, b.Packs)
+}
+
+// sameForkPacks compares pack sets by value (nil and empty are equal —
+// both marshal to no packs).
+func sameForkPacks(a, b []*proto.PackRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		pa, pb := a[i], b[i]
+		if pa == nil || pb == nil {
+			if pa != pb {
+				return false
+			}
+			continue
+		}
+		if *pa != *pb {
+			return false
+		}
+	}
+	return true
+}
+
+// adoptOrphanManifest adopts a 412-occupying child manifest left by a
+// crashed attempt (issue #458): fork.json is absent (a present fork.json
+// defers to the service's ours-vs-theirs adopt check), the manifest is
+// provably this parent's reservation (Repo == child, Revision == 1 — no
+// WAL publish has advanced it — HeadSeq/MinSeq track the just-read
+// parent, packs verbatim), and the checkpoint pair was just
+// adopted-or-created above (so it matches this parent too).
+//
+// Anything else is ErrConflict, hands off: a foreign or WAL-advanced
+// manifest may be live; an empty-parent orphan (HeadSeq 0) is
+// byte-identical to a fresh repo manifest (#432), so it fails closed —
+// adopting would risk hijacking a live repo's prefix, and deleting would
+// risk wiping one. Repair there is the documented exact-key delete, and a
+// parent that moved under the crash (orphan seq != current seq) likewise
+// 409s with the residue named — replacing a moved-under orphan would need
+// a delete this layer must not issue on doubt.
+func (e *ShareExecutor) adoptOrphanManifest(ctx context.Context, child, cOwner, cName string, pm *proto.Manifest, packs []*proto.PackRef) error {
+	conflict := func(format string, args ...any) error {
+		return fmt.Errorf("%w: "+format, append([]any{ErrConflict}, args...)...)
+	}
+	if pm.HeadSeq == 0 {
+		return conflict("fork target %s already exists", child)
+	}
+	if praw, _, perr := store.GetBytes(ctx, e.Store, "repos/"+cOwner+"/"+cName+"/fork.json", store.GetOptions{}); perr != nil {
+		if !store.IsNotFound(perr) {
+			return conflict("fork target %s already exists", child)
+		}
+	} else if praw != nil {
+		return conflict("fork target %s already exists", child)
+	}
+	raw, _, gerr := store.GetBytes(ctx, e.Store, manifestKey(cOwner, cName), store.GetOptions{})
+	if gerr != nil || raw == nil {
+		return conflict("fork target %s already exists", child)
+	}
+	cm, uerr := proto.UnmarshalManifest(raw)
+	if uerr != nil {
+		return conflict("fork target %s already exists", child)
+	}
+	if cm.Repo != child || cm.Revision != 1 || cm.HeadSeq != pm.HeadSeq || cm.MinSeq != pm.HeadSeq+1 {
+		if cm.Repo == child && cm.Revision == 1 && cm.HeadSeq != pm.HeadSeq {
+			return conflict("fork target %s holds a stale reservation from a crashed fork of an older parent state (seq %d, parent now %d); delete the child prefix keys to retry", child, cm.HeadSeq, pm.HeadSeq)
+		}
+		return conflict("fork target %s already exists", child)
+	}
+	if cm.ObjectFormat != pm.ObjectFormat || !sameForkPacks(cm.Packs, packs) {
+		return conflict("fork target %s already exists", child)
+	}
+	if cm.Checkpoint == nil || cm.Checkpoint.Seq != pm.HeadSeq || cm.Checkpoint.Key != store.CheckpointKey(pm.HeadSeq) {
+		return conflict("fork target %s already exists", child)
+	}
+	return nil
 }
 
 // putCreatePB Creates one object; a 412 maps to ErrConflict (the service

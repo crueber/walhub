@@ -67,6 +67,34 @@ func TestEnsureRepoAccess(t *testing.T) {
 	}
 }
 
+func TestEnsureRepoAccessCreated(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+	s := New(st, nil)
+	// First call Creates the doc.
+	created, err := s.EnsureRepoAccessCreated(ctx, "acme", "r1", "alice@example.com", "private")
+	if err != nil || !created {
+		t.Fatalf("create: %v %v", created, err)
+	}
+	// Second call adopts the pre-existing doc (created=false) — the fork
+	// rollback (Forgejo #458) deletes only created docs.
+	created, err = s.EnsureRepoAccessCreated(ctx, "acme", "r1", "bob@example.com", "private")
+	if err != nil || created {
+		t.Fatalf("adopt: %v %v", created, err)
+	}
+	doc, _, err := s.GetAccess(ctx, "acme", "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.RoleBindings) != 1 || doc.RoleBindings[0].Subject != "user:alice@example.com" {
+		t.Fatalf("adopt must not overwrite: %+v", doc.RoleBindings)
+	}
+	// The legacy wrapper still reports only the error.
+	if err := s.EnsureRepoAccess(ctx, "acme", "r2", "alice@example.com", ""); err != nil {
+		t.Fatalf("wrapper: %v", err)
+	}
+}
+
 // --- creation/import owner admission (Forgejo #346) ----------------------------
 
 // ownerFixture builds a service with: org "acme" (alice owner, bob member),
