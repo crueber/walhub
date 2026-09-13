@@ -795,3 +795,13 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   section links each org to `/:org` with an explicit "No organizations" empty state (never
   absent); org profiles omit the section (member principals are email spellings, not routable
   owner slugs per #370 — the roster is managed at organization settings).
+- **Membership list moves to its own tab (issue #430, 2026-09-13)** — absorbs the remainder of #423
+  (closed; its backend endpoint above stays, cross-referenced by comment). The user-profile
+  Organizations section leaves the `/:owner` profile rail for the new `/:owner/organizations` tab
+  (12_web_ui.md §2.3): `OwnerTabs` reads Profile | Repositories | Organizations with the same
+  classes/active-underline/`aria-current` on all three routes; the profile view goes rail-free
+  (the issue's planner's call — no compact rail kept). Org profiles keep Profile | Repositories
+  (`isOrg` hides the third tab, same #370 rationale). Client-only (`web/src/index.jsx` route +
+  `Repos.jsx` `view="orgs"` branch; an org literally named `organizations` loses its UI page,
+  client-side only — same reservation class as #422's `repositories`); no endpoint, ETag, or
+  cache-key change. Headless cover: `web/test/unit/owner-orgs-tab-430.test.js`; `vite build` green.

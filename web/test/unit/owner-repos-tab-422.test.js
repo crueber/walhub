@@ -41,8 +41,8 @@ function tagOf(src, start) {
 
 test("route: /:owner/repositories registered before /:owner (static before dynamic)", () => {
   assert.ok(
-    INDEX.includes('import Repos, { OwnerRepositories } from "./pages/Repos.jsx"'),
-    "index imports the repositories-tab component next to Repos"
+    INDEX.includes('import Repos, { OwnerRepositories, OwnerOrganizations } from "./pages/Repos.jsx"'),
+    "index imports the repositories-tab component next to Repos (organizations tab joins it per #430)"
   );
   assert.ok(INDEX.includes('<Route path="/:owner/repositories" component={OwnerRepositories} />'), "repositories tab route exists");
   assert.ok(INDEX.includes('<Route path="/:owner" component={Repos} />'), "/:owner profile route kept");
@@ -81,8 +81,8 @@ test("tab strip reuses the repo page's tab bar anatomy", () => {
 });
 
 test("strip renders on both routes and both variants (outside every isOrg Show)", () => {
-  const use = REPOS.indexOf("<OwnerTabs owner={owner()} count={repoCount()} />");
-  assert.ok(use !== -1, "the page renders the strip with owner + shared-payload count");
+  const use = REPOS.indexOf("<OwnerTabs owner={owner()} count={repoCount()} isOrg={isOrg()} />");
+  assert.ok(use !== -1, "the page renders the strip with owner + shared-payload count + org gating (#430)");
   const orgOpen = REPOS.indexOf("<Show when={isOrg()}>");
   const between = REPOS.slice(orgOpen, use);
   const opens = (between.match(/<Show/g) || []).length;
