@@ -70,41 +70,48 @@ test("always-on helper spans are gone from both pages", () => {
 });
 
 test("both inputs wire aria-invalid + aria-describedby to a live message", () => {
+  // Forgejo #497: the wiring lives in the shared OwnerNameRow component
+  // (prefix-namespaced per page); both pages pass the rule through.
+  const ROW = srcOf("../../src/components/OwnerNameRow.jsx");
+  assert.ok(ROW.includes("id={errorId()}"), "row: message element carries the namespaced id");
+  assert.ok(ROW.includes("aria-describedby={errorId()}"), "row: input references the message");
+  assert.ok(ROW.includes("aria-invalid={!!props.nameCharsError()}"), "row: input carries live aria-invalid");
+  assert.ok(ROW.includes('aria-live="polite"'), "row: message container is aria-live polite");
+  assert.ok(ROW.includes("props.nameCharsError()"), "row: consumes the shared rule via props");
   const pairs = [
-    ["New.jsx", NEW, "new-name-error"],
-    ["Import.jsx", IMPORT, "import-name-error"],
+    ["New.jsx", NEW, 'prefix="new"'],
+    ["Import.jsx", IMPORT, 'prefix="import"'],
   ];
-  for (const [name, src, id] of pairs) {
-    assert.ok(src.includes(`id="${id}"`), `${name}: message element #${id} exists`);
-    assert.ok(src.includes(`aria-describedby="${id}"`), `${name}: input references #${id}`);
-    assert.ok(src.includes("aria-invalid={!!nameCharsError()}"), `${name}: input carries live aria-invalid`);
-    assert.ok(src.includes('aria-live="polite"'), `${name}: message container is aria-live polite`);
+  for (const [name, src, prefix] of pairs) {
+    assert.ok(src.includes(prefix), `${name}: id namespace pins the describedby target`);
+    assert.ok(src.includes("nameCharsError={nameCharsError}"), `${name}: passes the rule into the row`);
     assert.ok(src.includes("validateRepoChars"), `${name}: consumes the shared rule`);
   }
 });
 
-test("no grid shift: the message is a reserved-height slot in the name cell", () => {
-  for (const [name, src, id] of [["New.jsx", NEW, "new-name-error"], ["Import.jsx", IMPORT, "import-name-error"]]) {
-    // Always rendered (no <Show> gate around the slot) with two lines of
-    // reserved height, inside the same label cell — the Owner/Name row
-    // keeps its height whether the message shows or not. Two lines, not
-    // one: the 81-char rule text wraps at sm:2-col cell widths (~300px)
-    // and at 390px mobile stacked, so a 1-line reserve would still shift.
-    assert.ok(src.includes(`<p id="${id}" class="min-h-[2rem]`), `${name}: reserved-height slot`);
-    const labelIdx = src.indexOf(`for="${id === "new-name-error" ? "new-name" : "import-name"}"`);
-    const slotIdx = src.indexOf(`<p id="${id}"`);
-    assert.ok(labelIdx !== -1 && slotIdx > labelIdx, `${name}: slot lives inside the name label cell`);
-  }
+test("no grid shift: the message is a reserved-height slot below the grid", () => {
+  // Forgejo #497: the slot moved OUT of the name label cell to a
+  // full-width paragraph below the two-column grid (plus items-start on
+  // the grid), so the message can appear/disappear without touching the
+  // Owner column's geometry. Still always rendered with two lines of
+  // reserved height: the 81-char rule text wraps at sm:2-col cell widths
+  // (~400px full-width now — still wraps at 390px mobile) and a 1-line
+  // reserve would still shift.
+  const ROW = srcOf("../../src/components/OwnerNameRow.jsx");
+  assert.ok(ROW.includes("min-h-[2rem]"), "row: reserved-height slot");
+  const gridIdx = ROW.indexOf('<div class="grid grid-cols-1 items-start');
+  const slotIdx = ROW.indexOf("<p id={errorId()}");
+  assert.ok(gridIdx !== -1 && slotIdx > gridIdx, "row: slot lives below the grid, not inside the name cell");
+  assert.ok(ROW.includes("items-start"), "row: columns stay top-aligned");
   // The old conditionally-mounted live blocks are gone (they reflowed the
   // grid while typing).
   assert.ok(!NEW.includes("<Show when={fieldError() && getName()}>"), "New.jsx: shifting live block removed");
-  // The collapsing Owner/Name row itself is untouched (stacked + sm:2-col).
-  for (const [name, src] of [["New.jsx", NEW], ["Import.jsx", IMPORT]]) {
-    assert.ok(
-      src.includes('<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">'),
-      `${name}: collapsing Owner/Name row unchanged`,
-    );
-  }
+  // The collapsing Owner/Name row itself keeps the mobile stack (now with
+  // the asymmetric sm: split — see owner-name-row-497.test.js).
+  assert.ok(
+    ROW.includes("grid-cols-1"),
+    "row: stacked below sm: unchanged",
+  );
 });
 
 test("submit-time behavior: client gate blocks invalid names, server 400s unchanged", () => {

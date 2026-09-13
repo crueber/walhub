@@ -10,17 +10,22 @@
 // Form-page pattern (Forgejo #479 standing rule — reference: ReleaseNew.jsx):
 // centered mx-auto max-w-2xl column, one h2 + one muted intro, single card
 // form, label.grid.gap-1 fields with id + aria-describedby help, collapsing
-// grid-cols-1 sm:grid-cols-2 rows (never a bare grid-cols-2), inline
+// collapsing
+// grid-cols-1 sm:… rows (never a bare grid-cols-2), inline
 // errors/warnings, primary button with busy swap + cancel to /explore.
 // Forgejo #486: the Name field carries live charset validation (shared
 // lib/repo-name.js rule) in a reserved-height slot — no always-on helper.
+// Forgejo #497: the Owner/Name pair is the shared OwnerNameRow component
+// (matched h-9 heights, items-start top alignment, asymmetric 1fr/2fr
+// split, error slot below the grid) — identical on Import.jsx.
 
-import { createSignal, Show, For, onCleanup } from "solid-js";
+import { createSignal, Show, onCleanup } from "solid-js";
 import { A, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { validateRepoName, isUiRouteCollision } from "../../sdk/src/create.js";
 import { allowedOwners } from "../lib/orgs.js";
 import { validateRepoChars } from "../lib/repo-name.js";
+import OwnerNameRow from "../components/OwnerNameRow.jsx";
 import { invalidate } from "../lib/data.js";
 
 function winnerUrl(msg) {
@@ -75,9 +80,9 @@ export default function New() {
   const fieldError = () => validateRepoName(getOwner(), getName()).error ?? "";
 
   // Forgejo #486: live name-charset error only (empty → "", required rides
-  // the disabled submit), rendered into a reserved-height slot inside the
-  // name label — never a conditionally-mounted block, so the rows below
-  // never shift while typing.
+  // the disabled submit), rendered into the shared OwnerNameRow's
+  // reserved-height slot below the grid — never a conditionally-mounted
+  // block, so the rows below never shift while typing.
   const nameCharsError = () => validateRepoChars(getName());
 
   const submit = async (e) => {
@@ -144,47 +149,16 @@ export default function New() {
         Import is the mirror path.
       </p>
       <form class="card grid gap-3 p-4" onSubmit={submit} aria-label="New repository">
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label class="grid gap-1" for="new-owner">
-            <span class="text-sm font-medium">Owner</span>
-            <Show
-              when={getOwners() !== null}
-              fallback={
-                <select id="new-owner" class="input font-mono" disabled aria-label="Owner">
-                  <option>{getOwner() || "…"}</option>
-                </select>
-              }
-            >
-              <select
-                id="new-owner"
-                class="input font-mono"
-                value={getOwner()}
-                onChange={(e) => setOwner(e.currentTarget.value)}
-                aria-label="Owner"
-              >
-                <For each={getOwners() ?? []}>{(o) => <option value={o}>{o}</option>}</For>
-              </select>
-            </Show>
-          </label>
-          <label class="grid gap-1" for="new-name">
-            <span class="text-sm font-medium">Name</span>
-            <input
-              id="new-name"
-              class="input font-mono"
-              value={getName()}
-              onInput={(e) => setName(e.currentTarget.value.trim())}
-              placeholder="newthing"
-              autocomplete="off"
-              spellcheck={false}
-              aria-label="Name"
-              aria-invalid={!!nameCharsError()}
-              aria-describedby="new-name-error"
-            />
-            <p id="new-name-error" class="min-h-[2rem] text-xs text-red-700 dark:text-red-400" aria-live="polite">
-              {nameCharsError()}
-            </p>
-          </label>
-        </div>
+        <OwnerNameRow
+          prefix="new"
+          getOwner={getOwner}
+          setOwner={setOwner}
+          getOwners={getOwners}
+          getName={getName}
+          setName={setName}
+          namePlaceholder="newthing"
+          nameCharsError={nameCharsError}
+        />
         <Show when={!fieldError() && isUiRouteCollision(getOwner()) && getOwner()}>
           <p class="text-xs text-amber-700 dark:text-amber-400">
             warning: owner name collides with a UI route — the /:owner page will misroute (git/API unaffected)
