@@ -129,6 +129,17 @@ func (s *Service) computeMergeable(ctx context.Context, owner, repo string, num 
 			pr = npr
 		}
 	}
+	// Fork→base object bridge (issue #456): merge-base and the trial merge
+	// run in baseDir, so fork-unique head objects are fetched from the
+	// fork serving copy first (local disk-to-disk, zero bucket trips).
+	// Same-repo heads need nothing (one object set). A bridge failure
+	// fails the recompute loud — mergeability without objects is a
+	// verdict no code path may guess.
+	if pr.Head.Repo != pr.Base.Repo {
+		if ferr := s.Git.FetchInto(ctx, baseDir, headDir, headLive); ferr != nil {
+			return nil, fmt.Errorf("%w: fork object bridge: %v", ErrUnavailable, ferr)
+		}
+	}
 	// Ancestry: head fully merged into base (head is an ancestor of base)
 	// ⇒ up_to_date, nothing to merge. (The base-contained-in-head
 	// direction is the NORMAL PR shape — head branched off base — and
@@ -336,7 +347,10 @@ func (s *Service) HandleRefEvent(ctx context.Context, owner, repo string, ev Ref
 
 // diffDir selects the git dir for base...head reads: the base repo dir when
 // the head sha is reachable there, else the fork dir (shared packs make it
-// local, §7). One pool-gated reachability probe, no LIST.
+// local, §7). A cross-fork head missing from the base serving copy is
+// bridged first (issue #456: fetch fork objects into the base copy, then
+// re-probe) — only a still-missing head falls back to the fork dir. One
+// pool-gated reachability probe on the happy path, no LIST.
 func (s *Service) diffDir(ctx context.Context, pr *PRDoc) (string, error) {
 	if s.Git == nil || s.Dirs == nil {
 		return "", fmt.Errorf("%w: git backend not wired", ErrUnavailable)
@@ -348,16 +362,22 @@ func (s *Service) diffDir(ctx context.Context, pr *PRDoc) (string, error) {
 	if pr.Head.Repo == pr.Base.Repo {
 		return baseDir, nil
 	}
-	ok, err := s.Git.Reachable(ctx, baseDir, pr.Head.SHA)
-	if err != nil {
-		return "", fmt.Errorf("%w: reachability check: %v", ErrUnavailable, err)
-	}
-	if ok {
-		return baseDir, nil
-	}
 	headDir, err := s.Dirs.Dir(ctx, pr.Head.Repo)
 	if err != nil {
 		return "", fmt.Errorf("%w: head repo unavailable: %v", ErrUnavailable, err)
+	}
+	// Bridge fork-unique objects into the base copy (issue #456), then
+	// re-probe: a still-missing head falls back to the fork dir (the
+	// bridge succeeded, so the miss is object state, not backend — the
+	// fork-local read is the best remaining chance). Any bridge FAILURE
+	// is 503 (fail closed — a diff without its objects is a verdict no
+	// fallback may guess).
+	_, post, berr := s.bridgeForkHead(ctx, pr.Base.Repo, pr.Head.Repo, baseDir, headDir, pr.Head.SHA)
+	if berr != nil {
+		return "", fmt.Errorf("%w: reachability check: %v", ErrUnavailable, berr)
+	}
+	if post {
+		return baseDir, nil
 	}
 	return headDir, nil
 }

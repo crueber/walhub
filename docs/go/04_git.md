@@ -679,6 +679,17 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
 
 ## Decisions & deviations from the Rust design
 
+- **Collaboration-layer fork→base bridge fetch (issue #456, owned by
+  `docs/features/03_pull_requests.md` §7).** Cross-fork PR work runs git in
+  the base serving copy, so fork-unique head objects are fetched from the
+  fork serving copy on demand. Exact argv (run in the base git-dir):
+  `git -c gc.auto=0 fetch --no-tags --no-write-fetch-head --quiet <forkDir> <sha>`.
+  Full history (merge-base/trial-merge need whole ancestry), no tags, no
+  FETCH_HEAD (ref-free, invisible to concurrent readers), gc disabled (a
+  read-path bridge must never repack the serving copy). Fetch-by-sha is
+  exact under a moved fork branch and fails loud under a force-pushed-away
+  sha. Idempotent; base manifest untouched (serving-copy warmth only).
+
 - **Connectivity via `git rev-list --objects --stdin --not --all | git cat-file --batch-check`** instead of
   the gix rev-walk: stock git gives exact `stop_at_existing_refs`/missing-object semantics with zero
   in-process walker code (dependency policy); per-ref attribution by bounded per-tip re-runs on failure.

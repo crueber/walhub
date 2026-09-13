@@ -368,11 +368,15 @@ func (s *Service) OpenPR(ctx context.Context, owner, repo string, actor auth.Pri
 		return nil, nil, fmt.Errorf("%w: unknown revision %q", ErrUnprocessable, in.HeadRef)
 	}
 	// Reachability in the BASE object set (§3: no PR ever publishes git
-	// objects, only a ref to objects that already arrived). Cross-fork
-	// heads not yet merged-reachable skip the base-side publish and record
-	// the fork-local head instead (§7: the diff endpoint resolves through
-	// the fork; the merge task fetches nothing — shared packs make it local).
-	reachable, err := s.Git.Reachable(ctx, baseDir, headSHA)
+	// objects, only a ref to objects that already arrived). Fork-unique
+	// heads miss the base serving copy by construction (issue #456) — the
+	// §7 fork→base bridge fetches them from the fork serving copy on
+	// demand (local disk-to-disk, zero bucket trips) and re-probes, so a
+	// missing-object rev-list failure is bridged, not 503'd. pre is the
+	// WITHOUT-bridge verdict: refs/pull/<num>/head is published only for
+	// pre-reachable heads (bucket-backed rule — bridge.go); bridged-only
+	// cross-fork heads record fork-local (§7) exactly as before.
+	pre, reachable, err := s.bridgeForkHead(ctx, baseRepo, repoName(headOwner, headRepo), baseDir, headDir, headSHA)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: reachability check: %v", ErrUnavailable, err)
 	}
@@ -431,10 +435,12 @@ func (s *Service) OpenPR(ctx context.Context, owner, repo string, actor auth.Pri
 	s.emitMentioned(ctx, owner, repo, num, who, in.Body)
 	s.stream(ctx, StreamEvent{Name: "pull", Repo: baseRepo, Action: "opened", Num: num, Title: title, State: StateOpen, Author: who, BaseRef: in.BaseRef, HeadRef: in.HeadRef, HeadSHA: headSHA})
 	// Server-side refs/pull/<num>/head publish (WAL publish path, §3):
-	// only for reachable heads; unreachable same-repo heads already 422'd
-	// above, unreachable cross-fork heads record fork-local (no publish).
+	// only for pre-reachable heads (unreachable same-repo heads already
+	// 422'd above; bridged-only cross-fork heads stay fork-local — their
+	// objects are cache-resident, not bucket-backed, so no base-side ref
+	// may name them).
 	headPublished := false
-	if reachable && s.Refs != nil {
+	if pre && s.Refs != nil {
 		meta := map[string]string{"principal": who, "agent": "pulls"}
 		if correlationID != "" {
 			meta["correlation_id"] = correlationID

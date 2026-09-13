@@ -70,6 +70,15 @@ type GitRunner interface {
 	// scratch dir the CALLER owns: it must survive until the ref publish
 	// consuming it returns, then be removed (os.RemoveAll).
 	PackTip(ctx context.Context, dir, tip string) (*TipPack, error)
+	// FetchInto fetches one commit sha from the fork serving copy into the
+	// base serving copy (the §7 fork→base object bridge, issue #456):
+	// `git -c gc.auto=0 fetch --no-tags --no-write-fetch-head --quiet
+	// <srcDir> <sha>` run in baseDir. No ref is created or moved
+	// (--no-write-fetch-head suppresses FETCH_HEAD); only objects land,
+	// in the serving-copy cache alone — the base manifest is untouched.
+	// A git exit (unknown sha in the source) is a bridge failure, never
+	// a verdict; backend failures propagate as unavailable (503).
+	FetchInto(ctx context.Context, baseDir, srcDir, sha string) error
 }
 
 // TipPack is one server-made pack file pair (merge/update-branch), ready
@@ -458,6 +467,45 @@ func (g *SubprocessGit) Reachable(ctx context.Context, dir, sha string) (bool, e
 		return false, fmt.Errorf("cat-file reachability: %w", err)
 	}
 	return !strings.Contains(checkOut, "missing"), nil
+}
+
+// FetchInto runs the §7 fork→base object bridge (issue #456): a local,
+// full-history fetch of one commit sha from the fork serving copy into the
+// base serving copy. Argv is verbatim:
+//
+//	git -c gc.auto=0 fetch --no-tags --no-write-fetch-head --quiet <srcDir> <sha>
+//
+// Full history (no --depth: merge-base/trial-merge need the whole ancestry),
+// no tags (fork tags are outside the PR contract), no FETCH_HEAD (the fetch
+// must not disturb concurrent serving-copy readers), gc disabled (a read-path
+// bridge must never repack the serving copy). Fetching by raw sha is exact:
+// a moved fork branch still yields the recorded head's objects, and a
+// force-pushed-away sha fails loudly instead of bridging the wrong history.
+// Idempotent: re-fetching present objects is a local no-op.
+//
+// ### Concurrency
+//
+// Hazard: concurrent bridges (and readers) sharing one base serving copy.
+// Avoidance: git object writes are atomic (loose objects arrive via rename,
+// packs via lock files), so concurrent fetches converge; no lock of any kind
+// is held (pure subprocess, 13 §2 rule 4); the fetch never touches a ref, so
+// no reader observes a torn ref state.
+func (g *SubprocessGit) FetchInto(ctx context.Context, baseDir, srcDir, sha string) error {
+	if err := validateSHA(sha); err != nil {
+		return err
+	}
+	if srcDir == "" || baseDir == "" {
+		return fmt.Errorf("%w: fork object bridge needs both dirs", ErrInvalid)
+	}
+	argv := []string{"-c", "gc.auto=0", "fetch", "--no-tags", "--no-write-fetch-head", "--quiet", srcDir, sha}
+	if _, err := g.runCollect(ctx, baseDir, argv, "", nil); err != nil {
+		var ge *gitExitError
+		if errors.As(err, &ge) {
+			return fmt.Errorf("fork object bridge: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 // Diff returns the unified `base...head` patch (§9.5).

@@ -281,8 +281,12 @@ fast-forward outcomes (§5 step 5).
   fork's ref namespace and `refs/pull/<num>/head` is published in the BASE repo only when the head
   commit is reachable in the base's object set — cross-fork heads that are not yet merged-reachable are
   spec'd as: publish `refs/pull/<num>/head` in the base only if reachable; otherwise the PR records the
-  fork-local head ref and the diff endpoint resolves through the fork (the merge task fetches nothing —
-  shared packs make it local).
+  fork-local head ref. Base-side git work (open's reachability verdict, mergeability, merge, diff) runs
+  against a §7 fork→base object bridge (issue #456): the head sha is fetched from the fork serving copy
+  into the base serving copy on demand (local disk-to-disk, zero bucket trips, no ref touched, base
+  manifest untouched) and reachability is re-probed — a missing-object rev-list failure is bridged, not
+  503'd. `refs/pull/<num>/head` stays publish-only-for-pre-bridge-reachable heads (bucket-backed rule:
+  bridged objects are serving-copy warmth, and a base-side ref to them would dangle after eviction).
 
 ### Concurrency
 
@@ -484,6 +488,35 @@ every call goes through the SDK).
   rollback still strands the prefix (same crash-window class as the merge
   publish-then-event); repair is deleting the ≤ 4 exact child keys, and a
   retry 409s loudly (fail-closed, never hijacks).
+- **Fork→base object bridge (issue #456, 2026-09-13).** Cross-fork PRs whose
+  head holds fork-unique commits had no fork-to-base object bridge: `OpenPR`
+  mapped the missing-object rev-list failure to 503 (missing objects are an
+  error, not unreachable), and mergeability/merge/diff ran git in the base
+  serving copy where fork objects can never appear (the read fallback is
+  child-to-ancestor only — the wrong direction). Only base-contained heads
+  worked end to end. The fix bridges on demand (`internal/pulls/bridge.go` +
+  the `GitRunner.FetchInto` seam, `git -c gc.auto=0 fetch --no-tags
+  --no-write-fetch-head --quiet <forkDir> <sha>` in the base dir — argv in
+  `docs/go/04_git.md` Decisions): open bridges before the reachability
+  verdict (healthy fork-unique PRs open fork-local instead of 503ing; a
+  bridge failure is still 503), diff bridges before the base-vs-fork dir
+  choice (a still-missing head keeps the fork-dir fallback; a bridge failure
+  is 503), mergeability and merge fetch unconditionally for cross-repo heads
+  (their trial/commit/pack steps cannot run without the objects — a bridge
+  failure fails loud, narrated on the task). Design answers to law 4/6:
+  fetch-into-the-serving-copy (not an ephemeral overlay) because the merge's
+  `PackTip` must pack fork objects from the base dir to upload them
+  atomically with the ref move (§5 durability — an alternates overlay would
+  leave the pack step ambiguous about object provenance); zero bucket trips
+  (local disk only) so hot-path budgets are untouched and the pre-probe hit
+  costs nothing extra; the base manifest is never written (eviction just
+  re-bridges). `refs/pull/<num>/head` publishes only for pre-bridge
+  reachable heads — bridged objects are cache warmth, and a base-side ref to
+  them would dangle after eviction. Proven end to end with the real git
+  binary (`bridge_e2e_test.go`: open/diff/commits/mergeable/merge of a
+  fork-unique head, merge verified by ancestry in the base copy plus a
+  pack-carrying publish). Residual, unchanged: update-branch trials the
+  reverse merge in the fork copy and needs no bridge (out of scope).
 
 ## Explicitly out of scope
 
