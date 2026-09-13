@@ -86,6 +86,12 @@ render(
       <Route path="/:owner" component={Repos} />
       <Route path="/:org/settings" component={Org} />
       <Route path="/:owner/teams/:slug" component={Team} />
+      {/* Top-level composer (Forgejo #438): /:owner/:name/fork renders as a
+          standalone page (site header only, no repo tab strip/sidebar) like
+          GitHub's /fork flow — same URL as before, hoisted out of the Repo
+          shell below. Fork.jsx reads owner/name from params, so no context
+          is lost by leaving the nested layout. */}
+      <Route path="/:owner/:name/fork" component={Fork} />
       <Route path="/:owner/:name" component={Repo}>
         <Route path="/" component={Tree} />
         <Route path="/tree/*rest" component={Tree} />
@@ -97,7 +103,6 @@ render(
         <Route path="/issues/:num" component={Issue} />
         <Route path="/pulls" component={Pulls} />
         <Route path="/pulls/new" component={PullNew} />
-        <Route path="/fork" component={Fork} />
         <Route path="/forks" component={Forks} />
         <Route path="/pull/:num" component={Pull} />
         <Route path="/pull/:num/commits" component={PullCommits} />
