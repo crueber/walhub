@@ -13,6 +13,7 @@ func TestExposedTemplatesExact(t *testing.T) {
 	want := []string{
 		"/api/v1/users/{principal}",
 		"/api/v1/users/{principal}/avatar",
+		"/api/v1/users/{principal}/orgs",
 		"/api/v1/orgs",
 		"/api/v1/orgs/{org}",
 		"/api/v1/orgs/{org}/avatar",
@@ -89,6 +90,8 @@ func TestExposedCoversRoutes(t *testing.T) {
 		{"user avatar regenerate", "POST", "/api/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},
 		{"user avatar delete", "DELETE", "/api/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},
 		{"user avatar browser lane", "GET", "/api-browser/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},
+		{"user orgs get", "GET", "/api/v1/users/alice@example.com/orgs", true, "/api/v1/users/{principal}/orgs"},
+		{"user orgs browser lane", "GET", "/api-browser/v1/users/alice@example.com/orgs", true, "/api/v1/users/{principal}/orgs"},
 		{"orgs list", "GET", "/api/v1/orgs", true, "/api/v1/orgs"},
 		{"orgs create", "POST", "/api/v1/orgs", true, "/api/v1/orgs"},
 		{"org get", "GET", "/api/v1/orgs/acme", true, "/api/v1/orgs/{org}"},

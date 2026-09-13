@@ -30,6 +30,10 @@ export function attachUsers(client) {
         headers: { "Content-Type": "application/json" },
         ...opts,
       }),
+    /** Orgs the principal belongs to (Forgejo #423): sorted names, [] when
+     *  none (the server never 404s — unknown principals answer empty). */
+    orgs: (principal, opts) =>
+      client._call(`${path(principal)}/orgs`, { method: "GET", ...opts }),
     avatar: {
       /** Avatar image path (`v` = avatar_updated_at cache-busts the
        *  immutable max-age response, the org-avatar shape). Callers

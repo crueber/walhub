@@ -2,6 +2,7 @@ package identity
 
 import (
 	"encoding/json"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/url"
@@ -30,6 +31,7 @@ import (
 var ExposedTemplates = []string{
 	"/api/v1/users/{principal}",
 	"/api/v1/users/{principal}/avatar",
+	"/api/v1/users/{principal}/orgs",
 	"/api/v1/orgs",
 	"/api/v1/orgs/{org}",
 	"/api/v1/orgs/{org}/avatar",
@@ -255,6 +257,9 @@ func (h *Handler) routeUsers(w http.ResponseWriter, r *http.Request, rest []stri
 	if len(rest) == 2 && rest[1] == "avatar" {
 		return h.routeUserAvatar(w, r, principal)
 	}
+	if len(rest) == 2 && rest[1] == "orgs" {
+		return h.routeUserOrgs(w, r, principal)
+	}
 	if len(rest) != 1 {
 		return false
 	}
@@ -318,6 +323,79 @@ func (h *Handler) routeUsers(w http.ResponseWriter, r *http.Request, rest []stri
 		return true
 	}
 	methodNotAllowed(w, "GET", "PUT")
+	return true
+}
+
+// routeUserOrgs: GET /api/v1/users/{principal}/orgs (Forgejo #423).
+//
+// The membership rail behind the owner-profile Organizations section: the
+// sorted names of every org whose roster contains the principal (any role),
+// served from Service.MemberOrgsFor (the #346 admission helper with the
+// #370 alias matching — a username spelling matches roster rows held under
+// its verified email). One LIST plus one exact-key members.json GET per
+// org, server-side (law 6 — the client never fans out per-org roster
+// fetches); human-rate callers only (profile page loads), never a git hot
+// path. Both lanes (/api/v1 + /api-browser/v1) via handleTop; like every
+// identity surface there is no /services/api twin.
+//
+// Shape is a bare sorted array ([] when none — never null, never 404 for
+// an unknown principal: "which orgs" answers empty, backing the profile's
+// explicit "No organizations" empty state). GET-only.
+//
+// Visibility (planner decision, recorded): no visibility filtering —
+// MemberOrgsFor returns every containing roster, and this rail serves it
+// to any read-authorized caller (anonymous needs the anonymous_read flag,
+// the same gate as the profile and members reads). Org visibility governs
+// repos, not roster facts.
+//
+// Cache class: mutable-collab (Forgejo #382 — the profile/org/members
+// class): no-cache with a content ETag over the sorted names, so a roster
+// add/remove busts revalidation while an unchanged rail 304s. A bio edit
+// rides the separate owner-profile route, so it can never stale this rail
+// (pinned by TestUserOrgsFreshAfterBioEdit).
+//
+// ### Concurrency
+// Hazard: a roster edit racing the LIST-plus-probes. Avoidance:
+// whole-object reads per org; a concurrent change affects the next
+// request, never tears this one. No lock is held across any store call.
+func (h *Handler) routeUserOrgs(w http.ResponseWriter, r *http.Request, principal string) bool {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return true
+	}
+	p, aerr := h.principal(r)
+	if aerr != nil {
+		writeErr(w, aerr)
+		return true
+	}
+	if p.Anonymous && !h.Svc.anonymousRead() {
+		writePlain(w, http.StatusUnauthorized, "authentication required")
+		return true
+	}
+	// Forgejo #370: a username spelling carries its verified email so
+	// roster rows held under the email match (the profile-GET precedent
+	// above); a legacy email spelling matches itself. Unbound usernames
+	// resolve "" — the rail answers what the bare spelling matches
+	// (never 404). Lookup errors are ignored like the profile GET: the
+	// MemberOrgsFor LIST below is the fail-closed verdict.
+	qp := auth.Principal{Name: principal}
+	if auth.ValidUsername(principal) {
+		if em, emerr := h.Svc.EmailForUsername(r.Context(), principal); emerr == nil && em != "" {
+			qp.Email = em
+		}
+	}
+	orgs, err := h.Svc.MemberOrgsFor(r.Context(), qp)
+	if err != nil {
+		writeErr(w, err)
+		return true
+	}
+	// MemberOrgsFor initializes out := []string{} — the rail is
+	// []-never-null by construction (the ListOrgs precedent).
+	sum := fnv.New32a()
+	for _, o := range orgs {
+		_, _ = sum.Write([]byte(o + "\x00"))
+	}
+	writeCached(w, r, ccMutable, etagOf("user-orgs", int(int32(sum.Sum32()))), http.StatusOK, orgs)
 	return true
 }
 

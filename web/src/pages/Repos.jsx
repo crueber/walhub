@@ -31,6 +31,7 @@ import { createSignal, createEffect, For, Show } from "solid-js";
 import { useParams, useLocation, A } from "@solidjs/router";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { orderByActivity } from "../lib/owners.js";
+import { normalizeMemberOrgs } from "../lib/orgs.js";
 import { timeZones } from "../lib/timezone.js";
 import {
   emptyProfile,
@@ -297,6 +298,16 @@ function OwnerPage(props) {
     () => `org:${owner()}`,
     () => repos.orgs.get(owner()).catch(() => null)
   );
+  // Forgejo #423: the membership rail. users.orgs resolves the sorted org
+  // names over GET /api/v1/users/{principal}/orgs (server-side, one rail —
+  // never a per-org roster fan-out); unknown principals answer [] so the
+  // section below always has something explicit to render. A bio edit
+  // invalidates only `profile:{owner}` — this key is untouched and stays
+  // fresh by construction (separate route, separate ETag).
+  const [getMemberOrgs] = useData(
+    () => `memberorgs:${owner()}`,
+    () => repos.users.orgs(owner()).catch(() => [])
+  );
   // Forgejo #376: the user avatar. users.get resolves null for unknown
   // owners and orgs (404 → null, never a tray) — one extra cached GET
   // that doubles as the profile-consumption surface (the navbar is the
@@ -426,6 +437,43 @@ function OwnerPage(props) {
                 }}
               />
             </Show>
+            {/* Forgejo #423: Organizations — the membership rail for user
+                profiles. Always rendered for users (never silently absent):
+                the list links each org to /:org; the empty rail renders an
+                explicit "No organizations" line (GitHub parity). Org
+                profiles (the isOrg() branch below) deliberately omit this
+                section: member principals are email spellings, not routable
+                owner slugs (#370), so member links would be dead — the
+                roster is managed at organization settings instead. */}
+            <section class="orgs-rail mt-6" aria-label="Organizations">
+              <h3 class="text-base font-semibold">Organizations</h3>
+              <Show when={getMemberOrgs()} fallback={<p class="muted mt-1 text-sm">loading…</p>}>
+                {(orgs) => {
+                  const names = () => normalizeMemberOrgs(orgs());
+                  return (
+                    <Show
+                      when={names().length > 0}
+                      fallback={<p class="muted mt-1 text-sm">No organizations</p>}
+                    >
+                      <ul class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                        <For each={names()}>
+                          {(org) => (
+                            <li>
+                              <A
+                                class="text-emerald-700 hover:underline dark:text-emerald-400"
+                                href={`/${org}`}
+                              >
+                                {org}
+                              </A>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </Show>
+                  );
+                }}
+              </Show>
+            </section>
           </Show>
       {/* Forgejo #359: org landing — the org identity (badge + org
           display name + org doc fields: description/location/timezone/
