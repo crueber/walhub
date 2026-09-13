@@ -486,7 +486,7 @@ every call goes through the SDK).
   there is certain (Parent == parent), foreign stays 409. Known residual,
   documented not fixed: a process crash between the share and the
   rollback still strands the prefix (same crash-window class as the merge
-  publish-then-event);   repair is deleting the ≤ 4 exact child keys, and a
+  publish-then-event); repair is deleting the ≤ 4 exact child keys, and a
   retry 409s loudly (fail-closed, never hijacks).
 - **Fork→base object bridge (issue #456, 2026-09-13).** Cross-fork PRs whose
   head holds fork-unique commits had no fork-to-base object bridge: `OpenPR`
