@@ -58,12 +58,13 @@
   .repo-tabs { scrollbar-width: none; }
   .repo-tabs::-webkit-scrollbar { display: none; }
   .repo-tabs a { @apply shrink-0; }
-  /* Owner tab strip (Forgejo #422): the same narrow-width treatment as the
-     repo tabs above — same anatomy (see Repos.jsx OwnerTabs), one hook per
-     strip. */
-  .owner-tabs { scrollbar-width: none; }
-  .owner-tabs::-webkit-scrollbar { display: none; }
-  .owner-tabs a { @apply shrink-0; }
+  /* Owner tab list (Forgejo #437, supersedes the #435 top strip): a
+     vertical tab list at the top of the profile sidebar (see Repos.jsx
+     OwnerTabs) — stacked full-width links inside a bordered box, no
+     scrolling, no wrapping. The active tab fills its row with the
+     container's selected background (see the component), so no scrollbar
+     or shrink rules apply. */
+  .owner-tabs a { @apply block w-full; }
 
   /* Controls */
   .btn { @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors

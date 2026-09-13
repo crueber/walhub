@@ -57,29 +57,47 @@ test("two-column page grid: main left, sidebar right, stacked below on narrow", 
   assert.ok(REPOS.indexOf("<h1") < sideIdx, "identity precedes the sidebar in DOM order");
 });
 
-test("identity block stays atop the main column; the toolbar lives in the repositories view", () => {
-  const main = block(REPOS, '<div class="profile-main', "profile-sidebar");
-  assert.ok(main.includes("<h1"), "display name is the page h1");
-  assert.ok(main.includes("{displayName()}"), "h1 renders the display name (owner slug when unset)");
-  assert.ok(main.includes("@{owner()}"), "handle renders under the name");
-  assert.ok(main.includes('join(" · ")'), "location · timezone separator kept");
-  assert.ok(main.includes("renderBody(profile().bio_markdown)"), "bio renders through the shared markdown pipeline");
-  // Forgejo #435: the toolbar left the main column for the repositories
-  // view — the profile main column carries identity + teaser only.
-  assert.ok(!main.includes("repos-toolbar"), "no Repositories toolbar inside the profile main column (#435)");
-  assert.ok(!main.includes("<RepoRow"), "no repo grid inside the profile main column (#435)");
-  assert.ok(main.includes("<Show when={getEditing() && getProfile()?.can_edit}>"), "the edit form opens in place in the main column");
-  const reposView = REPOS.slice(REPOS.indexOf('<Show when={view() === "repos"}>'));
-  assert.ok(reposView.indexOf("repos-toolbar") !== -1, "toolbar lives in the repositories view");
-  assert.ok(reposView.indexOf("repos-toolbar") < reposView.indexOf("orderByActivity"), "toolbar renders above the listing");
+test("identity block stays atop the main column; tab views share the column", () => {
+  // Forgejo #437: all three views render in the same main column — scope
+  // the identity pins to the profile branch (profile gate → repos gate),
+  // not to the sidebar marker (the sidebar column now follows every view).
+  const profile = block(REPOS, '<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>');
+  assert.ok(profile.includes("<h1"), "display name is the page h1");
+  assert.ok(profile.includes("{displayName()}"), "h1 renders the display name (owner slug when unset)");
+  assert.ok(profile.includes("@{owner()}"), "handle renders under the name");
+  assert.ok(profile.includes('join(" · ")'), "location · timezone separator kept");
+  assert.ok(profile.includes("renderBody(profile().bio_markdown)"), "bio renders through the shared markdown pipeline");
+  assert.ok(!profile.includes("repos-toolbar"), "no Repositories toolbar inside the profile branch (#437: teaser deleted, toolbar on the tab)");
+  assert.ok(!profile.includes("<RepoRow"), "no repo grid inside the profile branch");
+  assert.ok(!profile.includes("View all →"), "no count teaser inside the profile branch");
+  assert.ok(profile.includes("<Show when={getEditing() && getProfile()?.can_edit}>"), "the edit form opens in place in the main column");
+  // The main column itself spans all three view branches before the sidebar.
+  const mainIdx = REPOS.indexOf('<div class="profile-main');
+  const colIdx = REPOS.indexOf('<div class="profile-sidebar-col');
+  const main = REPOS.slice(mainIdx, colIdx);
+  for (const gate of ['<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>', '<Show when={view() === "orgs"}>']) {
+    assert.ok(main.includes(gate), `the main column carries the ${gate} branch`);
+  }
+  assert.ok(main.indexOf("repos-toolbar") !== -1, "toolbar lives in the repositories branch of the main column");
+  assert.ok(main.indexOf("repos-toolbar") < main.indexOf("orderByActivity"), "toolbar renders above the listing");
+  assert.ok(main.includes("orgs-rail"), "membership list lives in the organizations branch of the main column");
 });
 
-test("avatar + all owner actions live grouped in the sidebar, none in the identity block", () => {
+test("tabs lead the sidebar; avatar + all owner actions grouped beneath, none in the identity block", () => {
   const identity = block(REPOS, '<div class="profile-header', "</div>\n            <Show when={getEditing()");
   assert.ok(!identity.includes("Edit profile"), "Edit profile left the identity block");
   assert.ok(!identity.includes("Regenerate avatar"), "Regenerate lives in the sidebar, not the identity block");
   assert.ok(!identity.includes("Remove avatar"), "Remove lives in the sidebar, not the identity block");
   assert.ok(!identity.includes("profile-avatar"), "the avatar left the identity block");
+  // Forgejo #437: the vertical tab list is the first element of the
+  // sidebar column, above the avatar asides on every view.
+  const col = REPOS.indexOf('<div class="profile-sidebar-col');
+  const use = REPOS.indexOf("<OwnerTabs owner={owner()} count={repoCount()} isOrg={isOrg()} />", col);
+  assert.ok(use !== -1, "the tab list opens the sidebar column");
+  const userAside = REPOS.indexOf('aria-label="Profile actions"', col);
+  const orgAside = REPOS.indexOf('aria-label="Organization actions"', col);
+  assert.ok(userAside !== -1 && use < userAside, "tabs render above the user aside");
+  assert.ok(orgAside !== -1 && use < orgAside, "tabs render above the org aside");
   const side = block(REPOS, 'aria-label="Profile actions"', "</aside>");
   assert.ok(side.includes("h-24 w-24"), "avatar at profile scale, on top of the sidebar");
   assert.ok(side.includes("Edit profile"), "Edit profile grouped in the sidebar");
@@ -149,12 +167,12 @@ test("390px safety: no fixed widths beside the avatar, no orphan rows", () => {
   assert.ok(!actionsTag.includes("flex-row"), "actions never sit side-by-side");
 });
 
-test("org variant: org header in main, avatar + Manage grouped in the sidebar", () => {
-  const main = block(REPOS, '<div class="profile-main', "profile-sidebar");
-  // Forgejo #435: the toolbar left the main column for the repositories
-  // view — scope the org slice to the identity region (through the teaser
-  // gate), not the toolbar.
-  const org = main.slice(main.indexOf("<Show when={isOrg()}>"), main.indexOf('<Show when={view() === "profile"}>'));
+test("org variant: org header in main, tabs + avatar + Manage grouped in the sidebar", () => {
+  // Forgejo #437: scope the org slice to the profile branch (profile gate
+  // → repos gate) — the main column now carries all three view branches
+  // before the sidebar column.
+  const profile = block(REPOS, '<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>');
+  const org = profile.slice(profile.indexOf("<Show when={isOrg()}>"));
   assert.ok(org.includes("<h2"), "org keeps the h2 title row (only the user header promotes to h1)");
   assert.ok(org.includes("{orgName()}"), "org display name kept");
   assert.ok(org.includes("org-badge"), "org badge kept");
