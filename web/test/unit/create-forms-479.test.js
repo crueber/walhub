@@ -60,11 +60,12 @@ test("Import LFS/ssh limits collapse into a details, not prose", () => {
 });
 
 test("help text is field-scoped with id + aria-describedby", () => {
+  // Forgejo #486 supersedes the always-on repo-name helpers: charset
+  // guidance on New/Import lives in the live-validation message only
+  // (see repo-name-486.test.js) — the name-help pairs are gone by design.
   const pairs = [
-    ["New.jsx", NEW, "new-name-help"],
     ["New.jsx", NEW, "new-mirror-help"],
     ["Import.jsx", IMPORT, "import-source-help"],
-    ["Import.jsx", IMPORT, "import-name-help"],
     ["Import.jsx", IMPORT, "import-token-help"],
     ["OrgNew.jsx", ORGNEW, "orgnew-name-help"],
   ];
