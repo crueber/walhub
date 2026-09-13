@@ -136,7 +136,8 @@ type ForkEntry struct {
 // ForksIndex is repos/<o>/<r>/meta/forks.json (CAS'd): the parent-side fork
 // index listing children. The maintain unit consults children's manifests
 // before deleting superseded packs (GC rule, §7); grand-children are
-// discovered transitively, one level per pass.
+// discovered transitively in the same pass (bounded by the probe cap in
+// internal/maintain/forknet.go; exhaustion defers the sweep fail-closed).
 type ForksIndex struct {
 	Version int         `json:"version"`
 	Forks   []ForkEntry `json:"forks"`

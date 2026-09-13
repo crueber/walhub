@@ -258,8 +258,11 @@ fast-forward outcomes (§5 step 5).
 - **GC rule (load-bearing for forks):** pack removal (maintain's `removeSuperseded`) deletes a pack only
   when NO manifest in the fork network still references it. The parent's `meta/forks.json` lists
   children (`[{repo: "o2/r2", forked_at: RFC3339}]`); before deleting superseded packs, the maintain
-  unit consults the children's manifests' pack sets (bounded: one conditional GET per direct child;
-  grand-children discovered transitively, one level per pass — repairable, not blocking). A pack whose
+  unit consults the children's manifests' pack sets (bounded: two exact-key GETs per
+  child — manifest + own index — capped at 512 probes per pass, parent index extra;
+  grand-children discovered transitively in the same breadth-first pass; cap
+  exhaustion defers the sweep fail-closed and the next pass retries from scratch).
+  A pack whose
   removal is blocked stays pending per the existing TryLock-or-defer protocol (13 §2.1).
 - **Deleting a fork parent with live children converts it to a meta repository (issue #451) —
   never a wipe.** The parent prefix survives as storage-only: the `wal/` pack set is preserved
@@ -742,3 +745,20 @@ every call goes through the SDK).
   snapshot under lock, GET + compare outside, store under lock; concurrent resolvers stay
   idempotent, last write wins. Pinned by `TestForkChainRootBackfillInvalidates` (stale chain short
   of the root, backfill mid-handle, same handle short-circuits via Root).
+
+- **GC probe cap raised 64 → 512 with the fail-closed direction preserved (issue #460,
+  2026-09-13 — child of audit #449, F7).** At two probes per child the old cap exhausted at
+  ~32 direct children and the sweep aborted every pass, so a popular parent's superseded packs
+  accumulated with only a log line — indefinite deferral, not a retry. The walk already runs on
+  the background maintain path only (leased compact unit, TryLock-or-defer, exact-key GETs, no
+  LIST), so 512 probes/pass (~256 direct children plus transitive subtrees) is bounded law-6
+  cost, measured in test (40 leaf children = exactly 81 GETs: 1 parent index + 2 per child).
+  Exhaustion still aborts with nothing deleted (fail closed — an unvisited subtree's pack set is
+  unknown, and deleted packs are unrecoverable while a deferred sweep is merely retried). The
+  stale "one level per pass" comments (forknet.go, pulls model, this §7) are corrected: the walk
+  is breadth-first transitive in the same pass — the cap, not the depth, bounds it. Residual
+  bound, stated not solved: fan-outs beyond ~256 children still defer every pass; a durable
+  paged cursor resuming across passes is the follow-up (it needs bucket-side cursor state, a
+  schema decision — no disk/memory state per law 4). Pinned by `TestForkNetworkGCWideFanout`
+  (40 children compact, cost pinned) and `TestForkNetworkGCCapExceeded` (300 children abort
+  safely).

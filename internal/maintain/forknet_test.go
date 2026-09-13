@@ -344,10 +344,24 @@ func TestForkNetworkGCCorruptChild(t *testing.T) {
 	}
 }
 
-// Probe-cap exhaustion with unvisited children remaining aborts the
-// sweep: the unvisited subtrees' pack sets are unknown, so proceeding
-// would delete packs a live fork still references.
-func TestForkNetworkGCCapExceeded(t *testing.T) {
+// countStore counts Get calls (the fork-network walk's exact-key probes)
+// while delegating everything else to the wrapped store.
+type countStore struct {
+	store.ObjectStore
+	gets int
+}
+
+func (s *countStore) Get(ctx context.Context, key string, opts store.GetOptions) (store.GetResult, error) {
+	s.gets++
+	return s.ObjectStore.Get(ctx, key, opts)
+}
+
+// A wide fan-out that exceeded the old 64-probe cap (~32 children at two
+// probes each) compacts in one pass under the raised cap (issue #460):
+// 40 leaf children pin their packs, the unreferenced pack is collected,
+// and the measured probe cost stays bounded (1 parent-index GET + 2 per
+// child — manifest + own index — all exact-key, never a LIST).
+func TestForkNetworkGCWideFanout(t *testing.T) {
 	eff := gcTestEff()
 	repo := &fakeRepo{id: "acme/widget", m: &proto.Manifest{Repo: "acme/widget", HeadSeq: 9, MinSeq: 1}, git: &fakeGit{}}
 	var supers []string
@@ -361,11 +375,85 @@ func TestForkNetworkGCCapExceeded(t *testing.T) {
 			Supersedes: supers},
 	}
 	eng := newFakeEngine(eff, repo)
-	maint := New(eng, Options{Leaser: &fakeLeaser{}})
 	st := eng.Store()
 	ctx := context.Background()
 	var rows []forkIndexEntry
 	for i := 0; i < 40; i++ {
+		id := "f/c" + strconv.Itoa(i)
+		cm := &proto.Manifest{Repo: id, HeadSeq: 9, MinSeq: 10, Revision: 1,
+			Packs: []*proto.PackRef{pack("shared-"+strconv.Itoa(i), 9, 10, 1, 1)}}
+		if _, err := st.Put(ctx, "repos/"+id+"/manifest.pb", store.PutBody{Bytes: cm.Marshal()}, store.PutOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, forkIndexEntry{Repo: id, ForkedAt: "2026-09-13T12:00:00Z"})
+		put := repo.Prefix() + "wal/shared-" + strconv.Itoa(i) + ".pack"
+		if _, err := st.Put(ctx, put, store.PutBody{Bytes: []byte("x")}, store.PutOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fx, _ := json.Marshal(&forkIndex{Version: 1, Forks: rows})
+	if _, err := st.Put(ctx, "repos/acme/widget/meta/forks.json", store.PutBody{Bytes: fx}, store.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Put(ctx, repo.Prefix()+"wal/gone-old.pack", store.PutBody{Bytes: []byte("x")}, store.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	cs := &countStore{ObjectStore: eng.st}
+	ceng := &failEngine{fakeEngine: eng, st: cs}
+	maint := New(ceng, Options{Leaser: &fakeLeaser{}})
+	removed, err := maint.gcSuperseded(ctx, repo, &Snapshot{ID: repo.id, Manifest: repo.m, Eff: eff})
+	if err != nil {
+		t.Fatalf("wide fan-out must compact under the raised cap, got err=%v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (gone-old only — all 40 shared packs are pinned)", removed)
+	}
+	for i := 0; i < 40; i++ {
+		if !eng.st.has(repo.Prefix() + "wal/shared-" + strconv.Itoa(i) + ".pack") {
+			t.Fatalf("shared-%d.pack is pinned by its live fork and must survive", i)
+		}
+	}
+	if eng.st.has(repo.Prefix() + "wal/gone-old.pack") {
+		t.Fatal("gone-old.pack is unreferenced and must be collected")
+	}
+	// Measured cost: 1 parent-index GET + 2 exact-key GETs per leaf
+	// child (manifest + own index probe). The walk's internal probe
+	// counter (bounded by maxForkNetworkProbes) covers the 80 child
+	// probes; the parent index read sits outside it by construction.
+	if want := 1 + 2*40; cs.gets != want {
+		t.Fatalf("walk GETs = %d, want %d (1 parent index + 2 per child)", cs.gets, want)
+	}
+	if cs.gets > maxForkNetworkProbes+1 {
+		t.Fatalf("walk GETs = %d, exceeds probe budget %d+1", cs.gets, maxForkNetworkProbes)
+	}
+}
+
+// Probe-cap exhaustion with unvisited children remaining still aborts the
+// sweep fail-closed (issue #460 direction preserved): 300 leaf children
+// need 600 probes, beyond the 512 cap, so nothing is deleted and the next
+// pass retries. The unvisited subtrees' pack sets are unknown —
+// proceeding would delete packs a live fork still references.
+func TestForkNetworkGCCapExceeded(t *testing.T) {
+	eff := gcTestEff()
+	repo := &fakeRepo{id: "acme/widget", m: &proto.Manifest{Repo: "acme/widget", HeadSeq: 9, MinSeq: 1}, git: &fakeGit{}}
+	const kids = 300
+	var supers []string
+	for i := 0; i < kids; i++ {
+		supers = append(supers, "shared-"+strconv.Itoa(i))
+	}
+	supers = append(supers, "gone-old")
+	repo.entries = []*proto.LogEntry{
+		{Seq: 9, Kind: proto.EntryKindCompact,
+			CreatedAt:  ptrTs(time.Now().Add(-8 * 24 * time.Hour)),
+			Supersedes: supers},
+	}
+	eng := newFakeEngine(eff, repo)
+	maint := New(eng, Options{Leaser: &fakeLeaser{}})
+	st := eng.Store()
+	ctx := context.Background()
+	var rows []forkIndexEntry
+	for i := 0; i < kids; i++ {
 		id := "f/c" + strconv.Itoa(i)
 		cm := &proto.Manifest{Repo: id, HeadSeq: 9, MinSeq: 10, Revision: 1,
 			Packs: []*proto.PackRef{pack("shared-"+strconv.Itoa(i), 9, 10, 1, 1)}}
@@ -393,9 +481,12 @@ func TestForkNetworkGCCapExceeded(t *testing.T) {
 	if removed != 0 {
 		t.Fatalf("removed = %d, want 0", removed)
 	}
-	for i := 0; i < 40; i++ {
+	for i := 0; i < kids; i++ {
 		if !eng.st.has(repo.Prefix() + "wal/shared-" + strconv.Itoa(i) + ".pack") {
 			t.Fatalf("shared-%d.pack must survive the deferred sweep", i)
 		}
+	}
+	if !eng.st.has(repo.Prefix() + "wal/gone-old.pack") {
+		t.Fatal("fail-closed sweep must delete nothing, including gone-old.pack")
 	}
 }

@@ -15,20 +15,33 @@ import (
 // network still references it. The parent's meta/forks.json lists direct
 // children ([{repo, forked_at}]); the sweep consults the children's
 // manifests' pack sets before deleting. Grand-children are discovered
-// transitively through each child's own index, one level per pass —
-// repairable, not blocking.
+// transitively through each child's own index in the SAME pass (breadth-
+// first walk, bounded by the probe cap below) — a deferred pass retries
+// from scratch, never resumes mid-network.
 //
 // ### Concurrency
 //
 // Hazard: holding maintenance locks across network calls. Avoidance: the
 // expansion runs inside gcSuperseded, which holds only the TryLock-or-defer
 // pack try-lock (never syncMu/packMu/rw — the 13 §2.1 protocol), and the
-// probe count is bounded (maxForkNetworkProbes manifests per pass). No
-// lock is acquired or held here at all — pure store round trips.
+// probe count is bounded (maxForkNetworkProbes exact-key GETs per pass).
+// No lock is acquired or held here at all — pure store round trips.
+//
+// Probe budget (law 6, issue #460): the walk runs on the background
+// maintain path only (leased compact unit, never the push hot path), so a
+// few hundred exact-key GETs per GC pass are the measured cost — never a
+// LIST, never unbounded. Cap exhaustion still fails closed (see below);
+// fan-outs beyond ~256 direct children keep deferring, and a durable
+// paged cursor resuming across passes is the documented follow-up, not
+// this change.
 
 // maxForkNetworkProbes bounds one GC pass's network expansion: one
-// exact-key GET per manifest/index read, never a LIST (law 4).
-const maxForkNetworkProbes = 64
+// exact-key GET per manifest/index read, never a LIST (law 4). Two probes
+// per child (manifest + own index), so one pass covers ~256 direct
+// children plus their transitive subtrees (issue #460: raised from 64,
+// which capped ~32 children and deferred popular-parent sweeps
+// indefinitely while logging only the deferral).
+const maxForkNetworkProbes = 512
 
 // forkIndexEntry mirrors one row of the parent-side fork index
 // (meta/forks.json, owned by internal/pulls — mirrored here so maintain
@@ -112,8 +125,8 @@ func (m *Maintainer) forkNetworkLive(ctx context.Context, rep Repo, live map[str
 				live[p.Checksum] = true
 			}
 		}
-		// Grand-children, one level per pass: the child's own index
-		// extends the queue (bounded by the probe cap above). An
+		// Grand-children, transitively in the same pass: the child's own
+		// index extends the queue (bounded by the probe cap above). An
 		// unreadable child index aborts the sweep (fail closed — its
 		// grandchildren are unknown); an absent index is a leaf fork.
 		probes++
@@ -146,8 +159,9 @@ func (m *Maintainer) forkNetworkLive(ctx context.Context, rep Repo, live map[str
 }
 
 // readForkIndex reads one meta/forks.json by exact key (never LIST).
-// Absent → (nil, nil). Corrupt → error (fail closed at the parent; the
-// child path treats it as skip via the caller's continue).
+// Absent → (nil, nil) — a leaf fork. Corrupt or unreadable (non-404
+// transport error) → error, and the caller fails the sweep closed at
+// both the parent and every child level.
 func readForkIndex(ctx context.Context, st store.ObjectStore, owner, name string) (*forkIndex, error) {
 	raw, _, err := store.GetBytes(ctx, st, "repos/"+owner+"/"+name+"/meta/forks.json", store.GetOptions{})
 	if err != nil || raw == nil {
