@@ -14,6 +14,9 @@
 // form, label.grid.gap-1 fields with id + aria-describedby help, collapsing
 // grid-cols-1 sm:grid-cols-2 rows (never a bare grid-cols-2), inline
 // errors/warnings, primary button with busy swap + cancel to /explore.
+// Forgejo #486: the Name field carries live charset validation (shared
+// lib/repo-name.js rule) in a reserved-height slot — no always-on helper;
+// the submit path gains the matching client gate for one-shot imports.
 // The mirror pull-only paragraph lives on New.jsx only (not duplicated
 // here — this page's mirror radio label already carries the pull-only
 // detail); the LFS/ssh limits live in a collapsed details, not prose.
@@ -24,6 +27,7 @@ import repos from "../../sdk/src/index.js";
 import { normalizeSource } from "../../sdk/src/import.js";
 import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
 import { allowedOwners } from "../lib/orgs.js";
+import { validateRepoChars } from "../lib/repo-name.js";
 import { reportError, invalidate } from "../lib/data.js";
 
 export default function Import() {
@@ -80,6 +84,13 @@ export default function Import() {
 
   const suggestion = () => normalizeSource(getUrl());
 
+  // Forgejo #486: live name-charset error only (empty → "", required rides
+  // the disabled submit), rendered into a reserved-height slot inside the
+  // name label — never a conditionally-mounted block, so the rows below
+  // never shift while typing. Shared with New.jsx (and both mirror modes,
+  // which use the same name field).
+  const nameCharsError = () => validateRepoChars(getName());
+
   const pushLog = (text) => {
     setLog((log) => [...log.slice(-59), text]);
   };
@@ -116,6 +127,18 @@ export default function Import() {
     ctrl?.abort();
     ctrl = new AbortController();
     const signal = ctrl.signal;
+    // Forgejo #486: client-side name-charset gate for both modes (the
+    // mirror branch below only checks required-ness; the server 400s stay
+    // authoritative and render in the existing error block).
+    const nameChars = validateRepoChars(getName());
+    if (nameChars) {
+      setErr(nameChars);
+      pushLog(`error: ${nameChars}`);
+      setPhase("error");
+      reportError(new Error(nameChars), "import");
+      setBusy(false);
+      return;
+    }
     // Mirror mode: validate through the shared mirror rule, create via
     // the mirror endpoint (POST /api/v1/repos/mirrors), then land on
     // the repo page — which renders the awaiting-first-sync state (#281
@@ -286,9 +309,12 @@ export default function Import() {
                 autocomplete="off"
                 spellcheck={false}
                 aria-label="Name"
-                aria-describedby="import-name-help"
+                aria-invalid={!!nameCharsError()}
+                aria-describedby="import-name-error"
               />
-              <span id="import-name-help" class="muted text-xs">Letters, digits, and . _ - — the URL path after the owner.</span>
+              <p id="import-name-error" class="min-h-[2rem] text-xs text-red-700 dark:text-red-400" aria-live="polite">
+                {nameCharsError()}
+              </p>
             </label>
           </div>
           <label class="grid gap-1" for="import-token">
@@ -372,7 +398,7 @@ export default function Import() {
             </div>
           </Show>
           <div class="flex gap-2">
-            <button type="submit" class="btn primary px-3 py-1" disabled={getBusy() || anonymous() || !getUrl() || !getOwner() || !getName()}>
+            <button type="submit" class="btn primary px-3 py-1" disabled={getBusy() || anonymous() || !getUrl() || !getOwner() || !getName() || !!nameCharsError()}>
               {getBusy() ? "starting…" : getMode() === "mirror" ? "create mirror" : "start import"}
             </button>
             <A class="btn px-3 py-1" href="/explore">

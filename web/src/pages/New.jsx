@@ -9,6 +9,8 @@
 // form, label.grid.gap-1 fields with id + aria-describedby help, collapsing
 // grid-cols-1 sm:grid-cols-2 rows (never a bare grid-cols-2), inline
 // errors/warnings, primary button with busy swap + cancel to /explore.
+// Forgejo #486: the Name field carries live charset validation (shared
+// lib/repo-name.js rule) in a reserved-height slot — no always-on helper.
 
 import { createSignal, Show, For, onCleanup } from "solid-js";
 import { A, useNavigate, useSearchParams } from "@solidjs/router";
@@ -16,6 +18,7 @@ import repos from "../../sdk/src/index.js";
 import { validateRepoName, isUiRouteCollision } from "../../sdk/src/create.js";
 import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
 import { allowedOwners } from "../lib/orgs.js";
+import { validateRepoChars } from "../lib/repo-name.js";
 import { invalidate } from "../lib/data.js";
 
 function winnerUrl(msg) {
@@ -73,6 +76,12 @@ export default function New() {
   const noWrite = () => getMe() != null && getMe().write === false;
 
   const fieldError = () => validateRepoName(getOwner(), getName()).error ?? "";
+
+  // Forgejo #486: live name-charset error only (empty → "", required rides
+  // the disabled submit), rendered into a reserved-height slot inside the
+  // name label — never a conditionally-mounted block, so the rows below
+  // never shift while typing.
+  const nameCharsError = () => validateRepoChars(getName());
 
   // Mirror-mode validation rides the shared lib rule (server re-validates).
   const mirrorError = () =>
@@ -210,9 +219,12 @@ export default function New() {
               autocomplete="off"
               spellcheck={false}
               aria-label="Name"
-              aria-describedby="new-name-help"
+              aria-invalid={!!nameCharsError()}
+              aria-describedby="new-name-error"
             />
-            <span id="new-name-help" class="muted text-xs">Letters, digits, and . _ - — the URL path after the owner.</span>
+            <p id="new-name-error" class="min-h-[2rem] text-xs text-red-700 dark:text-red-400" aria-live="polite">
+              {nameCharsError()}
+            </p>
           </label>
         </div>
         <Show when={getMode() === "mirror"}>
@@ -239,9 +251,6 @@ export default function New() {
             Mirrors are pull-only: pushes are rejected for everyone, and the upstream
             syncs on the schedule. The first sync starts immediately.
           </p>
-        </Show>
-        <Show when={fieldError() && getName()}>
-          <p class="text-xs text-red-700 dark:text-red-400">{fieldError()}</p>
         </Show>
         <Show when={getMode() === "mirror" && mirrorError()}>
           <p class="text-xs text-red-700 dark:text-red-400">{mirrorError()}</p>
