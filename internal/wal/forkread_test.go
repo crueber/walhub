@@ -41,7 +41,8 @@ func TestForkChain(t *testing.T) {
 	if len(chain) != 2 || chain[0] != "o/r" || chain[1] != "a/b" {
 		t.Fatalf("chain = %v", chain)
 	}
-	// Cached: a second call issues no store traffic (same slice back).
+	// Revalidated: a second call with an unchanged own fork.json returns
+	// the cached chain (one exact-key GET to revalidate, issue #459).
 	if chain2 := h.forkChain(ctx); len(chain2) != 2 {
 		t.Fatalf("cached chain = %v", chain2)
 	}
@@ -75,6 +76,73 @@ func TestForkChainDeadMiddle(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("root must survive a dead middle: %v", chain)
+	}
+}
+
+// TestForkChainRootBackfillInvalidates pins issue #459: a Root
+// backfill landing under a live handle must re-resolve the cached chain
+// so the Root short-circuit reaches the network root past a dead middle.
+func TestForkChainRootBackfillInvalidates(t *testing.T) {
+	r, st := newTestRegistry(t)
+	ctx := context.Background()
+	for _, id := range []string{"a/b", "f/c", "g/h"} {
+		if _, err := r.Create(ctx, id, git.Sha1); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	putForkDoc(t, st, "f/c", "a/b", "a/b")
+	// g/h forked from f/c; its Root is stale (pre-backfill == parent).
+	putForkDoc(t, st, "g/h", "f/c", "f/c")
+	// Dead middle: f/c's fork.json is fully wiped, so only g/h's own
+	// Root can still reach a/b.
+	if err := st.Delete(ctx, "repos/f/c/fork.json", ""); err != nil {
+		t.Fatalf("wipe middle: %v", err)
+	}
+	h, err := r.Open(ctx, "g/h")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if chain := h.forkChain(ctx); len(chain) != 1 || chain[0] != "f/c" {
+		t.Fatalf("stale chain = %v, want [f/c]", chain)
+	}
+	// Adopted-provenance backfill mid-handle (merge.go CAS shape:
+	// Root converges, Version++ on a real change).
+	raw, meta, err := store.GetBytes(ctx, st, "repos/g/h/fork.json", store.GetOptions{})
+	if err != nil || raw == nil {
+		t.Fatalf("read own: %v", err)
+	}
+	var doc struct {
+		Parent  string `json:"parent"`
+		Root    string `json:"root"`
+		Version int    `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode own: %v", err)
+	}
+	doc.Root = "a/b"
+	doc.Version++
+	backfilled, _ := json.Marshal(map[string]any{
+		"parent": doc.Parent, "root": doc.Root,
+		"forked_at": "2026-09-13T12:00:00Z", "version": doc.Version,
+	})
+	if _, err := store.PutBytes(ctx, st, "repos/g/h/fork.json", backfilled,
+		store.PutOptions{Mode: store.PutUpdate, IfVersion: meta.Version}); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	chain := h.forkChain(ctx)
+	found := false
+	for _, id := range chain {
+		if id == "a/b" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("backfilled chain must short-circuit via Root: %v", chain)
+	}
+	// A merged_upstream_at-style stamp (Version-only advance) also
+	// refreshes the cache instead of serving it forever.
+	if chain2 := h.forkChain(ctx); len(chain2) != len(chain) {
+		t.Fatalf("stable chain = %v, want %v", chain2, chain)
 	}
 }
 

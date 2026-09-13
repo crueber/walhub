@@ -143,7 +143,7 @@ type ForksIndex struct {
 }
 
 // ForkDoc is repos/<o2>/<r2>/fork.json (Create once, then CAS'd for
-// merged_upstream_at): fork-side provenance. Root is the network root
+// Root backfill and merged_upstream_at): fork-side provenance. Root is the network root
 // ancestor (issue #424 amendment: the network is a tree — Root lets any
 // node answer the whole network; a direct fork of a root has Root ==
 // Parent; additive per 14 §14.12, old readers ignore it).

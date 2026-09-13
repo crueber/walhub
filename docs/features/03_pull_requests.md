@@ -724,3 +724,21 @@ every call goes through the SDK).
   other direct caller (`repoimport` rollback) deletes import targets that were never listed, so no
   sweep is owed there. Pre-#457 ghosts (rows stranded before this change) are not backfilled; a
   re-fork of the swept name re-lists exactly one row (adopt path converges, pinned by test).
+
+- **Fork-chain cache revalidates on `fork.json` advance (issue #459, 2026-09-13 — child of
+  audit #449, F6).** The fix, not the documented-window fallback. `wal`'s `forkChain` was a
+  handle-lifetime cache justified by "the parent pointer never moves" — but the adopted-provenance
+  backfill (`runFork`) CAS-moves `Root` under a live handle, and the chain is built from
+  Parent+Root, so a stale cache skipped the Root short-circuit past a dead middle (degraded-only:
+  Parent never moves, so the fallback still terminated). The handle now caches its own
+  Parent+Root+Version alongside the chain and revalidates on every use with one exact-key GET of
+  its own `fork.json` — mismatch (including deletion, which converges the chain to empty)
+  re-resolves, and the revalidation GET doubles as the resolve's own read (no second trip).
+  `fork.json` version semantics, coordinated with #458: Version 1 at create, ++ on a Root-backfill
+  change and on the #457 `merged_upstream_at` stamp (already-correct backfills stay untouched, no
+  churn — a Version-only advance still refreshes the cache). Law 6: the revalidation GET rides the
+  failure path only (`forkChain` runs after an own-prefix NotFound), so push/refs/checkpoint
+  budgets are untouched. Concurrency (`docs/go/13_concurrency.md`): `forkMu` stays a leaf lock —
+  snapshot under lock, GET + compare outside, store under lock; concurrent resolvers stay
+  idempotent, last write wins. Pinned by `TestForkChainRootBackfillInvalidates` (stale chain short
+  of the root, backfill mid-handle, same handle short-circuits via Root).

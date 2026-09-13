@@ -57,6 +57,12 @@ type RepoHandle struct {
 	forkMu          sync.Mutex
 	forkChainCached []string
 	forkLoaded      bool
+	// forkOwn is the handle's own fork.json as seen when the chain was
+	// built (issue #459: the chain is built from Parent+Root, and the
+	// Root backfill moves Root under a live handle — so the cache is
+	// revalidated against these fields, not just loaded-once).
+	forkOwn   forkDoc
+	forkOwnOK bool
 
 	// entry-time bookkeeping for checkpoint provenance (§5.5); under syncMu.
 	firstEntryTime time.Time

@@ -950,7 +950,10 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 	if adoptedShare {
 		if _, err := s.casUpdate(ctx, ForkKey(in.TargetOwner, in.Name), 5, func(cur []byte, _ store.Version) ([]byte, bool, error) {
 			// Adopted provenance: backfill Root when a pre-Root wave (or a
-			// crashed run) left it empty. Already-correct docs are untouched.
+			// crashed run) left it empty. Already-correct docs are untouched
+			// (no version churn); a real change bumps Version like every
+			// other fork.json CAS (issue #459: wal's chain cache revalidates
+			// on Parent+Root+Version).
 			if cur == nil {
 				return nil, false, nil
 			}
@@ -962,6 +965,7 @@ func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput,
 				return nil, false, nil
 			}
 			doc.Root = root
+			doc.Version++
 			out, _ := json.Marshal(&doc)
 			return out, true, nil
 		}); err != nil {
