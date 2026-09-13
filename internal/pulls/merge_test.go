@@ -1,6 +1,7 @@
 package pulls
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 // seedMergeable primes a clean mergeable stamp for the merge task.
@@ -542,6 +544,86 @@ func TestSink(t *testing.T) {
 		}
 		if !stamped {
 			t.Fatal("force-push evidence missing")
+		}
+	})
+}
+
+// putForkDoc writes a fork-side fork.json directly (Create — provenance as
+// the fork task would have committed it).
+func putForkDoc(t *testing.T, e *testEnv, owner, repo, raw string) {
+	t.Helper()
+	if _, err := store.PutBytes(ctx(), e.store, ForkKey(owner, repo), []byte(raw),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
+		t.Fatalf("seed fork.json: %v", err)
+	}
+}
+
+// TestMergeStampsUpstreamMerge pins issue #457 (decision: write, not
+// remove — the stamp is one conditional PUT on the cross-fork merge path):
+// merging a cross-fork PR CAS-stamps the head repo's fork.json
+// merged_upstream_at with the merge instant, while same-repo merges mint
+// no fork.json at all (zero added trips on the hot path).
+func TestMergeStampsUpstreamMerge(t *testing.T) {
+	t.Run("cross-fork merge stamps", func(t *testing.T) {
+		e := newTestEnv()
+		e.roles.Roles["jane@example.com"] = "write"
+		e.roles.Roles["merger@example.com"] = "maintain"
+		base, head := hexSHA(1), hexSHA(2)
+		e.seedRefs("o/r", map[string]string{"refs/heads/main": base})
+		e.seedRefs("f/c", map[string]string{"refs/heads/topic": head})
+		_, pr, err := e.svc.OpenPR(ctx(), "o", "r", writer(), OpenInput{
+			Title: "fork work", BaseRef: "refs/heads/main", HeadRef: "refs/heads/topic",
+			Fork: &ForkInfo{Repo: "f/c"},
+		}, "")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if pr.Head.Repo != "f/c" {
+			t.Fatalf("head repo = %q", pr.Head.Repo)
+		}
+		putForkDoc(t, e, "f", "c", `{"parent":"o/r","root":"o/r","forked_at":"2026-09-04T12:00:00Z","version":1}`)
+		e.git.MergeBaseSHA = hexSHA(7)
+		e.git.Behind = 0
+		e.refs.Refs["o/r"] = map[string]string{"refs/heads/main": base}
+		if _, err := e.svc.StartMerge(ctx(), "o", "r", pr.Num, maintainer(), MergeInput{Strategy: StrategyMerge}, ""); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		done := waitTask(5*time.Second, func() *TaskRecord { return e.svc.MergeTask("o", "r") })
+		if done == nil || done.State != TaskOK {
+			t.Fatalf("merge = %+v", done)
+		}
+		raw, _, _ := e.svc.getJSON(ctx(), ForkKey("f", "c"))
+		var doc ForkDoc
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("fork.json: %v (raw %s)", err, raw)
+		}
+		stored, _, _ := e.svc.loadPR(ctx(), "o", "r", pr.Num)
+		if stored.MergedAt == nil {
+			t.Fatal("pr has no merged_at")
+		}
+		if doc.MergedUpstreamAt == nil || *doc.MergedUpstreamAt != *stored.MergedAt {
+			t.Fatalf("merged_upstream_at = %v, want %v (raw %s)", doc.MergedUpstreamAt, stored.MergedAt, raw)
+		}
+		if doc.Parent != "o/r" || doc.Root != "o/r" {
+			t.Fatalf("stamp clobbered provenance: %s", raw)
+		}
+	})
+
+	t.Run("same-repo merge writes nothing", func(t *testing.T) {
+		e := newTestEnv()
+		e.roles.Roles["jane@example.com"] = "write"
+		e.roles.Roles["merger@example.com"] = "maintain"
+		openBasic(t, e, "o", "r")
+		seedMergeable(t, e, hexSHA(1), hexSHA(2))
+		if _, err := e.svc.StartMerge(ctx(), "o", "r", 1, maintainer(), MergeInput{Strategy: StrategyMerge}, ""); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		done := waitTask(5*time.Second, func() *TaskRecord { return e.svc.MergeTask("o", "r") })
+		if done == nil || done.State != TaskOK {
+			t.Fatalf("merge = %+v", done)
+		}
+		if raw, _, _ := e.svc.getJSON(ctx(), ForkKey("o", "r")); raw != nil {
+			t.Fatalf("same-repo merge must not mint fork.json: %s", raw)
 		}
 	})
 }

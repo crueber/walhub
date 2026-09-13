@@ -345,6 +345,106 @@ func TestIncForksLazyCreate(t *testing.T) {
 	}
 }
 
+// TestDecForksTable pins issue #457: the child-delete sweep decrements the
+// parent counter exactly when it removed a row. Decrement is field-scoped
+// (stars/watchers pass through), floored at zero, a no-op on absent
+// objects (the delete path mints nothing), and an error on corrupt ones.
+func TestDecForksTable(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		seed      string // "" = absent object
+		decs      int
+		wantForks int
+		wantErr   bool
+	}{
+		{"absent is a no-op", "", 1, 0, false},
+		{"decrement preserves siblings", `{"stars":2,"watchers":1,"forks":2,"updated_at":"2026-09-04T12:00:00Z"}`, 1, 1, false},
+		{"floor at zero", `{"stars":0,"watchers":0,"forks":0,"updated_at":"2026-09-04T12:00:00Z"}`, 3, 0, false},
+		{"corrupt errors", `{oops`, 1, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newHarness(t)
+			seedRepo(t, x, "o", "r")
+			if tc.seed != "" {
+				seedSocial(t, x, tc.seed)
+			}
+			for i := 0; i < tc.decs; i++ {
+				if err := x.svc.DecForks(ctx(), "o", "r"); tc.wantErr {
+					if !isErr(err, ErrCorrupt) {
+						t.Fatalf("dec %d: %v, want corrupt", i, err)
+					}
+					return
+				} else if err != nil {
+					t.Fatalf("dec %d: %v", i, err)
+				}
+			}
+			d, err := x.svc.Counts(ctx(), jane(), "o", "r")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.Forks != tc.wantForks {
+				t.Fatalf("forks = %d, want %d", d.Forks, tc.wantForks)
+			}
+			if tc.name == "decrement preserves siblings" && (d.Stars != 2 || d.Watchers != 1) {
+				t.Fatalf("siblings moved: %+v", d)
+			}
+			if tc.seed == "" {
+				if _, _, err := store.GetBytes(ctx(), x.svc.Store, SocialKey("o", "r"), store.GetOptions{}); !store.IsNotFound(err) {
+					t.Fatalf("absent dec minted an object (err %v)", err)
+				}
+			}
+		})
+	}
+}
+
+// TestDecForksConcurrentConverges pins the law-4 atomicity: N concurrent
+// Incs racing M concurrent Decs land exactly at seed+N-M (every delta
+// applies once through the CAS loop — a racing decrement never swallows an
+// increment). The seed keeps the floor unreachable, so the count is
+// deterministic; the floor itself is pinned by the table.
+func TestDecForksConcurrentConverges(t *testing.T) {
+	x := newHarness(t)
+	seedRepo(t, x, "o", "r")
+	seedSocial(t, x, `{"stars":0,"watchers":0,"forks":100,"updated_at":"2026-09-04T12:00:00Z"}`)
+	const incs, decs = 8, 4
+	var wg sync.WaitGroup
+	errs := make(chan error, incs+decs)
+	// Conflict-retry driver: the CAS loop is bounded, so a bursting client
+	// re-issues on 409 — a conflicted attempt applied nothing, so each
+	// success is still exactly one delta (the property under test).
+	apply := func(op func() error) {
+		defer wg.Done()
+		for {
+			if err := op(); err == nil {
+				return
+			} else if !isErr(err, ErrConflict) {
+				errs <- err
+				return
+			}
+		}
+	}
+	for i := 0; i < incs; i++ {
+		wg.Add(1)
+		go apply(func() error { return x.svc.IncForks(ctx(), "o", "r") })
+	}
+	for i := 0; i < decs; i++ {
+		wg.Add(1)
+		go apply(func() error { return x.svc.DecForks(ctx(), "o", "r") })
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent: %v", err)
+	}
+	d, err := x.svc.Counts(ctx(), jane(), "o", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Forks != 100+incs-decs {
+		t.Fatalf("forks = %d, want %d", d.Forks, 100+incs-decs)
+	}
+}
+
 func TestViewerState(t *testing.T) {
 	x := newHarness(t)
 	seedRepo(t, x, "o", "r")

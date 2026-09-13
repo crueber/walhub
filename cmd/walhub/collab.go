@@ -216,6 +216,16 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	wireNotifyFanout(c.notifySvc, c.issuesSvc, c.pullsSvc, c.reviewSvc, c.checksSvc)
 	wireReleasesFanout(c.releasesSvc, c.notifySvc)
 	wireSocialForks(c.socialSvc, c.pullsSvc)
+	// Issue #457: the child-delete sweep — deleting a fork child unlists
+	// it from the parent-side fork index and decrements the parent's
+	// social counter. Wired here (composition owns both sides; core never
+	// imports upward, law 8): the serving RepoRegistry captures the fork
+	// parent pre-delete and calls back post-delete (serve.go Delete).
+	if apiEnv != nil {
+		if rr, ok := apiEnv.Repos.(*repoRegistry); ok {
+			rr.onChildDelete = forkDeleteSweep(c.pullsSvc)
+		}
+	}
 	// Feature 10 repository import (docs/features/10): the URL-import
 	// surface (Seam 1, both lanes, top-level twins) over the P6 roles
 	// owned by identity; the repo-import task runs on the core wal

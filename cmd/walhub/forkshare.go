@@ -83,3 +83,54 @@ func forkSummaryOf(ctx context.Context, st store.ObjectStore, owner, repo string
 	}
 	return sum, true
 }
+
+// forkParentOf reads the fork.json parent pointer of owner/repo by exact
+// key (issue #457: the child-delete sweep's pre-read — the delete wipe
+// removes fork.json, so the parent must be captured BEFORE the manifest
+// delete linearizes). "" means not-a-fork: absent, unreadable, or corrupt
+// docs all read as no-parent, and the delete proceeds unswept (the ghost
+// row, if any, stays exactly as before — no regression, never fail-closed
+// on a best-effort sweep).
+func forkParentOf(ctx context.Context, st store.ObjectStore, owner, repo string) string {
+	if st == nil {
+		return ""
+	}
+	raw, _, err := store.GetBytes(ctx, st, pulls.ForkKey(owner, repo), store.GetOptions{})
+	if err != nil || raw == nil {
+		return ""
+	}
+	var doc struct {
+		Parent string `json:"parent"`
+	}
+	if jerr := json.Unmarshal(raw, &doc); jerr != nil || doc.Parent == "" {
+		return ""
+	}
+	return doc.Parent
+}
+
+// forkDeleteSweep returns the repoRegistry.onChildDelete callback (issue
+// #457): unlist the deleted child from the parent-side fork index, and
+// decrement the parent's social counter exactly when a row was removed.
+// Best-effort throughout — a shortfall keeps the pre-#457 ghost (no
+// regression) and never fails anything: UnlistFork errors (corrupt index)
+// skip the counter, a missing row skips it too, and a DecForks failure is
+// display-only drift. Tested directly (the orgBirthObserver precedent —
+// task-kind registrations forbid a second buildCollab per test binary).
+func forkDeleteSweep(pullsSvc *pulls.Service) func(ctx context.Context, child, parent string) {
+	return func(ctx context.Context, child, parent string) {
+		if pullsSvc == nil {
+			return
+		}
+		po, pn, ok := splitOwnerRepo(parent)
+		if !ok {
+			return
+		}
+		removed, uerr := pullsSvc.UnlistFork(ctx, po, pn, child)
+		if uerr != nil || !removed {
+			return
+		}
+		if fc := pullsSvc.Forks; fc != nil {
+			_ = fc.DecForks(ctx, po, pn)
+		}
+	}
+}

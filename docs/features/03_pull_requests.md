@@ -287,6 +287,17 @@ fast-forward outcomes (§5 step 5).
   manifest untouched) and reachability is re-probed — a missing-object rev-list failure is bridged, not
   503'd. `refs/pull/<num>/head` stays publish-only-for-pre-bridge-reachable heads (bucket-backed rule:
   bridged objects are serving-copy warmth, and a base-side ref to them would dangle after eviction).
+- **Deleting a fork child sweeps its parent provenance (issue #457).** After the child's manifest
+  delete linearizes, the serving layer unlists the child from the parent's `meta/forks.json`
+  (CAS row-removal, `Version++` only on an actual removal — misses write nothing, so the list ETag
+  is stable) and decrements the parent's `social.json` forks counter exactly when a row was removed
+  (CAS loop, floored at zero, absent object stays absent). The order is load-bearing for GC safety:
+  the row goes second, so a maintain pass either probes a 404 it already skips or never probes at
+  all. Both steps are best-effort — a shortfall keeps the pre-#457 ghost, never fails the delete.
+- **Cross-fork merges stamp `fork.json` `merged_upstream_at` (issue #457).** The merge task CAS-writes
+  the merge instant onto the head repo's `fork.json` next to the merged event (same instant as
+  `pr.json` `merged_at`); same-repo merges are gated to zero trips. A missing child doc (deleted
+  mid-merge) is a narrated no-op; a store failure never fails the landed merge.
 
 ### Concurrency
 
@@ -665,6 +676,20 @@ every call goes through the SDK).
   contributes nothing" comment now means fully-wiped ancestors only); re-create absorbs (no probe
   on any create path — the push fast-path budget pinned by `TestPushFastPathZeroCollabRoundTrips`
   forbids it, and one key cannot serve Open=NotFound and Create=412 at once); no-children path
-  byte-identical; maintain's walk unchanged (verified by
-  `TestForkNetworkGCMetaParent` — absent parent manifest + present index still pins). Covers the
-  "parent deletion/GC" item of audit #449 — the audit marks it covered here, not re-reported.
+   byte-identical; maintain's walk unchanged (verified by
+   `TestForkNetworkGCMetaParent` — absent parent manifest + present index still pins). Covers the
+   "parent deletion/GC" item of audit #449 — the audit marks it covered here, not re-reported.
+
+- **Provenance maintenance (issue #457, 2026-09-13 — child of audit #449, F3 + F8).** Decision: write,
+  not remove. `merged_upstream_at` was documented (§2 table, `ForkDoc`) but had zero writers — the
+  stamp now lands on the cross-fork merge path (one conditional PUT, best-effort, next to the merged
+  event), so the §2 "Create once, then CAS'd for `merged_upstream_at`" row is finally true; no reader
+  was added (the forks list serves rows from the parent index — per-child `fork.json` reads would
+  cost N trips — and the summary projection stays index-derived). The child-delete sweep lives in the
+  serving `RepoRegistry.Delete` (composition, not core — law 8): pre-read the parent from the child's
+  `fork.json` before the wipe, `Registry.Delete`, then `pulls.UnlistFork` + `ForksCounter.DecForks`
+  (the counter moves only when a row actually went, so a never-listed child cannot drive it
+  negative; the floor absorbs pre-#457 Inc shortfalls). `wal.Registry` itself is untouched — the only
+  other direct caller (`repoimport` rollback) deletes import targets that were never listed, so no
+  sweep is owed there. Pre-#457 ghosts (rows stranded before this change) are not backfilled; a
+  re-fork of the swept name re-lists exactly one row (adopt path converges, pinned by test).

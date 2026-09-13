@@ -576,6 +576,12 @@ func applyPortOverride(cfg *config.Config) {
 type repoRegistry struct {
 	reg *wal.Registry
 	st  store.ObjectStore
+	// onChildDelete sweeps fork provenance after a successful Delete:
+	// called as onChildDelete(ctx, child, parent) with both ids in
+	// "owner/name" form. Set by buildCollab (issue #457); nil skips the
+	// sweep (tests without the collaboration layer). Best-effort only —
+	// it must never fail the delete (which already linearized).
+	onChildDelete func(ctx context.Context, child, parent string)
 }
 
 func (r *repoRegistry) Owners(ctx context.Context) ([]string, error) {
@@ -691,8 +697,23 @@ func (r *repoRegistry) Create(ctx context.Context, id git.RepoId, format git.Obj
 }
 
 func (r *repoRegistry) Delete(ctx context.Context, id git.RepoId) error {
+	// Child-delete sweep (issue #457): capture the fork parent BEFORE the
+	// wipe (the wipe deletes fork.json), then sweep AFTER the manifest
+	// delete linearizes. The order is load-bearing for GC safety: a
+	// maintain pass between the row-removal and the child wipe cannot
+	// exist (the row goes second), so the walk either probes a 404 it
+	// already skips or never probes at all. The sweep is best-effort —
+	// a failed delete sweeps nothing, and a failed sweep never fails
+	// the delete (no lock held across the store calls, 13 §2 rule 4).
+	parent := forkParentOf(ctx, r.st, id.Owner, id.Name)
 	_, err := r.reg.Delete(ctx, id.String())
-	return err
+	if err != nil {
+		return err
+	}
+	if parent != "" && r.onChildDelete != nil {
+		r.onChildDelete(ctx, id.String(), parent)
+	}
+	return nil
 }
 
 // ---- api.Tasks adapter (07_api.md §12: ops + task table) ------------------------

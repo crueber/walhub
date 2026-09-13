@@ -7,11 +7,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/git"
+	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/store"
 	"git.packden.us/crueber/walhub/internal/wal"
 )
@@ -186,4 +190,256 @@ func TestRepoRegistryOwnerCounts(t *testing.T) {
 	} else if _, ok := counts["solo"]; ok {
 		t.Fatalf("solo must vanish with its last repo: %v", counts)
 	}
+}
+
+// putJSON seeds one JSON object (fork.json / forks.json stand-ins).
+func putJSON(t *testing.T, r *repoRegistry, ctx context.Context, key, raw string) {
+	t.Helper()
+	if _, err := store.PutBytes(ctx, r.st, key, []byte(raw),
+		store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
+		t.Fatalf("put %s: %v", key, err)
+	}
+}
+
+// sweepRecorder captures onChildDelete calls.
+type sweepRecorder struct {
+	calls [][2]string
+}
+
+func (s *sweepRecorder) fn(_ context.Context, child, parent string) {
+	s.calls = append(s.calls, [2]string{child, parent})
+}
+
+// TestRepoRegistryDeleteSweepsForkProvenance pins issue #457 at the serving
+// layer: Delete captures the fork parent pre-wipe (the wipe deletes
+// fork.json) and fires onChildDelete post-commit. Plain deletes, corrupt
+// fork.json, and a nil callback never fire — and never fail the delete.
+func TestRepoRegistryDeleteSweepsForkProvenance(t *testing.T) {
+	t.Run("fork child fires sweep", func(t *testing.T) {
+		r, ctx := testRepoRegistry(t)
+		rec := &sweepRecorder{}
+		r.onChildDelete = rec.fn
+		mustCreate(t, r, ctx, "acme/api")
+		mustCreate(t, r, ctx, "acme/child")
+		putJSON(t, r, ctx, "repos/acme/child/fork.json", `{"parent":"acme/api","forked_at":"2026-09-04T12:00:00Z","version":1}`)
+		if err := r.Delete(ctx, git.RepoId{Owner: "acme", Name: "child"}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if len(rec.calls) != 1 || rec.calls[0] != [2]string{"acme/child", "acme/api"} {
+			t.Fatalf("sweep calls = %v", rec.calls)
+		}
+		repos, err := r.Repos(ctx, "acme")
+		if err != nil {
+			t.Fatalf("Repos: %v", err)
+		}
+		checkStrings(t, "Repos(acme) after child delete", repos, []string{"api"})
+	})
+
+	t.Run("plain repo is silent", func(t *testing.T) {
+		r, ctx := testRepoRegistry(t)
+		rec := &sweepRecorder{}
+		r.onChildDelete = rec.fn
+		mustCreate(t, r, ctx, "acme/solo")
+		if err := r.Delete(ctx, git.RepoId{Owner: "acme", Name: "solo"}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if len(rec.calls) != 0 {
+			t.Fatalf("sweep calls = %v", rec.calls)
+		}
+	})
+
+	t.Run("corrupt fork.json is silent but deletes", func(t *testing.T) {
+		r, ctx := testRepoRegistry(t)
+		rec := &sweepRecorder{}
+		r.onChildDelete = rec.fn
+		mustCreate(t, r, ctx, "acme/bad")
+		putJSON(t, r, ctx, "repos/acme/bad/fork.json", "{oops")
+		if err := r.Delete(ctx, git.RepoId{Owner: "acme", Name: "bad"}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if len(rec.calls) != 0 {
+			t.Fatalf("sweep calls = %v", rec.calls)
+		}
+		repos, _ := r.Repos(ctx, "acme")
+		checkStrings(t, "Repos(acme)", repos, []string{})
+	})
+
+	t.Run("nil callback is safe", func(t *testing.T) {
+		r, ctx := testRepoRegistry(t)
+		mustCreate(t, r, ctx, "acme/kid")
+		putJSON(t, r, ctx, "repos/acme/kid/fork.json", `{"parent":"acme/api","forked_at":"2026-09-04T12:00:00Z","version":1}`)
+		if err := r.Delete(ctx, git.RepoId{Owner: "acme", Name: "kid"}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("litter name still sweeps", func(t *testing.T) {
+		r, ctx := testRepoRegistry(t)
+		rec := &sweepRecorder{}
+		r.onChildDelete = rec.fn
+		// No manifest: a stale fork.json from a half-provisioned child.
+		putJSON(t, r, ctx, "repos/acme/ghost/fork.json", `{"parent":"acme/api","forked_at":"2026-09-04T12:00:00Z","version":1}`)
+		if err := r.Delete(ctx, git.RepoId{Owner: "acme", Name: "ghost"}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if len(rec.calls) != 1 || rec.calls[0] != [2]string{"acme/ghost", "acme/api"} {
+			t.Fatalf("sweep calls = %v", rec.calls)
+		}
+	})
+}
+
+// fakeForksSeam records DecForks through the pulls.ForksCounter seam.
+type fakeForksSeam struct {
+	mu     sync.Mutex
+	decs   [][2]string
+	decErr error
+}
+
+func (f *fakeForksSeam) IncForks(_ context.Context, _, _ string) error { return nil }
+
+func (f *fakeForksSeam) DecForks(_ context.Context, owner, repo string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.decs = append(f.decs, [2]string{owner, repo})
+	return f.decErr
+}
+
+func (f *fakeForksSeam) decCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.decs)
+}
+
+// TestForkDeleteSweepTable pins the forkDeleteSweep wiring (the
+// orgBirthObserver precedent — direct, never via a second buildCollab):
+// the deleted child is unlisted from the parent index, and the social
+// counter decrements exactly when a row was removed. Every shortfall is a
+// silent no-op (best-effort — the delete already linearized).
+func TestForkDeleteSweepTable(t *testing.T) {
+	setup := func(t *testing.T, index string) (store.ObjectStore, *pulls.Service, *fakeForksSeam) {
+		t.Helper()
+		st := store.NewMemory()
+		svc := pulls.New(st, nil)
+		fc := &fakeForksSeam{}
+		svc.Forks = fc
+		if index != "" {
+			if _, err := store.PutBytes(context.Background(), st, pulls.ForksKey("o", "r"), []byte(index),
+				store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return st, svc, fc
+	}
+	readRaw := func(t *testing.T, st store.ObjectStore) string {
+		t.Helper()
+		raw, _, err := store.GetBytes(context.Background(), st, pulls.ForksKey("o", "r"), store.GetOptions{})
+		if err != nil {
+			if store.IsNotFound(err) {
+				return "ABSENT"
+			}
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	t.Run("row removed and counter decremented", func(t *testing.T) {
+		st, svc, fc := setup(t, `{"version":1,"forks":[{"repo":"f/c","forked_at":"2026-09-04T12:00:00Z"}]}`)
+		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+		if got := readRaw(t, st); !strings.Contains(got, `"forks":[]`) {
+			t.Fatalf("index = %q", got)
+		}
+		if fc.decCount() != 1 || fc.decs[0] != [2]string{"o", "r"} {
+			t.Fatalf("decs = %v", fc.decs)
+		}
+	})
+
+	t.Run("missing row skips counter", func(t *testing.T) {
+		st, svc, fc := setup(t, `{"version":1,"forks":[{"repo":"f/other","forked_at":"2026-09-04T12:00:00Z"}]}`)
+		before := readRaw(t, st)
+		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+		if got := readRaw(t, st); got != before {
+			t.Fatalf("index moved: %q → %q", before, got)
+		}
+		if fc.decCount() != 0 {
+			t.Fatalf("decs = %v", fc.decs)
+		}
+	})
+
+	t.Run("absent index skips counter", func(t *testing.T) {
+		_, svc, fc := setup(t, "")
+		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+		if fc.decCount() != 0 {
+			t.Fatalf("decs = %v", fc.decs)
+		}
+	})
+
+	t.Run("corrupt index skips counter", func(t *testing.T) {
+		_, svc, fc := setup(t, "{oops")
+		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+		if fc.decCount() != 0 {
+			t.Fatalf("decs = %v", fc.decs)
+		}
+	})
+
+	t.Run("bad parent is a no-op", func(t *testing.T) {
+		st, svc, fc := setup(t, `{"version":1,"forks":[]}`)
+		forkDeleteSweep(svc)(context.Background(), "f/c", "oops")
+		if got := readRaw(t, st); !strings.Contains(got, `"version":1`) {
+			t.Fatalf("index = %q", got)
+		}
+		if fc.decCount() != 0 {
+			t.Fatalf("decs = %v", fc.decs)
+		}
+	})
+
+	t.Run("nil service is safe", func(t *testing.T) {
+		forkDeleteSweep(nil)(context.Background(), "f/c", "o/r")
+	})
+
+	t.Run("nil seam still unlists", func(t *testing.T) {
+		st, svc, _ := setup(t, `{"version":1,"forks":[{"repo":"f/c","forked_at":"2026-09-04T12:00:00Z"}]}`)
+		svc.Forks = nil
+		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+		if got := readRaw(t, st); !strings.Contains(got, `"forks":[]`) {
+			t.Fatalf("index = %q", got)
+		}
+	})
+
+	t.Run("counter shortfall stays silent", func(t *testing.T) {
+		st, svc, fc := setup(t, `{"version":1,"forks":[{"repo":"f/c","forked_at":"2026-09-04T12:00:00Z"}]}`)
+		fc.decErr = errors.New("boom")
+		forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+		if got := readRaw(t, st); !strings.Contains(got, `"forks":[]`) {
+			t.Fatalf("index = %q", got)
+		}
+		if fc.decCount() != 1 {
+			t.Fatalf("decs = %d, want 1", fc.decCount())
+		}
+	})
+
+	t.Run("concurrent double sweep decrements once", func(t *testing.T) {
+		// Two concurrent deletes of the same child both reach the sweep
+		// (Registry.Delete is idempotent-success). Exactly one UnlistFork
+		// lands the row removal, so exactly one DecForks must fire — a
+		// stale per-attempt flag would double-decrement here.
+		st, svc, fc := setup(t, `{"version":1,"forks":[{"repo":"f/c","forked_at":"2026-09-04T12:00:00Z"}]}`)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				forkDeleteSweep(svc)(context.Background(), "f/c", "o/r")
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if got := readRaw(t, st); !strings.Contains(got, `"forks":[]`) {
+			t.Fatalf("index = %q", got)
+		}
+		if fc.decCount() != 1 {
+			t.Fatalf("decs = %d, want exactly 1", fc.decCount())
+		}
+	})
 }
