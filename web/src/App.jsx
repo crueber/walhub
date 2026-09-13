@@ -12,6 +12,7 @@ import { refreshUnread, unreadCount } from "./pages/Notifications.jsx";
 import NotificationTray from "./components/NotificationTray.jsx";
 import Icon from "./lib/icons.jsx";
 import IdentityMenu from "./components/IdentityMenu.jsx";
+import CreateMenu from "./components/CreateMenu.jsx";
 
 export default function App(props) {
   const location = useLocation();
@@ -69,7 +70,9 @@ export default function App(props) {
           </A>
           <nav aria-label="Site" class="site-nav flex min-w-0 flex-1 items-center gap-3 overflow-x-auto whitespace-nowrap sm:gap-4">
             <A href="/explore">explore</A>
-            <A href="/import">import</A>
+            {/* Forgejo #466: import left the primary nav for the navbar
+                create (+) button — /import stays reachable from the
+                dropdown (the route is untouched). */}
             {/* Forgejo #371: signed-in users (outside none mode) find keys
                 in the identity menu — the primary nav keeps it for
                 signed-out visitors. */}
@@ -117,6 +120,14 @@ export default function App(props) {
                 <Icon name="dark-mode" />
               </Show>
             </button>
+            {/* Forgejo #466: signed-in → create (+) button immediately left
+                of the identity menu (compact plus-icon trigger, dropdown
+                with New repository / Import / New organization). Gated on
+                nav().showCreate — the same condition as the identity menu —
+                so the signed-out navbar is unchanged. */}
+            <Show when={nav().showCreate}>
+              <CreateMenu items={nav().createItems} />
+            </Show>
             <Show when={nav().showIdentity}>
               <IdentityMenu username={nav().username} avatarUrl={nav().avatarUrl} items={nav().menuItems} />
             </Show>

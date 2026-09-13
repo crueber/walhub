@@ -1,9 +1,12 @@
 // web/test/unit/icons-465.test.js — Forgejo #465: the shared embedded SVG
 // icon mechanism + the 10 provided icons across the six controls (Watch/Star
 // toggles, Fork pill, Clone trigger, notification bell, theme toggle).
-// Every control renders a real icon through the ONE lib/icons.jsx component
-// with the issue's state mapping; all emoji/unicode glyphs are gone; the
-// #447 metrics and the #463 spacing contract are untouched. No DOM: JSX and
+// Forgejo #466 adds the eleventh icon — the navbar create-button plus, a
+// minimal inline stroke (no plus glyph shipped with #465) drawn through the
+// same Icon shape — consumed by components/CreateMenu.jsx. Every control
+// renders a real icon through the ONE lib/icons.jsx component with the
+// issue's state mapping; all emoji/unicode glyphs are gone; the #447 metrics
+// and the #463 spacing contract are untouched. No DOM: JSX and
 // the icon map are pinned as source text, mirroring
 // header-pills-447.test.js / repo-social-toggles.test.js.
 import { test } from "node:test";
@@ -40,15 +43,15 @@ function codeOf(src) {
 // #438 fork glyph, which must not come back on the pill either).
 const OLD_GLYPHS = ["👁", "★", "🔔", "☀", "☾", "⑂"];
 
-test("one shared mechanism: a single component exporting the ten named icons", () => {
+test("one shared mechanism: a single component exporting the eleven named icons", () => {
   assert.ok(ICONS.includes("export default function Icon(props)"), "one default Icon component");
   assert.ok(ICONS.includes("export const ICON_NAMES"), "the name list is exported for consumers");
-  for (const name of ["watch-on", "watch-off", "star-on", "star-off", "fork", "clone", "notify-on", "notify-off", "light-mode", "dark-mode"]) {
+  for (const name of ["watch-on", "watch-off", "star-on", "star-off", "fork", "clone", "notify-on", "notify-off", "light-mode", "dark-mode", "plus"]) {
     // Hyphenated names are quoted keys, single-word names are bare keys.
     assert.ok(ICONS.includes(`"${name}"`) || ICONS.includes(`\n  ${name}:`), `icon ${name} is registered`);
   }
-  // Exactly ten entries: one viewBox per icon, one shared outer <svg>.
-  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 10, "ten icon entries, no more");
+  // Exactly eleven entries: one viewBox per icon, one shared outer <svg>.
+  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 11, "eleven icon entries, no more");
   assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 1, "a single shared <svg> renders every icon");
 });
 
@@ -64,6 +67,9 @@ test("verbatim embedding: each icon keeps its shipped viewBox and 1em currentCol
     "notify-off": "0 0 1024 1024",
     "light-mode": "0 0 1024 1024",
     "dark-mode": "0 0 24 24",
+    // Forgejo #466: the create-button plus is drawn inline (no shipped
+    // file), so its box is the conventional 16-unit grid.
+    plus: "0 0 16 16",
   };
   for (const [name, box] of Object.entries(boxes)) {
     assert.ok(ICONS.includes(`viewBox: "${box}"`), `${name} keeps its shipped viewBox ${box} (mixed units scale through 1em)`);
@@ -169,7 +175,7 @@ test("#447 metrics intact: same pills, counts still left of labels, icon first",
 test("no-overflow structure: icons are font-relative, wrap guards unchanged", () => {
   // Every icon renders a 1em box at the caller's font size — icons scale with
   // text and cannot force overflow by themselves at text-sm or default sizes.
-  assert.ok(ICONS.includes('width="1em"') && ICONS.includes('height="1em"'), "all ten icons share the font-relative 1em box");
+  assert.ok(ICONS.includes('width="1em"') && ICONS.includes('height="1em"'), "all eleven icons share the font-relative 1em box");
   assert.ok(REPO.includes('<div class="repo-header mb-3 flex flex-wrap items-center gap-3">'), "repo-header keeps flex-wrap (the cluster drops as one unit, never overflows)");
   assert.ok(REPO.includes('<div class="ml-auto flex items-center gap-2">'), "the cluster keeps row-owned gap-2 — Icon adds no spacing of its own (#463)");
 });

@@ -1,13 +1,18 @@
 // web/src/lib/icons.jsx — the shared embedded SVG icon mechanism (Forgejo
-// #465): one component, consumed by all six controls (Watch/Star/Fork/Clone
+// #465): one component, consumed by all seven controls (Watch/Star/Fork/Clone
 // in pages/Repo.jsx, the notification bell in components/NotificationTray.jsx,
-// the theme toggle in App.jsx).
+// the theme toggle in App.jsx, the create button in
+// components/CreateMenu.jsx).
 //
-// The 10 icon bodies are embedded below as inline JSX, transcribed verbatim
+// The 11 icon bodies are embedded below as inline JSX, transcribed verbatim
 // from the provided 1em currentColor files (issue comments 4783-4792 — the
-// source of truth for every path; each entry keeps its file's viewBox as-is
-// so the mixed viewports 16/24/1024/1200 all scale through width="1em"
-// height="1em"). No fetches, no raw imports, no innerHTML: the icons ship
+// source of truth for every path but one; each entry keeps its file's viewBox
+// as-is so the mixed viewports 16/24/1024/1200 all scale through width="1em"
+// height="1em"). The eleventh body is the create-button plus (Forgejo #466):
+// no plus glyph was provided with #465, so it is a minimal inline stroke
+// drawn here through the same Icon shape (16-unit viewBox, currentColor
+// paint, no color literals) rather than a one-off <svg> at the call site.
+// No fetches, no raw imports, no innerHTML: the icons ship
 // inside the vite bundle and render with zero runtime requests. No color
 // literals anywhere in this layer — every body paints via fill="currentColor"
 // / stroke="currentColor" and state coloring comes from the control's own
@@ -96,9 +101,18 @@ const ICONS = {
       </g>
     ),
   },
+  // Forgejo #466: the navbar create-button plus. No plus glyph shipped with
+  // #465 — a minimal two-stroke cross on the 16-unit grid, painted with the
+  // same currentColor stroke idiom as dark-mode above.
+  plus: {
+    viewBox: "0 0 16 16",
+    body: (
+      <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M8 3v10M3 8h10" />
+    ),
+  },
 };
 
-/** The ten icon names, in asset order (watch, star, fork, clone, bell, theme). */
+/** The eleven icon names, in asset order (watch, star, fork, clone, bell, theme, plus). */
 export const ICON_NAMES = Object.keys(ICONS);
 
 /**

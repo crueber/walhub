@@ -127,7 +127,6 @@ export default function Owners() {
   const [getOwners] = useData("owners", () =>
     repos.owners.listDetailed({ sort: "activity", order: "desc" }),
   );
-  const [getMe] = useData("me", () => repos.me().catch(() => null));
   // Per-owner newest-commit times reported by OwnerSections as their
   // detailed docs land (Forgejo #283). Missing key = fetch pending;
   // null = settled with no known activity — both sort last.
@@ -135,32 +134,12 @@ export default function Owners() {
   const reportActivity = (owner, at) => {
     setActivity((prev) => (prev[owner] === at ? prev : { ...prev, [owner]: at }));
   };
-  const canWrite = () => {
-    const me = getMe();
-    if (!me) return false;
-    if (me.anonymous) return false;
-    return me.write !== false;
-  };
   return (
     <div class="owners-page">
-      <div class="mb-4 flex items-center justify-between">
-        <h2 class="text-xl font-semibold">Owners</h2>
-        <div class="flex gap-2">
-          <Show when={canWrite()}>
-            <A class="btn primary px-3 py-1" href="/new">
-              New repository
-            </A>
-            {/* Forgejo #348: the create-org entry point — same gate as
-                the repo CTA (logged-in writer), lands in /:org/settings. */}
-            <A class="btn px-3 py-1" href="/orgs/new">
-              New organization
-            </A>
-          </Show>
-          <A class="btn px-3 py-1" href="/import">
-            Import repository
-          </A>
-        </div>
-      </div>
+      {/* Forgejo #466: the repo/import/org header CTAs moved to the
+          navbar create (+) button — the heading stands alone; the listing
+          below is unchanged. */}
+      <h2 class="mb-4 text-xl font-semibold">Owners</h2>
       <section class="card mb-6 p-4">
         <p class="text-sm leading-relaxed">
           <strong>walhub</strong> is a git host whose only database is an object store.{" "}

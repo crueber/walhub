@@ -16,6 +16,9 @@
 //   loginHref       "/_auth/login?next=<current>" ("" when hidden)
 //   showIdentity    avatar-or-username control + dropdown
 //   menuItems       [{kind, label, href}] in dropdown order
+//   showCreate      navbar create (+) button (same gate as the identity
+//                   menu — Forgejo #466)
+//   createItems     [{kind, label, href}] for the create dropdown, in order
 //   showKeysInNav / showInvitationsInNav / showSetupInNav
 //                   primary-nav visibility (signed-in users find
 //                   keys/invitations/setup in the menu; setup stays in the
@@ -75,6 +78,22 @@ export function menuItems(me, mode) {
 }
 
 /**
+ * createItems() → the navbar create-button dropdown entries in order: New
+ * repository (/new), Import repository (/import), New organization
+ * (/orgs/new). Shown to every signed-in user with no permission probe
+ * (law 6: no new requests) — each target page enforces its own gate
+ * server-side and renders its own errors. Hrefs are plain strings — the
+ * component renders all three as router links. (Forgejo #466.)
+ */
+export function createItems() {
+  return [
+    { kind: "new-repo", label: "New repository", href: "/new" },
+    { kind: "import", label: "Import repository", href: "/import" },
+    { kind: "new-org", label: "New organization", href: "/orgs/new" },
+  ];
+}
+
+/**
  * navModel({me, discovery}, currentPath) → the full header auth surface.
  * currentPath feeds the login ?next= return target (defaults to "/").
  */
@@ -92,6 +111,11 @@ export function navModel({ me = null, discovery = null } = {}, currentPath = "/"
     showLogin,
     loginHref,
     showIdentity,
+    // Forgejo #466: the create (+) button shares the identity gate —
+    // signed-in users have something to create; anonymous visitors keep
+    // today's navbar unchanged.
+    showCreate: signedIn,
+    createItems: signedIn ? createItems() : [],
     username: signedIn ? (me.principal ?? "") : "",
     // Forgejo #376: the navbar avatar. me.avatar_url is the stable
     // user-avatar URL ("?v=" cache-busted); "" renders the username

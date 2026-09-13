@@ -3,8 +3,9 @@
 // /:owner/repositories. /:owner is the profile view (identity only — the
 // #437 sidebar tab list plus the #421 avatar asides live in the shared
 // sidebar shell, no grid, no teaser); /:owner/repositories is the
-// repositories tab (the toolbar/CTA/grid/import listing moved verbatim
-// into the shared main column). Client-only: routes + Repos.jsx views, no
+// repositories tab (the toolbar/grid/import listing moved verbatim
+// into the shared main column — #466 later deleted the toolbar CTA into
+// the navbar create button). Client-only: routes + Repos.jsx views, no
 // API change, the listing rides the shared `repos:{owner}` key, <RepoRow>
 // stays shared (no fork). The tab list (Forgejo #437, superseding the
 // #435 top strip) is a vertical sidebar list, not the repo page's tab bar.
@@ -110,15 +111,14 @@ test("profile view: identity only, no teaser, no grid/toolbar/import", () => {
   assert.ok(!teaser.includes("New repository"), "no create CTA on the profile view");
 });
 
-test("repositories view: toolbar + CTA + grid + import moved verbatim", () => {
+test("repositories view: heading + grid + import moved verbatim; no CTA (#466)", () => {
   const start = REPOS.indexOf('<Show when={view() === "repos"}>');
   assert.ok(start !== -1, "the listing lives behind the repos-view gate");
   const listing = REPOS.slice(start);
   const toolbar = block(listing, "repos-toolbar", "</div>");
   assert.ok(toolbar.includes("Repositories</h3>"), "heading text unchanged");
-  assert.ok(toolbar.includes("New repository"), "CTA moved with the list it populates");
-  assert.ok(toolbar.includes("<Show when={canWrite()}>"), "CTA gate byte-identical");
-  assert.ok(toolbar.includes("href={`/new?owner=${encodeURIComponent(owner())}`}"), "CTA href byte-identical");
+  assert.ok(!toolbar.includes("New repository"), "no CTA in the toolbar (navbar create button owns creation)");
+  assert.ok(!toolbar.includes("canWrite"), "the CTA gate left with the CTA");
   assert.ok(toolbar.includes("flex-wrap"), "390px toolbar wrap kept");
   assert.ok(listing.includes("<RepoRow owner={owner()}"), "grid rows render through the shared component");
   assert.ok(listing.includes("orderByActivity(doc().repos)"), "grid ordering untouched");
@@ -149,7 +149,8 @@ test("no data-fetch, cache-key, or gating-logic changes", () => {
     assert.ok(REPOS.includes(key), `fetch surface untouched: ${key}`);
   }
   for (const gate of [
-    "<Show when={canWrite()}>",
+    // Forgejo #466: the canWrite gate left with the toolbar CTA (the navbar
+    // create button owns creation now) — every remaining gate byte-identical.
     "<Show when={getProfile()?.can_edit && !getEditing()}>",
     "<Show when={isSelf()}>",
     "<Show when={userSrc()}>",
