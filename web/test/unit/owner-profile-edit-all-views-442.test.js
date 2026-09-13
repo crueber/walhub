@@ -105,7 +105,8 @@ test("no data-fetch, cache-key, or other gating-logic changes", () => {
     assert.ok(REPOS.includes(key), `fetch surface untouched: ${key}`);
   }
   for (const gate of [
-    "<Show when={canWrite()}>",
+    // Forgejo #466: the canWrite gate left with the toolbar CTA (the navbar
+    // create button owns creation now) — every remaining gate byte-identical.
     "<Show when={!isOrg()}>",
     "<Show when={isOrg()}>",
     "<Show when={getProfile()?.can_edit && !getEditing()}>",

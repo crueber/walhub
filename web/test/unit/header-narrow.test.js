@@ -70,22 +70,26 @@ test("nav strip hides its own scrollbar but stays keyboard/touch scrollable", ()
   assert.ok(navTag.includes("overflow-x-auto"), "strip keeps overflow-x-auto: touch scroll + focus-follow still work");
 });
 
-test("site-nav contents unchanged (no links moved into a hamburger)", () => {
+test("site-nav contents: explore → keys → setup (import lives in the create menu)", () => {
   const nav = block(APP, '<nav aria-label="Site"', "</nav>");
-  for (const href of ["/explore", "/import", "/keys", "/setup"]) {
+  for (const href of ["/explore", "/keys", "/setup"]) {
     assert.ok(nav.includes(`href="${href}"`), `site-nav must still link ${href}`);
   }
+  // Forgejo #466: import left the primary nav for the navbar create (+)
+  // button — the /import route itself is untouched (see create-menu-466).
+  assert.ok(!nav.includes('href="/import"'), "import must not be in the site-nav");
   assert.ok(!nav.includes('href="/api"'), "API stays in the ml-auto cluster (#238 untouched)");
 });
 
 test("390px arithmetic: pinned chrome fits, nav absorbs the rest", () => {
   // Measured fixed widths (generous upper bounds): brand ~70px, right cluster
-  // (API ~30 + bell ~40 + toggle ~40 + internal gaps ~16) ~130px, row padding
-  // px-4 = 32px, row gaps at <sm: (gap-3 = 12px) x 2 = 24px. Pinned total ≈
-  // 256px < 390px, so the flex-1 nav always gets a non-negative share and its
-  // overflow scrolls INSIDE the strip — scrollWidth === clientWidth.
+  // (API ~30 + bell ~40 + toggle ~40 + create ~32 (#466, signed-in only) +
+  // internal gaps ~20) ~162px, row padding px-4 = 32px, row gaps at <sm:
+  // (gap-3 = 12px) x 2 = 24px. Pinned total ≈ 288px < 390px, so the flex-1
+  // nav always gets a non-negative share and its overflow scrolls INSIDE
+  // the strip — scrollWidth === clientWidth.
   const viewport = 390;
-  const pinned = 70 + 130 + 32 + 24;
+  const pinned = 70 + 162 + 32 + 24;
   assert.ok(pinned < viewport, `pinned chrome ${pinned}px fits in ${viewport}px (nav gets ${viewport - pinned}px+)`);
 });
 

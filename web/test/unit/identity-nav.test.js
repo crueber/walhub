@@ -271,23 +271,19 @@ test("IdentityMenu #390: initials fallback keeps the same circle shape", () => {
   assert.ok(fb.includes("ring-1"), "fallback shares the ring treatment");
 });
 
-test("Repos #395/#403/#413: profile header is one composed block, New repository in the toolbar", () => {
+test("Repos #395/#403/#413/#466: profile header is one composed block, creation lives in the navbar", () => {
   const REPOS = srcOf("../../src/pages/Repos.jsx");
   assert.ok(REPOS.includes("h-24 w-24"), "avatar at 96px (>= 72px)");
   assert.ok(REPOS.includes("profile-header"), "identity + avatar share one composed header block");
-  // The orphans are gone (#403) and the CTA left the header (#413): no
-  // standalone justify-end row above the header — Edit profile alone in
-  // the action row under the bio, New repository right-anchored in the
-  // Repositories toolbar below.
+  // The orphans are gone (#403) and the CTA left the header (#413) and then
+  // the toolbar (#466): no standalone justify-end row above the header —
+  // Edit profile alone in the sidebar action group, creation in the navbar
+  // create button (CreateMenu, gated on nav().showCreate).
   assert.ok(!REPOS.includes("mb-3 flex justify-end"), "no orphan action row above the header");
   assert.ok(!REPOS.includes("flex justify-end"), "no right-aligned orphan row anywhere on the user header");
   const grid = REPOS.indexOf('<div class="profile-header');
   assert.ok(grid !== -1, "the composed header grid exists");
-  const headerEnd = REPOS.indexOf("getEditing()", grid);
-  // Forgejo #422: the Repos.jsx file-header comment names the CTA — pin the
-  // rendered text node (closing newline into </A>), not prose.
-  const cta = REPOS.indexOf("New repository\n");
-  assert.ok(cta !== -1 && cta > headerEnd, "the New-repository CTA renders below the header, in the toolbar");
+  assert.ok(!REPOS.includes("New repository"), "no New-repository CTA anywhere on the page (#466)");
   const large = REPOS.indexOf("h-24 w-24");
   assert.ok(grid < large, "the large avatar renders inside the composed header grid");
   assert.ok(REPOS.includes("ring-zinc-300"), "ring treatment consistent with the navbar");

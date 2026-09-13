@@ -390,16 +390,10 @@ function OwnerPage(props) {
     setEditing(true);
     if (view() !== "profile") navigate(`/${owner()}`);
   };
-  // Writers-only New button (mirrors require_write so the button never
-  // promises what POST /api/v1/repos refuses): hidden for anonymous
-  // without write. One me() fetch, no tray (missing = hidden).
+  // Forgejo #466: the toolbar New-repository CTA (and its canWrite gate)
+  // moved to the navbar create (+) button — the me() fetch stays for the
+  // avatar self-service gate below.
   const [getMe] = useData("me", () => repos.me().catch(() => null));
-  const canWrite = () => {
-    const me = getMe();
-    if (!me) return false;
-    if (me.anonymous) return false;
-    return me.write !== false;
-  };
   // Forgejo #376: avatar self-service — the viewer is the owner (the
   // server re-checks self-or-admin; the client never decides).
   const isSelf = () => {
@@ -568,18 +562,13 @@ function OwnerPage(props) {
           page keeps identity only. */}
       <Show when={view() === "repos"}>
       {/* Forgejo #413: the Repositories toolbar — the section heading
-          with the New-repository CTA right-anchored (the same flex
-          items-center justify-between title-row shape the org header
-          used; flex-wrap gap-2 per #273-#278 so 390px wraps without
-          overflow). The single surface owning repo creation for both
-          user and org variants; gate and href unchanged. */}
+          row (the same flex items-center justify-between title-row shape
+          the org header used; flex-wrap gap-2 per #273-#278 so 390px wraps
+          without overflow). Forgejo #466: the New-repository CTA left the
+          toolbar for the navbar create (+) button, so the row is just the
+          h3 — the listing and its heading are unchanged. */}
       <div class="repos-toolbar mb-2 mt-6 flex flex-wrap items-center justify-between gap-2">
         <h3 class="text-base font-semibold">Repositories</h3>
-        <Show when={canWrite()}>
-          <A class="btn primary px-3 py-1" href={`/new?owner=${encodeURIComponent(owner())}`}>
-            New repository
-          </A>
-        </Show>
       </div>
       <Show when={getDoc()} fallback={<p class="muted">loading…</p>}>
         {(doc) => {

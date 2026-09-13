@@ -1,14 +1,16 @@
 // web/test/unit/profile-header-403.test.js — Forgejo #403: the owner
 // profile header reads like GitHub's — grouped action row, no dead space.
 // (#413 moved the New-repository CTA out of that grouped row into the
-// Repositories toolbar; #421 moved the surviving grouped actions — Edit
+// Repositories toolbar, #466 moved it on into the navbar create button;
+// #421 moved the surviving grouped actions — Edit
 // profile, Regenerate/Remove avatar — with the avatar into a right
 // sidebar under an <hr>, leaving the identity block action-free. The pins
 // below assert the surviving #403 shape: h1 anchor, tight handle, bottom
 // divider, composition — plus the absence of the CTA from the header.)
 // Layout only: Edit profile keeps its can_edit gate (now in the sidebar),
-// every other Show gate stays byte-identical (canWrite, can_edit, isSelf,
-// userSrc); no fetch, cache key, or server interaction changes. The org
+// every other surviving Show gate stays byte-identical (can_edit, isSelf,
+// userSrc — #466 deleted the canWrite gate with the toolbar CTA); no fetch,
+// cache key, or server interaction changes. The org
 // branch (#359) keeps its header minus the title-row CTA (likewise #413),
 // plus the same sidebar treatment (#421). No DOM: JSX pinned as source
 // text, mirroring profile-header.test.js.
@@ -43,7 +45,7 @@ test("no full-width row above the header; identity block carries no actions (#41
   // the main column above the per-view Shows — scope the identity pins to
   // the header div's own close (the bio div inside is self-closing).
   const identity = block(REPOS, '<div class="profile-header', "</div>");
-  assert.ok(!identity.includes("New repository"), "New repository left the header for the toolbar (#413)");
+  assert.ok(!identity.includes("New repository"), "New repository left the header for good (#413, #466: navbar owns creation)");
   assert.ok(!identity.includes("Edit profile"), "Edit profile left the identity block for the sidebar (#421)");
 });
 
@@ -96,9 +98,10 @@ test("sidebar avatar + grouped actions functionally untouched", () => {
   assert.ok(REPOS.includes('invalidate(`user:${owner()}`)'), "#376 avatar invalidation untouched");
 });
 
-test("all Show gates byte-identical to pre-change", () => {
+test("all Show gates byte-identical to pre-change (minus the #466 CTA gate)", () => {
   for (const gate of [
-    "<Show when={canWrite()}>",
+    // Forgejo #466: the canWrite gate left with the toolbar CTA (the navbar
+    // create button owns creation now).
     "<Show when={getProfile()?.can_edit && !getEditing()}>",
     "<Show when={isSelf()}>",
     "<Show when={userSrc()}>",
@@ -116,8 +119,10 @@ test("zero fetch/cache/server changes", () => {
     assert.ok(REPOS.includes(key), `cache key untouched: ${key}`);
   }
   assert.ok(REPOS.includes('"me"'), "me fetch untouched");
+  // Forgejo #466: the shared toolbar carries no CTA anymore (creation lives
+  // in the navbar create button) — zero New-repository links on the page.
   const ctas = [...REPOS.matchAll(/href={`\/new\?owner=\${encodeURIComponent\(owner\(\)\)}`}/g)];
-  assert.equal(ctas.length, 1, "exactly one New-repository link: the shared Repositories toolbar");
+  assert.equal(ctas.length, 0, "no New-repository link left: the toolbar keeps the heading only");
   assert.ok(REPOS.includes("repos.owners.detailed(owner()"), "listing fetch untouched");
   assert.ok(REPOS.includes("repos.owners.updateProfile("), "profile save untouched");
 });
@@ -129,7 +134,7 @@ test("org branch keeps its header minus the title-row CTA (#359, #413) plus the 
   const profile = block(REPOS, '<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>');
   const org = profile.slice(profile.indexOf("<Show when={isOrg()}>"));
   assert.ok(!org.includes("<OrgAvatar"), "org avatar left the title row for the sidebar");
-  assert.ok(!org.includes("New repository"), "org title row no longer carries the CTA (shared toolbar owns it)");
+  assert.ok(!org.includes("New repository"), "org title row no longer carries the CTA (navbar owns creation)");
   assert.ok(!org.includes("Manage organization"), "Manage lives in the sidebar, not the main column");
   assert.ok(org.includes("renderBody(getOrg().bio_markdown)"), "org bio still reads the org doc");
   assert.ok(!org.includes("profile-header"), "the composed user grid never renders for orgs");

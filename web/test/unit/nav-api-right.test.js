@@ -1,7 +1,8 @@
 // web/test/unit/nav-api-right.test.js — navbar API placement (issue #238):
 // the API link lives in the far-right ml-auto utility cluster (left of the
 // tray + theme toggle), NOT in the primary site-nav; remaining nav order is
-// explore → import → keys → setup; route/href unchanged (/api). No DOM: JSX
+// explore → keys → setup (import left the nav for the create menu in
+// Forgejo #466); route/href unchanged (/api). No DOM: JSX
 // is pinned as source text, mirroring landing.test.js / how-it-works.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,14 +26,15 @@ function block(src, start, end) {
   return src.slice(s, e);
 }
 
-test("site-nav holds explore → import → keys → setup, no API", () => {
+test("site-nav holds explore → keys → setup, no API, no import", () => {
   const nav = block(APP, '<nav aria-label="Site" class="site-nav', "</nav>");
-  for (const href of ["/explore", "/import", "/keys", "/setup"]) {
+  for (const href of ["/explore", "/keys", "/setup"]) {
     assert.ok(nav.includes(`href="${href}"`), `site-nav must link ${href}`);
   }
+  assert.ok(!nav.includes('href="/import"'), "import must not be in the site-nav (#466: create menu owns it)");
   assert.ok(!nav.includes('href="/api"'), "API must not be in the site-nav");
-  const order = ["/explore", "/import", "/keys", "/setup"].map((h) => nav.indexOf(`href="${h}"`));
-  assert.deepEqual([...order].sort((a, b) => a - b), order, "nav order must be explore → import → keys → setup");
+  const order = ["/explore", "/keys", "/setup"].map((h) => nav.indexOf(`href="${h}"`));
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "nav order must be explore → keys → setup");
 });
 
 test("API renders in the ml-auto cluster, left of tray + toggle", () => {

@@ -1,6 +1,7 @@
 // web/test/unit/profile-header.test.js — Forgejo #395 (#390 follow-up),
 // reshaped by #403 (grouped action row, header divider), #413 (the
-// New-repository CTA left the header for the Repositories toolbar), and
+// New-repository CTA left the header for the Repositories toolbar), #466
+// (the CTA left the toolbar for the navbar create button), and
 // #421 (GitHub-style two-column grid: main content left, avatar + grouped
 // owner actions in a right sidebar under an <hr>, stacking below on
 // narrow widths): the /:owner user-profile header is a composed identity
@@ -82,20 +83,19 @@ test("avatar renders for the doc; actions stay self-gated with #376 invalidation
   assert.ok(REPOS.includes('invalidate("me")'), "navbar avatar invalidation untouched");
 });
 
-test("action group carries Edit profile only from the header; New repository stays in the toolbar (#413)", () => {
+test("action group carries Edit profile only from the header; creation lives in the navbar (#413, #466)", () => {
   // Forgejo #437: all three views share the main column — scope the identity
   // pins to the profile branch (profile gate → repos gate).
   const profile = block(REPOS, '<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>');
-  assert.ok(!profile.includes("New repository"), "no CTA in the identity region (shared toolbar owns it)");
+  assert.ok(!profile.includes("New repository"), "no CTA in the identity region (the navbar create button owns it)");
   assert.ok(!profile.includes("justify-end"), "no orphan right-aligned row in the identity region");
   const side = block(REPOS, 'aria-label="Profile actions"', "</aside>");
   assert.ok(!side.includes("New repository"), "New repository never joins the sidebar action group");
   assert.ok(side.includes("Edit profile"), "Edit profile grouped in the sidebar");
   assert.ok(side.includes("getProfile()?.can_edit"), "Edit gate unchanged (server can_edit, client never decides)");
   const toolbar = block(REPOS, "repos-toolbar", "</div>");
-  assert.ok(toolbar.includes("New repository"), "New repository renders once, in the Repositories toolbar");
-  assert.ok(toolbar.includes("btn primary"), "CTA keeps primary styling");
-  assert.ok(toolbar.includes("<Show when={canWrite()}>"), "CTA keeps the canWrite gate");
+  assert.ok(toolbar.includes("Repositories</h3>"), "toolbar keeps the section heading");
+  assert.ok(!toolbar.includes("New repository"), "no CTA in the toolbar either (#466: navbar owns creation)");
 });
 
 test("light + dark share the treatment", () => {
@@ -114,7 +114,7 @@ test("org header keeps its fields (#359) with the same sidebar treatment (#421)"
   assert.ok(org.includes("org-badge"), "org badge kept");
   assert.ok(org.includes("{orgName()}"), "org display name kept");
   assert.ok(org.includes("<h2"), "org keeps the h2 title row (only the user header promotes to h1)");
-  assert.ok(!org.includes("New repository"), "org title row no longer carries the CTA (it lives in the shared toolbar)");
+  assert.ok(!org.includes("New repository"), "org title row no longer carries the CTA (creation lives in the navbar)");
   assert.ok(org.includes("renderBody(getOrg().bio_markdown)"), "org bio still reads the org doc, not the owner profile");
   assert.ok(!org.includes("profile-header"), "the composed user grid never renders for orgs");
   assert.ok(!org.includes("Regenerate avatar"), "avatar self-service stays non-org only");

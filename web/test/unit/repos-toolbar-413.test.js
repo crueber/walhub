@@ -1,11 +1,16 @@
 // web/test/unit/repos-toolbar-413.test.js — Forgejo #413: the
 // New-repository CTA moves out of both header spots (the user action row
 // under the bio, the org title row) into a Repositories toolbar — heading
-// row, CTA right-anchored, wrapping at 390px per #273-#278. Layout only:
-// the canWrite gate, the /new?owner= href with encodeURIComponent, Edit
-// profile (server can_edit), Manage organization (canManage), the header
-// divider (#403), and every fetch/cache key stay unchanged. No DOM: JSX
-// pinned as source text, mirroring profile-header.test.js.
+// row, CTA right-anchored, wrapping at 390px per #273-#278.
+//
+// SUPERSEDED by Forgejo #466: the CTA left the toolbar for the navbar
+// create (+) button (components/CreateMenu.jsx, gated on nav().showCreate),
+// so the toolbar row is just the h3 heading — the listing, its heading, and
+// the import footer are unchanged. This file now pins the post-#466 state:
+// heading kept with its type size and spacing, no CTA anywhere on the page,
+// the canWrite gate gone with it, remaining gates/dividers/fetch keys
+// byte-identical. No DOM: JSX pinned as source text, mirroring
+// profile-header.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -27,9 +32,9 @@ function block(src, start, end) {
   return src.slice(s, e);
 }
 
-test("user header action row no longer carries the CTA (#421: identity carries no actions at all)", () => {
+test("user header action row carries no CTA (#421: identity carries no actions at all)", () => {
   const identity = block(REPOS, '<div class="profile-header', "</div>");
-  assert.ok(!identity.includes("New repository"), "CTA left the user header for the toolbar");
+  assert.ok(!identity.includes("New repository"), "no CTA in the user header (creation lives in the navbar now)");
   assert.ok(!identity.includes("/new?owner="), "no create link hides in the header");
   assert.ok(!identity.includes("Edit profile"), "Edit profile left the identity block for the sidebar (#421)");
   const side = block(REPOS, 'aria-label="Profile actions"', "</aside>");
@@ -37,39 +42,28 @@ test("user header action row no longer carries the CTA (#421: identity carries n
   assert.ok(!side.includes("New repository"), "New repository never joins the sidebar action group");
 });
 
-test("org title row no longer carries the CTA", () => {
+test("org title row carries no CTA", () => {
   const org = block(REPOS, "<Show when={isOrg()}>", "<h3");
-  assert.ok(!org.includes("New repository"), "CTA left the org title row");
+  assert.ok(!org.includes("New repository"), "no CTA in the org title row");
   assert.ok(!org.includes("/new?owner="), "no create link hides in the org header");
 });
 
-test("CTA renders once, in the Repositories toolbar, right-anchored", () => {
+test("Repositories toolbar keeps the heading only — the CTA is gone (#466)", () => {
   const toolbar = block(REPOS, "repos-toolbar", "</div>");
   assert.ok(toolbar.includes("<h3"), "heading row owns the section title");
   assert.ok(toolbar.includes("Repositories</h3>"), "heading text unchanged");
   assert.ok(toolbar.includes("text-base font-semibold"), "heading keeps its type size");
-  assert.ok(toolbar.includes("New repository"), "CTA sits with the list it populates");
-  assert.ok(toolbar.includes("btn primary px-3 py-1"), "CTA keeps primary styling");
-  assert.ok(toolbar.indexOf("Repositories</h3>") < toolbar.indexOf("New repository"), "heading first, CTA after (right-anchored)");
+  assert.ok(!toolbar.includes("New repository"), "CTA left the toolbar for the navbar create button");
+  assert.ok(!toolbar.includes("/new?owner="), "no create link hides in the toolbar");
+  assert.ok(!toolbar.includes("canWrite"), "the CTA gate left with the CTA");
   const tags = REPOS.slice(REPOS.indexOf('<div class="repos-toolbar'), REPOS.indexOf(">", REPOS.indexOf('<div class="repos-toolbar')) + 1);
-  assert.ok(tags.includes("flex"), "toolbar is a flex row");
-  assert.ok(tags.includes("items-center"), "heading and CTA share a baseline");
-  assert.ok(tags.includes("justify-between"), "CTA anchors right (the org title-row shape)");
+  assert.ok(tags.includes("flex"), "toolbar keeps its flex row shape");
+  assert.ok(tags.includes("items-center"), "heading keeps its baseline");
   assert.ok(tags.includes("flex-wrap"), "390px wraps instead of overflowing");
   assert.ok(tags.includes("gap-2"), "wrapped rows keep their rhythm");
-});
-
-test("gate and href preserved: canWrite + pre-filled owner", () => {
-  const toolbar = block(REPOS, "repos-toolbar", "</div>");
-  assert.ok(toolbar.includes("<Show when={canWrite()}>"), "CTA still gated on canWrite (never promises what POST /api/v1/repos refuses)");
-  assert.ok(
-    toolbar.includes("href={`/new?owner=${encodeURIComponent(owner())}`}"),
-    "pre-filled owner href preserved with encodeURIComponent"
-  );
-  // Forgejo #422: the Repos.jsx file-header comment names the CTA too —
-  // count the rendered element (the text node closing into </A>), not prose.
-  const ctas = [...REPOS.matchAll(/New repository\s*</g)];
-  assert.equal(ctas.length, 1, "exactly one New-repository CTA on the page");
+  // Forgejo #422: the rendered CTA text node is gone from the whole page —
+  // the file-header comment never named it, so a bare absence scan is exact.
+  assert.ok(!REPOS.includes("New repository"), "no New-repository CTA anywhere on the page");
 });
 
 test("Edit profile / Manage organization gating and behavior unchanged", () => {
@@ -93,7 +87,6 @@ test("no data-fetch, cache-key, or gating-logic changes", () => {
     assert.ok(REPOS.includes(key), `fetch surface untouched: ${key}`);
   }
   for (const gate of [
-    "<Show when={canWrite()}>",
     "<Show when={getProfile()?.can_edit && !getEditing()}>",
     "<Show when={isSelf()}>",
     "<Show when={userSrc()}>",
