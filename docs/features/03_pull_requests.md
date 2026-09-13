@@ -428,7 +428,12 @@ every call goes through the SDK).
   6: hot paths are unchanged when the object is where it says it is),
   and a total miss keeps the degraded/fsck contract. The fork-network
   GC rule (`internal/maintain/forknet.go`, transitive walk, probe cap)
-  is therefore genuinely load-bearing. Known hole, documented not
+  is therefore genuinely load-bearing. The sweep is fail-closed: a
+  deleted child (manifest 404) pins nothing and skips its subtree, but
+  any other doubt — transport error, corrupt manifest/index, or probe-cap
+  exhaustion with unvisited children remaining — aborts the sweep with
+  nothing deleted (deleted packs are unrecoverable; a deferred sweep just
+  retries). Known hole, documented not
   fixed: deleting a fork-network member strands descendants the
   transitive walk can no longer reach (delete-guard is follow-up work).
 

@@ -3,6 +3,7 @@ package maintain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"git.packden.us/crueber/walhub/internal/store"
@@ -49,10 +50,13 @@ type forkIndex struct {
 //
 // Fail-closed where it matters: an unreadable or corrupt parent index
 // aborts the sweep (the caller deletes nothing) — the index is the only
-// map to the network, and guessing wrong deletes a live fork's packs. A
-// single unreadable child (deleted fork → manifest 404, transient store
-// error) skips that subtree only, loudly logged: one gone fork must not
-// stall its siblings' collection, and a deleted fork pins nothing.
+// map to the network, and guessing wrong deletes a live fork's packs. The
+// same rule holds per child: a deleted fork (manifest 404) pins nothing
+// and skips its subtree, but ANY other doubt — a transport error, a
+// corrupt manifest, an unreadable child index, or a probe cap hit with
+// unvisited children remaining — aborts the sweep (the caller deletes
+// nothing; the next pass retries). Deleted packs are unrecoverable while
+// a deferred sweep is merely retried, so doubt always keeps packs.
 func (m *Maintainer) forkNetworkLive(ctx context.Context, rep Repo, live map[string]bool) error {
 	st := m.store()
 	if st == nil {
@@ -88,14 +92,20 @@ func (m *Maintainer) forkNetworkLive(ctx context.Context, rep Repo, live map[str
 		}
 		probes++
 		raw, _, gerr := store.GetBytes(ctx, st, "repos/"+co+"/"+cn+"/manifest.pb", store.GetOptions{})
-		if gerr != nil || raw == nil {
-			m.logf("%s: fork-network child %s unreadable, skipping subtree: %v", rep.ID(), id, gerr)
+		if gerr != nil {
+			if store.IsNotFound(gerr) {
+				m.logf("%s: fork-network child %s deleted, skipping subtree", rep.ID(), id)
+				continue
+			}
+			return fmt.Errorf("fork-network child %s manifest: %w", id, gerr)
+		}
+		if raw == nil {
+			m.logf("%s: fork-network child %s manifest empty, skipping subtree", rep.ID(), id)
 			continue
 		}
 		cm, uerr := proto.UnmarshalManifest(raw)
 		if uerr != nil {
-			m.logf("%s: fork-network child %s manifest corrupt, skipping subtree", rep.ID(), id)
-			continue
+			return fmt.Errorf("fork-network child %s manifest corrupt: %w", id, uerr)
 		}
 		for _, p := range cm.Packs {
 			if p != nil {
@@ -103,19 +113,33 @@ func (m *Maintainer) forkNetworkLive(ctx context.Context, rep Repo, live map[str
 			}
 		}
 		// Grand-children, one level per pass: the child's own index
-		// extends the queue (bounded by the probe cap above).
+		// extends the queue (bounded by the probe cap above). An
+		// unreadable child index aborts the sweep (fail closed — its
+		// grandchildren are unknown); an absent index is a leaf fork.
 		probes++
 		if probes >= maxForkNetworkProbes {
 			break
 		}
 		cindex, cerr := readForkIndex(ctx, st, co, cn)
-		if cerr != nil || cindex == nil {
+		if cerr != nil {
+			return fmt.Errorf("fork-network child %s index: %w", id, cerr)
+		}
+		if cindex == nil {
 			continue
 		}
 		for _, f := range cindex.Forks {
 			if !visited[f.Repo] {
 				queue = append(queue, f.Repo)
 			}
+		}
+	}
+	// Probe-cap exhaustion with unvisited children remaining aborts the
+	// sweep (fail closed): the unvisited subtrees' pack sets are unknown,
+	// so proceeding would delete packs a live fork still references. The
+	// next pass retries; queue rows already visited are harmless.
+	for _, id := range queue {
+		if !visited[id] {
+			return fmt.Errorf("fork network exceeds probe cap %d; deferring sweep", maxForkNetworkProbes)
 		}
 	}
 	return nil
