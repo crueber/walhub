@@ -130,3 +130,117 @@ func TestE2E_ForkDeleteKeepsChildrenWorking(t *testing.T) {
 		t.Fatalf("child main after absorb = %q, want %q", refs["refs/heads/main"], childSHA)
 	}
 }
+
+// forkListed reports whether the parent forks index lists child.
+func forkListed(t *testing.T, url, token, child string) bool {
+	t.Helper()
+	st, data := apiCall(t, "GET", url, "", token)
+	if st != 200 {
+		t.Fatalf("GET forks: status %d, want 200 (body %s)", st, data)
+	}
+	var doc struct {
+		Forks []struct {
+			Repo string `json:"repo"`
+		} `json:"forks"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("forks decode: %v", err)
+	}
+	for _, f := range doc.Forks {
+		if f.Repo == child {
+			return true
+		}
+	}
+	return false
+}
+
+// socialForks returns the parent's social.json forks counter.
+func socialForks(t *testing.T, url, token string) float64 {
+	t.Helper()
+	st, data := apiCall(t, "GET", url, "", token)
+	if st != 200 {
+		t.Fatalf("GET social: status %d, want 200 (body %s)", st, data)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("social decode: %v", err)
+	}
+	n, ok := doc["forks"].(float64)
+	if !ok {
+		t.Fatalf("social forks = %v (%s)", doc["forks"], data)
+	}
+	return n
+}
+
+// TestE2E_ForkChildDeleteSweepsProvenance (Forgejo #457): deleting a fork
+// child unlists it from the parent meta/forks.json and decrements the
+// parent's social forks counter — no ghost row, no drifting count.
+func TestE2E_ForkChildDeleteSweepsProvenance(t *testing.T) {
+	requireModernGit(t)
+	if testing.Short() {
+		t.Skip("e2e tier: skipped in -short mode")
+	}
+	g := newGitClient(t)
+	s := chainServer(t)
+	owner := testOwner
+	repo := uniqueRepo("forkchilddel")
+	forkName := repo + "-fork"
+	child := owner + "/" + forkName
+
+	// ---- 1. seed the parent -------------------------------------------------
+	work := filepath.Join(t.TempDir(), "work")
+	g.initRepo(work)
+	seedSHA := g.commitFile(work, "hello.txt", "hello parent\n", "seed commit")
+	parentURL := s.gitURL(owner, repo)
+	g.run(work, "remote", "add", "origin", parentURL)
+	g.runAuth(work, chainAliceTok, "push", "-u", "origin", "main")
+	if refs := g.lsRemoteAuth(parentURL, chainAliceTok); refs["refs/heads/main"] != seedSHA {
+		t.Fatalf("parent main = %q, want %q", refs["refs/heads/main"], seedSHA)
+	}
+
+	// ---- 2. fork it ----------------------------------------------------------
+	forkRes := mustAPI(t, "POST", s.base+"/api/v1/repos/"+owner+"/"+repo+"/forks",
+		fmt.Sprintf(`{"target_owner":%q,"name":%q,"visibility":"public","branch":"refs/heads/main"}`,
+			owner, forkName), chainAliceTok)
+	if got := jget(t, forkRes, "repo"); got != child {
+		t.Fatalf("fork repo = %v, want %s", got, child)
+	}
+	forkLane := s.base + "/" + owner + "/" + forkName + "/api"
+	pollUntil(t, 60*time.Second, "fork child to become servable", func() bool {
+		st, data := apiCall(t, "GET", forkLane, "", chainAliceTok)
+		if st != 200 {
+			return false
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return false
+		}
+		return doc["fork_parent"] == owner+"/"+repo
+	})
+
+	// ---- 3. parent lists the child, counter at 1 ------------------------------
+	parentLane := s.base + "/" + owner + "/" + repo + "/api"
+	forksURL := s.base + "/api/v1/repos/" + owner + "/" + repo + "/forks"
+	pollUntil(t, 60*time.Second, "parent index to list the child", func() bool {
+		return forkListed(t, forksURL, chainAliceTok, child)
+	})
+	if n := socialForks(t, parentLane+"/social", chainAliceTok); n != 1 {
+		t.Fatalf("parent social forks = %v, want 1", n)
+	}
+
+	// ---- 4. DELETE the child ---------------------------------------------------
+	if st, data := apiCall(t, "DELETE", forkLane, "", chainAliceTok); st != 204 {
+		t.Fatalf("DELETE child: status %d, want 204 (body %s)", st, data)
+	}
+	if st, _ := apiCall(t, "GET", forkLane, "", chainAliceTok); st != 404 {
+		t.Fatalf("GET deleted child summary: status %d, want 404", st)
+	}
+
+	// ---- 5. the row is swept, the counter decremented ---------------------------
+	pollUntil(t, 60*time.Second, "parent index to drop the child", func() bool {
+		return !forkListed(t, forksURL, chainAliceTok, child)
+	})
+	if n := socialForks(t, parentLane+"/social", chainAliceTok); n != 0 {
+		t.Fatalf("parent social forks = %v, want 0", n)
+	}
+}

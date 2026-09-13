@@ -367,3 +367,35 @@ func (s *Service) IncForks(ctx context.Context, owner, repo string) error {
 	})
 	return err
 }
+
+// DecForks CAS-decrements the parent's forks counter (issue #457: called
+// from 03's child-delete sweep via the pulls.ForksCounter seam, only when
+// the sweep actually removed the child's parent-index row). ONLY the forks
+// field moves; everything else passes through. Floored at zero (an Inc
+// shortfall at fork time must never drive the display negative), and an
+// absent social.json is a no-op success — the delete path mints no objects.
+//
+// ### Concurrency
+//
+// Hazard: a concurrent Inc racing this Dec (fork + delete at once).
+// Avoidance: the canonical CAS loop re-reads on 412, so each writer applies
+// its delta to the fresh value — increments are never lost to a racing
+// decrement (law 4 counter discipline, same loop as §4).
+func (s *Service) DecForks(ctx context.Context, owner, repo string) error {
+	_, err := s.casUpdate(ctx, SocialKey(owner, repo), 8, func(cur []byte, ver store.Version) ([]byte, bool, error) {
+		if cur == nil {
+			return nil, false, nil
+		}
+		d, perr := parseSocialInto(cur)
+		if perr != nil {
+			return nil, false, perr
+		}
+		if d.Forks <= 0 {
+			return nil, false, nil
+		}
+		d.Forks--
+		d.UpdatedAt = s.nowUTC().Format(dateTimeFmt)
+		return encodeSocial(&d), true, nil
+	})
+	return err
+}

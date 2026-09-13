@@ -312,6 +312,16 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 	_ = s.savePR(ctx, owner, repo, target, prVer)
 	pr = target
 	s.updateIndex(ctx, owner, repo, prCardOf(th))
+	// Upstream-merge provenance (issue #457 — the fork.json
+	// merged_upstream_at the §2 table always promised): a cross-fork merge
+	// stamps the head repo's fork.json next to the merged event above.
+	// Same-repo merges pay zero trips (gated — no fork.json can exist). A
+	// missing child doc is a narrated no-op (the fork may have been
+	// deleted mid-merge); a store failure never fails the landed merge —
+	// provenance is committed-or-narrated, like the social counter.
+	if pr.Head.Repo != pr.Base.Repo {
+		s.stampUpstreamMerge(ctx, pr.Head.Repo, mergedAt, rec)
+	}
 	texts := append([]string{pr.Body, fullMessage(title, body)}, commitTexts...)
 	var closed []int
 	if s.Closer != nil {
@@ -345,6 +355,48 @@ func firstSubject(rows []CommitEntry) string {
 		return ""
 	}
 	return rows[0].Subject
+}
+
+// stampUpstreamMerge CAS-stamps merged_upstream_at on the fork head's
+// fork.json (issue #457). Best-effort by design: the merge already
+// published, so every failure mode narrates instead of failing — an
+// unparseable head repo, a doc that vanished with its deleted child
+// (nil-cur no-op), a corrupt doc (fail closed, kept not guessed), or a CAS
+// shortfall after retries. Re-stamping the same instant is a no-op (no
+// version churn — the merge outcome is write-once, so a second stamp with
+// the same value can only be a retry).
+//
+// ### Concurrency
+//
+// Hazard: none new — the canonical CAS loop (no lock held, 13 §2 rule 4);
+// a racing fork-retry backfill touches only Root and converges on re-read.
+func (s *Service) stampUpstreamMerge(ctx context.Context, headRepo, mergedAt string, rec *TaskRecord) {
+	co, cn, ok := strings.Cut(headRepo, "/")
+	if !ok || co == "" || cn == "" || strings.Contains(cn, "/") {
+		rec.notice("upstream-merge stamp skipped: bad head repo %q", headRepo)
+		return
+	}
+	_, err := s.casUpdate(ctx, ForkKey(co, cn), 5, func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		if cur == nil {
+			return nil, false, nil
+		}
+		var doc ForkDoc
+		if jerr := json.Unmarshal(cur, &doc); jerr != nil {
+			return nil, false, jerr
+		}
+		if doc.MergedUpstreamAt != nil && *doc.MergedUpstreamAt == mergedAt {
+			return nil, false, nil
+		}
+		doc.MergedUpstreamAt = &mergedAt
+		doc.Version++
+		out, _ := json.Marshal(&doc)
+		return out, true, nil
+	})
+	if err != nil {
+		rec.notice("upstream-merge stamp shortfall: %s", err)
+	} else {
+		rec.notice("stamped %s merged_upstream_at", ForkKey(co, cn))
+	}
 }
 
 // shortSHA renders the first 12 hex chars (narration only, never storage).

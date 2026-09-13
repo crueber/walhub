@@ -228,7 +228,9 @@ and there is deliberately NO reverse index (enumerating people is not a feature 
 step MUST CAS-increment the parent's `social.json.forks` (same loop as §4). 07 owns the field's shape
 and nothing else about forks. A repo cannot fork-count itself; the field starts at 0 when
 `social.json` is first created (lazily, on first mutation — a repo with no social object reports all
-counts as 0).
+counts as 0). Deleting a fork child CAS-decrements the parent's counter through the same seam
+(issue #457: `DecForks`, floored at zero, absent object stays absent — the decrement fires only
+when 03's sweep actually removed the child's parent-index row, so the count tracks the listed rows).
 
 ## 7. API endpoints
 

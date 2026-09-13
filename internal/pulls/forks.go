@@ -2,10 +2,12 @@ package pulls
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"git.packden.us/crueber/walhub/internal/server/auth"
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 // This file owns the fork list surface (§8 amendment, issue #424): the
@@ -86,4 +88,55 @@ func (s *Service) ListForks(ctx context.Context, owner, repo string, actor auth.
 		page.More = true
 	}
 	return page, nil
+}
+
+// UnlistFork CAS-removes child ("owner/name") from the parent-side fork
+// index (issue #457: the child-delete sweep — the caller invokes this only
+// AFTER the child's manifest delete linearized, so a GC pass either sees
+// the row and probes a 404 it already skips, or never sees the row at
+// all). Idempotent: an absent index or an absent row returns (false, nil)
+// with no write and no version bump (ETag-stable — a delete that was never
+// a fork moves nothing). Returns true only when a row was actually
+// removed; the caller decrements the social counter exactly then, so the
+// counter cannot drift below the listed rows. A corrupt index errors (fail
+// closed — the caller keeps the ghost row rather than guessing).
+//
+// ### Concurrency
+//
+// Hazard: a concurrent fork racing this unlist (CAS contention on the
+// index). Avoidance: the canonical CAS loop — the 412 loser re-reads and
+// converges (law 4 index-row discipline: Version++ only on an actual row
+// removal). No lock is held (13 §2 rule 4 — pure store round trips).
+func (s *Service) UnlistFork(ctx context.Context, owner, repo, child string) (bool, error) {
+	removed := false
+	_, err := s.casUpdate(ctx, ForksKey(owner, repo), 10, func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		if cur == nil {
+			return nil, false, nil
+		}
+		fx, perr := parseForks(cur)
+		if perr != nil {
+			return nil, false, perr
+		}
+		kept := make([]ForkEntry, 0, len(fx.Forks))
+		found := false
+		for _, f := range fx.Forks {
+			if f.Repo == child {
+				found = true
+				continue
+			}
+			kept = append(kept, f)
+		}
+		if !found {
+			return nil, false, nil
+		}
+		fx.Forks = kept
+		fx.Version++
+		out, _ := json.Marshal(fx)
+		removed = true
+		return out, true, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return removed, nil
 }
