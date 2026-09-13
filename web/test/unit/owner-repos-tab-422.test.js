@@ -80,15 +80,22 @@ test("tab strip reuses the repo page's tab bar anatomy", () => {
   assert.ok(strip.includes("tab-badge"), "repositories tab carries the count badge hook");
 });
 
-test("strip renders on both routes and both variants (outside every isOrg Show)", () => {
+test("strip leads the page on all three routes and both variants (first in flow, outside every Show)", () => {
   const use = REPOS.indexOf("<OwnerTabs owner={owner()} count={repoCount()} isOrg={isOrg()} />");
   assert.ok(use !== -1, "the page renders the strip with owner + shared-payload count + org gating (#430)");
-  const orgOpen = REPOS.indexOf("<Show when={isOrg()}>");
-  const between = REPOS.slice(orgOpen, use);
+  // Forgejo #435: the strip moved above the identity layout — it renders
+  // before the profile grid and outside every Show, so no view or variant
+  // gate can hide it on any route.
+  const page = REPOS.indexOf('<div class="repos-page">');
+  assert.ok(page !== -1 && page < use, "the strip renders inside the owner page");
+  const between = REPOS.slice(page, use);
   const opens = (between.match(/<Show/g) || []).length;
   const closes = (between.match(/<\/Show>/g) || []).length;
-  assert.ok(opens === closes, "every Show opened since the org block is closed before the strip (strip is outside)");
-  assert.ok(!between.includes("view()"), "no view gate hides the strip on either route");
+  assert.ok(opens === closes, "every Show opened since the page root is closed before the strip (strip is outside)");
+  assert.ok(!between.includes("view()"), "no view gate hides the strip on any route");
+  assert.ok(!between.includes("isOrg()"), "no variant gate hides the strip on either variant");
+  const layout = REPOS.indexOf('<div class="profile-layout');
+  assert.ok(layout !== -1 && use < layout, "the strip renders before the identity layout (first in page flow)");
 });
 
 test("profile view: teaser with count + link, no grid/toolbar/import", () => {

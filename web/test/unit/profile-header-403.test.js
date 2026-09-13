@@ -121,7 +121,10 @@ test("zero fetch/cache/server changes", () => {
 
 test("org branch keeps its header minus the title-row CTA (#359, #413) plus the sidebar (#421)", () => {
   const main = block(REPOS, '<div class="profile-main', "profile-sidebar");
-  const org = main.slice(main.indexOf("<Show when={isOrg()}>"), main.indexOf("repos-toolbar"));
+  // Forgejo #435: the toolbar left the main column for the repositories
+  // view — scope the org slice to the identity region (through the teaser
+  // gate), not the toolbar.
+  const org = main.slice(main.indexOf("<Show when={isOrg()}>"), main.indexOf('<Show when={view() === "profile"}>'));
   assert.ok(!org.includes("<OrgAvatar"), "org avatar left the title row for the sidebar");
   assert.ok(!org.includes("New repository"), "org title row no longer carries the CTA (shared toolbar owns it)");
   assert.ok(!org.includes("Manage organization"), "Manage lives in the sidebar, not the main column");
