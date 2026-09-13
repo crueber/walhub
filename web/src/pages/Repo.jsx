@@ -620,7 +620,8 @@ export default function Repo(props) {
                 <>
                   {/* Forgejo #447: the header action strip speaks ONE idiom —
                       the Star/Watch btn shape (btn px-2 py-1 text-sm) as
-                      canonical. Fork stays an <A> link and Clone's <summary>
+                      canonical. Fork stays links (<A>, split count/label
+                      destinations since #464) and Clone's <summary>
                       its popover trigger, both styled to the same metrics;
                       every count sits LEFT of its label ({n} Star, {n} Watch,
                       {n} Fork; Clone is label-only). The Fork count always
@@ -630,8 +631,9 @@ export default function Repo(props) {
                       tab-badge circle would add a second count idiom where
                       the header needs one). Counts ride data already in hand
                       (toggles' social/watch payloads, summary.forks) — no new
-                      requests. Toggle behavior, Fork navigation, and the Clone
-                      popover are untouched.
+                      requests. Toggle behavior and the Clone
+                      popover are untouched; Fork navigation is split
+                      per #464 below.
                       Forgejo #463 extends the idiom to SPACING: the row's
                       gap-2 owns every gap — no child adds, removes, or doubles
                       spacing. TasksOverlay renders nothing when idle (its
