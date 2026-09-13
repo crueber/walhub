@@ -409,6 +409,7 @@ UI surfaces (full SPA patterns in 08/12_web_ui; these are the notification-speci
 | Webhooks settings | `/{o}/{r}/settings/webhooks` (admin only) | CRUD table + `ping` button + recent deliveries expander; secret shown once at creation |
 | Org activity | `/:org/settings` → Activity (owner only) | newest-first org-event table (member/team/repo/invite) with an "older" cursor; live rows prepend over the `org_activity` stream (one connection per mount, capped reconnect) |
 | Mention autocomplete | comment composer | suggests `@principal` from F1 user search and `@org/team` from F1 teams; purely advisory — the server re-parses |
+| Rendered mention links | every thread body (issue/PR/review via `renderBody`) | `@username` and legacy `@email` tokens link to `/{principal}` at render time (client-side `linkifyMentions` in `web/src/lib/render-md.js`, beside the #340 ref pass): same left-boundary + trailing-punct rules as §3, code spans/fences/links skipped, `@org/team` NOT linked (team URLs live under settings/teams, out of scope); ALL grammar-valid tokens link with no existence probe (dead links acceptable, GitHub behavior — decision (a)), href lowercased, display as typed; plain relative anchors, zero sanitizer changes |
 
 SDK additions (`web/sdk/src/notifications.js`, bundled by esbuild into `repos.js` per 12 §1.0):
 
@@ -747,6 +748,18 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   No new dependencies; API + SDK only (no org-settings hooks tab — deferred). Rationale:
   owners should not register N per-repo hooks to watch membership; the per-scope cursor keeps
   the §5.3 at-least-once contract without a second delivery implementation.
+
+- **Rendered mention profile links (Forgejo #440, 2026-09-13):** `linkifyMentions` in
+  `web/src/lib/render-md.js` autolinks `@username` + legacy `@email` tokens to `/{principal}`
+  (§7 row) beside the #340 ref pass — same left-boundary + trailing-punct rules as §3, code
+  spans/fences/links skipped (marked-autolinked `@email` arrives as `@` + mailto anchor and is
+  folded; bare addresses keep mailto, never a mention). `@org/team` NOT linked (team URLs live
+  under settings/teams, out of scope); ALL grammar-valid tokens link with no existence probe
+  (decision (a) — dead links acceptable, GitHub behavior; the server still drops unresolvable
+  mentions from fan-out silently). Renderer-only: no server change, no sanitizer change, no new
+  dependencies; every `renderBody` consumer (issue/PR/review threads) inherits it. Rationale:
+  the notification half already lands mentioned/team_mention with tray deep links — the thread
+  body must link the handle it notifies about, deterministically and headless-testable.
 
 ## Explicitly out of scope
 

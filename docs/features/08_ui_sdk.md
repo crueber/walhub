@@ -57,7 +57,7 @@ the repo header (07, optimistic update + rollback), "New issue"/"New pull reques
 
 | Component | Purpose | Contract |
 |---|---|---|
-| `ThreadTimeline` | Renders a P3 event log (issue thread, PR conversation, review thread) oldest → newest (chronological, issue #225 — callers pass the newest-first wire order through; the stable by-seq sort happens here, once). Comment kinds (opened/commented, i.e. `textFor` → null) render as divider-separated entries — author/date header, markdown body, reaction rows — with NO per-comment boxes; every other kind renders as a single-line centered muted system row ("{actor} {text}") | Input: header + seq window of events (`{after_seq, n}`); compensating events render as normal rows (never rewrite history); comment bodies via markdown-lite + sanitizer; `aria-live="polite"` region so SSE-appended rows announce; dedup key `(num, event_seq)`; rows carry `event-{seq}` DOM ids |
+| `ThreadTimeline` | Renders a P3 event log (issue thread, PR conversation, review thread) oldest → newest (chronological, issue #225 — callers pass the newest-first wire order through; the stable by-seq sort happens here, once). Comment kinds (opened/commented, i.e. `textFor` → null) render as divider-separated entries — author/date header, markdown body, reaction rows — with NO per-comment boxes; every other kind renders as a single-line centered muted system row ("{actor} {text}") | Input: header + seq window of events (`{after_seq, n}`); compensating events render as normal rows (never rewrite history); comment bodies via the render-md pipeline (marked GFM + `#N`/`PRN` ref autolinks + `@mention` profile autolinks per 06 §7 + allowlist sanitizer); `aria-live="polite"` region so SSE-appended rows announce; dedup key `(num, event_seq)`; rows carry `event-{seq}` DOM ids |
 | `CommentComposer` | New-comment editor | markdown-lite preview (`lib/markdown.js` + `lib/sanitize.js`); **mentions autocomplete**: `@` opens a popup fed by `useData("assignables:{o}/{r}")` (repo collaborators ∪ org members, endpoint per 01); submits via the feature's comment endpoint → `{event_seq}`; optional close controls (`closeLabel`+`onClose`, `onCommentAndClose`+`commentAndCloseLabel`) share one right-aligned action row — the issue thread uses them for Close/Reopen + Comment-and-Close, the PR page omits them. On an open issue the close controls are SPLIT buttons (`closeChooser`, issue #311): primary segment closes immediately as completed (one click, `CLOSE_COMPLETED` sent explicitly), ▾ segment opens an upward menu with the not-planned alternate only; choice passed as `onClose(reason)` / `onCommentAndClose(body, reason)`; any outside click dismisses the menu (document listener, RefPicker pattern); reopen stays a plain button |
 | `LabelPicker` | Apply/remove labels on an issue/PR | Source: `labels:{o}/{r}` cache; each toggle = one PATCH (one event per 02); triage+ only |
 | `AssigneePicker` | Same, for assignees | Source: `assignables:{o}/{r}`; triage+ only |
@@ -454,6 +454,11 @@ the existing CSS files. This is the floor, not the ceiling — no ARIA beyond wh
   Immutable `events:` windows never SSE-refetch (timelines append frames directly). Headless
   cover: `web/test/unit/fetch-rate-guard.test.js` (burst budgets, post-TTL liveness,
   mutation-eager pin).
+
+- **Rendered mention profile links (Forgejo #440, 2026-09-13).** The ThreadTimeline
+  renderer's "comment bodies" contract now names the full render-md pipeline (ref + mention
+  autolinks, 06 §7): `@username`/`@email` → `/{principal}`, `@org/team` unlinked, dead links
+  acceptable (decision (a)). Renderer-only, every `renderBody` consumer inherits it; no new deps.
 
 ## Explicitly out of scope
 
