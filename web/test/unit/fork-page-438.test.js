@@ -94,9 +94,10 @@ test("repo header Fork and Clone are a text-only matched pair on the canonical b
   // the same size/weight with no icon glyph — one action strip, not two
   // families. The count still reads summary.forks (no extra fetch); the
   // count-left-of-label shape itself is pinned in header-pills-447.test.js.
-  const pill = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</A>");
-  assert.ok(pill.includes('class="btn px-2 py-1 text-sm"'), "Fork keeps the canonical btn metrics (was pill pre-#447)");
-  assert.ok(pill.includes('href={`/${full()}/fork`}'), "Fork pill still links to the fork page");
+  const pill = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  assert.ok(pill.includes('<span class="btn px-2 py-1 text-sm'), "Fork keeps the canonical btn metrics on one pill shell (was pill pre-#447, split links since #464)");
+  assert.ok(pill.includes('href={`/${full()}/fork`}'), "Fork label still links to the fork page");
+  assert.ok(pill.includes('href={`/${full()}/forks`}'), "Fork count links to the fork-network page (#464 split)");
   assert.ok(pill.includes("summary.forks") || pill.includes("s().forks"), "Fork count still reads summary.forks (no extra fetch)");
   assert.ok(!pill.includes("⑂"), "Fork pill carries no icon glyph");
   const cloneSummary = block(REPO, "<summary class=\"btn", "</summary>");

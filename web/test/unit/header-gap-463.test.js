@@ -99,9 +99,10 @@ test("sibling audit: no other empty flex items in the row", () => {
     const ret = body.slice(body.indexOf("return ("));
     assert.ok(!ret.includes("<div"), `${name} renders no wrapper div (button straight out of <Show>)`);
   }
-  // Fork is a bare <A> (a real pill); Clone's <details> IS the pill.
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</A>");
-  assert.ok(fork.includes("<A"), "Fork is a bare link pill — no wrapper");
+  // Fork is a single <span> pill shell with two inner links (#464 split
+  // navigation) — still one flex item, no wrapper div around it.
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  assert.ok(fork.includes('<span class="btn px-2 py-1 text-sm'), "Fork is one pill shell — the flex item is the pill itself");
   const menu = block(REPO, "function CloneMenu(props)", "--- tabs ---");
   const menuRet = menu.slice(menu.indexOf("return ("));
   assert.ok(menuRet.includes('<details ref={root} class="clone-menu relative"'),

@@ -603,13 +603,9 @@ export default function Repo(props) {
                     <RefPicker full={full()} repo={repoClient} head={() => pillHead(getViewed(), s().head)} />
                   </Show>
                   <span class="muted">{s().branches ?? 0} branches · {s().tags ?? 0} tags</span>
-                  {/* Issue #424: the fork-network rail — the live count
-                      links to the queryable fork list. */}
-                  <Show when={(s().forks ?? 0) > 0}>
-                    <A class="hover:underline" href={`/${full()}/forks`}>
-                      {s().forks} {s().forks === 1 ? "fork" : "forks"}
-                    </A>
-                  </Show>
+                  {/* Forgejo #464: the #424 fork-network rail lived here — it
+                      now lives on the header Fork pill count, so the metadata
+                      line keeps branches · tags only. */}
                 </div>
               </div>
             )}
@@ -643,12 +639,31 @@ export default function Repo(props) {
                       anchoring the tasks-drop popover when tasks run), so the
                       row holds only real pills. Audited siblings: Star/Watch
                       return their <button> straight out of <Show> (no
-                      wrapper), Fork is a bare <A>, Clone's <details> IS the
+                      wrapper), Fork is a single <span> pill shell (not a
+                      link itself), Clone's <details> IS the
                       pill — no other empty flex items in this row. Clone
-                      details-metrics unchanged. */}
-                  <A class="btn px-2 py-1 text-sm" href={`/${full()}/fork`} title={`Fork ${full()}`}>
-                    {s().forks ?? 0} Fork
-                  </A>
+                      details-metrics unchanged.
+                      Forgejo #464 splits the Fork pill navigation WITHOUT
+                      splitting its look: the pill shell keeps the canonical
+                      btn px-2 py-1 text-sm metrics (ONE pill visually —
+                      single container, count left of label, one
+                      whitespace-nowrap row), while the count links to the
+                      fork-network page (/{full}/forks, the #424 route) and
+                      the "Fork" label keeps the create navigation
+                      (/{full()}/fork). Sibling links, not a nested anchor
+                      (anchors cannot nest). The count still always renders —
+                      including 0, like Star/Watch — so at zero forks the
+                      count still lands on the (empty) network page. Counts
+                      still ride summary.forks — no new requests. */}
+                  <span class="btn px-2 py-1 text-sm whitespace-nowrap" title={`Fork ${full()}`}>
+                    <A class="hover:underline" href={`/${full()}/forks`} title={`View forks of ${full()}`}>
+                      {s().forks ?? 0}
+                    </A>
+                    {" "}
+                    <A class="hover:underline" href={`/${full()}/fork`}>
+                      Fork
+                    </A>
+                  </span>
                   <CloneMenu full={full()} summary={s()} />
                 </>
               )}

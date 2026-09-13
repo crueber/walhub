@@ -33,27 +33,32 @@ function block(src, start, end) {
 test("all four controls share the canonical btn px-2 py-1 text-sm metrics", () => {
   const star = block(REPO, "function StarToggle(props)", "function TasksOverlay");
   const watch = block(REPO, "function WatchToggle(props)", "function RefPicker");
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</A>");
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
   const clone = block(REPO, "<summary class=\"btn", "</summary>");
   for (const [name, b] of [["StarToggle", star], ["WatchToggle", watch], ["Fork link", fork], ["Clone summary", clone]]) {
     for (const cls of ["btn", "px-2", "py-1", "text-sm"]) {
       assert.ok(b.includes(cls), `${name} carries ${cls} (the canonical Star/Watch metrics)`);
     }
   }
-  // Fork stays a link and Clone stays a popover trigger — same metrics,
+  // Fork is a single pill shell with two inner links (#464 split
+  // navigation) and Clone stays a popover trigger — same metrics,
   // unchanged element roles.
-  assert.ok(fork.includes("<A"), "Fork stays an <A> link styled to the button metrics");
+  assert.ok(fork.includes('<span class="btn px-2 py-1 text-sm'), "Fork stays one pill shell styled to the button metrics");
+  assert.ok(fork.includes("<A"), "Fork destinations stay <A> links inside the shell");
   assert.ok(clone.startsWith("<summary"), "Clone stays a <summary> trigger in the canonical shape");
 });
 
 test("every count renders left of its label; Clone is label-only", () => {
   const star = block(REPO, "function StarToggle(props)", "function TasksOverlay");
   const watch = block(REPO, "function WatchToggle(props)", "function RefPicker");
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</A>");
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
   const clone = block(REPO, "<summary class=\"btn", "</summary>");
   assert.ok(star.includes("★ {s().stars ?? 0} Star"), "Star reads {n} Star (glyph kept, count left of label)");
   assert.ok(watch.includes("👁 {w().watchers ?? 0} Watch"), "Watch reads {n} Watch (glyph kept, count left of label)");
-  assert.ok(fork.includes("{s().forks ?? 0} Fork"), "Fork reads {n} Fork (count left of label, summary source)");
+  assert.ok(fork.includes("{s().forks ?? 0}"), "Fork count reads the summary source (renders at 0, #464)");
+  const countAt = fork.indexOf("{s().forks ?? 0}");
+  const labelAt = fork.indexOf("Fork\n                    </A>");
+  assert.ok(countAt !== -1 && labelAt !== -1 && countAt < labelAt, "Fork reads {n} Fork (count left of label, split across the two #464 links)");
   assert.ok(!fork.includes("Fork{"), "Fork never renders label-then-count");
   assert.ok(clone.endsWith(">Clone"), "Clone renders the bare label, no count");
   assert.ok(!clone.includes("{") && !clone.includes("}"), "Clone summary carries no count interpolation");
@@ -62,9 +67,9 @@ test("every count renders left of its label; Clone is label-only", () => {
 test("Fork shows its count at zero, like Star/Watch show 0", () => {
   // Implementer's call per the issue: always render {n} Fork (including 0)
   // so the group reads consistently. The hidden-at-zero direction (#446) is
-  // absorbed, not adopted; the fork-network rail below the title still links
-  // the > 0 count to the fork list, so > 0 discovery is preserved there.
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</A>");
+  // absorbed, not adopted; the pill count itself links to the fork list
+  // (#464), so > 0 discovery is preserved without a second count idiom.
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
   assert.ok(!fork.includes("> 0 ?"), "Fork keeps no hidden-at-zero conditional");
   assert.ok(fork.includes("s().forks ?? 0"), "Fork falls back to 0 exactly like the toggles");
 });
@@ -97,8 +102,10 @@ test("toggle behavior untouched: optimistic flip + reconcile on error", () => {
 });
 
 test("Fork navigation + Clone popover untouched", () => {
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</A>");
-  assert.ok(fork.includes('href={`/${full()}/fork`}'), "Fork still navigates to the fork composer");
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  assert.ok(fork.includes('href={`/${full()}/fork`}'), "Fork label still navigates to the fork composer");
+  assert.ok(fork.includes('href={`/${full()}/forks`}'), "Fork count navigates to the fork-network page (#464 split)");
+  assert.ok(fork.indexOf("/forks`}") < fork.indexOf("/fork`}"), "count link (network) sits left of the label link (composer)");
   assert.ok(fork.includes("title={`Fork ${full()}`}"), "Fork keeps its tooltip title");
   const menu = block(REPO, "function CloneMenu(props)", "--- tabs ---");
   assert.ok(menu.includes('<details ref={root} class="clone-menu relative"'), "Clone stays a native <details> popover");
