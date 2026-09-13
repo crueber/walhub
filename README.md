@@ -71,9 +71,9 @@ For an **S3-backed store** (rustfs/MinIO/GCS), see [`compose.yaml`](compose.yaml
 ## v1 release requirements
 
 - [x] [git storage](internal/store)
-- [ ] [issues](internal/issues)
+- [x] [issues](internal/issues)
 - [ ] [pull requests](internal/pulls)
-- [ ] [tags](internal/tags)
+- [x] [tags](internal/tags)
 - [ ] [releases](internal/releases)
 - [ ] packages
 - [ ] [actions](https://git.packden.us/crueber/walhub/issues/288)
