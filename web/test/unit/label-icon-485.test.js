@@ -45,7 +45,7 @@ test("label exists in the ICONS map, path transcribed verbatim", () => {
   assert.ok(ICONS.includes("label:"), "label is registered");
   assert.ok(ICONS.includes(`d="${LABEL_D}"`), "d path transcribed verbatim from label.svg");
   const entry = ICONS.slice(ICONS.indexOf("label:"));
-  assert.ok(entry.includes('viewBox: "0 0 24 24"'), "label keeps its shipped 24-unit box");
+  assert.ok(entry.includes('viewBox="0 0 24 24"'), "label keeps its shipped 24-unit box");
   assert.ok(entry.includes('fill="none"'), "label keeps its unfilled body");
   assert.ok(entry.includes('stroke="currentColor"'), "label paints via currentColor stroke");
   assert.ok(entry.includes('stroke-linecap="round"') && entry.includes('stroke-linejoin="round"'), "label keeps its round caps/joins");
@@ -55,9 +55,9 @@ test("label exists in the ICONS map, path transcribed verbatim", () => {
   assert.ok(!code.includes("rgb("), "no rgb() literal in the entry");
 });
 
-test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", () => {
-  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 15, "fifteen icon entries, no more");
-  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 1, "a single shared <svg> renders every icon");
+test("map holds fifteen complete per-entry svgs (#491), no fetch/innerHTML", () => {
+  assert.equal((ICONS.match(/viewBox="0 0 /g) ?? []).length, 15, "fifteen icon entries, no more");
+  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 15, "one complete <svg> per entry — no shared shape for rows to fight over (#491)");
   const code = codeOf(ICONS);
   assert.ok(code.includes("currentColor"), "icons inherit text color via currentColor");
   assert.ok(!code.match(/#[0-9a-fA-F]{3,8}\b/), "no hex color literal in the icon layer");
@@ -69,8 +69,8 @@ test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", (
 test("icons.jsx header comment reflects the new entry and consumers", () => {
   assert.ok(ICONS.includes("all twelve surfaces"), "consumer count updated to twelve");
   assert.ok(ICONS.includes("pages/Labels.jsx"), "the labels-page consumer is named");
-  assert.ok(ICONS.includes("The 15 icon bodies"), "body count updated to fifteen");
-  assert.ok(ICONS.includes("label") && ICONS.includes("#485"), "the new body is attributed to #485");
+  assert.ok(ICONS.includes("The 15 icons"), "entry count updated to fifteen");
+  assert.ok(ICONS.includes("label") && ICONS.includes("#485"), "the new entry is attributed to #485");
   assert.ok(ICONS.includes("fifteen icon names"), "ICON_NAMES comment updated to fifteen");
 });
 
@@ -118,7 +118,7 @@ test("#319 badge + #274 scroll intact around the strip icon", () => {
 });
 
 test("decorative contract: icons add no accessible names, add no per-icon classes", () => {
-  assert.ok(ICONS.includes('aria-hidden="true"'), "the shared svg carries aria-hidden");
+  assert.ok(ICONS.includes('aria-hidden="true"'), "every svg carries aria-hidden");
   for (const [file, src] of [["Issues.jsx", ISSUES], ["Labels.jsx", LABELS], ["Repo.jsx", REPO]]) {
     assert.ok(!src.includes("<svg"), `${file} hand-rolls no <svg>`);
     for (const m of src.matchAll(/<Icon[^>]*>/g)) {

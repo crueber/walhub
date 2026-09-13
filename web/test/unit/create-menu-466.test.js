@@ -138,14 +138,14 @@ test("CreateMenu: panel bounded on phone widths", () => {
 
 test("plus icon: registered through the shared mechanism, currentColor only", () => {
   assert.ok(ICONS.includes("plus:"), "plus registered in the icon map");
-  assert.ok(ICONS.includes('viewBox: "0 0 16 16"'), "plus on the 16-unit grid");
+  assert.ok(ICONS.includes('viewBox="0 0 16 16"'), "plus on the 16-unit grid");
   // Bound the slice at the plus entry's own close (not a fixed width, not
   // the next entry) so neighboring comments and later entries — e.g. the
-  // #481 attribution and issue-comment body — never leak into the scan.
+  // #481 attribution and issue-comment entry — never leak into the scan.
   const start = ICONS.indexOf("plus:");
-  const entry = ICONS.slice(start, ICONS.indexOf("},", start));
+  const entry = ICONS.slice(start, ICONS.indexOf("),", start));
   assert.ok(entry.includes("currentColor"), "plus paints via currentColor");
-  assert.ok(!entry.match(/#[0-9a-fA-F]{3,8}\b/), "no hex literal in the plus body");
+  assert.ok(!entry.match(/#[0-9a-fA-F]{3,8}\b/), "no hex literal in the plus entry");
 });
 
 // --- removals ---------------------------------------------------------------------

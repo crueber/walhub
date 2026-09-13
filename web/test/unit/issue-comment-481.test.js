@@ -45,7 +45,7 @@ function walk(dir, out = []) {
 test("issue-comment exists in the ICONS map, path transcribed verbatim", () => {
   assert.ok(ICONS.includes('"issue-comment"'), "issue-comment is registered");
   assert.ok(ICONS.includes(`d="${PROVIDED_D}"`), "d path transcribed verbatim from the provided SVG");
-  assert.ok(ICONS.includes('viewBox: "0 0 16 16"'), "shipped viewBox 0 0 16 16 preserved");
+  assert.ok(ICONS.includes('viewBox="0 0 16 16"'), "shipped viewBox 0 0 16 16 preserved");
   const entry = ICONS.slice(ICONS.indexOf('"issue-comment"'));
   assert.ok(entry.includes('fill="currentColor"'), "paints via currentColor");
   const code = codeOf(entry);
@@ -53,9 +53,9 @@ test("issue-comment exists in the ICONS map, path transcribed verbatim", () => {
   assert.ok(!code.includes("rgb("), "no rgb() literal in the entry");
 });
 
-test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", () => {
-  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 15, "fifteen icon entries, no more");
-  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 1, "a single shared <svg> renders every icon");
+test("map holds fifteen complete per-entry svgs (#491), no fetch/innerHTML", () => {
+  assert.equal((ICONS.match(/viewBox="0 0 /g) ?? []).length, 15, "fifteen icon entries, no more");
+  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 15, "one complete <svg> per entry — no shared shape for rows to fight over (#491)");
   const code = codeOf(ICONS);
   assert.ok(!code.includes("fetch("), "no runtime fetches — icons ship inside the bundle");
   assert.ok(!code.includes("?raw"), "no vite raw imports — the body is inline JSX");
@@ -65,8 +65,8 @@ test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", (
 test("icons.jsx header comment reflects the new entry and consumer", () => {
   assert.ok(ICONS.includes("all twelve surfaces"), "consumer count updated to twelve");
   assert.ok(ICONS.includes("pages/Issues.jsx"), "the issue-list consumer is named");
-  assert.ok(ICONS.includes("The 15 icon bodies"), "body count updated to fifteen");
-  assert.ok(ICONS.includes("issue-comment") && ICONS.includes("#481"), "the twelfth body is attributed to #481");
+  assert.ok(ICONS.includes("The 15 icons"), "entry count updated to fifteen");
+  assert.ok(ICONS.includes("issue-comment") && ICONS.includes("#481"), "the twelfth entry is attributed to #481");
   assert.ok(ICONS.includes("fifteen icon names"), "ICON_NAMES comment updated to fifteen");
 });
 
