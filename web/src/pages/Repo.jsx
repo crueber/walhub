@@ -546,7 +546,11 @@ export default function Repo(props) {
               <div class="repo-title">
                 <div class="flex flex-wrap items-baseline gap-x-3">
                   <h1 class="text-xl font-semibold">
-                    <A class="hover:underline" href={`/${params.owner}`}>{params.owner}</A>
+                    {/* Forgejo #445: the owner segment links to the owner's
+                        repositories list (/:owner/repositories), not the
+                        profile — the OwnerTabs derivation lands the viewer
+                        on the Repositories tab with correct active state. */}
+                    <A class="hover:underline" href={`/${params.owner}/repositories`}>{params.owner}</A>
                     {" / "}
                     <A class="hover:underline" href={`/${full()}`}>{params.name}</A>
                   </h1>
