@@ -80,6 +80,8 @@ type RepoHandle struct {
 
 `delete(id)`: drop the handle from the map (new opens fail immediately), then **delete the manifest first** — that is the linearization point — then page through all keys under `repos/<owner>/<repo>/` deleting (LIST is slow and paged; delete pages sequentially, it is not a hot path), then `os.RemoveAll` the local dir.
 
+Fork-deletion safety (Forgejo #451): when live fork children still reference the repo's packs, the delete CONVERTS the prefix to a storage-only meta repository instead of wiping it. The fork-index probe runs before the linearization point (absent/empty index, or an index whose children are all gone, takes the plain full wipe above — byte-identical; a corrupt index or probe error aborts with the prefix untouched). The conversion writes `meta/tombstone.json` first (history marker), deletes the manifest (same linearization point), then sweeps every servable key while preserving `wal/`, `meta/forks.json`, `fork.json`, and the tombstone. The parent id never changes, so children's `fork.json` pointers stay correct with no child write; the manifest gate keeps the meta prefix out of listings, and re-create absorbs the prefix (a fresh manifest lands on the absent key with no probe on any create path, so the push fast-path budget stays clean — the absorbed repo serves fresh while old children keep reading; the stale tombstone waits for the next childless delete).
+
 ### 5.1.3 The rw lock and the TRY-WRITE-ONLY rule
 
 The Rust spec's `rw` lock protects the on-disk pack set against readers: readers take a read guard for the whole duration of object access (a clone's guard can live for a whole stream), and pack removal takes a write guard. The Rust spec has a hard invariant: **never take this lock as a blocking write — only try-write.** Reason (from the spec, keep the war story): a queued writer blocks ALL new readers; one 24-minute clone once starved every `info/refs` for minutes.
@@ -533,3 +535,23 @@ Background prefetch (from §6.2): after a refs-only sync, if `wal.prefetch_packs
   `TestPublish_WipedVersionTokenHealsOnFreshen` pins it (fails
   deterministically without the adopt). No wire or budget shape changed
   (same GETs, one conditional assignment).
+
+- **NEW (2026-09-13) — fork-deletion safety: parent→meta conversion (Forgejo #451).**
+  `Registry.Delete` probes the parent-side fork index BEFORE the manifest-delete
+  linearization point: ≥1 live child (child manifest still present) converts the
+  prefix to a storage-only meta repository (tombstone → manifest delete → selective
+  sweep preserving `wal/`, `meta/forks.json`, `fork.json`, the tombstone) instead of
+  wiping it. Rationale: fork children reference the parent's pack checksums verbatim
+  under the parent prefix, so a full wipe orphans every child at once — and the
+  preserved index keeps the maintain fork-network walk working with zero walk
+  changes (the walk never probes the parent manifest). Deliberate choices: the parent
+  id never changes (children's `fork.json` pointers stay textually correct — no child
+  write, verified not rewritten); the parent's own `fork.json` is preserved (chain
+  resolution in `forkread.go` works untouched); re-create of the name absorbs the
+  prefix (planner's call: refusal would need a tombstone probe on the create path,
+  which the push fast-path budget forbids — and one key cannot serve Open=NotFound
+  and Create=412 at once; the absorbed repo serves fresh while old children keep
+  reading, and the stale tombstone waits for the next childless delete);
+  the no-children path is byte-identical to the old wipe. Pinned by
+  `TestDelete451*` (table, multi-level chain, absorb, tombstone GC) plus
+  `TestE2E_ForkDeleteKeepsChildrenWorking` (real-git clone/push/reads post-delete).

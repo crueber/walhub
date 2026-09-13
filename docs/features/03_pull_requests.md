@@ -261,6 +261,21 @@ fast-forward outcomes (§5 step 5).
   unit consults the children's manifests' pack sets (bounded: one conditional GET per direct child;
   grand-children discovered transitively, one level per pass — repairable, not blocking). A pack whose
   removal is blocked stays pending per the existing TryLock-or-defer protocol (13 §2.1).
+- **Deleting a fork parent with live children converts it to a meta repository (issue #451) —
+  never a wipe.** The parent prefix survives as storage-only: the `wal/` pack set is preserved
+  verbatim, `meta/forks.json` and the parent's own `fork.json` are kept (chain resolution and the
+  GC walk above work untouched — the walk never probes the parent manifest), and
+  `meta/tombstone.json` records the conversion (`{repo, reason: "fork-parent", children}`). All
+  servable state (manifest, refs, checkpoints, issues, pulls, policy, access) is deleted, so the
+  meta prefix is invisible to listings and unopenable — but the parent id never changes, so every
+  child's `fork.json` Parent/Root pointers stay correct with no child write. Re-creating the name
+  absorbs the prefix (planner's call): the manifest key is absent, so a fresh manifest lands with
+  no probe on the create path (the push fast-path budget forbids any tombstone check there, and
+  Open=NotFound + Create=412 cannot coexist on one key) — the absorbed repo serves fresh while
+  old children keep reading the preserved packs, and the stale tombstone waits for the next
+  childless delete to wipe it with the prefix. Deleting a repo with no live fork
+  children is the historical full wipe, unchanged. A corrupt fork index (or any probe doubt)
+  aborts the delete before the manifest goes — doubt keeps packs.
 - Cross-fork PRs: the PR's `head.repo` names the fork; diff/commits endpoints read objects through the
   fork's manifest (they share the packs, so reads are as cheap as same-repo); the head ref lives in the
   fork's ref namespace and `refs/pull/<num>/head` is published in the BASE repo only when the head
@@ -606,3 +621,17 @@ every call goes through the SDK).
   the Fork pill (with count) sits in the Clone row; "forked from" links
   the parent from the identity block. SDK `repo.forks.create/list`
   (dogfood rule); Apidocs rows updated.
+
+- **Fork-deletion safety (issue #451, 2026-09-13): delete-with-children converts the parent to a
+  meta repository.** Ruling: deleting a fork parent that still has live fork children must not
+  break the children. `Registry.Delete` (the single delete layer — API and CLI inherit it) probes
+  the parent-side index before the manifest-delete linearization point and converts instead of
+  wiping; the check lives at exactly this layer with tests covering both paths. Deliberate
+  choices: parent id unchanged (re-pointing = verification, no child `fork.json` rewrite); the
+  parent's own `fork.json` preserved (chain logic untouched — the `readForkDoc` "deleted ancestor
+  contributes nothing" comment now means fully-wiped ancestors only); re-create absorbs (no probe
+  on any create path — the push fast-path budget pinned by `TestPushFastPathZeroCollabRoundTrips`
+  forbids it, and one key cannot serve Open=NotFound and Create=412 at once); no-children path
+  byte-identical; maintain's walk unchanged (verified by
+  `TestForkNetworkGCMetaParent` — absent parent manifest + present index still pins). Covers the
+  "parent deletion/GC" item of audit #449 — the audit marks it covered here, not re-reported.

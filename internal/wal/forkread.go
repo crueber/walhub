@@ -65,7 +65,10 @@ type forkDoc struct {
 
 // readForkDoc reads one fork.json by exact key (never LIST, law 4).
 // Absent/unreadable/corrupt → ok=false (the chain simply ends there — a
-// deleted ancestor contributes nothing).
+// fully-wiped ancestor contributes nothing). A meta ancestor (deleted
+// fork parent, #451) keeps its fork.json, so it stays chain-alive with
+// zero reader changes: the fallback below reads the preserved wal/
+// packs through the same ancestor keys.
 func (h *RepoHandle) readForkDoc(ctx context.Context, id string) (forkDoc, bool) {
 	var doc forkDoc
 	raw, _, err := store.GetBytes(ctx, h.reg.st, "repos/"+id+"/fork.json", store.GetOptions{})
