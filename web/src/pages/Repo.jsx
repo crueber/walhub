@@ -230,6 +230,14 @@ function RefPicker(props) {
   // head as fallback — the pill follows the Code tab, not always HEAD.
   const head = () => (typeof props.head === "function" ? props.head() : props.head);
   const label = () => pillLabel(head());
+  // Forgejo #482: the pin needs the SUMMARY head (the default-branch target
+  // — HeadTarget), not the context-first pill head above. head() follows the
+  // viewed ref (#252), so deriving the pin from it would badge whatever
+  // branch is on screen (e.g. fix/…) as "default" and leave the real default
+  // unreachable past the 50-ref page window. The shell passes s().head
+  // straight through as summaryHead; viewed/tag/sha-addressed states never
+  // leak into the pin.
+  const summaryHead = () => (typeof props.summaryHead === "function" ? props.summaryHead() : props.summaryHead);
   const [getRefs, setRefs] = createSignal([]);
   const [getKind, setKind] = createSignal("branches");
   const [getQuery, setQuery] = createSignal("");
@@ -271,10 +279,11 @@ function RefPicker(props) {
 
   // Forgejo #482: the pinned default-branch row derives from the summary
   // head (the default-branch target — HeadTarget), which the picker already
-  // holds. The server pages refs name-sorted at n=50 with no default hoist,
-  // so a default sorting late (main at ~115 on walhub itself) is otherwise
-  // structurally unreachable. Pins branches only; dedupes vs the stream.
-  const pinned = () => pinnedDefault(head(), getKind());
+  // holds via the summaryHead prop. The server pages refs name-sorted at
+  // n=50 with no default hoist, so a default sorting late (main at ~115 on
+  // walhub itself) is otherwise structurally unreachable. Pins branches
+  // only; dedupes vs the stream.
+  const pinned = () => pinnedDefault(summaryHead(), getKind());
   const visibleRefs = () => dedupeRefs(pinned(), getRefs());
 
   // Esc dismisses the picker and returns focus to the pill trigger. The
@@ -658,7 +667,7 @@ export default function Repo(props) {
                 </div>
                 <div class="repo-meta mt-1 flex items-center gap-2 text-xs">
                   <Show when={s().head} fallback={<span class="pill">empty</span>}>
-                    <RefPicker full={full()} repo={repoClient} head={() => pillHead(getViewed(), s().head)} />
+                    <RefPicker full={full()} repo={repoClient} head={() => pillHead(getViewed(), s().head)} summaryHead={() => s().head} />
                   </Show>
                   <span class="muted">{s().branches ?? 0} branches · {s().tags ?? 0} tags</span>
                   {/* Forgejo #464: the #424 fork-network rail lived here — it

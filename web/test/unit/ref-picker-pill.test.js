@@ -96,7 +96,14 @@ test("Forgejo #482: the type <select> is gone; two toggle pills sit above the fi
 
 test("Forgejo #482: pinned default row renders first from the summary head via pick()", () => {
   const s = src();
-  assert.ok(s.includes("pinnedDefault(head(), getKind())"), "pin derives from the summary head, branches only");
+  // The pin reads the SUMMARY head prop (the default-branch target), never
+  // the context-first pill head: deriving from head() would badge whatever
+  // branch is on screen (e.g. fix/…) as "default" while the real default
+  // stays past the 50-ref page window.
+  assert.ok(s.includes("pinnedDefault(summaryHead(), getKind())"), "pin derives from the summary head, branches only");
+  assert.ok(!s.includes("pinnedDefault(head(), getKind())"), "pin never derives from the viewed-ref pill head");
+  assert.ok(s.includes("summaryHead={() => s().head}"), "call site passes the raw summary head (not pillHead) for the pin");
+  assert.ok(s.includes("head={() => pillHead(getViewed(), s().head)}"), "pill label keeps the context-first head (#252 untouched)");
   assert.ok(s.includes("dedupeRefs(pinned(), getRefs())"), "streamed list dedupes against the pin");
   const list = s.indexOf("ref-list");
   const pin = s.indexOf("ref-pinned");
