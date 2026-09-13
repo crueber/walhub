@@ -52,9 +52,11 @@ test("one shared mechanism: a single component exporting the fifteen named icons
     // Hyphenated names are quoted keys, single-word names are bare keys.
     assert.ok(ICONS.includes(`"${name}"`) || ICONS.includes(`\n  ${name}:`), `icon ${name} is registered`);
   }
-  // Exactly fifteen entries: one viewBox per icon, one shared outer <svg>.
-  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 15, "fifteen icon entries, no more");
-  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 1, "a single shared <svg> renders every icon");
+  // Exactly fifteen entries: one complete svg per icon (#491: per-entry
+  // factories minting fresh nodes — no shared outer shape, so per-row Icons
+  // never fight over one node).
+  assert.equal((ICONS.match(/viewBox="0 0 /g) ?? []).length, 15, "fifteen icon entries, no more");
+  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 15, "one complete <svg> per entry, no shared outer svg");
 });
 
 test("verbatim embedding: each icon keeps its shipped viewBox and 1em currentColor paint", () => {
@@ -82,9 +84,9 @@ test("verbatim embedding: each icon keeps its shipped viewBox and 1em currentCol
     label: "0 0 24 24",
   };
   for (const [name, box] of Object.entries(boxes)) {
-    assert.ok(ICONS.includes(`viewBox: "${box}"`), `${name} keeps its shipped viewBox ${box} (mixed units scale through 1em)`);
+    assert.ok(ICONS.includes(`viewBox="${box}"`), `${name} keeps its shipped viewBox ${box} (mixed units scale through 1em)`);
   }
-  assert.ok(ICONS.includes('width="1em"') && ICONS.includes('height="1em"'), "the shared svg stays 1em so every viewBox renders at the caller's font size");
+  assert.ok(ICONS.includes('width="1em"') && ICONS.includes('height="1em"'), "each svg stays 1em so every viewBox renders at the caller's font size");
   const code = codeOf(ICONS);
   assert.ok(code.includes("currentColor"), "icons inherit text color via currentColor");
   assert.ok(!code.match(/#[0-9a-fA-F]{3,8}\b/), "no hex color literal in the icon layer");
@@ -94,8 +96,8 @@ test("verbatim embedding: each icon keeps its shipped viewBox and 1em currentCol
   assert.ok(!code.includes("fetch("), "no runtime fetches — icons ship inside the bundle");
 });
 
-test("decorative + sized by contract: aria-hidden on the svg, one .icon utility, no per-icon styling", () => {
-  assert.ok(ICONS.includes('aria-hidden="true"'), "the shared svg carries aria-hidden (controls keep their own accessible names)");
+test("decorative + sized by contract: aria-hidden on every svg, one .icon utility, no per-icon styling", () => {
+  assert.ok(ICONS.includes('aria-hidden="true"'), "every svg carries aria-hidden (controls keep their own accessible names)");
   assert.ok(ICONS.includes("`icon ${props.class}`"), "caller classes compose onto the shared utility, never replace it");
   assert.ok(CSS.includes(".icon {"), "the one shared utility exists in ui.css");
   const rule = block(CSS, ".icon {", "}");

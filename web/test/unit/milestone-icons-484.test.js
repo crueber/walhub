@@ -52,8 +52,8 @@ test("milestone-open/milestone-done exist in the ICONS map, paths transcribed ve
   // As labeled (open=16, done=24) — NOT swapped to match the issue prose.
   const openEntry = ICONS.slice(ICONS.indexOf('"milestone-open"'), ICONS.indexOf('"milestone-done"'));
   const doneEntry = ICONS.slice(ICONS.indexOf('"milestone-done"'));
-  assert.ok(openEntry.includes('viewBox: "0 0 16 16"'), "open keeps its shipped 16-unit box");
-  assert.ok(doneEntry.includes('viewBox: "0 0 24 24"'), "done keeps its shipped 24-unit box");
+  assert.ok(openEntry.includes('viewBox="0 0 16 16"'), "open keeps its shipped 16-unit box");
+  assert.ok(doneEntry.includes('viewBox="0 0 24 24"'), "done keeps its shipped 24-unit box");
   assert.ok(openEntry.includes('fill-rule="evenodd"') && openEntry.includes('clip-rule="evenodd"'), "open keeps its evenodd rules");
   for (const [name, entry] of [["milestone-open", openEntry], ["milestone-done", doneEntry]]) {
     assert.ok(entry.includes('fill="currentColor"'), `${name} paints via currentColor`);
@@ -63,9 +63,9 @@ test("milestone-open/milestone-done exist in the ICONS map, paths transcribed ve
   }
 });
 
-test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", () => {
-  assert.equal((ICONS.match(/viewBox: "/g) ?? []).length, 15, "fifteen icon entries, no more");
-  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 1, "a single shared <svg> renders every icon");
+test("map holds fifteen complete per-entry svgs (#491), no fetch/innerHTML", () => {
+  assert.equal((ICONS.match(/viewBox="0 0 /g) ?? []).length, 15, "fifteen icon entries, no more");
+  assert.equal((codeOf(ICONS).match(/<svg/g) ?? []).length, 15, "one complete <svg> per entry — no shared shape for rows to fight over (#491)");
   const code = codeOf(ICONS);
   assert.ok(code.includes("currentColor"), "icons inherit text color via currentColor");
   assert.ok(!code.match(/#[0-9a-fA-F]{3,8}\b/), "no hex color literal in the icon layer");
@@ -77,7 +77,7 @@ test("map grows to fifteen entries on the one shared svg, no fetch/innerHTML", (
 test("icons.jsx header comment reflects the new entries and consumers", () => {
   assert.ok(ICONS.includes("all twelve surfaces"), "consumer count updated to twelve");
   assert.ok(ICONS.includes("pages/Milestones.jsx"), "the milestones-page consumer is named");
-  assert.ok(ICONS.includes("The 15 icon bodies"), "body count updated to fifteen");
+  assert.ok(ICONS.includes("The 15 icons"), "entry count updated to fifteen");
   assert.ok(ICONS.includes("milestone") && ICONS.includes("#484"), "the new bodies are attributed to #484");
   assert.ok(ICONS.includes("AS LABELED"), "the prose/files viewBox discrepancy decision is noted");
   assert.ok(ICONS.includes("fifteen icon names"), "ICON_NAMES comment updated to fifteen");
@@ -131,7 +131,7 @@ test("#319 badge + #274 scroll intact around the strip icon", () => {
 });
 
 test("decorative contract: icons add no accessible names, add no per-icon classes", () => {
-  assert.ok(ICONS.includes('aria-hidden="true"'), "the shared svg carries aria-hidden");
+  assert.ok(ICONS.includes('aria-hidden="true"'), "every svg carries aria-hidden");
   for (const [file, src] of [["Milestones.jsx", MILESTONES], ["Issues.jsx", ISSUES], ["Repo.jsx", REPO]]) {
     assert.ok(!src.includes("<svg"), `${file} hand-rolls no <svg>`);
     for (const m of src.matchAll(/<Icon[^>]*>/g)) {
