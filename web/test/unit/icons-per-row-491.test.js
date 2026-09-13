@@ -29,7 +29,6 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL, fileURLToPath } = require("node:url");
 
