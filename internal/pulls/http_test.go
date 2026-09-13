@@ -319,8 +319,17 @@ func TestHTTPFork(t *testing.T) {
 			if w := doReq(t, e.h, "POST", lane, top("/repos/o/r/forks"), `{"name":"x","zzz":1}`, writer()); w.Code != 400 {
 				t.Fatalf("unknown = %d", w.Code)
 			}
-			if w := doReq(t, e.h, "GET", lane, top("/repos/o/r/forks"), ``, writer()); w.Code != 405 {
-				t.Fatalf("get forks = %d", w.Code)
+			// GET lists the live fork index (issue #424: queryable
+			// relation, mutable-collab class + version ETag). The POST
+			// above queued a task that may or may not have listed its
+			// row yet — assert the shape, not the (racy) contents.
+			w = doReq(t, e.h, "GET", lane, top("/repos/o/r/forks"), ``, writer())
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"forks":`) ||
+				!strings.Contains(w.Body.String(), `"more":false`) || w.Header().Get("ETag") == "" {
+				t.Fatalf("get forks = %d (%s) etag=%q", w.Code, w.Body.String(), w.Header().Get("ETag"))
+			}
+			if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
+				t.Fatalf("forks class = %q, want %q", cc, ccMutable)
 			}
 			// Non-pulls paths fall through (false → core mux owns them).
 			req := httptest.NewRequest("GET", "/o/r/api/issues", nil)

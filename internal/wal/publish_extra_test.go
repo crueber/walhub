@@ -1263,7 +1263,7 @@ func TestEngineFor_BindsRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	rp := &RemotePacks{Revision: 3}
-	eng := h.engineFor(rp)
+	eng := h.engineFor(context.Background(), rp)
 	if eng.packs != rp || eng.blocks != r.blocks || eng.st != r.st || eng.repoID != h.ID {
 		t.Fatal("engineFor wiring")
 	}

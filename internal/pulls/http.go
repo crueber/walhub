@@ -274,9 +274,10 @@ func parseNum(seg string) (int, error) {
 	return n, nil
 }
 
-// handleTop answers the top-level fork route (§8):
-// POST /api/v1/repos/{owner}/{repo}/forks (+ /api-browser/v1 twin). It is
-// only called with a valid lane (Handle routes on segs[0]).
+// handleTop answers the top-level fork routes (§8):
+// POST /api/v1/repos/{owner}/{repo}/forks (+ /api-browser/v1 twin) starts
+// the pull-fork task; GET lists the live fork index (?n=&after=, read).
+// It is only called with a valid lane (Handle routes on segs[0]).
 func (h *Handler) handleTop(w http.ResponseWriter, r *http.Request, segs []string) bool {
 	rest := segs[1:]
 	// Strip the version segment (v1) when present.
@@ -288,11 +289,15 @@ func (h *Handler) handleTop(w http.ResponseWriter, r *http.Request, segs []strin
 		if _, err := git.ParseRepoId(owner + "/" + repo); err != nil {
 			return false
 		}
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, "POST")
+		switch r.Method {
+		case http.MethodPost:
+			h.fork(w, r, owner, repo)
+			return true
+		case http.MethodGet:
+			h.listForks(w, r, owner, repo)
 			return true
 		}
-		h.fork(w, r, owner, repo)
+		methodNotAllowed(w, "GET", "POST")
 		return true
 	}
 	return false
@@ -758,11 +763,17 @@ func (h *Handler) fork(w http.ResponseWriter, r *http.Request, owner, repo strin
 	var body struct {
 		TargetOwner string `json:"target_owner"`
 		Name        string `json:"name"`
+		Visibility  string `json:"visibility"`
+		Branch      string `json:"branch"`
+		Description string `json:"description"`
 	}
-	if !decodeStrict(w, r, 1<<20, map[string]bool{"target_owner": true, "name": true}, &body) {
+	if !decodeStrict(w, r, 1<<20, map[string]bool{"target_owner": true, "name": true, "visibility": true, "branch": true, "description": true}, &body) {
 		return
 	}
-	rec, child, err := h.Svc.StartFork(r.Context(), owner, repo, p, ForkInput{TargetOwner: body.TargetOwner, Name: body.Name})
+	rec, child, err := h.Svc.StartFork(r.Context(), owner, repo, p, ForkInput{
+		TargetOwner: body.TargetOwner, Name: body.Name,
+		Visibility: body.Visibility, Branch: body.Branch, Description: body.Description,
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -773,4 +784,31 @@ func (h *Handler) fork(w http.ResponseWriter, r *http.Request, owner, repo strin
 	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = w.Write(b)
+}
+
+// listForks answers GET …/forks (?n=&after=, read): the live fork index.
+// Mutable-collab class (issue #280/#424 amendment: the index grows on fork
+// creation) with a version-folded ETag, so revalidation stays cheap.
+func (h *Handler) listForks(w http.ResponseWriter, r *http.Request, owner, repo string) {
+	p, aerr := h.principal(r)
+	if aerr != nil {
+		writeErr(w, aerr)
+		return
+	}
+	q := r.URL.Query()
+	n := 0
+	if v := q.Get("n"); v != "" {
+		nv, cerr := strconv.Atoi(v)
+		if cerr != nil || nv < 1 {
+			writePlain(w, http.StatusBadRequest, "invalid n: must be a positive integer")
+			return
+		}
+		n = nv
+	}
+	page, err := h.Svc.ListForks(r.Context(), owner, repo, p, q.Get("after"), n)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeCached(w, r, ccMutable, "forks"+strconv.Itoa(page.Version), http.StatusOK, page)
 }

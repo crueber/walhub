@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -225,15 +226,18 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 		return nil, fmt.Errorf("%w: strategy must be merge|squash|rebase", ErrInvalid)
 	}
 	rec.notice("publishing %s → %s", pr.Base.Ref, shortSHA(newSHA))
-	// Step 5: publish — REF_UPDATE for the base ref, old = base sha at plan
-	// time. The WAL publish CAS arbitrates against concurrent pushes: a
-	// moved base loses the CAS and the task re-plans once, else fails
-	// loudly. NEVER force-publishes.
+	// Step 5: publish — the base ref move PLUS the server-made objects in
+	// ONE WAL entry (the merged ref never dangles bucket-missing objects:
+	// commit-tree/replay mint objects only the serving copy holds, so the
+	// tip is packed here and uploaded atomically with the txn). The WAL
+	// publish CAS arbitrates against concurrent pushes: a moved base loses
+	// the CAS and the task re-plans once, else fails loudly. NEVER
+	// force-publishes.
 	meta := map[string]string{"principal": who, "agent": "pulls"}
 	if correlationID != "" {
 		meta["correlation_id"] = correlationID
 	}
-	if perr := s.Refs.UpdateRef(ctx, pr.Base.Repo, pr.Base.Ref, baseLive, newSHA, meta); perr != nil {
+	if perr := s.publishWithObjects(ctx, pr.Base.Repo, pr.Base.Ref, baseLive, newSHA, baseDir, meta, rec, "merge"); perr != nil {
 		if isCASConflict(perr) {
 			rec.notice("base moved under the merge; re-planning once")
 			baseRelive, rerr := s.Git.ResolveRef(ctx, baseDir, pr.Base.Ref)
@@ -464,8 +468,11 @@ func (s *Service) runUpdateBranch(ctx context.Context, owner, repo string, num i
 		return "", err
 	}
 	meta := map[string]string{"principal": who, "agent": "pulls"}
-	if perr := s.Refs.UpdateRef(ctx, pr.Head.Repo, pr.Head.Ref, headLive, newSHA, meta); perr != nil {
-		return "", fmt.Errorf("%w: head moved; retry", ErrConflict)
+	if perr := s.publishWithObjects(ctx, pr.Head.Repo, pr.Head.Ref, headLive, newSHA, headDir, meta, rec, "update-branch"); perr != nil {
+		if isCASConflict(perr) {
+			return "", fmt.Errorf("%w: head moved; retry", ErrConflict)
+		}
+		return "", perr
 	}
 	th, _, _ := s.loadThread(ctx, owner, repo, num)
 	if th != nil {
@@ -524,24 +531,67 @@ func (s *Service) DeleteHead(ctx context.Context, owner, repo string, num int, a
 // --- fork ----------------------------------------------------------------------
 
 // ForkInput shapes POST /api/v1/repos/{owner}/{repo}/forks (§8):
-// {target_owner?, name?} → 202 + TaskRecord (pull-fork). Auth: write on the
-// source (+ create rights on the target — approximated by requiring an
-// authenticated principal; the target namespace owner check rides the repo
-// create path the executor delegates to).
+// {target_owner?, name?, visibility?, branch?, description?} → 202 +
+// TaskRecord (pull-fork). Auth: write on the source + create rights on
+// the target (the #346 owner-admission gate — self or member org, host
+// admin bypass; nil gate = legacy-open). Field semantics:
+//   - visibility: public|authenticated|private ("" = public, the repo-create
+//     default); threaded to EnsureRepoAccess for the child's access.json.
+//   - branch: starting branch for the child's Head — "" = parent Head, a
+//     short name selects refs/heads/<name>, a full refs/heads/<...> ref is
+//     accepted verbatim. refs/tags/* and other namespaces are rejected
+//     explicitly (out of scope: tag-anchored forks), as is a branch missing
+//     from the parent (422 under the task).
+//   - description: optional short display string (≤ 1024 bytes, no C0
+//     controls); threaded into the child manifest's inline settings TOML
+//     atomically at Create — the same store the summary description reads,
+//     so no post-create write is needed.
 type ForkInput struct {
 	TargetOwner string
 	Name        string
+	Visibility  string
+	Branch      string
+	Description string
+}
+
+// MaxForkDescription bounds the fork description (the settings TOML the
+// child manifest carries inline is ≤ 16 KiB; the description is one key).
+const MaxForkDescription = 1024
+
+// ForkOptions carries the resolved fork parameters into the manifest step.
+type ForkOptions struct {
+	// Branch is the full child HEAD ref ("" = parent HEAD).
+	Branch string
+	// Description is the trimmed display string ("" = none).
+	Description string
+	// Creator is the forking principal (settings authorship).
+	Creator string
 }
 
 // ForkExecutor performs the manifest-sharing step (§7: the fork's
 // manifest.pb references the parent's pack set verbatim plus a fresh refs
-// snapshot, in already-on-bucket mode). Nil in this wave: the task records
-// the collaboration objects (fork.json, forks.json) and narrates the
-// manifest step as delegated — the GC rule (consult fork-network manifests
-// before pack deletion) is specified now and enforced by the maintain unit
-// once it reads meta/forks.json.
+// snapshot, in already-on-bucket mode; Create on the child manifest
+// arbitrates the target name exactly like repo create). A 412-class
+// failure surfaces as ErrConflict so the caller can run the adopt check.
 type ForkExecutor interface {
-	ShareManifest(ctx context.Context, parent, child string) error
+	ShareManifest(ctx context.Context, parent, child string, opt ForkOptions) error
+}
+
+// OwnerGate is the creation owner-admission gate the fork target inherits
+// (Forgejo #346, mirroring the repo-create path): the target owner must
+// equal the principal's own username or be an org the principal belongs
+// to; host admins bypass. Satisfied by *identity.Service; nil skips the
+// check (legacy-open, tests without the identity surface).
+type OwnerGate interface {
+	CheckCreateOwner(ctx context.Context, owner string, p auth.Principal) *auth.AuthError
+}
+
+// AccessBootstrapper materializes the child's access.json at fork time
+// (the placeholder-create path's EnsureRepoAccess, Forgejo #210 §3):
+// Create-wins, adopt-don't-overwrite. Satisfied by *identity.Service;
+// nil skips the write (read-time synthesis only).
+type AccessBootstrapper interface {
+	EnsureRepoAccess(ctx context.Context, owner, repo, creator, visibility string) error
 }
 
 // StartFork starts (or joins) the pull-fork task.
@@ -569,8 +619,48 @@ func (s *Service) StartFork(ctx context.Context, owner, repo string, actor auth.
 	if err := validateRepoPart(name); err != nil {
 		return nil, "", fmt.Errorf("%w: invalid name %q", ErrInvalid, in.Name)
 	}
+	visibility := strings.ToLower(strings.TrimSpace(in.Visibility))
+	if visibility == "" {
+		visibility = "public"
+	}
+	switch visibility {
+	case "public", "authenticated", "private":
+	default:
+		return nil, "", fmt.Errorf("%w: visibility must be public|authenticated|private, got %q", ErrInvalid, in.Visibility)
+	}
+	branch, err := normalizeForkBranch(in.Branch)
+	if err != nil {
+		return nil, "", err
+	}
+	description := strings.TrimSpace(in.Description)
+	if len(description) > MaxForkDescription {
+		return nil, "", fmt.Errorf("%w: description exceeds %d bytes", ErrInvalid, MaxForkDescription)
+	}
+	for i := 0; i < len(description); i++ {
+		c := description[i]
+		if c < 0x20 && c != '\n' && c != '\t' {
+			return nil, "", fmt.Errorf("%w: description must not contain control characters", ErrInvalid)
+		}
+	}
+	if s.OwnerGate != nil {
+		if gerr := s.OwnerGate.CheckCreateOwner(ctx, targetOwner, actor); gerr != nil {
+			return nil, "", gerr
+		}
+	}
 	child := repoName(targetOwner, name)
+	// Fail fast on a taken name (the form surfaces this inline): fork.json
+	// provenance claims the name, and a child manifest (real repo or a
+	// completed fork) occupies it. Either present → sync 409. The CAS
+	// steps in runFork still arbitrate races (the loser fails loud under
+	// the task); this probe is advisory, never authoritative.
+	if raw, _, _ := s.getJSON(ctx, ForkKey(targetOwner, name)); raw != nil {
+		return nil, "", fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+	}
+	if _, ver, _ := s.getJSON(ctx, manifestKey(targetOwner, name)); ver != "" {
+		return nil, "", fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+	}
 	repoID := repoName(owner, repo)
+	resolved := ForkInput{TargetOwner: targetOwner, Name: name, Visibility: visibility, Branch: branch, Description: description}
 	entry, joined := s.tasks.begin(child, TaskKindFork)
 	if joined {
 		return entry.rec.snapshot(), child, nil
@@ -579,7 +669,7 @@ func (s *Service) StartFork(ctx context.Context, owner, repo string, actor auth.
 	go func() {
 		defer s.tasks.end(child, TaskKindFork)
 		bctx := context.WithoutCancel(ctx)
-		if rerr := s.runFork(bctx, owner, repo, targetOwner, name, actor, entry.rec); rerr != nil {
+		if rerr := s.runFork(bctx, owner, repo, resolved, actor, entry.rec); rerr != nil {
 			entry.rec.setState(TaskError, "", rerr.Error(), nil)
 			entry.rec.notice("fork failed: %s", rerr.Error())
 			entry.err = rerr
@@ -590,22 +680,144 @@ func (s *Service) StartFork(ctx context.Context, owner, repo string, actor auth.
 	return entry.rec.snapshot(), child, nil
 }
 
-// runFork executes the pull-fork task: Create fork-side provenance (the
-// Create arbitrates the target name — a 412 is "name taken", exactly like
-// repo create), CAS the parent forks.json, then the manifest-sharing step.
-func (s *Service) runFork(ctx context.Context, owner, repo, targetOwner, name string, actor auth.Principal, rec *TaskRecord) error {
+// normalizeForkBranch resolves the branch input to a full child-HEAD ref:
+// "" stays "" (parent Head), a short name selects refs/heads/<name>, a full
+// refs/heads/<...> ref passes through. Anything else (tags, HEAD, other
+// namespaces, bad shapes) is rejected explicitly — out of scope, never
+// silently ignored.
+func normalizeForkBranch(branch string) (string, error) {
+	b := strings.TrimSpace(branch)
+	if b == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(b, "refs/") {
+		if !strings.HasPrefix(b, "refs/heads/") || len(b) <= len("refs/heads/") {
+			return "", fmt.Errorf("%w: branch must be a branch (refs/heads/...), got %q", ErrInvalid, branch)
+		}
+		if err := validateRefName(b); err != nil {
+			return "", err
+		}
+		return b, nil
+	}
+	full := "refs/heads/" + b
+	if err := validateRefName(full); err != nil {
+		return "", fmt.Errorf("%w: invalid branch %q", ErrInvalid, branch)
+	}
+	return full, nil
+}
+
+// manifestKey returns the bucket-relative manifest.pb key for owner/repo
+// (the fork pre-check probes it; the manifest step Creates it).
+func manifestKey(owner, repo string) string {
+	return "repos/" + owner + "/" + repo + "/manifest.pb"
+}
+
+// runFork executes the pull-fork task in commit order: the manifest-sharing
+// step first (its Create arbitrates the target name — a 412 is "name
+// taken", exactly like repo create), then fork-side provenance
+// (Create-once, the second arbitration), the CAS'd parent index, the
+// best-effort social counter, the child access bootstrap, and the event.
+//
+// Order matters for convergence: everything before the fork.json commit is
+// retryable (share adopts when the manifest is ours, access adopts
+// unconditionally); everything after is committed-or-narrated (the social
+// counter shortfall precedent). A share-412 with our own provenance
+// adopts and continues; a share-412 owned by anyone else (a real repo, or
+// another parent's fork) reports 409 without touching it.
+func (s *Service) runFork(ctx context.Context, owner, repo string, in ForkInput, actor auth.Principal, rec *TaskRecord) error {
 	who := normPrincipal(actor.Name)
 	now := s.nowUTC().Format(dateTimeFmt)
-	child := repoName(targetOwner, name)
-	forkDoc := &ForkDoc{Parent: repoName(owner, repo), ForkedAt: now, Version: 1}
-	raw, _ := json.Marshal(forkDoc)
-	if err := s.putCreate(ctx, ForkKey(targetOwner, name), raw); err != nil {
-		if isPrecondition(err) {
-			return fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+	child := repoName(in.TargetOwner, in.Name)
+	parentID := repoName(owner, repo)
+	// Network root: the parent's own Root when the parent is itself a fork
+	// (its Root, or its Parent when Root predates the field), else the
+	// parent. A corrupt parent provenance fails closed — the tree pointer
+	// is load-bearing for GC, never guessed.
+	root := parentID
+	if praw, _, _ := s.getJSON(ctx, ForkKey(owner, repo)); praw != nil {
+		var pdoc ForkDoc
+		if err := json.Unmarshal(praw, &pdoc); err != nil {
+			return fmt.Errorf("%w: parent fork.json: %v", ErrCorrupt, err)
 		}
+		if pdoc.Root != "" {
+			root = pdoc.Root
+		} else if pdoc.Parent != "" {
+			root = pdoc.Parent
+		}
+	}
+	adoptedShare := false
+	if s.ForkExec != nil {
+		serr := s.ForkExec.ShareManifest(ctx, parentID, child, ForkOptions{Branch: in.Branch, Description: in.Description, Creator: who})
+		if serr != nil {
+			if errors.Is(serr, ErrConflict) {
+				// Adopt when the occupying manifest is ours (a retried
+				// share after a transient failure past the Create): our
+				// provenance claims it. Anything else — a real repo, or
+				// another parent's fork — is 409, hands off.
+				if craw, _, _ := s.getJSON(ctx, ForkKey(in.TargetOwner, in.Name)); craw != nil {
+					var cdoc ForkDoc
+					if jerr := json.Unmarshal(craw, &cdoc); jerr == nil && cdoc.Parent == parentID {
+						rec.notice("adopted existing child manifest for %s", child)
+						adoptedShare = true
+					} else {
+						return fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+					}
+				} else {
+					return fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+				}
+			} else {
+				return serr
+			}
+		} else {
+			rec.notice("shared manifest for %s", child)
+		}
+	} else {
+		// Manifest sharing (§7: already-on-bucket mode — skip pack uploads,
+		// verify closure, fresh refs snapshot + checkpoint, Create manifest).
+		// No ForkExecutor is wired in this wave (the wal-level manifest copy
+		// needs the engine handle the composition owns); the task narrates the
+		// delegation instead of pretending. The fork-network GC rule (§7) is
+		// specified now: pack removal consults children's manifests.
+		rec.notice("manifest share delegated: child prefix %s provisioned; packs shared by construction on first sync (fork executor pending)", child)
+	}
+	// Child access bootstrap (pre-commit: Create-wins/adopt, safe to
+	// retry). A store failure here fails the task LOUD — an unreadable or
+	// mis-visible child is never a silent shortfall.
+	if s.AccessBoot != nil {
+		if aerr := s.AccessBoot.EnsureRepoAccess(ctx, in.TargetOwner, in.Name, who, in.Visibility); aerr != nil {
+			return aerr
+		}
+		rec.notice("materialized %s access (%s)", child, in.Visibility)
+	}
+	forkDoc := &ForkDoc{Parent: parentID, Root: root, ForkedAt: now, Version: 1}
+	raw, _ := json.Marshal(forkDoc)
+	if !adoptedShare {
+		if err := s.putCreate(ctx, ForkKey(in.TargetOwner, in.Name), raw); err != nil {
+			if isPrecondition(err) {
+				return fmt.Errorf("%w: fork target %s already exists", ErrConflict, child)
+			}
+			return err
+		}
+		rec.notice("recorded %s", ForkKey(in.TargetOwner, in.Name))
+	} else if _, err := s.casUpdate(ctx, ForkKey(in.TargetOwner, in.Name), 5, func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		// Adopted provenance: backfill Root when a pre-Root wave (or a
+		// crashed run) left it empty. Already-correct docs are untouched.
+		if cur == nil {
+			return nil, false, nil
+		}
+		var doc ForkDoc
+		if jerr := json.Unmarshal(cur, &doc); jerr != nil {
+			return nil, false, jerr
+		}
+		if doc.Root == root {
+			return nil, false, nil
+		}
+		doc.Root = root
+		out, _ := json.Marshal(&doc)
+		return out, true, nil
+	}); err != nil {
 		return err
 	}
-	rec.notice("recorded %s", ForkKey(targetOwner, name))
 	_, err := s.casUpdate(ctx, ForksKey(owner, repo), 10, func(cur []byte, ver store.Version) ([]byte, bool, error) {
 		fx := &ForksIndex{Forks: []ForkEntry{}}
 		if cur != nil {
@@ -641,15 +853,35 @@ func (s *Service) runFork(ctx context.Context, owner, repo, targetOwner, name st
 			rec.notice("incremented social.json forks")
 		}
 	}
-	// Manifest sharing (§7: already-on-bucket mode — skip pack uploads,
-	// verify closure, fresh refs snapshot + checkpoint, Create manifest).
-	// No ForkExecutor is wired in this wave (the wal-level manifest copy
-	// needs the engine handle the composition owns); the task narrates the
-	// delegation instead of pretending. The fork-network GC rule (§7) is
-	// specified now: pack removal consults children's manifests.
-	rec.notice("manifest share delegated: child prefix %s provisioned; packs shared by construction on first sync (fork executor pending)", child)
 	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "forked", Actor: who, PullNum: 0, Recipients: []string{}})
 	return nil
+}
+
+// publishWithObjects packs the server-made tip and publishes the ref move
+// with it (§5 durability): commit-tree/replay mint objects only the serving
+// copy holds, so the tip is packed (tip --not --all) and uploaded
+// atomically with the txn in ONE WAL entry — the merged ref never dangles
+// bucket-missing objects. A pack failure fails the task LOUD (fail closed:
+// a ref without its objects bricks clones); an empty pack falls back to
+// the ref-only path (nothing new to upload — no hole to leave).
+func (s *Service) publishWithObjects(ctx context.Context, repo, ref, old, newSHA, dir string, meta map[string]string, rec *TaskRecord, what string) error {
+	if s.Git == nil {
+		return fmt.Errorf("%w: git backend not wired", ErrUnavailable)
+	}
+	tp, perr := s.Git.PackTip(ctx, dir, newSHA)
+	if perr != nil {
+		return perr
+	}
+	if tp == nil {
+		rec.notice("%s objects already on bucket; ref-only publish", what)
+		return s.Refs.UpdateRef(ctx, repo, ref, old, newSHA, meta)
+	}
+	defer os.RemoveAll(tp.Scratch)
+	rec.notice("%s objects packed %s (%d objects)", what, shortSHA(tp.Checksum), tp.ObjectCount)
+	return s.Refs.UpdateRefWithPack(ctx, repo, ref, old, newSHA, &RefPack{
+		PackPath: tp.PackPath, IdxPath: tp.IdxPath, Checksum: tp.Checksum,
+		PackSize: tp.PackSize, IdxSize: tp.IdxSize, ObjectCount: tp.ObjectCount,
+	}, meta)
 }
 
 // validateRepoPart checks one owner/name path part (charset/length, no

@@ -50,6 +50,14 @@ type RepoHandle struct {
 	checkpoints    map[uint64]time.Time // seq -> created_at cache
 	effCfg         effectiveConfigCache
 
+	// Fork-ancestor chain (forkread.go, issue #424): cached ancestor
+	// "owner/name" ids for the pack-content read fallback. forkMu is a
+	// LEAF lock — taken alone, never with syncMu/packMu/rw, never held
+	// across a store call.
+	forkMu          sync.Mutex
+	forkChainCached []string
+	forkLoaded      bool
+
 	// entry-time bookkeeping for checkpoint provenance (§5.5); under syncMu.
 	firstEntryTime time.Time
 	lastEntryTime  time.Time

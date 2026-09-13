@@ -193,26 +193,22 @@ func (h *RepoHandle) materialize(ctx context.Context, t *Task, m *pbManifest, lv
 
 // fetchPackFile downloads one file of a pack. The .pack goes through the
 // striped downloader (16 × 32 MiB stripes, §5.2/03 §5.2); side-files are
-// small single GETs.
+// small single GETs. Pack bytes resolve with the fork fallback
+// (forkread.go): a fork shares its ancestors' objects by construction,
+// so a child-prefix miss retries each ancestor outward.
 func (h *RepoHandle) fetchPackFile(ctx context.Context, p *proto.PackRef, what string) error {
 	packDir := h.repo.PackDir()
 	switch what {
 	case ".pack":
 		dst := filepath.Join(packDir, "pack-"+p.Checksum+".pack")
-		key := h.repoKey(store.PackKey(p.Checksum))
 		size := int64(p.PackSize)
-		if size == 0 {
-			if meta, err := h.reg.st.Head(ctx, key); err == nil && meta != nil {
-				size = meta.Size
-			}
-		}
 		f, err := os.OpenFile(dst+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
 			return &WalError{Kind: WalErrIo, Detail: dst, Wrapped: err}
 		}
 		defer f.Close()
-		if err := store.DownloadFileParallel(ctx, h.reg.st, key, f, size); err != nil {
-			return &WalError{Kind: WalErrStore, Detail: key, Wrapped: err}
+		if err := h.downloadShared(ctx, store.PackKey(p.Checksum), f, size); err != nil {
+			return err
 		}
 		f.Close()
 		return os.Rename(dst+".tmp", dst)
@@ -241,9 +237,11 @@ func sideKeyOf(suffix, checksum string) string {
 	return store.IdxKey(checksum)
 }
 
-// fetchSideFile GETs one side-file into objects/pack (tmp+rename).
+// fetchSideFile GETs one side-file into objects/pack (tmp+rename). Pack
+// bytes resolve with the fork fallback (forkread.go): shared side files
+// live under the ancestor prefix until the child compacts them away.
 func (h *RepoHandle) fetchSideFile(ctx context.Context, checksum, suffix, key string, size int64) error {
-	body, _, err := store.GetBytes(ctx, h.reg.st, h.repoKey(key), store.GetOptions{})
+	body, err := h.sharedGet(ctx, key)
 	if err != nil {
 		return &WalError{Kind: WalErrStore, Detail: key, Wrapped: err}
 	}
@@ -381,7 +379,7 @@ func atomicWriteFile(dst string, data []byte) error {
 // `remote-index` task; concurrent openers join it (§5.7).
 func (h *RepoHandle) remoteReaderFor(ctx context.Context, m *pbManifest) (*RemoteReader, error) {
 	if cur := h.remoteIdx.Load(); cur != nil && cur.Revision == m.Revision {
-		return &RemoteReader{Revision: m.Revision, eng: h.engineFor(cur)}, nil
+		return &RemoteReader{Revision: m.Revision, eng: h.engineFor(ctx, cur)}, nil
 	}
 	// Run never propagates fn's error; the record carries the outcome.
 	rec, err := h.reg.tasks.Run(ctx, h.ID, "remote-index", map[string]string{"revision": itoa(m.Revision)},
@@ -398,18 +396,26 @@ func (h *RepoHandle) remoteReaderFor(ctx context.Context, m *pbManifest) (*Remot
 	if cur == nil || cur.Revision != m.Revision {
 		return nil, &WalError{Kind: WalErrRetry, Detail: "remote index build raced a revision change"}
 	}
-	return &RemoteReader{Revision: m.Revision, eng: h.engineFor(cur)}, nil
+	return &RemoteReader{Revision: m.Revision, eng: h.engineFor(ctx, cur)}, nil
 }
 
 // engineFor binds a RemotePacks revision to the shared block cache and the
 // repo's object store (per-revision engine, §5.7).
-func (h *RepoHandle) engineFor(rp *RemotePacks) *remoteEngine {
+func (h *RepoHandle) engineFor(ctx context.Context, rp *RemotePacks) *remoteEngine {
+	// Fork prefixes for the remote read fallback (forkread.go): own
+	// prefix stays the engine's base; ancestors ride along. Empty for
+	// non-forks (the engine takes exactly today's path).
+	var prefixes []string
+	for _, a := range h.forkChain(ctx) {
+		prefixes = append(prefixes, "repos/"+a+"/")
+	}
 	return &remoteEngine{
-		packs:  rp,
-		blocks: h.reg.blocks,
-		st:     h.reg.st,
-		repoID: h.ID,
-		objCap: h.reg.vals.remoteObjectBytes,
+		packs:    rp,
+		blocks:   h.reg.blocks,
+		st:       h.reg.st,
+		repoID:   h.ID,
+		prefixes: prefixes,
+		objCap:   h.reg.vals.remoteObjectBytes,
 	}
 }
 
@@ -443,7 +449,7 @@ func (h *RepoHandle) buildRemoteIndex(ctx context.Context, t *Task, m *pbManifes
 					return nil
 				}
 			}
-			body, _, err := store.GetBytes(gctx, h.reg.st, h.repoKey(store.IdxKey(p.Checksum)), store.GetOptions{})
+			body, err := h.sharedGet(gctx, store.IdxKey(p.Checksum))
 			if err != nil {
 				return &WalError{Kind: WalErrStore, Detail: store.IdxKey(p.Checksum), Wrapped: err}
 			}

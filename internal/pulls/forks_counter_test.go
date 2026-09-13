@@ -28,7 +28,7 @@ func TestForkCompletionIncrementsSocial(t *testing.T) {
 	fc := &fakeForksCounter{}
 	e.svc.Forks = fc
 	rec := &TaskRecord{Progress: []string{}}
-	if err := e.svc.runFork(ctx(), "o", "r", "f", "c", writer(), rec); err != nil {
+	if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c"}, writer(), rec); err != nil {
 		t.Fatalf("fork: %v", err)
 	}
 	fc.mu.Lock()
@@ -46,7 +46,7 @@ func TestForkCompletionIncrementsSocial(t *testing.T) {
 	fc.err = errors.New("store down")
 	fc.mu.Unlock()
 	rec2 := &TaskRecord{Progress: []string{}}
-	if err := e.svc.runFork(ctx(), "o", "r", "f", "c2", writer(), rec2); err != nil {
+	if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c2"}, writer(), rec2); err != nil {
 		t.Fatalf("shortfall must not fail the task: %v", err)
 	}
 	joined := false

@@ -481,30 +481,54 @@ func TestE2E_CollabFullChain(t *testing.T) {
 	}
 	mark("tray+webhook", step)
 
-	// ---- 12. fork → cross-fork PR (03 §8, P2 numbering) ---------------------------------
-	// As-built scope (09 audit note): the pull-fork task records the
-	// collaboration objects (fork.json, parent forks.json) but manifest
-	// sharing is deferred (ForkExecutor nil — see 03 Decisions). The fork
-	// path therefore has no git state until something pushes it, so the
-	// chain seeds the fork head by direct push (auto-create) and proves
-	// the cross-fork OPEN path: head resolution through the named fork
-	// repo, P2 numbering, fork metadata on the PR.
+	// ---- 12. fork → cross-fork PR (03 §7/§8, P2 numbering) ---------------------------
+	// The pull-fork task shares the parent manifest (pack set verbatim,
+	// fresh refs snapshot + checkpoint, child manifest.pb Create), so a
+	// completed fork is a servable repo: the chain polls the child
+	// summary (fork_parent projection + description) and the live fork
+	// list, THEN pushes the cross-fork branch (sequencing matters — a
+	// racing auto-create would own the name via the same CAS rule).
 	step = time.Now()
 	forkName := repo + "-fork"
 	forkRes := mustAPI(t, "POST", s.base+"/api/v1/repos/"+owner+"/"+repo+"/forks",
-		fmt.Sprintf(`{"target_owner":%q,"name":%q}`, owner, forkName), chainAliceTok)
+		fmt.Sprintf(`{"target_owner":%q,"name":%q,"visibility":"public","branch":"refs/heads/main","description":"e2e fork"}`,
+			owner, forkName), chainAliceTok)
 	if got := jget(t, forkRes, "repo"); got != owner+"/"+forkName {
 		t.Fatalf("fork repo = %v, want %s/%s", got, owner, forkName)
+	}
+	forkLane := s.base + "/" + owner + "/" + forkName + "/api"
+	pollUntil(t, 60*time.Second, "fork child to become servable", func() bool {
+		st, data := apiCall(t, "GET", forkLane, "", chainAliceTok)
+		if st != 200 {
+			return false
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return false
+		}
+		return doc["fork_parent"] == owner+"/"+repo && doc["description"] == "e2e fork"
+	})
+	// The live fork list names the child (the queryable index relation).
+	forkList := mustAPI(t, "GET", s.base+"/api/v1/repos/"+owner+"/"+repo+"/forks", "", chainAliceTok)
+	found := false
+	if arr, ok := forkList["forks"].([]any); ok {
+		for _, row := range arr {
+			if m, ok := row.(map[string]any); ok && m["repo"] == owner+"/"+forkName {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("fork list misses %s/%s: %v", owner, forkName, forkList)
 	}
 	forkURL := s.gitURL(owner, forkName)
 	g.run(work, "checkout", "-b", "crossfeat")
 	g.commitFile(work, "cross.txt", "cross-fork change\n", "cross-fork commit")
-	// The branch is pushed to the parent too: with manifest sharing
-	// deferred, the fork's packs are disjoint from the parent's, and the
-	// base-side reachability probe can only answer for objects the base
-	// materialization holds (a pack-shared fork would hold them by
-	// construction). The cross-fork assertion below is the routing one:
-	// the head resolves through the NAMED fork repo.
+	// The branch is pushed to the parent too, so the base-side
+	// reachability probe answers for objects both materializations hold
+	// (a pack-shared fork holds them by construction). The cross-fork
+	// assertion below is the routing one: the head resolves through the
+	// NAMED fork repo.
 	g.runAuth(work, chainAliceTok, "push", "origin", "crossfeat")
 	g.runAuth(work, chainAliceTok, "push", forkURL, "crossfeat")
 	pollUntil(t, 60*time.Second, "fork refs to appear", func() bool {

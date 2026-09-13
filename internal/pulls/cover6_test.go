@@ -475,7 +475,7 @@ func TestCover6HTTPLeftovers(t *testing.T) {
 		e.roles.Roles["jane@example.com"] = "write"
 		_, _ = store.PutBytes(ctx(), e.store, ForksKey("o", "r"), []byte("{oops"), store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"})
 		rec := &TaskRecord{Progress: []string{}}
-		if err := e.svc.runFork(ctx(), "o", "r", "f", "c", writer(), rec); !errors.Is(err, ErrCorrupt) {
+		if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c"}, writer(), rec); !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("corrupt forks: %v", err)
 		}
 	})

@@ -490,13 +490,13 @@ func TestCover3ForkBranches(t *testing.T) {
 		e := newTestEnv()
 		rec := &TaskRecord{Progress: []string{}}
 		e.failPutErr(ForkKey("f", "c"), errors.New("bad put"))
-		if err := e.svc.runFork(ctx(), "o", "r", "f", "c", writer(), rec); err == nil {
+		if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c"}, writer(), rec); err == nil {
 			t.Fatal("put err must surface")
 		}
 		e.clearFails()
 		e.clearFails()
 		e.failPut(ForksKey("o", "r"), 99)
-		if err := e.svc.runFork(ctx(), "o", "r", "f", "c2", writer(), rec); !errors.Is(err, ErrConflict) {
+		if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c2"}, writer(), rec); !errors.Is(err, ErrConflict) {
 			t.Fatalf("cas exhaust: %v", err)
 		}
 		e.clearFails()
@@ -504,13 +504,13 @@ func TestCover3ForkBranches(t *testing.T) {
 	t.Run("runFork already listed is idempotent", func(t *testing.T) {
 		e := newTestEnv()
 		rec := &TaskRecord{Progress: []string{}}
-		if err := e.svc.runFork(ctx(), "o", "r", "f", "c", writer(), rec); err != nil {
+		if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c"}, writer(), rec); err != nil {
 			t.Fatalf("first: %v", err)
 		}
 		// Drop fork.json but keep the index row: re-run converges without
 		// duplicating the row.
 		_ = e.store.Delete(ctx(), ForkKey("f", "c"), "")
-		if err := e.svc.runFork(ctx(), "o", "r", "f", "c", writer(), rec); err != nil {
+		if err := e.svc.runFork(ctx(), "o", "r", ForkInput{TargetOwner: "f", Name: "c"}, writer(), rec); err != nil {
 			t.Fatalf("second: %v", err)
 		}
 		raw, _, _ := e.svc.getJSON(ctx(), ForksKey("o", "r"))

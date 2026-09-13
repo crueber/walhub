@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -282,6 +283,11 @@ type remoteEngine struct {
 	blocks *BlockCache
 	st     store.ObjectStore
 	repoID string
+	// prefixes are the store prefixes reads resolve under, own first
+	// then fork ancestors outward (forkread.go — a fork shares its
+	// ancestors' pack objects by construction). The block cache keys on
+	// the full key, so per-prefix entries stay correct.
+	prefixes []string
 
 	objMu    sync.Mutex
 	objLRU   map[objKey]*list.Element
@@ -338,16 +344,41 @@ func (e *remoteEngine) lookupObj(k objKey) (string, []byte, bool) {
 	return "", nil, false
 }
 
-// packKey is the store key of a pack (index-local checksum).
+// packKey is the store key of a pack (index-local checksum, own prefix).
 func (e *remoteEngine) packKey(ix *packIndex) string {
 	return repoPrefix(e.repoID) + store.PackKey(ix.Checksum)
 }
 
-// readRaw reads exactly size bytes of pack data at off through the block cache.
+// readRaw reads exactly size bytes of pack data at off through the block
+// cache, with fork fallback: the own key first (non-forks take exactly
+// today's path), then each ancestor outward. A NotFound moves on;
+// anything else fails at once. The block cache keys on the full key, so
+// per-prefix entries stay correct.
 func (e *remoteEngine) readRaw(ctx context.Context, packKey string, off, size int64) ([]byte, error) {
 	if size <= 0 {
 		return nil, nil
 	}
+	keys := []string{packKey}
+	if rel, ok := strings.CutPrefix(packKey, repoPrefix(e.repoID)); ok {
+		for _, p := range e.prefixes {
+			keys = append(keys, p+rel)
+		}
+	}
+	var lastErr error
+	for _, k := range keys {
+		data, err := e.readRawOne(ctx, k, off, size)
+		if err == nil {
+			return data, nil
+		}
+		if !store.IsNotFound(err) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (e *remoteEngine) readRawOne(ctx context.Context, packKey string, off, size int64) ([]byte, error) {
 	first := uint64(off) >> blockShift
 	last := uint64(off+size-1) >> blockShift
 	var buf bytes.Buffer

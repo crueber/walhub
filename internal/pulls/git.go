@@ -3,10 +3,13 @@ package pulls
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -59,6 +62,27 @@ type GitRunner interface {
 	LogRange(ctx context.Context, dir, base, head string, skip, n int) ([]CommitEntry, error)
 	// Subject returns the subject line of one commit.
 	Subject(ctx context.Context, dir, sha string) (string, error)
+	// PackTip packs every object reachable from tip but no existing ref
+	// (the merge/update-branch commit step, §5: server-made commits must
+	// reach the bucket atomically with their ref update, or the merged
+	// ref dangles bucket-missing objects). Returns (nil, nil) when tip
+	// contributes no new objects. The pack file pair lives under a temp
+	// scratch dir the CALLER owns: it must survive until the ref publish
+	// consuming it returns, then be removed (os.RemoveAll).
+	PackTip(ctx context.Context, dir, tip string) (*TipPack, error)
+}
+
+// TipPack is one server-made pack file pair (merge/update-branch), ready
+// for the ref-publish funnel (upload + manifest CAS in one WAL entry).
+type TipPack struct {
+	// Scratch owns PackPath/IdxPath (caller removes it after publish).
+	Scratch     string
+	PackPath    string
+	IdxPath     string
+	Checksum    string
+	PackSize    uint64
+	IdxSize     uint64
+	ObjectCount uint64
 }
 
 // RepoDirs resolves a repo to its synced local git dir (the production
@@ -80,6 +104,23 @@ type RefPublisher interface {
 	UpdateRef(ctx context.Context, repo, ref, old, newSHA string, meta map[string]string) error
 	// DeleteRef deletes ref (policy-checked like any ref delete).
 	DeleteRef(ctx context.Context, repo, ref string, meta map[string]string) error
+	// UpdateRefWithPack moves ref old → new together with a server-made
+	// pack (merge/update-branch commits, §5): the pack uploads and the
+	// txn commits in ONE WAL entry — the ref never dangles. A nil pack
+	// is UpdateRef. The pack files must survive until this returns (the
+	// funnel uploads synchronously); the caller removes them after.
+	UpdateRefWithPack(ctx context.Context, repo, ref, old, newSHA string, pack *RefPack, meta map[string]string) error
+}
+
+// RefPack is the funnel-bound form of a TipPack (law 8: core's
+// PreparedPack stays in the WAL package; this is the narrow seam copy).
+type RefPack struct {
+	PackPath    string
+	IdxPath     string
+	Checksum    string
+	PackSize    uint64
+	IdxSize     uint64
+	ObjectCount uint64
 }
 
 // gitPool is the bounded semaphore of concurrent git processes (04_git.md
@@ -463,6 +504,157 @@ func (g *SubprocessGit) Subject(ctx context.Context, dir, sha string) (string, e
 		return "", fmt.Errorf("log subject: %w", err)
 	}
 	return strings.TrimRight(out, "\n"), nil
+}
+
+// PackTip packs every object reachable from tip but no existing ref
+// (§5 merge/update-branch durability): `git pack-objects --revs --stdout`
+// over `<tip>` plus `^<ref>` exclusion lines (one per ref from
+// `for-each-ref` — pack-objects takes no `--not/--all`, caret negation
+// rides stdin), then `git index-pack --stdin --fsck-objects` in a scratch
+// git-dir (the ingest shape, minus thin handling — server-made packs are
+// thick and trusted). Returns (nil, nil) when tip contributes no new
+// objects (fully contained — the caller publishes ref-only, today's path,
+// with nothing to dangle).
+//
+// ### Concurrency
+//
+// Hazard: two merges packing concurrently. Avoidance: the scratch dir is
+// unique per call (pid+nanos, the replay-temp-branch scheme); nothing is
+// written to the serving dir. No lock of any kind is held (pure
+// subprocess + temp files, 13 §2 rule 4).
+func (g *SubprocessGit) PackTip(ctx context.Context, dir, tip string) (*TipPack, error) {
+	if err := validateSHA(tip); err != nil {
+		return nil, err
+	}
+	refsOut, err := g.runCollect(ctx, dir, []string{"for-each-ref", "--format=%(refname)"}, "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("pack refs: %w", err)
+	}
+	var stdin strings.Builder
+	stdin.WriteString(tip + "\n")
+	for _, ref := range splitLines(refsOut) {
+		stdin.WriteString("^" + ref + "\n")
+	}
+	raw, err := g.runCollect(ctx, dir, []string{"pack-objects", "--revs", "--stdout"}, stdin.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("pack-objects: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, nil // fully contained — nothing new to upload
+	}
+	scratch, err := os.MkdirTemp("", "walhub-packtip-*")
+	if err != nil {
+		return nil, fmt.Errorf("%w: pack scratch: %v", ErrUnavailable, err)
+	}
+	// A pack failure below must not litter the temp dir (the caller owns
+	// removal only on success).
+	failed := true
+	defer func() {
+		if failed {
+			os.RemoveAll(scratch)
+		}
+	}()
+	if err := os.MkdirAll(filepath.Join(scratch, "objects", "pack"), 0o755); err != nil {
+		return nil, fmt.Errorf("%w: pack scratch: %v", ErrUnavailable, err)
+	}
+	// The hand-built git-dir mirrors the ingest scratch (minus alternates
+	// — the pack is thick and self-contained): index-pack --stdin
+	// requires a recognizable repository layout.
+	if err := os.MkdirAll(filepath.Join(scratch, "refs"), 0o755); err != nil {
+		return nil, fmt.Errorf("%w: pack scratch: %v", ErrUnavailable, err)
+	}
+	if err := os.MkdirAll(filepath.Join(scratch, "objects", "info"), 0o755); err != nil {
+		return nil, fmt.Errorf("%w: pack scratch: %v", ErrUnavailable, err)
+	}
+	if err := os.WriteFile(filepath.Join(scratch, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		return nil, fmt.Errorf("%w: pack scratch: %v", ErrUnavailable, err)
+	}
+	if cfg, cerr := os.ReadFile(filepath.Join(dir, "config")); cerr == nil {
+		_ = os.WriteFile(filepath.Join(scratch, "config"), cfg, 0o644)
+	}
+	out, err := g.runCollect(ctx, scratch, []string{"index-pack", "--stdin", "--fsck-objects"}, raw, nil)
+	if err != nil {
+		return nil, fmt.Errorf("pack index: %w", err)
+	}
+	sha := lastTipHexToken(out)
+	if err := validateSHA(sha); err != nil {
+		return nil, fmt.Errorf("%w: pack index produced %q", ErrCorrupt, sha)
+	}
+	pp := filepath.Join(scratch, "objects", "pack", "pack-"+sha+".pack")
+	ip := filepath.Join(scratch, "objects", "pack", "pack-"+sha+".idx")
+	pfi, err := os.Stat(pp)
+	if err != nil {
+		return nil, fmt.Errorf("%w: pack missing: %v", ErrCorrupt, err)
+	}
+	ifi, err := os.Stat(ip)
+	if err != nil {
+		return nil, fmt.Errorf("%w: pack idx missing: %v", ErrCorrupt, err)
+	}
+	// An excluded-everything pack still emits a header-only shell (the
+	// contained-tip case): zero objects means ref-only, today's path.
+	if n := tipIdxObjectCount(ip); n == 0 {
+		os.RemoveAll(scratch)
+		return nil, nil
+	} else {
+		failed = false
+		return &TipPack{
+			Scratch:     scratch,
+			PackPath:    pp,
+			IdxPath:     ip,
+			Checksum:    sha,
+			PackSize:    uint64(pfi.Size()),
+			IdxSize:     uint64(ifi.Size()),
+			ObjectCount: n,
+		}, nil
+	}
+}
+
+// lastTipHexToken returns the last 40/64-hex token in s (index-pack
+// stdout carries the pack checksum; mirrors internal/git's parser so the
+// seam stays dependency-light).
+func lastTipHexToken(s string) string {
+	var last string
+	for _, tok := range strings.Fields(s) {
+		t := strings.Trim(tok, ",;:")
+		if len(t) == 40 || len(t) == 64 {
+			ok := true
+			for i := 0; i < len(t); i++ {
+				c := t[i]
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				last = t
+			}
+		}
+	}
+	return last
+}
+
+// tipIdxObjectCount reads the object count from a v2 pack idx fanout
+// table (fanout[255] after the 8-byte header; mirrors internal/git's
+// reader — cosmetic field, so an unreadable idx counts 0, never an
+// error).
+func tipIdxObjectCount(path string) uint64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	var hdr [8]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return 0
+	}
+	if !bytes.Equal(hdr[:4], []byte{0xff, 't', 'O', 'c'}) || binary.BigEndian.Uint32(hdr[4:8]) != 2 {
+		return 0
+	}
+	var fan [1024]byte
+	if _, err := io.ReadFull(f, fan[:]); err != nil {
+		return 0
+	}
+	return uint64(binary.BigEndian.Uint32(fan[1020:1024]))
 }
 
 // splitLines splits output into non-empty lines.

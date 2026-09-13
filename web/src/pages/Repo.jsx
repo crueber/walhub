@@ -566,6 +566,13 @@ export default function Repo(props) {
                       {visibilityBadge(s()).label}
                     </span>
                   </Show>
+                  {/* Issue #424: forked-from indication — the parent pointer
+                      renders in the identity block, linking to the parent. */}
+                  <Show when={s().fork_parent}>
+                    <span class="muted text-sm">
+                      forked from <A class="hover:underline" href={`/${s().fork_parent}`}>{s().fork_parent}</A>
+                    </span>
+                  </Show>
                   {/* Forgejo #240: pull-only mirror badge + next sync. The
                       summary `mirror` view is the single source (same shape
                       the settings Mirror tab polls); nothing here fetches. */}
@@ -589,6 +596,13 @@ export default function Repo(props) {
                     <RefPicker full={full()} repo={repoClient} head={() => pillHead(getViewed(), s().head)} />
                   </Show>
                   <span class="muted">{s().branches ?? 0} branches · {s().tags ?? 0} tags</span>
+                  {/* Issue #424: the fork-network rail — the live count
+                      links to the queryable fork list. */}
+                  <Show when={(s().forks ?? 0) > 0}>
+                    <A class="hover:underline" href={`/${full()}/forks`}>
+                      {s().forks} {s().forks === 1 ? "fork" : "forks"}
+                    </A>
+                  </Show>
                 </div>
               </div>
             )}
@@ -599,7 +613,16 @@ export default function Repo(props) {
             <WatchToggle repo={repoClient} />
             <TasksOverlay repo={repoClient} />
             <Show when={getSummary()}>
-              {(s) => <CloneMenu full={full()} summary={s()} />}
+              {(s) => (
+                <>
+                  {/* Issue #424: Fork sits in the Clone pill row — same
+                      vocabulary, count from the summary (no extra fetch). */}
+                  <A class="pill" href={`/${full()}/fork`} title={`Fork ${full()}`}>
+                    ⑂ Fork{(s().forks ?? 0) > 0 ? ` ${s().forks}` : ""}
+                  </A>
+                  <CloneMenu full={full()} summary={s()} />
+                </>
+              )}
             </Show>
           </div>
         </div>
