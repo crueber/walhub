@@ -7,7 +7,18 @@
 // per-view Shows — one copy, same gate, same onDone, no state plumbing (the
 // signal already lived at the shared OwnerPage scope). The #420 bio
 // hide-while-editing gate stays profile-view-only; the sidebar button gate
-// is untouched. No DOM: JSX pinned as source text, mirroring
+// is untouched.
+//
+// SUPERSEDED in placement by Forgejo #498 (this file's first two tests
+// rewritten #498-scoped): the hoist leaked the form onto the
+// repositories/organizations tabs, so the form re-scopes under
+// view() === "profile" — profile view only. What #442 keeps: the sidebar
+// button on every tab opens the editor THROUGH the #455 navigate-to-/{owner}
+// flow (openEditor), the module-scope signal (it must survive the
+// tab→profile remount), the byte-identical gate/onDone, and the
+// profile-view-only #420 bio gate. The exit path (effect + cleanup) and the
+// profile-only placement pins live in owner-profile-edit-exit-498.test.js.
+// No DOM: JSX pinned as source text, mirroring
 // profile-sidebar-421.test.js / profile-bio-editing.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -30,23 +41,30 @@ function block(src, start, end) {
   return src.slice(s, e);
 }
 
-test("form renders once, in the main column above every per-view gate", () => {
+test("form renders once, in the main column inside the profile branch only", () => {
+  // Forgejo #498 (supersedes the #442 hoist this test used to pin): the
+  // above-the-gates placement leaked the form onto the tabs, so the single
+  // copy re-scopes under view() === "profile" — first in the profile
+  // branch, above the identity block. Reachability from every tab is kept
+  // through openEditor's navigate-to-/{owner} (#455), not through rendering
+  // on every tab.
   const uses = [...REPOS.matchAll(/<ProfileForm/g)];
-  assert.equal(uses.length, 1, "exactly one ProfileForm use (hoisted, never forked per view)");
+  assert.equal(uses.length, 1, "exactly one ProfileForm use (scoped, never forked per view)");
   const main = REPOS.indexOf('<div class="profile-main');
+  const profileGate = REPOS.indexOf('<Show when={view() === "profile"}>');
+  const reposGate = REPOS.indexOf('<Show when={view() === "repos"}>');
   const form = REPOS.indexOf("<Show when={getEditing() && getProfile()?.can_edit}>");
   assert.ok(main !== -1 && form !== -1 && main < form, "the form Show renders inside the main column");
-  for (const gate of ['<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>', '<Show when={view() === "orgs"}>']) {
-    const at = REPOS.indexOf(gate);
-    assert.ok(at !== -1 && form < at, `the form sits above the ${gate} branch (reachable from that view)`);
-  }
+  assert.ok(profileGate < form && form < reposGate, "the form nests inside the profile branch (before the repos branch)");
   const col = REPOS.indexOf('<div class="profile-sidebar-col');
   assert.ok(col !== -1 && form < col, "the form renders in the main column, not the sidebar");
 });
 
-test("form no longer nests inside any per-view branch", () => {
+test("form nests in the profile branch only — no copy on the tabs", () => {
+  // Forgejo #498: the tabs show their normal content while editing (the
+  // exit effect clears the state too — pinned in -exit-498).
   const profile = block(REPOS, '<Show when={view() === "profile"}>', '<Show when={view() === "repos"}>');
-  assert.ok(!profile.includes("<ProfileForm"), "no form copy inside the profile branch");
+  assert.ok(profile.includes("<ProfileForm"), "the single form copy lives inside the profile branch");
   const repos = block(REPOS, '<Show when={view() === "repos"}>', '<Show when={view() === "orgs"}>');
   assert.ok(!repos.includes("<ProfileForm"), "no form copy inside the repositories branch");
   const orgs = REPOS.slice(REPOS.indexOf('<Show when={view() === "orgs"}>'));
