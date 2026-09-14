@@ -16,6 +16,7 @@ import { useData, invalidate, invalidatePullLists, reportError } from "../lib/da
 import { CheckPill, ContextRows, ZeroChecksBlock } from "./Checks.jsx";
 import { isZeroChecks, requiredCheckBlockers } from "../lib/checks-empty.js";
 import { parsePatchFiles, normalizePatchBody, anchorContextSha } from "../lib/diff.js";
+import { lineClass } from "../components/DiffTable.jsx";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import DateTime from "../components/DateTime.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
@@ -306,7 +307,10 @@ function threadFreshness(thread, files) {
 
 /** One file's hunks with line comment affordances + inline thread cards
  *  (unresolved-first; unlocatable/drifted anchors render once, collapsed,
- *  at the file end — never relocated). */
+ *  at the file end — never relocated). Added/removed rows carry the shared
+ *  lineClass() background on the row div (issue #544 — the same .diff-add /
+ *  .diff-del tokens DiffBody uses, so the conversation diff matches the
+ *  Files tab and commit diffs in both themes). */
 function DiffFile(props) {
   const stageLine = (file, hunk, row) => {
     // A line's comment affordance builds the anchor from the parsed hunk:
@@ -375,7 +379,7 @@ function DiffFile(props) {
               <For each={rows}>
                 {(row, ri) => (
                   <div>
-                    <div class="group flex font-mono text-xs">
+                    <div class={`group flex font-mono text-xs ${lineClass(row.line.t)}`}>
                       <span class="w-10 shrink-0 select-none text-right text-zinc-400">{row.oldNo ?? ""}</span>
                       <span class="w-10 shrink-0 select-none text-right text-zinc-400">{row.newNo ?? ""}</span>
                       <span class="w-4 shrink-0 select-none">{row.line.t}</span>

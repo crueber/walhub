@@ -20,6 +20,13 @@
 // render time. The drift-hash inputs (hunk.lines → anchorContextSha in
 // lib/diff.js, twin DriftHash in internal/review/model.go) are never
 // touched — the pinned vectors in diff-review.test.js are the tripwire.
+//
+// Row backgrounds (issue #544): lineClass() applies per CELL, not per row
+// — unified rows color both cells (gutter + code, full-row background),
+// split rows color per side (a paired change row is red-left/green-right,
+// never one color across). The .diff-num.diff-add/.diff-del compound rules
+// in ui.css beat the plain .diff-num background at any order; the
+// unlayered .diff-row.line-hl selection rule still wins over all of them.
 
 import { createSignal, createEffect, onCleanup, untrack, For, Show } from "solid-js";
 import {
@@ -219,7 +226,7 @@ export function DiffBody(props) {
                         const side = unifiedSide(l);
                         return (
                           <tr id={uniId(hi(), li())} class="diff-row" classList={{ "line-hl": inSel(side, no) }}>
-                            <td class="diff-num">
+                            <td class={`diff-num ${lineClass(l.t)}`}>
                               {gutterLink(hi(), side, no, `Diff line ${no}${side === "old" ? " (old side)" : ""} in ${path()}`)}
                             </td>
                             <td class={lineClass(l.t)}>{l.text || " "}</td>
@@ -243,11 +250,11 @@ export function DiffBody(props) {
                   <For each={annotateSplitRows(h)}>
                     {(row, ri) => (
                       <tr id={splitId(hi(), ri())} class="diff-row" classList={{ "line-hl": inSel("old", row.left?.no) || inSel("new", row.right?.no) }}>
-                        <td class="diff-num">
+                        <td class={`diff-num ${row.left ? lineClass(row.left.t) : ""}`}>
                           {gutterLink(hi(), "old", row.left?.no, `Diff line ${row.left?.no} (old side) in ${path()}`)}
                         </td>
                         <td class={row.left ? lineClass(row.left.t) : ""}>{row.left ? row.left.text || " " : ""}</td>
-                        <td class="diff-num">
+                        <td class={`diff-num ${row.right ? lineClass(row.right.t) : ""}`}>
                           {gutterLink(hi(), "new", row.right?.no, `Diff line ${row.right?.no} (new side) in ${path()}`)}
                         </td>
                         <td class={row.right ? lineClass(row.right.t) : ""}>{row.right ? row.right.text || " " : ""}</td>

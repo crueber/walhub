@@ -275,6 +275,24 @@ the family; inline colors are never used for state.
   `web/src/lib/diff-lines.js`): one gutter column unified, two (old
   left, new right) in split; file-scoped shareable hashes; same
   highlight treatment as blob (`ui.css:317-323`).
+- **`.diff-add` / `.diff-del` row backgrounds** (Forgejo #544,
+  `ui.css:295-296` + gutter tiebreaks `ui.css:306-313`): every `+`
+  line renders a full-row light green background, every `-` line
+  light red — gutter cells included, both themes (`dark:` variants
+  carry the default dark theme). The classes apply per CELL via the
+  shared `lineClass()` (`DiffTable.jsx:37`): unified rows color
+  gutter + code, split rows color per side (a paired change row is
+  red-left/green-right, never one color across). The div-based PR
+  conversation diff (`DiffFile`, `web/src/pages/Pull.jsx`) imports
+  the same helper onto its row divs instead of forking a mapping.
+  Gutter tiebreak: a colored gutter carries BOTH classes
+  (`diff-num diff-add`), and the compound
+  `.diff-num.diff-add/.diff-del` rules beat the plain `.diff-num`
+  background at any order (equal-specificity single-class ties would
+  lose — `.diff-num` is written later). Line selection still wins:
+  `.diff-row.line-hl` stays deliberately unlayered (unlayered beats
+  layered at any specificity), same precedent as blob. No color
+  literals in JSX — colors live in `ui.css` token composition (F2).
 - **`.markdown-body`** (issue #182, `ui.css:234-274`): designed prose
   covering everything marked emits (headings, code, tables, blockquotes,
   nested/task lists, hr, images, links); relative URLs resolve against
