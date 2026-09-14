@@ -1,10 +1,13 @@
-// web/test/unit/commit-graph-gutter-512.test.js — Forgejo #512: the
-// commit-graph lane gutter must read as one continuous line while the graph
-// is ON. Each row draws only its own rail segment, so consecutive row boxes
-// must abut edge-to-edge: rows margin-free (padding-only separation) and no
-// per-row divider touching the rail column. Graph OFF keeps its dividers;
-// the ≤480px fallback is unchanged. Source pins, mirroring
-// commit-graph-506.test.js (no Solid, no DOM).
+// web/test/unit/commit-graph-gutter-512.test.js — Forgejo #512
+// (+ reopened follow-up): the commit-graph lane gutter must read as one
+// continuous line while the graph is ON. Each row draws only its own rail
+// segment, so the rail must fill its row box edge-to-edge: the row itself
+// carries no vertical padding (a stretched grid item only fills its track,
+// and row-level py-2 sits outside the track — measured live: 16px short
+// rail, 8px gap at every joint), each content column carries its own py-2,
+// rows are margin-free, and no per-row divider touches the rail column.
+// Graph OFF keeps its dividers; the ≤480px fallback is unchanged. Source
+// pins, mirroring commit-graph-506.test.js (no Solid, no DOM).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -19,15 +22,24 @@ function srcOf(rel) {
 const COMMITS = srcOf("../../src/pages/Commits.jsx");
 const CSS = srcOf("../../src/ui.css");
 
-test("#512: .commit-row carries no margins — separation is padding only", () => {
+test("#512: .commit-row carries no vertical padding and no margins — the rail fills the box", () => {
   const rowClass = COMMITS.match(/class="commit-row ([^"]*)"/)?.[1] ?? "";
-  assert.ok(rowClass.includes("py-2"), "row spacing comes from py-2 cell padding");
+  // No vertical padding on the row itself: a stretched grid item fills
+  // only its track, and row-level py-* sits outside the track (reopened #512).
+  const vpad = rowClass.split(/\s+/).find((t) => /^(py-|pt-|pb-)/.test(t));
+  assert.equal(vpad, undefined, `no vertical padding on the row (found: ${vpad})`);
   const marginUtil = rowClass.split(/\s+/).find((t) => /^(m[xytrbl]?|space-[xy])-/.test(t));
   assert.equal(marginUtil, undefined, `no margin utility on the row (found: ${marginUtil})`);
   assert.ok(
     /\.commit-row[^{]*\{[^}]*margin:\s*0/.test(CSS),
     "ui.css pins the margin-free convention against future mb-* reaches",
   );
+  // Each content column carries its own py-2 instead.
+  for (const col of ["commit-main", "commit-sha-col", "commit-check"]) {
+    const m = COMMITS.match(new RegExp(`class="${col} ([^"]*)"`));
+    assert.ok(m, `${col} block found`);
+    assert.ok(/(^|\s)py-2(\s|$)/.test(m[1]), `${col} carries its own py-2 (${m[1]})`);
+  }
 });
 
 test("#512: divide-y applies only while the graph is OFF", () => {
