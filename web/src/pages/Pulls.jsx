@@ -1,6 +1,6 @@
 // web/src/pages/Pulls.jsx — route "/:owner/:name/pulls" (03 §9): the PR
 // list (state tabs open/closed, base/head filters, paged index-first
-// cards), ALWAYS rendered newest-first by number descending (#48). Opening a PR lives on the full "/pulls/new" page (issue #34 —
+// flat divider rows in the Issues.jsx idiom — Forgejo #531), ALWAYS rendered newest-first by number descending (#48). Opening a PR lives on the full "/pulls/new" page (issue #34 —
 // the cramped sidebar box is gone; this page links to it). Cards refresh
 // on `pull` SSE frames (the repo stream is shared; this page refetches its
 // window).
@@ -120,25 +120,36 @@ export default function Pulls() {
             />
           }
         >
-          <ul class="card-list">
+          {/* Flat divider-separated rows, never boxed (Forgejo #531, the
+              Issues.jsx:351–358 idiom echoing the ThreadTimeline
+              comment-entry dividers): one container, per-PR row = title
+              link, state chip, refs inline, right-aligned meta. The
+              title truncates (min-w-0 + max-w-full) and the row wraps,
+              so long titles wrap sanely instead of overflowing; the
+              right meta sits ml-auto. */}
+          <ul>
             <For each={sortByNumDesc(getPage().pulls)}>
               {(pr) => (
-                <li class="card">
-                  <A href={`/${ctx.owner}/${ctx.name}/pull/${pr.num}`} class="card-title">
-                    #{pr.num} {pr.title}
-                  </A>
-                  <div class="card-meta">
+                <li class="border-t border-zinc-200 py-3 first:border-t-0 first:pt-0 dark:border-zinc-800">
+                  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <A
+                      href={`/${ctx.owner}/${ctx.name}/pull/${pr.num}`}
+                      class="min-w-0 max-w-full truncate font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+                    >
+                      #{pr.num} {pr.title}
+                    </A>
                     {/* Forgejo #530: merged wins over state (merge stamps
                         closed too) — the chip helper reads the PROut.merged
                         flag the list endpoint carries. */}
                     <span class={pullListChip(pr).cls}>{pullListChip(pr).text}</span>
-                    <span>
+                    <span class="min-w-0 text-xs text-zinc-500 dark:text-zinc-400">
                       {pr.base_ref} ← {pr.head_ref}
                     </span>
-                    {" · "}
-                    <span>{pr.author}</span>
-                    {" · "}
-                    <span><DateTime value={pr.updated_at} /></span>
+                    <span class="ml-auto shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+                      <span>{pr.author}</span>
+                      {" · "}
+                      <span><DateTime value={pr.updated_at} /></span>
+                    </span>
                   </div>
                 </li>
               )}

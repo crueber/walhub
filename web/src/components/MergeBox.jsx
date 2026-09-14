@@ -1,5 +1,10 @@
 // web/src/components/MergeBox.jsx — 08 §2 MergeBox.
 //
+// Forgejo #531: the box renders as a VALUE inside the PR sidebar's one
+// divide-y panel (the Issue.jsx:549 idiom) — no .card wrappers, no
+// card-header heading; the parent section owns the "Merge" micro-label
+// and the machine state renders as a value line below it.
+//
 // The PR merge control as an explicit state machine (per 03/04/05):
 // draft → ready → blocked{checks, reviews, conflicts} → mergeable →
 // merging(task) → merged | failed. Transitions recompute on header
@@ -142,9 +147,9 @@ export default function MergeBox(props) {
   };
 
   return (
-    <div class="grid gap-4">
+    <>
       <Show when={state() === "merging" || getTask()}>
-        <div class="card" aria-live="polite" aria-label="Merge task">
+        <div aria-live="polite" aria-label="Merge task">
           <p class="text-xs">
             merge task {getTask()?.state ?? "starting…"}
             <Show when={getTask()?.error}>: {getTask()?.error}</Show>
@@ -155,8 +160,8 @@ export default function MergeBox(props) {
         </div>
       </Show>
       <Show when={!props.pr?.merged}>
-        <form class="card" onSubmit={merge} aria-label="Merge">
-          <h2 class="card-header">Merge ({state()})</h2>
+        <form onSubmit={merge} aria-label="Merge">
+          <p class="text-sm">{state()}</p>
           <label class="field">
             <span>Strategy</span>
             <select value={getStrategy()} onInput={(e) => setStrategy(e.target.value)} disabled={getMerging()}>
@@ -194,10 +199,10 @@ export default function MergeBox(props) {
         </form>
       </Show>
       <Show when={props.pr?.merged}>
-        <p class="card text-sm">
+        <p class="text-sm">
           merged as {(props.pr?.merge_commit_sha ?? "").slice(0, 12)} by {props.pr?.merged_by}
         </p>
       </Show>
-    </div>
+    </>
   );
 }

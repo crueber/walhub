@@ -77,13 +77,15 @@ function decisionBadge(decision) {
 }
 
 /** Review summary bar (§8): decision badge + reviewer chips (stale derived
- *  client-side from commit_sha != head) + requested chips + unresolved. */
+ *  client-side from commit_sha != head) + requested chips + unresolved.
+ *  Forgejo #531: a section VALUE inside the sidebar's one divide-y panel
+ *  (the Issue.jsx:549 idiom) — no .card wrapper, no heading; the parent
+ *  section owns the uppercase micro-label. */
 function ReviewSummaryBar(props) {
   const summary = () => props.summary;
   const latest = () => Object.entries(summary()?.latest ?? {});
   return (
-    <div class="card" aria-label="Review summary">
-      <h2 class="card-header">Review summary</h2>
+    <>
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <span class={decisionBadge(summary()?.decision ?? "REVIEW_REQUIRED")}>
           {summary()?.decision ?? "REVIEW_REQUIRED"}
@@ -107,7 +109,7 @@ function ReviewSummaryBar(props) {
           {(who) => <span class="pill opacity-70" title="requested reviewer">{who} · requested</span>}
         </For>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -165,7 +167,9 @@ function ReviewsList(props) {
 }
 
 /** Reviewers panel: picker fed by review-suggest (150 ms debounce,
- *  abort-on-keystroke per the §2.6 ref-picker pattern). */
+ *  abort-on-keystroke per the §2.6 ref-picker pattern). Forgejo #531: a
+ *  section VALUE inside the sidebar's one divide-y panel — no .card
+ *  wrapper, no heading; the parent section owns the micro-label. */
 function ReviewersPanel(props) {
   const [getQuery, setQuery] = createSignal("");
   const [getOptions, setOptions] = createSignal([]);
@@ -212,8 +216,7 @@ function ReviewersPanel(props) {
   };
 
   return (
-    <div class="card" aria-label="Reviewers">
-      <h2 class="card-header">Reviewers</h2>
+    <>
       <Show when={props.canEdit} fallback={
         <p class="text-xs text-zinc-500 dark:text-zinc-400">requesting reviewers needs the write role</p>
       }>
@@ -258,7 +261,7 @@ function ReviewersPanel(props) {
         </For>
       </ul>
       </Show>
-    </div>
+    </>
   );
 }
 
@@ -861,72 +864,90 @@ export default function Pull() {
           </div>
         </div>
       </section>
-      {/* Sidebar (Forgejo #521, the issue-page idiom): narrow rail of
-          grouped cards under one card-header treatment. The review summary
-          composes in here first — it floated between header and timeline
-          before — then mergeability / reviewers / checks / merge. */}
+      {/* Sidebar (Forgejo #531, the Issue.jsx:549 one-container idiom):
+          ONE card divide-y panel — review summary first, then
+          mergeability / reviewers / checks / merge as divided sections.
+          Each section is a p-3 block with an uppercase micro-label above
+          its value, so a "none" reads as that section's value. No
+          stacked sibling .card blocks, no card-header headings. */}
       <aside aria-label="Details" class="grid content-start gap-3">
-        <ReviewSummaryBar summary={summary()} head={head()} />
-        <div class="card">
-          <h2 class="card-header">Mergeability</h2>
-          <p class="text-sm">{mergeableText(mergeable())}</p>
-          <Show when={!getView()?.head_ref_ok}>
-            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">From branch pending — push first.</p>
-          </Show>
-          <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            base {pr()?.base?.ref} @ {(pr()?.base?.sha ?? "").slice(0, 12)}
-            <br />
-            head {pr()?.head?.ref} @ {(pr()?.head?.sha ?? "").slice(0, 12)}
-            {/* Forgejo #328: cross-repo PRs name the fork holding the head. */}
-            <Show when={pr()?.fork?.repo}>
+        <section class="card divide-y divide-zinc-200 text-sm dark:divide-zinc-800" aria-label="Pull request metadata">
+          <div class="p-3">
+            <span class="mb-1 block text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Review summary</span>
+            <ReviewSummaryBar summary={summary()} head={head()} />
+          </div>
+          <div class="grid gap-1 p-3">
+            {/* Mergeability is a VALUE, not a heading: the micro-label
+                above, mergeableText(mergeable()) as the value line, the
+                base/head branches, pending-branch warning, and
+                commits/files links as secondary value detail in the same
+                section. */}
+            <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Mergeability</span>
+            <p class="text-sm">{mergeableText(mergeable())}</p>
+            <Show when={!getView()?.head_ref_ok}>
+              <p class="text-xs text-amber-600 dark:text-amber-400">From branch pending — push first.</p>
+            </Show>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+              base {pr()?.base?.ref} @ {(pr()?.base?.sha ?? "").slice(0, 12)}
               <br />
-              from {pr()?.fork?.repo}
-            </Show>
-          </p>
-          <div class="mt-2 flex gap-2 text-xs">
-            <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/commits`}>commits</A>
-            <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/files`}>files</A>
+              head {pr()?.head?.ref} @ {(pr()?.head?.sha ?? "").slice(0, 12)}
+              {/* Forgejo #328: cross-repo PRs name the fork holding the head. */}
+              <Show when={pr()?.fork?.repo}>
+                <br />
+                from {pr()?.fork?.repo}
+              </Show>
+            </p>
+            <div class="flex gap-2 text-xs">
+              <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/commits`}>commits</A>
+              <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/files`}>files</A>
+            </div>
           </div>
-        </div>
-        <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} canEdit={canReview()} />
-        <Show when={head()}>
-          <div class="card" aria-label="Checks">
-            <h2 class="card-header flex items-center gap-2">
-              Checks
-              <CheckPill full={ctx.full} sha={head()} client={ctx.repoClient} verbose />
-            </h2>
-            <Show
-              when={zeroChecks()}
-              fallback={<ContextRows full={ctx.full} sha={head()} client={ctx.repoClient} />}
-            >
-              <ZeroChecksBlock full={ctx.full} required={requiredChecks()} />
-            </Show>
-            <Show when={requiredChecks().length > 0}>
-              <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                required: {requiredChecks().join(", ")}
-              </p>
-            </Show>
-            <Show when={checksBlockers().length > 0}>
-              <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                blocking merge: {checksBlockers().join(", ")}
-              </p>
-            </Show>
+          <div class="grid gap-1 p-3">
+            <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Reviewers</span>
+            <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} canEdit={canReview()} />
           </div>
-        </Show>
-        <Show when={thread()?.state === "open" || pr()?.merged}>
-          <MergeBox
-            client={ctx.repoClient}
-            num={num()}
-            pr={pr()}
-            mergeable={mergeable()}
-            checksBlockers={checksBlockers}
-            reviewDecision={() => summary()?.decision}
-            role={role}
-            canUpdate={canUpdateBranch}
-            onSettled={() => reload()}
-            reload={() => reload()}
-          />
-        </Show>
+          <Show when={head()}>
+            <div class="grid gap-1 p-3" aria-label="Checks">
+              <div class="mb-1 flex items-center justify-between gap-2">
+                <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Checks</span>
+                <CheckPill full={ctx.full} sha={head()} client={ctx.repoClient} verbose />
+              </div>
+              <Show
+                when={zeroChecks()}
+                fallback={<ContextRows full={ctx.full} sha={head()} client={ctx.repoClient} />}
+              >
+                <ZeroChecksBlock full={ctx.full} required={requiredChecks()} />
+              </Show>
+              <Show when={requiredChecks().length > 0}>
+                <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                  required: {requiredChecks().join(", ")}
+                </p>
+              </Show>
+              <Show when={checksBlockers().length > 0}>
+                <p class="text-xs text-amber-600 dark:text-amber-400">
+                  blocking merge: {checksBlockers().join(", ")}
+                </p>
+              </Show>
+            </div>
+          </Show>
+          <Show when={thread()?.state === "open" || pr()?.merged}>
+            <div class="grid gap-1 p-3">
+              <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Merge</span>
+              <MergeBox
+                client={ctx.repoClient}
+                num={num()}
+                pr={pr()}
+                mergeable={mergeable()}
+                checksBlockers={checksBlockers}
+                reviewDecision={() => summary()?.decision}
+                role={role}
+                canUpdate={canUpdateBranch}
+                onSettled={() => reload()}
+                reload={() => reload()}
+              />
+            </div>
+          </Show>
+        </section>
       </aside>
     </div>
   );
