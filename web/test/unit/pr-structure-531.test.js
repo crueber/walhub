@@ -98,6 +98,11 @@ test("merge section composes MergeBox with every gate prop intact", () => {
   assert.ok(MERGEBOX.includes("merge pull request"), "merge affordance kept");
 });
 
+test("card-list ban extends to the PR review surface + Checks page (Forgejo #545)", () => {
+  assert.ok(!PULL.includes('class="card-list"') && !PULL.includes("card-list"), "no card-list anywhere in Pull.jsx");
+  assert.ok(!srcOf("../../src/pages/Checks.jsx").includes("card-list"), "no card-list on the Checks page either");
+});
+
 test("PR list rows are flat border-t dividers in one container, never boxed", () => {
   assert.ok(!PULLS.includes('class="card-list"'), "no card-list container");
   assert.ok(!PULLS.includes('<li class="card">'), "no per-PR boxes");

@@ -223,11 +223,16 @@ pattern (issue #50 as amended by #270).
 ## 6. State chips
 
 `.chip-open` / `.chip-closed` / `.chip-merged` / `.chip-draft` /
-`.chip-prerelease` (`ui.css:108-119`) — the state→color mapping is fixed
-(emerald / red / purple / amber / sky). Consumers:
+`.chip-prerelease` / `.chip-neutral` (`ui.css:108-121`) — the state→color
+mapping is fixed (emerald / red / purple / amber / sky / zinc). Consumers:
 `web/src/pages/Issue.jsx:440` (open/closed),
 `web/src/lib/pull-state.js:53-55,99` (open/closed/merged mapping),
-`web/src/pages/Releases.jsx:27-30` (draft/prerelease). New states extend
+`web/src/pages/Releases.jsx:27-30` (draft/prerelease),
+`web/src/pages/Pull.jsx` `reviewVerdictChip` (Forgejo #545 — review
+verdicts: APPROVED → chip-open, CHANGES_REQUESTED → chip-closed,
+COMMENTED/dismissed/requested → chip-neutral, REVIEW_REQUIRED/unknown →
+chip-draft). `.chip-neutral` is the no-signal chip for states that carry
+no color meaning. New states extend
 the family; inline colors are never used for state.
 
 ## 7. Forms
@@ -375,3 +380,7 @@ overrides AGENTS.md law 1 or the Tailwind-only rule.
   working rules, and the cited tickets; it is now codified here with a
   canonical reference per rule, and made binding by the AGENTS.md §2
   amendment in the same change (law 12).
+- **AMENDED (Forgejo #545) — `.chip-neutral` joins the state-chip family
+  (§6).** Review verdicts with no color signal (COMMENTED, dismissed,
+  requested) render zinc in both themes; the PR page's `reviewVerdictChip`
+  is the single mapping serving every verdict surface.

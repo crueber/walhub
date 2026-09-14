@@ -66,14 +66,23 @@ function mergeableText(m) {
   }
 }
 
-function decisionBadge(decision) {
-  switch (decision) {
+/** Review-verdict chip (Forgejo #545): the ONE state→chip mapping for
+ *  every verdict on the PR page (summary-bar decision, reviewer states,
+ *  review cards). APPROVED rides the emerald chip-open, CHANGES_REQUESTED
+ *  the red chip-closed, COMMENTED + dismissed/requested the neutral
+ *  chip-neutral (ui.css), REVIEW_REQUIRED/unknown the amber chip-draft
+ *  (attention needed). No per-callsite bg overrides — colors live in
+ *  ui.css composition (F2). */
+function reviewVerdictChip(state) {
+  switch (state) {
     case "APPROVED":
-      return "pill bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200";
+      return "chip chip-open";
     case "CHANGES_REQUESTED":
-      return "pill bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+      return "chip chip-closed";
+    case "COMMENTED":
+      return "chip chip-neutral";
     default:
-      return "pill bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+      return "chip chip-draft";
   }
 }
 
@@ -88,7 +97,7 @@ function ReviewSummaryBar(props) {
   return (
     <>
       <div class="mb-2 flex flex-wrap items-center gap-2">
-        <span class={decisionBadge(summary()?.decision ?? "REVIEW_REQUIRED")}>
+        <span class={reviewVerdictChip(summary()?.decision ?? "REVIEW_REQUIRED")}>
           {summary()?.decision ?? "REVIEW_REQUIRED"}
         </span>
         <span class="text-xs text-zinc-500 dark:text-zinc-400">
@@ -98,7 +107,7 @@ function ReviewSummaryBar(props) {
       <div class="flex flex-wrap gap-1.5">
         <For each={latest()} fallback={<span class="text-xs text-zinc-500 dark:text-zinc-400">no reviews yet</span>}>
           {([who, r]) => (
-            <span class="pill" title={`${r.state} @ ${String(r.commit_sha ?? "").slice(0, 12)}`}>
+            <span class={reviewVerdictChip(r.state)} title={`${r.state} @ ${String(r.commit_sha ?? "").slice(0, 12)}`}>
               {who} · {r.state}
               <Show when={r.state === "APPROVED" && r.commit_sha !== props.head}>
                 <span class="ml-1 font-semibold text-amber-600 dark:text-amber-400">(stale)</span>
@@ -107,14 +116,20 @@ function ReviewSummaryBar(props) {
           )}
         </For>
         <For each={summary()?.requested ?? []}>
-          {(who) => <span class="pill opacity-70" title="requested reviewer">{who} · requested</span>}
+          {(who) => <span class="chip chip-neutral opacity-70" title="requested reviewer">{who} · requested</span>}
         </For>
       </div>
     </>
   );
 }
 
-/** Reviews list: cards driven by review_summary + GET reviews. */
+/** Reviews list (Forgejo #545): ONE .card panel with the card-header
+ *  title (the #521/#531 conversation-column idiom) holding an unstyled
+ *  flat list — the old wrapper class carried zero CSS rules and each item
+ *  was itself a .card, i.e. bordered chrome inside bordered chrome.
+ *  Items are plain divider rows (first row flush, like the flat PR-list
+ *  rows); each reads author + chip verdict + timestamp in the .card-meta
+ *  language, with the stale marker and dismiss affordance unchanged. */
 function ReviewsList(props) {
   const submitDismiss = async (seq) => {
     const reason = window.prompt("Dismissal reason (recorded on the compensating event):", "stale");
@@ -129,14 +144,14 @@ function ReviewsList(props) {
   return (
     <div class="card" aria-label="Reviews">
       <h2 class="card-header">Reviews</h2>
-      <ul class="card-list">
+      <ul class="divide-y divide-zinc-200 dark:divide-zinc-800">
         <For each={props.reviews ?? []} fallback={<li class="text-sm text-zinc-500 dark:text-zinc-400">No reviews yet.</li>}>
           {(rv) => (
-            <li class="card">
+            <li class="py-2 first:pt-0 last:pb-0">
               <div class="card-meta">
                 <span>{rv.by}</span>
                 {" · "}
-                <span class={decisionBadge(rv.state ?? rv.kind)}>{rv.kind === "review_dismissed" ? `dismissed #${rv.dismisses}` : rv.state}</span>
+                <span class={rv.kind === "review_dismissed" ? "chip chip-neutral" : reviewVerdictChip(rv.state ?? rv.kind)}>{rv.kind === "review_dismissed" ? `dismissed #${rv.dismisses}` : rv.state}</span>
                 {" · "}
                 <span><DateTime value={rv.at} /></span>
               </div>
@@ -539,21 +554,24 @@ function FinishReview(props) {
           </For>
         </ul>
       </Show>
-      <label class="field">
-        <span>Body (optional)</span>
-        <textarea value={getBody()} onInput={(e) => setBody(e.target.value)} rows="3" onKeyDown={onSubmitKeys(submit, { isBusy: () => getBusy() })} />
+      {/* Forgejo #545: the #479 canonical form shape (IssueNew.jsx) —
+          label.grid.gap-1 + text-sm font-medium span + .input control,
+          help scoped to its fields via id + aria-describedby. */}
+      <label class="grid gap-1">
+        <span class="text-sm font-medium">Body (optional)</span>
+        <textarea id="finish-review-body" class="input w-full" value={getBody()} onInput={(e) => setBody(e.target.value)} rows="3" onKeyDown={onSubmitKeys(submit, { isBusy: () => getBusy() })} aria-describedby="finish-review-head-help" />
       </label>
-      <label class="field mt-2">
-        <span>Verdict</span>
-        <select value={getVerdict()} onInput={(e) => setVerdict(e.target.value)}>
+      <label class="grid gap-1 mt-2">
+        <span class="text-sm font-medium">Verdict</span>
+        <select id="finish-review-verdict" class="input w-full" value={getVerdict()} onInput={(e) => setVerdict(e.target.value)} aria-describedby="finish-review-head-help">
           <option value="COMMENTED">comment</option>
           <option value="APPROVED">approve</option>
           <option value="CHANGES_REQUESTED">request changes</option>
         </select>
       </label>
-      <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">reviewing {(props.head ?? "").slice(0, 12)}</p>
+      <p id="finish-review-head-help" class="muted mt-1 text-xs">reviewing {(props.head ?? "").slice(0, 12)}</p>
       <div class="mt-2 flex gap-2">
-        <button type="submit" class="btn btn-primary px-3 py-1" disabled={getBusy()}>
+        <button type="submit" class="btn primary px-3 py-1" disabled={getBusy()}>
           {getBusy() ? "submitting…" : "submit review"}
         </button>
         <button type="button" class="btn px-3 py-1" onClick={props.onDone}>
