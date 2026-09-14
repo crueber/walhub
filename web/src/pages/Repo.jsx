@@ -770,15 +770,6 @@ export default function Repo(props) {
                     <RefPicker full={full()} repo={repoClient} head={() => pillHead(getViewed(), s().head)} summaryHead={() => s().head} />
                   </Show>
                   <span class="muted">{s().branches ?? 0} branches · {s().tags ?? 0} tags</span>
-                  {/* Issue #505: the Checks tab hides on check-less repos,
-                      which removes the Checks toolbar's "reporting API"
-                      pointer exactly where CI hasn't been wired yet. The
-                      meta line keeps the pointer while the tab is hidden
-                      (same href/spelling as the toolbar); once the first
-                      report lands the tab reappears and this retires. */}
-                  <Show when={!showChecksTab(s())}>
-                    <span class="muted">· <A class="hover:underline" href="/api#checks-ci" title="How external CI reports check results">reporting API</A></span>
-                  </Show>
                   {/* Forgejo #464: the #424 fork-network rail lived here — it
                       now lives on the header Fork pill count, so the metadata
                       line keeps branches · tags only. */}

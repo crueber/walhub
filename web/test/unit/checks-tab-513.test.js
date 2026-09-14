@@ -83,10 +83,12 @@ test("Repo.jsx: the shell records an explicit summary denial", () => {
 });
 
 test("Repo.jsx: #513 changes nothing else about the tab contract", () => {
-  // /api#checks-ci pointer (Repo.jsx meta line), deep-link empty state
-  // (route + activeTab segments), #319 badge, TABS model, and the
-  // hidden-state check stream all keep their #505 shapes.
-  assert.ok(REPO.includes('href="/api#checks-ci"'), "reporting-API pointer kept");
+  // Deep-link empty state (route + activeTab segments), #319 badge,
+  // TABS model, and the hidden-state check stream all keep their #505
+  // shapes. (Forgejo #527 retired the Repo.jsx meta-line /api#checks-ci
+  // pointer — the Checks toolbar link is the surviving pointer.)
+  assert.ok(!REPO.slice(REPO.indexOf("repo-meta")).includes('href="/api#checks-ci"'), "no meta-line reporting pointer (#527)");
+  assert.ok(srcOf("../../src/pages/Checks.jsx").includes('href="/api#checks-ci"'), "Checks toolbar reporting link kept");
   assert.ok(REPO.includes("checksHidden"), "hidden-state stream memo kept");
   assert.ok(REPO.includes("tabBadge(getSummary(), t.id)"), "#319 badge wiring kept");
   assert.ok(REPO.includes('t.id !== "checks" ||'), "only the Checks entry gates");
