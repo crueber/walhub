@@ -66,6 +66,9 @@ test("collabKeys maps every 08 §4 kind to its cache keys", () => {
   assert.deepEqual(collabKeys(full, { kind: "check", sha: "abc" }), [
     `checkindex:${full}:*`,
     `checks:${full}:*`,
+    // Issue #505: the first report flips the shared summary's
+    // has_checks tab flag with no ref move (the #319 precedent).
+    `repo:${full}`,
     `checks:${full}:abc`,
     `statuses:${full}:abc`,
   ]);

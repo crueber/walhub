@@ -120,7 +120,7 @@ routes directly — so twins would widen the browser-lane (cookie) surface for n
 |---|---|
 | **sha-addressed** (full 40/64-hex in the `{sha}`/`{rev}` position): `tree/{sha}/…`, `blob/{sha}/…`, `commits?ref={sha}`, `commit/{sha}` | `Cache-Control: private, max-age=31536000, immutable` |
 | **ref-dependent**: `owners*`, `refs*`, `resolve`, and any tree/blob/commits/commit addressed by a NAME | `Cache-Control: private, max-age=0, stale-while-revalidate=60` + `ETag: "<resolved sha>"` + `If-None-Match` → `304` |
-| **mutable collab** (issue #280) + the repo summary (Forgejo #381) + the repos/detailed listing (Forgejo #384) + the owner profile (Forgejo #385): any GET whose resource can change via a direct user action — issue/PR threads (`ETag: "v<version>"`), social counters, single/latest/list releases, the pull view, identity profiles/orgs/teams/invites/access docs, the repo summary (visibility, open counts, description, mirror state all mutate with no ref movement), the repos/detailed rows (visibility, mirror + mirror_upstream mutate with no ref movement; the ETag is a content hash over the rendered rows), and the owner profile (display name, location, timezone, bio all PUT-editable with no ref movement; the ETag is a content hash over the served doc) | `Cache-Control: private, no-cache` + the existing version ETag + `If-None-Match` → `304` |
+| **mutable collab** (issue #280) + the repo summary (Forgejo #381) + the repos/detailed listing (Forgejo #384) + the owner profile (Forgejo #385): any GET whose resource can change via a direct user action — issue/PR threads (`ETag: "v<version>"`), social counters, single/latest/list releases, the pull view, identity profiles/orgs/teams/invites/access docs,    the repo summary (visibility, open counts, checks existence, description, mirror state all mutate with no ref movement), the repos/detailed rows (visibility, mirror + mirror_upstream mutate with no ref movement; the ETag is a content hash over the rendered rows), and the owner profile (display name, location, timezone, bio all PUT-editable with no ref movement; the ETag is a content hash over the served doc) | `Cache-Control: private, no-cache` + the existing version ETag + `If-None-Match` → `304` |
 
 - Mutability, not addressability, decides the class: SWR's stale-serve window is for content whose
   staleness is bounded by ref movement (refs move rarely; seconds-old is fine). User-mutable state
@@ -141,7 +141,7 @@ routes directly — so twins would widen the browser-lane (cookie) surface for n
   so there is no #259-style disagreement hazard. Gaining either — a version ETag or a mutable
   projection — moves them to the mutable class with ETag coverage, and Check fails the
   SWR+version combination the moment it appears.
-- ETag suffixes retained: the summary's `~d`/`~m`/`~c`/`~v` suffixes stay under no-cache
+- ETag suffixes retained: the summary's `~d`/`~m`/`~c`/`~v`/`~f`/`~k` suffixes stay under no-cache
   (harmless — the browser always revalidates now — and pinned by existing 304 tests). The
   #382 amendment's optional suffix simplification is deferred: zero user benefit, nonzero
   churn risk.
@@ -528,7 +528,7 @@ Host); `ssh_clone_url` (17_ssh.md §3 — the SSH transport advertisement, `exte
 listen port on the same public host, `:22` omitted; absent while SSH is disabled with no external
 override); `api_url` = the `/api` lane URL; mutable-collab class (`private, no-cache`,
 Forgejo #381 — SWR's stale-serve window defeated the suffix-covered ETag, see below)
-+ `ETag: "<head sha>"` with the `~degraded`/`~d`/`~m`/`~c`/`~v` suffixes. `PUT` here creates (require_write,
++ `ETag: "<head sha>"` with the `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`/`~k` suffixes. `PUT` here creates (require_write,
 `?object_format=sha1|sha256`, `201`/`409` exists); `DELETE` (require_admin) → `204`.
 
 `health` is the **repo-state vocabulary** (issue #209 — scoped: this field describes the repo,
@@ -591,6 +591,19 @@ the `~v<visibility>` suffix — a visibility flip moves no ref, so without it a 
 client would 304 and keep showing the stale badge (same trap as `~degraded`/`~d`/`~m`/`~c`).
 The suffix makes revalidation correct; the §4 mutable-collab class (Forgejo #381) removes
 the stale-serve window the suffix alone cannot close.
+
+`has_checks` is the Checks-tab visibility flag (issue #505 — additive bool, always
+present, `false` = none; old clients ignore it per 14 §14.12): true once any check
+status was reported (hot window or backfilled — the CAS'd `checks/index.json` exists
+in both cases), read index-first behind the `Env.ChecksSummary` hook (one exact-key
+GET — probe, don't list, law 4; absent index → `false` with the byte-identical ETag,
+so pre-checks repos are untouched). Riding the summary costs zero new client requests
+(the tab bar already holds the shared summary signal; a dedicated endpoint would cost
+an extra request per repo view) at +1 server-side probe per summary — off the law-6
+budgeted paths (push/sync/checkpoint never call here, so their sim budgets hold unchanged).
+`ETag` covers the flag with the `~k<index-version>` suffix: the first report creates the
+index and moves no ref, so without it a revalidating client would 304 and the Checks tab
+would stay hidden after CI reports (same trap as `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`).
 
 ### 9.1.1 Explicit create — `POST /api/v1/repos` (+ `/api-browser/v1` twin; issue #210)
 
@@ -1311,13 +1324,30 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   (b) one shared definition, `internal/cachepolicy`, carrying the rule in its package doc —
   core and all five feature packages alias it (issues keeps the `ccThread` name as an alias:
   the thread class IS the mutable class), nothing redeclares a header string; (c) a
-  per-package `cacheclass_test.go` contract pinning every served cacheable GET to its exact
-  class and running `cachepolicy.Check` on the pair, with `ExposedTemplates` coverage so a
-  new route without a row fails CI (verified by flipping the summary to SWR and watching
-  the contract test go red, then reverting); (d) the re-audit sweep: the only SWR left
-  outside git content is the pull diff (ref-derived patch body — SWR-legit, documented at
-  the const) and the SWR listings above (boundary-documented); notify/review/checks/tags
-  and all mutation-adjacent reads were already no-store. (e) ETag-suffix simplification
-  explicitly deferred (retention note in §4). Client: no change — the SPA's `invalidate()`
-  + mutation-site reconcile (data.js, #318) already invalidates on mutation; the header
-  contract now backs the reload case it could not fix alone.
+   per-package `cacheclass_test.go` contract pinning every served cacheable GET to its exact
+   class and running `cachepolicy.Check` on the pair, with `ExposedTemplates` coverage so a
+   new route without a row fails CI (verified by flipping the summary to SWR and watching
+   the contract test go red, then reverting); (d) the re-audit sweep: the only SWR left
+   outside git content is the pull diff (ref-derived patch body — SWR-legit, documented at
+   the const) and the SWR listings above (boundary-documented); notify/review/checks/tags
+   and all mutation-adjacent reads were already no-store. (e) ETag-suffix simplification
+   explicitly deferred (retention note in §4). Client: no change — the SPA's `invalidate()`
+   + mutation-site reconcile (data.js, #318) already invalidates on mutation; the header
+   contract now backs the reload case it could not fix alone.
+- **Checks-tab visibility flag rides the summary (issue #505).** `GET …/api` gains always-present
+  `has_checks` (14 §14.12 field rule — no new endpoint, both lanes + SDK passthrough carry it
+  for free; a dedicated endpoint would cost an extra request per repo view, rejected). Source
+  is the CAS'd hot-window `checks/index.json` read index-first behind the `Env.ChecksSummary`
+  hook (the `MirrorSummary`/`CollabCounts` shape — api never imports the feature, law 8; one
+  exact-key GET, probe-don't-list law 4; absent index → `false` with the byte-identical ETag).
+  Deliberately the index, not a per-sha LIST scan (the summary is a per-page-view path; the
+  per-sha objects stay the backfill truth — a lost index update reads absent until the next
+  report, the same staleness envelope the table page already reads under). `ETag` gains the
+  `~k<index-version>` suffix (same trap as `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`: the first
+  report creates the index and moves no ref). Client (12_web_ui.md): the Checks tab hides
+  when the flag is false (fail-open on unknown — loading, deleted, pre-#505 servers keep the
+  tab), the `/checks` route still renders its empty state (deep links never 404), a
+  hidden-state shell stream plus the `check`→`repo:{full}` frame mapping reappear the tab
+  without a reload, and the header keeps the `/api#checks-ci` reporting link while hidden.
+  Rationale: zero new client requests with a version-keyed ETag — the cheapest correct
+  source, with the staleness story stated instead of silent.

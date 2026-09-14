@@ -137,7 +137,10 @@ test("post-TTL frames still refetch exactly once per key (liveness, #396)", asyn
   assert.equal(d[`checkindex:${full}:newest`], 1, "stale checkindex refetches once");
   assert.equal(d[`checks:${full}:${sha}`], 1, "stale checks window refetches once (prefix+explicit deduped)");
   assert.equal(d[`statuses:${full}:${sha}`], 1, "stale statuses refetch once");
-  assert.equal(d[`repo:${full}`], 0, "unmapped keys untouched");
+  // Issue #505: check frames map onto the shared summary entry, so the
+  // first report reappears the Checks tab without a reload — the stale
+  // summary refetches once, exactly like every other mapped key.
+  assert.equal(d[`repo:${full}`], 1, "stale summary refetches once (the #505 tab flip)");
 });
 
 test("immutable events windows never SSE-refetch (append path owns liveness, #396)", async () => {

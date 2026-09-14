@@ -4,14 +4,15 @@
 // every tab shares one client and one summary fetch.
 
 import repos from "../../sdk/src/index.js";
-import { createContext, useContext, createSignal, createEffect, onCleanup, For, Show, Switch, Match } from "solid-js";
+import { createContext, useContext, createSignal, createEffect, createMemo, onCleanup, For, Show, Switch, Match } from "solid-js";
 import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } from "../lib/data.js";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText } from "../lib/clone.js";
 import { formatNextSync } from "../lib/mirror.js";
 import { visibilityBadge } from "../lib/visibility.js";
-import { activeTab, tabBadge } from "../lib/tabs.js";
+import { activeTab, tabBadge, showChecksTab } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
+import { useCollabStream } from "../components/collab.jsx";
 import Icon from "../lib/icons.jsx";
 import { shortRef, pillHead, pillLabel, pinnedDefault, dedupeRefs } from "../lib/ref-pill.js";
 import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
@@ -629,6 +630,18 @@ export default function Repo(props) {
     }
   });
 
+  // Issue #505: while the Checks tab is hidden (summary loaded, no
+  // checks yet), hold one "check"-frame subscription at the shell so the
+  // first external-CI report invalidates the shared summary entry
+  // (collabKeys maps check frames onto repo:{full}) and the tab
+  // reappears without a reload. Mounted only in the hidden state —
+  // check-ful repos, pre-#505 servers (no field → tab shown), and
+  // loading/deleted summaries hold no extra stream. The boolean memo
+  // keeps the stream effect from reconnecting on every summary refresh
+  // (object identity changes; the flag flips only on transitions).
+  const checksHidden = createMemo(() => !!getSummary() && !showChecksTab(getSummary()));
+  useCollabStream(() => (checksHidden() ? full() : null), repoClient, ["check"]);
+
   const ctx = {
     get owner() { return params.owner; },
     get name() { return params.name; },
@@ -709,6 +722,15 @@ export default function Repo(props) {
                     <RefPicker full={full()} repo={repoClient} head={() => pillHead(getViewed(), s().head)} summaryHead={() => s().head} />
                   </Show>
                   <span class="muted">{s().branches ?? 0} branches · {s().tags ?? 0} tags</span>
+                  {/* Issue #505: the Checks tab hides on check-less repos,
+                      which removes the Checks toolbar's "reporting API"
+                      pointer exactly where CI hasn't been wired yet. The
+                      meta line keeps the pointer while the tab is hidden
+                      (same href/spelling as the toolbar); once the first
+                      report lands the tab reappears and this retires. */}
+                  <Show when={!showChecksTab(s())}>
+                    <span class="muted">· <A class="hover:underline" href="/api#checks-ci" title="How external CI reports check results">reporting API</A></span>
+                  </Show>
                   {/* Forgejo #464: the #424 fork-network rail lived here — it
                       now lives on the header Fork pill count, so the metadata
                       line keeps branches · tags only. */}
@@ -797,8 +819,13 @@ export default function Repo(props) {
               // badge renders only when the count is > 0 (tabBadge maps
               // everything else — other tabs, loading, pre-#319 servers —
               // to 0).
+              // Issue #505: the Checks tab hides on check-less repos
+              // (has_checks from the same shared summary — still zero new
+              // requests). The <Show> gates the tab only: the route keeps
+              // rendering its empty state, so deep links never 404.
               const n = () => tabBadge(getSummary(), t.id);
               return (
+                <Show when={t.id !== "checks" || showChecksTab(getSummary())}>
                 <A
                   href={t.href(full())}
                   end={t.id === "code"}
@@ -811,6 +838,7 @@ export default function Repo(props) {
                     <span class="tab-badge" aria-label={`${n()} open`}>{n()}</span>
                   </Show>
                 </A>
+                </Show>
               );
             }}
           </For>

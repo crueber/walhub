@@ -64,3 +64,20 @@ export function tabBadge(summary, tabId) {
   if (tabId === "pulls") return Math.max(0, summary.open_pulls ?? 0);
   return 0;
 }
+
+/**
+ * showChecksTab(summary) → boolean: the Checks-tab visibility rule
+ * (issue #505). The summary carries has_checks from the CAS'd
+ * hot-window checks index (false = none — the #319 badge discipline).
+ * Fail-open everywhere else: loading/deleted summaries (null/undefined)
+ * and pre-#505 servers (no field) keep the tab — hiding on unknown
+ * would flicker the strip on every load and strand old servers with no
+ * way into the Checks page. This gates the tab only, never navigation:
+ * the /:owner/:name/checks route still renders its empty state
+ * (deep links stay sane) and activeTab keeps mapping checks/check
+ * segments above.
+ */
+export function showChecksTab(summary) {
+  if (!summary) return true;
+  return summary.has_checks !== false;
+}
