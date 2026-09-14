@@ -48,8 +48,8 @@ test("Repo.jsx: Checks tab renders through the visibility helper", () => {
   assert.ok(REPO.includes("showChecksTab"), "shell imports the visibility helper");
   assert.ok(REPO.includes("<For each={TABS}>"), "nav still iterates the full TABS list (the #274 pin)");
   assert.ok(
-    REPO.includes('t.id !== "checks" || showChecksTab(getSummary())'),
-    "the Checks entry — and only it — gates on the shared summary flag",
+    REPO.includes('t.id !== "checks" || showChecksTab(getSummary(), { denied: summaryDenied() })'),
+    "the Checks entry — and only it — gates on the shared summary flag plus the #513 denial flag",
   );
   assert.ok(REPO.includes('id: "checks"'), "the TABS model keeps the checks entry (filter is runtime-only)");
 });

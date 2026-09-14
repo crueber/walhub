@@ -601,7 +601,26 @@ export default function Repo(props) {
   // was deleted, or never existed) — it resolves to null so the header
   // renders "not found" instead of "loading…" forever. Any other error keeps
   // the data-layer contract (tray, value stays undefined → still loading).
-  const [getSummary] = useData(() => `repo:${full()}`, () => tolerateMissing(repoClient.get(), null), REPO_TTL);
+  // Issue #513: an explicit 401 is ALSO an expected steady state (gated
+  // repo + anonymous viewer — the server correctly refuses the summary),
+  // but fail-open would then pin the Checks tab visible forever since the
+  // summary never loads. The 401 resolves to undefined (still "loading",
+  // never "not found" — 401 is not deletion) while recording the denial
+  // in summaryDenied, which the Checks-tab gate reads to hide the tab;
+  // every other error still throws into the tray path unchanged. The flag
+  // resets at each fetch start so a repo switch (or a later sign-in)
+  // never inherits a stale denial.
+  const [summaryDenied, setSummaryDenied] = createSignal(false);
+  const [getSummary] = useData(() => `repo:${full()}`, () => {
+    setSummaryDenied(false);
+    return tolerateMissing(repoClient.get(), null).catch((err) => {
+      if (err?.unauthorized) {
+        setSummaryDenied(true);
+        return undefined;
+      }
+      throw err;
+    });
+  }, REPO_TTL);
   // Forgejo #502: the Fork pill label routes anonymous viewers to the
   // log-in interstitial (shared identity cache keys — zero new requests).
   const [getMe] = useData("me", () => repos.me().catch(() => null));
@@ -821,11 +840,15 @@ export default function Repo(props) {
               // to 0).
               // Issue #505: the Checks tab hides on check-less repos
               // (has_checks from the same shared summary — still zero new
-              // requests). The <Show> gates the tab only: the route keeps
+              // requests). Issue #513: it also hides while the summary is
+              // explicitly auth-denied (gated repo + anonymous viewer —
+              // the summary never loads, so fail-open would pin it
+              // forever); plain loading still fails open (no flicker).
+              // The <Show> gates the tab only: the route keeps
               // rendering its empty state, so deep links never 404.
               const n = () => tabBadge(getSummary(), t.id);
               return (
-                <Show when={t.id !== "checks" || showChecksTab(getSummary())}>
+                <Show when={t.id !== "checks" || showChecksTab(getSummary(), { denied: summaryDenied() })}>
                 <A
                   href={t.href(full())}
                   end={t.id === "code"}
