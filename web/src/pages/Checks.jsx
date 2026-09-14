@@ -12,6 +12,7 @@ import DateTime from "../components/DateTime.jsx";
 import { useData, invalidate } from "../lib/data.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
+import { isZeroChecks, zeroChecksTitle } from "../lib/checks-empty.js";
 
 const DOT = {
   success: "bg-emerald-500",
@@ -31,23 +32,64 @@ export function stateLabel(state) {
 /** CheckPill fetches the combined view for one sha and renders the
  *  colored dot + label (no-store server-side, so this uses the default
  *  TTL, never SHA_TTL — sha-addressed does NOT mean immutable here).
- *  Links to the per-sha detail page (08 §1). */
+ *  Links to the per-sha detail page (08 §1). A sha with zero reported
+ *  contexts renders a NEUTRAL "no checks" pill (Forgejo #518): the wire
+ *  contract maps zero contexts to pending for the merge gate, but the
+ *  display must not read as CI-in-flight when nothing reported at all. */
 export function CheckPill(props) {
   const key = () => `checks:${props.full}:${props.sha}`;
   const [getView] = useData(key, () => props.client.checks.combined(props.sha));
+  const zero = () => isZeroChecks(getView());
   return (
     <A
       class="inline-flex items-center gap-1.5 hover:underline"
       href={`/${props.full}/checks/${props.sha}`}
-      title={`checks: ${getView()?.state ?? "…"}`}
+      title={zero() ? "checks: no contexts reported" : `checks: ${getView()?.state ?? "…"}`}
     >
       <Show when={getView()} fallback={<span class="inline-block h-2.5 w-2.5 rounded-full bg-zinc-300 dark:bg-zinc-600" aria-label="checks loading" />}>
-        <span class={`inline-block h-2.5 w-2.5 rounded-full ${stateDot(getView().state)}`} aria-label={`checks ${getView().state}`} />
-        <Show when={props.verbose}>
-          <span class="text-xs text-zinc-500 dark:text-zinc-400">{stateLabel(getView().state)}</span>
+        <Show
+          when={zero()}
+          fallback={
+            <>
+              <span class={`inline-block h-2.5 w-2.5 rounded-full ${stateDot(getView().state)}`} aria-label={`checks ${getView().state}`} />
+              <Show when={props.verbose}>
+                <span class="text-xs text-zinc-500 dark:text-zinc-400">{stateLabel(getView().state)}</span>
+              </Show>
+            </>
+          }
+        >
+          <span class="inline-block h-2.5 w-2.5 rounded-full bg-zinc-400 dark:bg-zinc-500" aria-label="no checks reported" />
+          <Show when={props.verbose}>
+            <span class="text-xs text-zinc-500 dark:text-zinc-400">no checks</span>
+          </Show>
         </Show>
       </Show>
     </A>
+  );
+}
+
+/** ZeroChecksBlock — the #518 empty state for a sha with zero reported
+ *  contexts (PR checks card + CheckDetail page). Titles "configured" only
+ *  when the caller knows no require_checks rules match (empty required
+ *  array); required-but-unreported and unknown-required both read
+ *  "reported". Reporting guidance points at the existing surfaces —
+ *  /api#checks-ci and the repo checks page — never new copy. */
+export function ZeroChecksBlock(props) {
+  const title = () => zeroChecksTitle(props.required);
+  return (
+    <div class="rounded-md border border-dashed border-zinc-300 px-3 py-2 dark:border-zinc-700" aria-label={title()}>
+      <p class="text-sm font-medium">{title()}</p>
+      <Show when={(props.required ?? []).length > 0}>
+        <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          waiting on required checks: {props.required.join(", ")} — nothing has reported for this sha yet.
+        </p>
+      </Show>
+      <p class="muted mt-1 text-xs">
+        External CI reports via <code class="font-mono">POST …/checks/statuses/{"{sha}"}</code> with a{" "}
+        <code class="font-mono">wct_</code> token — see the <A class="link" href="/api#checks-ci">reporting API</A>{" "}
+        and the <A class="link" href={`/${props.full}/checks`}>checks page</A>.
+      </p>
+    </div>
   );
 }
 

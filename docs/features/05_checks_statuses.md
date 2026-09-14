@@ -324,3 +324,15 @@ re-exports; envelope/SSE parsing reuses `sdk/src/sse.js` — one parser (12_web_
 - **Evidence E6** (`docs/EVIDENCE.md`): report-path round trips,
   combined-view fan-out bounds, gate scan cost, and why none of them can
   explode.
+- **Zero-contexts empty state is display-only (Forgejo #518).** The wire
+  rule above (zero contexts ⇒ pending) stays untouched — the merge gate
+  depends on it — but the UI no longer inherits it verbatim: a sha with an
+  empty `statuses` array renders a neutral "No checks configured" (no
+  require_checks match) / "No checks reported yet" block with reporting
+  guidance (POST …/checks/statuses/{sha} with a `wct_` token, linking the
+  existing `/api#checks-ci` docs and the checks page) instead of the amber
+  pending pill, on the PR checks card and the CheckDetail page. The rule
+  is the pure `web/src/lib/checks-empty.js` module (empty means
+  zero-length statuses — a single pending context is still in-flight);
+  the required-checks blocker strings (`<context> (missing)`) and the
+  merge-button tooltip already covered the gated case and are unchanged.
