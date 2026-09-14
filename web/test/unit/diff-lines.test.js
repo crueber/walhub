@@ -237,7 +237,9 @@ test("DiffTable.jsx carries gutters, drag handlers, hash sync, and highlight", (
   const fs = require("node:fs");
   const src = fs.readFileSync(new URL("../../src/components/DiffTable.jsx", import.meta.url), "utf8");
   assert.match(src, /from "\.\.\/lib\/diff-lines\.js"/, "imports the selection model");
-  assert.match(src, /class="diff-num"/, "gutter cells in both modes");
+  assert.match(src, /<td class=\{`diff-num \$\{lineClass\(l\.t\)\}`\}>/, "unified gutter shares the row background (#544)");
+  assert.match(src, /<td class=\{`diff-num \$\{row\.left \? lineClass\(row\.left\.t\) : ""\}`\}>/, "split left gutter follows its side (#544)");
+  assert.match(src, /<td class=\{`diff-num \$\{row\.right \? lineClass\(row\.right\.t\) : ""\}`\}>/, "split right gutter follows its side (#544)");
   assert.match(src, /aria-label=\{label\}/, "gutter anchors are labelled");
   assert.match(src, /`Diff line \$\{no\}/, "labels name the line");
   assert.match(src, /onMouseDown.*begin/, "mousedown sets the drag anchor");

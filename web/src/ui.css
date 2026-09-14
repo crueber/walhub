@@ -303,6 +303,16 @@
     dark:border-zinc-800 dark:bg-zinc-900; white-space: nowrap; vertical-align: top; }
   .diff-num a { @apply block cursor-pointer text-zinc-400 hover:text-emerald-600 hover:no-underline
     dark:text-zinc-500 dark:hover:text-emerald-400; }
+  /* Diff add/del gutters (Forgejo #544): gutter cells share their side's
+     add/del background — DiffTable.jsx applies lineClass() per cell
+     (unified: both cells; split: per side, so a paired change row stays
+     red-left/green-right), Pull.jsx DiffFile applies it per div row. The
+     compound selector beats the single-class .diff-num background above
+     regardless of order, both themes via dark: variants. Line selection
+     still wins: the .diff-row.line-hl rules below are deliberately
+     UNLAYERED (unlayered beats layered at any specificity). */
+  .diff-num.diff-add { @apply bg-emerald-50 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200; }
+  .diff-num.diff-del { @apply bg-red-50 text-red-900 dark:bg-red-950/60 dark:text-red-200; }
 }
 
 /* Blob line-selection highlight (issue #243): deliberately UNLAYERED so it
