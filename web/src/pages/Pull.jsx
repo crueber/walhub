@@ -24,24 +24,29 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullEventText } from "../lib/pull-state.js";
+import { renderBody } from "../lib/render-md.js";
 
-function eventText(ev) {
-  switch (ev.type) {
-    case "opened":
-    case "commented":
-      return null; // rendered as body
-    case "title_changed":
-      return `retitled “${ev.from}” → “${ev.to}”`;
-    case "state_changed":
-      return ev.to === "closed" ? "closed" : "reopened";
-    case "merged":
-      return `merged as ${(ev.merge_commit_sha ?? "").slice(0, 12)} (${ev.strategy ?? "merge"})`;
-    case "head_force_pushed":
-      return `head force-pushed ${(ev.from ?? "").slice(0, 12)} → ${(ev.to ?? "").slice(0, 12)}`;
-    default:
-      return ev.type;
-  }
+/** PR description block (Forgejo #521, the issue-page first-comment
+ *  treatment): the live pr.body editable view with an author/date byline in
+ *  the timeline comment-entry idiom (muted xs header + markdown-body — the
+ *  same classes ThreadTimeline uses, unboxed). Hidden when the PR has no
+ *  description; the timeline's opened row is a one-line system row (see
+ *  pullEventText), so the description renders exactly once and never stale.
+ *  The modal draft preview in FinishReview stays plain text by design. */
+function PRDescription(props) {
+  return (
+    <Show when={String(props.body ?? "").trim()}>
+      <article aria-label="Pull request description" class="mb-3 border-b border-zinc-200 pb-3 dark:border-zinc-800">
+        <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
+          <span class="font-medium text-zinc-700 dark:text-zinc-200">{props.actor}</span>
+          {" · "}
+          <DateTime value={props.at} />
+        </p>
+        <div class="markdown-body" innerHTML={renderBody(props.body ?? "", props.mdCtx)} />
+      </article>
+    </Show>
+  );
 }
 
 function mergeableText(m) {
@@ -78,6 +83,7 @@ function ReviewSummaryBar(props) {
   const latest = () => Object.entries(summary()?.latest ?? {});
   return (
     <div class="card" aria-label="Review summary">
+      <h2 class="card-header">Review summary</h2>
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <span class={decisionBadge(summary()?.decision ?? "REVIEW_REQUIRED")}>
           {summary()?.decision ?? "REVIEW_REQUIRED"}
@@ -119,7 +125,7 @@ function ReviewsList(props) {
   };
   return (
     <div class="card" aria-label="Reviews">
-      <h2 class="mb-2 text-sm font-semibold">Reviews</h2>
+      <h2 class="card-header">Reviews</h2>
       <ul class="card-list">
         <For each={props.reviews ?? []} fallback={<li class="text-sm text-zinc-500 dark:text-zinc-400">No reviews yet.</li>}>
           {(rv) => (
@@ -135,7 +141,9 @@ function ReviewsList(props) {
                 <p class="text-sm italic">dismissed review #{rv.dismisses}: {rv.reason}</p>
               </Show>
               <Show when={rv.body}>
-                <p class="whitespace-pre-wrap">{rv.body}</p>
+                {/* Review bodies render markdown like the timeline (Forgejo
+                    #521) — same renderBody + repo mdCtx, not raw pre-wrap. */}
+                <div class="markdown-body" innerHTML={renderBody(rv.body ?? "", props.mdCtx)} />
               </Show>
               <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                 {(rv.commit_sha ?? "").slice(0, 12)}
@@ -205,7 +213,7 @@ function ReviewersPanel(props) {
 
   return (
     <div class="card" aria-label="Reviewers">
-      <h2 class="mb-2 text-sm font-semibold">Reviewers</h2>
+      <h2 class="card-header">Reviewers</h2>
       <Show when={props.canEdit} fallback={
         <p class="text-xs text-zinc-500 dark:text-zinc-400">requesting reviewers needs the write role</p>
       }>
@@ -379,7 +387,7 @@ function DiffFile(props) {
                       </button>
                     </div>
                     <For each={threadsAt(hi(), ri())}>
-                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} />}
+                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} />}
                     </For>
                   </div>
                 )}
@@ -391,7 +399,7 @@ function DiffFile(props) {
       {/* Anchors that no longer locate (drifted head, deleted lines)
           render once, collapsed, at the file end — never relocated. */}
       <For each={placement().unplaced}>
-        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} />}
+        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} />}
       </For>
     </div>
   );
@@ -447,7 +455,7 @@ function ThreadCard(props) {
         </button>
       </div>
       <Show when={getOpen()}>
-        <ThreadComments tid={t().tid} client={props.client} num={props.num} />
+        <ThreadComments tid={t().tid} client={props.client} num={props.num} mdCtx={props.mdCtx} />
         <form class="mt-1 flex gap-2" onSubmit={comment}>
           <input class="input flex-1" value={getBody()} onInput={(e) => setBody(e.target.value)} placeholder="reply…" aria-label="Reply" />
           <button type="submit" class="btn px-2 py-0.5">
@@ -469,7 +477,9 @@ function ThreadComments(props) {
         {(c) => (
           <li class="text-xs">
             <span class="font-semibold">{c.by}</span> <span class="text-zinc-500 dark:text-zinc-400"><DateTime value={c.at} /></span>
-            <p class="whitespace-pre-wrap text-sm">{c.body}</p>
+            {/* Thread comments render markdown like the timeline (Forgejo
+                #521) — same renderBody + repo mdCtx, not raw pre-wrap. */}
+            <div class="markdown-body" innerHTML={renderBody(c.body ?? "", props.mdCtx)} />
           </li>
         )}
       </For>
@@ -504,7 +514,7 @@ function FinishReview(props) {
 
   return (
     <form class="card" aria-label="Finish review" onSubmit={submit}>
-      <h2 class="mb-2 text-sm font-semibold">Finish review</h2>
+      <h2 class="card-header">Finish review</h2>
       <Show when={(props.pending ?? []).length > 0} fallback={<p class="text-xs text-zinc-500 dark:text-zinc-400">no staged line comments</p>}>
         <ul class="mb-2 space-y-1">
           <For each={props.pending}>
@@ -711,6 +721,14 @@ export default function Pull() {
   // repo-level summary (ref/state-blind by design). No closeChooser: PR
   // closes carry no reason, so both controls stay plain buttons.
   const badge = () => pullBadgeView(thread(), pr());
+  // Repo mdCtx for every renderBody call site on this page (the #340
+  // contract: thread bodies carry no file coordinates, so relative URLs
+  // stay verbatim; owner/repo feeds the #N/PRN autolinker). One object —
+  // the timeline, description block, reviews, and thread comments share it.
+  const mdCtx = { owner: ctx.owner, repo: ctx.name };
+  // Attribution for the description block: the opened event's actor/at
+  // (the history record), falling back to the live thread while loading.
+  const openedEvent = () => (getView()?.events ?? []).find((ev) => ev?.type === "opened");
   const closeVis = () =>
     pullCloseVisibility({ thread: thread(), pr: pr(), mePrincipal: getMe()?.principal, role: role() });
   const closeAction = () => {
@@ -726,15 +744,18 @@ export default function Pull() {
   useCollabStream(() => ctx.full, ctx.repoClient, ["pull", "review", "thread", "check"], (frame) => Number(frame.num) === Number(num()));
 
   return (
-    <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
-      <section aria-label="Conversation">
-        {/* Header block (Forgejo #517, the Issue.jsx convention): title
-            left, state badge right — the badge is the state surface, so the
-            byline carries author + time only (no bare state token). */}
+    <div class="issue-page grid gap-4 md:grid-cols-[1fr_16rem]">
+      <section aria-label="Conversation" class="min-w-0">
+        {/* Header block (Forgejo #517, the Issue.jsx convention, #521
+            sibling read): title left, state badge right — the badge is the
+            state surface (open/closed/merged via pullBadgeView), so the
+            byline carries author + time only (no bare state token). The
+            number rides the muted span like the issue heading; h1 stays —
+            it is the page title above the h2 card titles. */}
         <header class="mb-4 border-b border-zinc-200 pb-3 dark:border-zinc-800">
           <div class="flex flex-wrap items-start justify-between gap-2">
             <h1 class="min-w-0 flex-1 text-xl font-semibold">
-              #{num()} {thread()?.title}
+              <span class="text-zinc-500 dark:text-zinc-400">#{num()}</span> {thread()?.title}
             </h1>
             <Show when={thread()}>
               <span class={`${badge().cls} mt-1 shrink-0`}>{badge().text}</span>
@@ -744,12 +765,15 @@ export default function Pull() {
             {thread()?.author} · <DateTime value={thread()?.updated_at} />
           </p>
         </header>
-        <div class="mb-4">
-          <ReviewSummaryBar summary={summary()} head={head()} />
-        </div>
+        <PRDescription
+          body={pr()?.body}
+          actor={openedEvent()?.actor ?? thread()?.author}
+          at={openedEvent()?.at ?? thread()?.updated_at}
+          mdCtx={mdCtx}
+        />
         {/* #340: thread bodies have no file coordinates (relative URLs stay
             verbatim) but carry the repo — owner/repo feeds the #N/PRN autolinker. */}
-        <ThreadTimeline events={getView()?.events ?? []} textFor={eventText} mdCtx={{ owner: ctx.owner, repo: ctx.name }} />
+        <ThreadTimeline events={getView()?.events ?? []} textFor={pullEventText} mdCtx={mdCtx} />
         <Show
           when={canComment()}
           fallback={
@@ -781,6 +805,7 @@ export default function Pull() {
             head={head()}
             canDismiss={canDismiss()}
             reload={reloadReview}
+            mdCtx={mdCtx}
           />
           <Show when={canReview()}>
             <Show when={getFinishing()} fallback={
@@ -803,7 +828,7 @@ export default function Pull() {
             </Show>
           </Show>
           <div aria-label="Files">
-            <h2 class="mb-2 text-sm font-semibold">Files ({diffCount()})</h2>
+            <h2 class="card-header">Files ({diffCount()})</h2>
             <Show when={getDiff()} fallback={
               <Show when={getDiffError()} fallback={<p class="text-sm text-zinc-500 dark:text-zinc-400">loading diff…</p>}>
                 <div class="card" role="alert">
@@ -827,6 +852,7 @@ export default function Pull() {
                       onStage={stage}
                       reload={reloadReview}
                       canResolve={canResolve()}
+                      mdCtx={mdCtx}
                     />
                   </div>
                 )}
@@ -835,9 +861,14 @@ export default function Pull() {
           </div>
         </div>
       </section>
-      <aside aria-label="Merge" class="flex flex-col gap-4">
+      {/* Sidebar (Forgejo #521, the issue-page idiom): narrow rail of
+          grouped cards under one card-header treatment. The review summary
+          composes in here first — it floated between header and timeline
+          before — then mergeability / reviewers / checks / merge. */}
+      <aside aria-label="Details" class="grid content-start gap-3">
+        <ReviewSummaryBar summary={summary()} head={head()} />
         <div class="card">
-          <h2 class="mb-2 text-sm font-semibold">Mergeability</h2>
+          <h2 class="card-header">Mergeability</h2>
           <p class="text-sm">{mergeableText(mergeable())}</p>
           <Show when={!getView()?.head_ref_ok}>
             <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">From branch pending — push first.</p>
@@ -860,7 +891,7 @@ export default function Pull() {
         <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} canEdit={canReview()} />
         <Show when={head()}>
           <div class="card" aria-label="Checks">
-            <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold">
+            <h2 class="card-header flex items-center gap-2">
               Checks
               <CheckPill full={ctx.full} sha={head()} client={ctx.repoClient} verbose />
             </h2>
