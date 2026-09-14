@@ -37,15 +37,21 @@ test(".card-meta separates spans on wrap: flex row, gap, wrap, muted both themes
   }
 });
 
-test("Pulls list card-meta separates ref-range, author, date with · separators", () => {
+test("Pulls list rows use the flat issues-row idiom (no card-meta box)", () => {
+  // Forgejo #531: the PR list converges on the Issues.jsx divider-row
+  // idiom — title + chip + refs inline, right meta ml-auto — so the
+  // card-meta hook lives only on the ReviewsList card in Pull.jsx now.
   const s = pulls();
-  assert.ok(s.includes('class="card-meta"'), "Pulls list keeps the card-meta hook");
-  assert.ok(s.includes('{" · "}'), "text items joined with · separators");
-  const meta = s.slice(s.indexOf('class="card-meta"'));
+  assert.ok(!s.includes('class="card-meta"'), "list rows no longer ride .card-meta");
+  assert.ok(!s.includes('class="card-list"'), "no boxed card-list container");
+  assert.ok(!s.includes('<li class="card">'), "no per-PR boxes");
+  assert.ok(s.includes('class="ml-auto shrink-0 text-xs text-zinc-500 dark:text-zinc-400"'), "right meta rides ml-auto like the issues row");
+  assert.ok(s.includes('{" · "}'), "meta items joined with · separators");
+  const meta = s.slice(s.indexOf("ml-auto shrink-0"));
   let at = -1;
-  for (const t of ["base_ref", "·", "pr.author", "·", "updated_at"]) {
+  for (const t of ["pr.author", "·", "updated_at"]) {
     const i = meta.indexOf(t, at + 1);
-    assert.ok(i > at, `${t} follows in separator order ref-range · author · date`);
+    assert.ok(i > at, `${t} follows in separator order author · date`);
     at = i;
   }
 });

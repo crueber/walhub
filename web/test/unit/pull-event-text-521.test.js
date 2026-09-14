@@ -15,8 +15,10 @@
 // - Review bodies + thread comments route through renderBody with the same
 //   repo mdCtx the timeline gets; the finish-review modal draft preview
 //   stays plain text by design.
-// - Page uses the issue-page grid idiom; sidebar cards share one
-//   .card-header; ReviewSummaryBar composes into the sidebar.
+// - Page uses the issue-page grid idiom; ReviewSummaryBar composes into
+//   the sidebar (Forgejo #531 reworks the sidebar into the Issue.jsx:549
+//   one-container divide-y panel — see pr-structure-531.test.js — so the
+//   sidebar pins live there, not here).
 // - chip-merged already ships in ui.css (#517); the pulls-list wire
 //   carries no merged signal (PROut has state open|closed only), so the
 //   list path needs no change — no wire change, per the issue.
@@ -117,13 +119,17 @@ test("page uses the issue-page grid idiom; summary bar composes into the sidebar
   assert.doesNotMatch(PULL, /<div class="mb-4">\s*<ReviewSummaryBar/);
 });
 
-test("sidebar + conversation cards share one card-header treatment", () => {
+test("conversation cards keep the one card-header treatment (sidebar moved on)", () => {
+  // Forgejo #531 reworks the sidebar into the Issue.jsx:549 one-panel
+  // idiom (micro-labels, no card-headers — pinned in
+  // pr-structure-531.test.js). The conversation column keeps .card-header.
   assert.match(CSS, /\.card-header \{ @apply mb-2 text-sm font-semibold; \}/);
-  for (const title of ["Review summary", "Reviews", "Reviewers", "Finish review", "Files", "Mergeability", "Checks"]) {
+  for (const title of ["Reviews", "Finish review", "Files"]) {
     assert.ok(PULL.includes(`<h2 class="card-header`), `${title} card rides .card-header`);
   }
-  assert.match(PULL, /<h2 class="card-header flex items-center gap-2">/);
-  assert.match(MERGEBOX, /<h2 class="card-header">Merge \(\{/);
+  for (const gone of ["Review summary", ">Reviewers<", "Mergeability", ">Checks<", "Merge ({"]) {
+    assert.ok(!PULL.includes(`<h2 class="card-header">${gone}`), `sidebar ${gone} heading is gone`);
+  }
   assert.doesNotMatch(PULL, /<h2 class="mb-2 text-sm font-semibold">/);
   assert.doesNotMatch(PULL, /<h2 class="mb-2 flex items-center gap-2 text-sm font-semibold">/);
 });
