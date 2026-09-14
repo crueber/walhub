@@ -232,7 +232,7 @@ type Service struct {
 
 	// Generate renders one deterministic avatar SVG for a seed (the
 	// verified email). Forgejo #376: production is
-	// GenerateUserAvatarSVG (DiceBear constellation); tests stub
+	// GenerateUserAvatarSVG (DiceBear rings on walhub-green, #525); tests stub
 	// counting/blocking renders for the single-flight proof.
 	Generate func(seed string) (string, error)
 

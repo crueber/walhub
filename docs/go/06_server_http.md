@@ -767,7 +767,8 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   `GET /_auth/callback` fires the `AvatarHook` seam after the session mint
   (wired in `cmd/walhub` to the identity service's `EnsureAvatarAsync`;
   nil in setup-only/tests). The hook only enqueues — a per-principal
-  single-flight background generation (DiceBear constellation, seed =
+  single-flight background generation (DiceBear rings on walhub-green since
+  #525 — constellation before; seed =
   email) that installs `users/<username>/avatar.svg` — so the login
   response never waits on rendering. Rationale: generation is local and
   fast but still off the login path (fail-closed on errors: the next
