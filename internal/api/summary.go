@@ -42,8 +42,13 @@ type summaryBody struct {
 	// fork (omitempty — old clients ignore it, 14 §14.12). Forks is the
 	// direct-children count from the meta/forks.json index (always
 	// present, 0 = none — the #319 badge discipline).
-	ForkParent  string `json:"fork_parent,omitempty"`
-	Forks       int    `json:"forks"`
+	ForkParent string `json:"fork_parent,omitempty"`
+	Forks      int    `json:"forks"`
+	// HasChecks is the Checks-tab visibility flag (issue #505): true
+	// once any check status was reported (hot window or backfilled — the
+	// index exists in both cases). Always present (false = none — the
+	// #319 badge discipline). Old clients ignore it (14 §14.12).
+	HasChecks   bool   `json:"has_checks"`
 	CloneURL    string `json:"clone_url"`
 	SSHCloneURL string `json:"ssh_clone_url,omitempty"`
 	HTMLURL     string `json:"html_url"`
@@ -139,6 +144,18 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 			forkSum, forkOK = fs, true
 		}
 	}
+	// The checks-existence projection (issue #505): one exact-key probe
+	// behind the Env hook (nil/absent → false, +0 round trips — the hook
+	// IS the feature; 404s are free per law 4). The flag rides the
+	// summary so the tab bar needs zero new requests (law 6: a dedicated
+	// endpoint would cost an extra request per repo view).
+	var checksSum ChecksSummary
+	checksOK := false
+	if h.env.ChecksSummary != nil {
+		if cs, ok := h.env.ChecksSummary(r.Context(), id.Owner, id.Name); ok {
+			checksSum, checksOK = cs, true
+		}
+	}
 	body := summaryBody{
 		Owner:        id.Owner,
 		Name:         id.Name,
@@ -156,6 +173,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		Visibility:   visibility,
 		ForkParent:   forkSum.Parent,
 		Forks:        forkSum.Count,
+		HasChecks:    checksSum.HasChecks,
 		CloneURL:     base + "/" + id.Owner + "/" + id.Name + ".git",
 		SSHCloneURL:  h.env.sshCloneURL(r, id.Owner, id.Name),
 		HTMLURL:      base + "/" + id.Owner + "/" + id.Name,
@@ -205,8 +223,15 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// behind a 304.
 		etag += "~f" + strconv.Itoa(forkSum.Version) + "." + strconv.Itoa(forkSum.Count) + forkParentHash(forkSum.Parent)
 	}
+	if checksOK {
+		// Same trap once more (issue #505): the first report creates
+		// the checks index and moves no ref, so the ETag covers the
+		// index version or a revalidating client 304s and the Checks
+		// tab stays hidden after CI reports.
+		etag += "~k" + strconv.Itoa(checksSum.Version)
+	}
 	// Forgejo #381: the summary serves the mutable-collab class
-	// (private, no-cache), NOT SWR. The ~d/~m/~c/~v suffixes above make
+	// (private, no-cache), NOT SWR. The ~d/~m/~c/~v/~f/~k suffixes above make
 	// *revalidation* correct, but SWR's stale-serve window still licensed
 	// the browser to paint the pre-mutation body on the next refresh
 	// while revalidating in the background (the #280 flip-flop class —

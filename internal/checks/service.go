@@ -520,6 +520,37 @@ func (s *Service) loadIndex(ctx context.Context, owner, repo string) (*IndexDoc,
 	return parseIndex(raw)
 }
 
+// HasChecks reports whether the repo has any reported check statuses
+// (issue #505): the summary Checks-tab visibility flag. One exact-key
+// GET on the CAS'd hot-window index (IndexKey — probe, don't list, law
+// 4); an absent index → ok=false (a repo that never reported carries no
+// flag and no ETag suffix, so its summary stays byte-identical — the
+// OpenCounts precedent). Present → ok=true with HasChecks = len(shas) >
+// 0 and Version = the index version (the summary ETag suffix input —
+// the ~c precedent). The per-sha objects are the backfill truth but the
+// index is the cheap flag: a lost index update (writer died between the
+// status write and the index CAS) reads absent until the next report —
+// the same staleness envelope the table page already reads under.
+// Corrupt bytes or a store error surface as err; composition fails open
+// to absent (display metadata must never fail the summary).
+//
+// No read gate here: existence is an aggregate, and the only caller
+// runs behind the summary's AuthRead gate (the OpenCounts precedent).
+func (s *Service) HasChecks(ctx context.Context, owner, repo string) (hasChecks bool, version int, ok bool, err error) {
+	raw, _, gerr := s.getJSON(ctx, IndexKey(owner, repo))
+	if gerr != nil {
+		return false, 0, false, gerr
+	}
+	if raw == nil {
+		return false, 0, false, nil
+	}
+	ix, perr := parseIndex(raw)
+	if perr != nil {
+		return false, 0, false, perr
+	}
+	return len(ix.SHAs) > 0, ix.Version, true, nil
+}
+
 // updateIndex upserts one sha's context row by its own CAS loop (P4).
 // Bounded at 5 attempts, then it PROCEEDS WITHOUT the index update —
 // LIST fallback covers reads, so staleness is a performance gap, never

@@ -565,7 +565,18 @@ type Env struct {
 	// ETag suffix (instances without the collab surface wired). Wired by
 	// composition (cmd/walhub) so this package never imports the feature
 	// (law 8).
-	ForkInfo func(ctx context.Context, owner, repo string) (ForkSummary, bool) // RepoVisibility is the per-repo visibility projection (Forgejo #345):
+	ForkInfo func(ctx context.Context, owner, repo string) (ForkSummary, bool)
+
+	// ChecksSummary is the checks-existence projection (issue #505):
+	// whether any check status was ever reported, read index-first (one
+	// exact-key GET on the CAS'd hot-window checks index; absent index →
+	// ok=false). Nil → the summary carries has_checks:false with no
+	// ETag suffix (instances without the checks surface wired). Wired by
+	// composition (cmd/walhub) so this package never imports the feature
+	// (law 8).
+	ChecksSummary func(ctx context.Context, owner, repo string) (ChecksSummary, bool)
+
+	// RepoVisibility is the per-repo visibility projection (Forgejo #345):
 	// "public"|"private" for the summary badge and listing rows, ok=false
 	// when unknown. Nil → the projections omit the field (instances
 	// without the identity surface wired). Wired by composition
@@ -680,6 +691,17 @@ type ForkSummary struct {
 	Parent  string
 	Count   int
 	Version int
+}
+
+// ChecksSummary is the checks-existence projection on the repo summary
+// (issue #505): the Checks-tab visibility flag. Version is the CAS'd
+// hot-window checks-index version — the summary ETag suffix that busts
+// the cache when the first report lands with no ref move (the
+// #235/#240/#319 suffix precedent). The wire carries the flag only;
+// the version rides the ETag.
+type ChecksSummary struct {
+	HasChecks bool
+	Version   int
 }
 
 // --- request context ---------------------------------------------------------

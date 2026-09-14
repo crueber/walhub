@@ -191,6 +191,25 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// forked). The push-time half needs no wiring: protect ignores
 	// require_checks on the push path by construction.
 	c.checksSvc, c.checksHandler = newChecksService(st, c.ident, c.pullsSvc, reg, cfg.Git.Binary)
+	// Issue #505: the summary checks-existence projection behind the Env
+	// hook (api renders ChecksSummary without importing the feature, law
+	// 8 — the CollabCounts shape). One exact-key probe on the CAS'd
+	// hot-window index (absent → ok=false → has_checks:false with the
+	// byte-identical ETag). Store errors fail open to absent (display
+	// metadata must never fail the summary — the CollabCounts
+	// precedent).
+	if apiEnv != nil {
+		apiEnv.ChecksSummary = func(ctx context.Context, owner, repo string) (api.ChecksSummary, bool) {
+			if c.checksSvc == nil {
+				return api.ChecksSummary{}, false
+			}
+			has, ver, ok, err := c.checksSvc.HasChecks(ctx, owner, repo)
+			if err != nil || !ok {
+				return api.ChecksSummary{}, false
+			}
+			return api.ChecksSummary{HasChecks: has, Version: ver}, true
+		}
+	}
 	// Feature 07 releases (docs/features/07 §§1–3): release headers,
 	// asset bytes (two-step upload, static serving), the monotonic
 	// latest pointer, and changelog autodraft. Publish fan-out rides

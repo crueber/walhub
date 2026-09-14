@@ -63,7 +63,11 @@ export function collabKeys(full, frame) {
       return keys;
     }
     case "check": {
-      const keys = [`checkindex:${full}:*`, `checks:${full}:*`];
+      // Issue #505: `repo:${full}` is the shell's shared summary entry —
+      // the first report flips the has_checks tab flag with no ref move
+      // (the #319 open-count precedent: invalidate-at-minimum, the
+      // refetch reconciles the tab).
+      const keys = [`checkindex:${full}:*`, `checks:${full}:*`, `repo:${full}`];
       if (frame?.sha) keys.push(`checks:${full}:${frame.sha}`, `statuses:${full}:${frame.sha}`);
       return keys;
     }
