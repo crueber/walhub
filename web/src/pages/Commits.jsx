@@ -6,7 +6,7 @@
 
 import { createEffect, createMemo, createSignal, onCleanup, For, Show } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
-import { useData, useResolved, SHA_TTL } from "../lib/data.js";
+import { useData, useResolved, SHA_TTL, invalidate } from "../lib/data.js";
 import { CopySha, shortSha } from "../lib/sha.jsx";
 import {
   assignLanes,
@@ -213,20 +213,53 @@ function CommitList(props) {
 
   // Windows beyond the first page (?skip=/?path=): same resolve → sha chain,
   // keyed sha+path+skip so each window is as immutable as its sha.
-  const [getPage, setPage] = createSignal(undefined);
-  createEffect(() => {
+  // Forgejo #529: the page-2 useData call used to live INSIDE a createEffect
+  // body here — useData opens its own createEffect, so invoking it during an
+  // effect run nested its scope under the outer effect and every re-run grew
+  // the effect graph without bound (RangeError: Maximum call stack size
+  // exceeded on page 2, then an eternal loading fallback because a failed
+  // entry carries only entry.error, never a value). The hook is hoisted to
+  // component scope with a reactive key instead (the Tree.jsx DocTabs
+  // precedent): a null pageKey means "do not fetch" (the "commits:none"
+  // sentinel entry, whose fetcher resolves null), so the first page and
+  // later windows share one subscription and no nested effect is created.
+  const pageKey = () => {
     const first = getFirst();
-    if (!first || (skip() === 0 && !path())) return setPage(undefined);
-    const sha = first.sha;
-    const key = `sha:${sha}:commits:${path()}:${skip()}`;
-    const [get] = useData(
-      key,
-      () => props.repoClient.commits({ ref: sha, path: path() || undefined, skip: skip() || undefined }),
-      SHA_TTL,
-    );
-    setPage(get());
+    if (!first || !first.sha || (skip() === 0 && !path())) return null;
+    return `sha:${first.sha}:commits:${path()}:${skip()}`;
+  };
+  // Forgejo #529: a failed window must surface, never hang on loading
+  // history…. The fetcher records the rejection locally (rethrowing so the
+  // data layer still trays it per contract); the fallback below renders the
+  // inline error with retry while a key is active. The error is per-window:
+  // navigating clears it, a still-failing window re-arms it, and retry
+  // invalidates the cached entry (the DegradedNotice precedent).
+  const [pageError, setPageError] = createSignal(null);
+  const [getPage] = useData(
+    () => pageKey() ?? "commits:none",
+    () => {
+      const k = pageKey();
+      if (!k) return Promise.resolve(null);
+      const sha = getFirst().sha;
+      return props.repoClient
+        .commits({ ref: sha, path: path() || undefined, skip: skip() || undefined })
+        .catch((err) => {
+          setPageError(err);
+          throw err;
+        });
+    },
+    SHA_TTL,
+  );
+  createEffect(() => {
+    pageKey();
+    setPageError(null);
   });
-  const h = () => (skip() === 0 && !path() ? getFirst() : getPage());
+  const retryPage = () => {
+    setPageError(null);
+    const k = pageKey();
+    if (k) invalidate(k);
+  };
+  const h = () => (pageKey() ? getPage() : getFirst());
 
   // Forgejo #506: the graph toggle (default OFF, persisted like the theme
   // in lib/store.js) and its per-window lane derivation. The memo reads
@@ -244,7 +277,23 @@ function CommitList(props) {
 
   return (
     <div class="commits-page">
-      <Show when={h()} fallback={<p class="muted animate-pulse">loading history…</p>}>
+      {/* Forgejo #529: a failed window renders an inline error with retry,
+          never the eternal loading fallback (a failed useData entry carries
+          only entry.error, never a value, so h() stays undefined). The
+          message stays generic — details ride the error tray per the
+          data-layer contract, never raw strings in the page. */}
+      <Show when={h()} fallback={
+        <Show when={pageKey() && pageError()} fallback={<p class="muted animate-pulse">loading history…</p>}>
+          <div class="commits-error card p-4 text-sm" role="alert">
+            <p>Could not load this page of history.</p>
+            <p class="mt-2">
+              <button type="button" class="btn px-2 py-1 text-xs" onClick={retryPage}>
+                Retry
+              </button>
+            </p>
+          </div>
+        </Show>
+      }>
         {(hist) => (
           <>
             <Show when={hist().empty}>
