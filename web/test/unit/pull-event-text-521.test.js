@@ -20,6 +20,8 @@
 // - chip-merged already ships in ui.css (#517); the pulls-list wire
 //   carries no merged signal (PROut has state open|closed only), so the
 //   list path needs no change — no wire change, per the issue.
+//   (Superseded by Forgejo #530, which adds PROut.merged and routes the
+//   list chip through pullListChip — see the #530 pin at the bottom.)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -131,7 +133,12 @@ test("chip-merged ships in ui.css (light + dark); conversation badge uses it", (
   assert.match(PULL, /\$\{badge\(\)\.cls\}/);
 });
 
-test("pulls list chip path untouched (no wire change: PROut has no merged signal)", () => {
-  assert.match(PULLS, /<span class=\{`chip chip-\$\{pr\.state\}`\}>/);
-  assert.doesNotMatch(PULLS, /merged/);
+test("pulls list renders the merged chip from PROut.merged (Forgejo #530)", () => {
+  // #521 pinned the no-signal list path; #530 adds the wire field, so the
+  // pin moves with it: the list chip goes through the headless helper with
+  // merged-wins semantics, never the raw `chip-${state}` path.
+  assert.match(PULLS, /import \{[^}]*pullListChip[^}]*\} from "\.\.\/lib\/pull-state\.js"/);
+  assert.match(PULLS, /<span class=\{pullListChip\(pr\)\.cls\}>/);
+  assert.match(PULLS, /\{pullListChip\(pr\)\.text\}/);
+  assert.doesNotMatch(PULLS, /chip chip-\$\{pr\.state\}/);
 });

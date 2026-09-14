@@ -12,6 +12,7 @@ import repos from "../../sdk/src/index.js";
 import { useData, invalidate } from "../lib/data.js";
 import { sortByNumDesc } from "../lib/sort.js";
 import { resolvePullState, pullListState } from "../lib/pullState.js";
+import { pullListChip } from "../lib/pull-state.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -127,7 +128,10 @@ export default function Pulls() {
                     #{pr.num} {pr.title}
                   </A>
                   <div class="card-meta">
-                    <span class={`chip chip-${pr.state}`}>{pr.state}</span>
+                    {/* Forgejo #530: merged wins over state (merge stamps
+                        closed too) — the chip helper reads the PROut.merged
+                        flag the list endpoint carries. */}
+                    <span class={pullListChip(pr).cls}>{pullListChip(pr).text}</span>
                     <span>
                       {pr.base_ref} ← {pr.head_ref}
                     </span>

@@ -89,6 +89,18 @@ export function pullEventText(ev) {
 }
 
 /**
+ * pullListChip(row) → {text, cls}: the Pulls.jsx list-row state chip.
+ * Merged wins (merge stamps StateClosed too, so row.state alone cannot
+ * tell merged from plain-closed — the row needs the PROut.merged flag,
+ * Forgejo #530). Text follows the list lowercase convention ("merged"
+ * alongside "open"/"closed"); the class reuses the #517 `chip-merged`.
+ */
+export function pullListChip(row) {
+  if (row?.merged) return { text: "merged", cls: "chip chip-merged" };
+  return { text: row?.state ?? "open", cls: `chip chip-${row?.state ?? "open"}` };
+}
+
+/**
  * pullCloseVisibility({thread, pr, mePrincipal, role}) → {showClose, showReopen}:
  * unmerged only (merged PRs expose no lifecycle control — a merged close is
  * a server 409), same author-or-triage rule both ways, driven by the live

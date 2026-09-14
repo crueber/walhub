@@ -318,7 +318,7 @@ starts. Auth levels are P6 roles resolved per P6 §1–4.
 
 | METHOD + path (repo-scoped `/{o}/{r}/api/…`) | Auth | Request → response | Seam |
 |---|---|---|---|
-| `GET …/pulls?state=&base=&head=&sort=&n=&after=` | read | → `{pulls:[{num, title, state, author, base_ref, head_ref, head_sha, draft, updated_at}], more}` (index-first per P4) | RouteProvider |
+| `GET …/pulls?state=&base=&head=&sort=&n=&after=` | read | → `{pulls:[{num, title, state, author, base_ref, head_ref, head_sha, draft, merged, updated_at}], more}` (index-first per P4; `merged` always present — Forgejo #530) | RouteProvider |
 | `POST …/pulls` | write | `{title, base_ref, head_ref, body?, fork?}` → `201` PR header (`409` if an OPEN pr already pairs base+head; `422` unresolvable refs) | RouteProvider |
 | `GET …/pulls/{num}` | read | → header + `pr.json` + live `mergeable` (stamped; §4) — mutable-collab class (issue #280: `private, no-cache`) + folded ETag (live head/base shas + thread/pr versions + mergeable stamp) | RouteProvider |
 | `GET …/pulls/{num}/diff` | read | → `text/plain` unified diff `base…head` (one well-formed `git diff` patch per spec §9.5; the 12_web_ui.md parser's exact input; ref-dependent SWR, no ETag) | RouteProvider |
@@ -792,5 +792,24 @@ every call goes through the SDK).
   (no new kinds, no ETag change — no cached-SWR field is added). Rationale:
   a stale or unwanted PR could previously only be abandoned open or merged
   away; it now closes like an issue. Pinned by
-  `web/test/unit/pull-state-517.test.js` (badge matrix, visibility matrix,
-  ladder/auth mirror).
+   `web/test/unit/pull-state-517.test.js` (badge matrix, visibility matrix,
+   ladder/auth mirror).
+
+- **PROut.merged flag (Forgejo #530, 2026-09-14).** The conversation page
+  rendered the merged chip from the thread payload (`pr.merged`), but
+  `PROut` carried no merged field and `ListPRs` dropped `pr.Merged` — so
+  the pulls list (`Pulls.jsx`, `chip-${state}`) could not tell merged from
+  plain-closed (merge stamps StateClosed too). `PROut` gains `merged`
+  (always present, never omitempty — the PROut/`Draft` discipline; additive
+  per law 5, old clients ignore the unknown field), populated from the
+  already-loaded per-row `pr.json` sidecar: law 6 holds structurally
+  (`ListPRs` adds no `loadPR`/`getJSON` call — the flag rides the
+  enrichment GET each listed row already costs, page-bounded, never a
+  LIST). `Pulls.jsx` renders merged rows via the new headless
+  `pullListChip` (`web/src/lib/pull-state.js`): merged wins as lowercase
+  "merged" on the #517 `chip-merged` class (lowercase matches the list
+  chips; the conversation header keeps its capitalized "Merged" badge).
+  Pinned by `internal/pulls/list_merged_test.go` (unmerged false, merged
+  true, closed-filter keeps the flag, always-present wire shape) and
+  `web/test/unit/pull-list-chip-530.test.js` (chip matrix incl. absent-flag
+  old payloads).
