@@ -625,8 +625,31 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   unchanged; existing holders keep their avatars (no retroactive regen —
   POST regen and next-login generation produce the new look). No new
   dependencies (same dicebear modules, law 1 exception already covers this).
-  Rationale: constellation offered no background hook, so the brand treatment
-  the issue asked for was only possible on a style with background support.
+   Rationale: constellation offered no background hook, so the brand treatment
+   the issue asked for was only possible on a style with background support.
+- **Greens-to-black rings figures (issue #539, §8):** the rings figure color
+  falls through to the style's built-in 16-color rainbow collection
+  (coral→blue→purple→pink: `f49383…f290a3`, pinned in
+  `TestGenerateGreensOnlyFigures`), so avatars mixed app emerald
+  (background) with indigo-family figures. Generation now passes a
+  `ringColor` core-library option alongside seed/backgroundColor: the
+  Tailwind emerald run 300→950 (`6ee7b7 34d399 10b981 059669 047857
+  065f46 064e3b 022c22`) plus black (`000000`) — all from the app
+  palette (`web/src/ui.css`) + black. Verified against the vendored
+  sources (not guessed): the option key is `<colorName>Color`
+  (`internal/render/options.go`), and a user-supplied list overrides
+  the style collection (`internal/render/resolver.go`
+  `r.options.color(name)`); options pass through a JSON round-trip so
+  the `[]string` spelling behaves like the #525 `backgroundColor`
+  precedent. Background stays emerald-600; seed contract + sanitize
+  gate unchanged; existing holders keep their avatars (no migration —
+  POST regen and next-login generation produce the new look). The
+  palette deliberately keeps emerald-600, so a tone-on-tone figure
+  (invisible against the background) is a possible deterministic
+  outcome — still on-brand, still the issue's stated scale. No new
+  dependencies (same dicebear modules, law 1 exception already covers
+  this). Rationale: the figure is the visual majority of the avatar,
+  so a rainbow figure undoes the #525 brand treatment.
 
 ## Explicitly out of scope
 

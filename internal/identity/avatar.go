@@ -1,10 +1,14 @@
-// avatar.go — auto-generated user avatars (Forgejo #376, restyled #525).
+// avatar.go — auto-generated user avatars (Forgejo #376, restyled #525,
+// figures recolored #539).
 //
 // Every OIDC login for a user with no avatar enqueues a background
 // generation: the DiceBear "rings" style seeded by the verified
 // email (seed stays the email even though #370 made the username the
 // identity key), over a solid walhub-green (emerald-600 #059669)
-// background in the greyscale-preset treatment (flat, no gradients).
+// background in the greyscale-preset treatment (flat, no gradients),
+// with the rings figures drawn from a greens-to-black override
+// palette (emerald-300→950 + black, userAvatarRingColors) instead of
+// the style's built-in rainbow.
 // The SVG lives on the bucket at
 // users/<username>/avatar.svg (law 4 — memory is a cache, the bucket is
 // truth) with the pointer on profile.json (avatar_content_type /
@@ -70,6 +74,30 @@ const maxUserAvatarBytes = int64(1 << 20)
 // carries a single <rect> fill, no gradient elements).
 const userAvatarBackgroundColor = "059669"
 
+// userAvatarRingColors is the rings-figure palette: the Tailwind
+// emerald run 300→950 plus black (bare hex, no "#", same spelling
+// the options schema accepts). Passed as the "ringColor"
+// core-library option (name+"Color" in the vendored
+// dicebear-go/internal/render/options.go — a user-supplied color
+// list overrides the style collection per resolver.go's
+// r.options.color(name)), replacing the style's built-in 16-color
+// rainbow (coral→blue→purple→pink) whose indigo-family figures
+// clashed with the app-green background (Forgejo #539). Greens to
+// black only, all from the app palette (web/src/ui.css) + black —
+// pinned by TestGenerateGreensOnlyFigures, which asserts none of
+// the 16 style defaults appears in output across seeds.
+var userAvatarRingColors = []string{
+	"6ee7b7", // emerald-300
+	"34d399", // emerald-400
+	"10b981", // emerald-500
+	"059669", // emerald-600 (background hue — figure-on-figure reads via the ring gaps)
+	"047857", // emerald-700
+	"065f46", // emerald-800
+	"064e3b", // emerald-900
+	"022c22", // emerald-950
+	"000000", // black
+}
+
 // ringsStyle parses the DiceBear "rings" definition
 // once per process: the definition is static JSON, so re-parsing per
 // login would burn CPU on a hot path (law 6).
@@ -83,11 +111,12 @@ var ringsStyle = sync.OnceValues(func() (*dicebear.Style, error) {
 
 // GenerateUserAvatarSVG renders the deterministic avatar for seed
 // (the user's verified email): DiceBear "rings" with a solid
-// walhub-green background (userAvatarBackgroundColor) — the style
-// defines no per-style options, but backgroundColor is a core-library
-// option (verified against the dicebear-go/v10 render + validation
-// sources: backgroundColor key, solid default fill, no backgroundType
-// key in v10).
+// walhub-green background (userAvatarBackgroundColor) and
+// greens-to-black figures (userAvatarRingColors via the "ringColor"
+// core-library option — verified against the dicebear-go/v10 render
+// + validation sources: the style defines no per-style options, but
+// backgroundColor and <colorName>Color are core-library option keys
+// and user-supplied colors override the style collection).
 // The seed feeds the PRNG only and is deliberately excluded from the
 // resolved options and the markup (verified by TestGenerateSeedAbsent);
 // sanitize-first, the write is still refused when the raw seed appears
@@ -102,6 +131,7 @@ func GenerateUserAvatarSVG(seed string) (string, error) {
 	av, err := dicebear.NewAvatar(st, map[string]any{
 		"seed":            seed,
 		"backgroundColor": []string{userAvatarBackgroundColor},
+		"ringColor":       userAvatarRingColors,
 	})
 	if err != nil {
 		return "", fmt.Errorf("dicebear: generate: %w", err)
