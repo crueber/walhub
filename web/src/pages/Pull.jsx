@@ -13,7 +13,8 @@ import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, invalidatePullLists, reportError } from "../lib/data.js";
-import { CheckPill, ContextRows } from "./Checks.jsx";
+import { CheckPill, ContextRows, ZeroChecksBlock } from "./Checks.jsx";
+import { isZeroChecks, requiredCheckBlockers } from "../lib/checks-empty.js";
 import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -628,14 +629,11 @@ export default function Pull() {
     }
     return [...out].sort();
   };
-  const checksBlockers = () => {
-    const required = requiredChecks();
-    if (!required.length) return [];
-    const byCtx = new Map((getCombined()?.statuses ?? []).map((s) => [s.context, s.state]));
-    return required
-      .filter((c) => byCtx.get(c) !== "success")
-      .map((c) => (byCtx.has(c) ? `${c} (${byCtx.get(c)})` : `${c} (missing)`));
-  };
+  const checksBlockers = () => requiredCheckBlockers(requiredChecks(), getCombined()?.statuses);
+  // Zero-contexts empty state (Forgejo #518): the combined view's wire
+  // state reads pending when nothing reported, so the card keys off the
+  // statuses array it already fetches — never the state string.
+  const zeroChecks = () => isZeroChecks(getCombined());
   const summary = () => thread()?.review_summary;
   const threads = () => getThreads()?.threads ?? [];
 
@@ -835,7 +833,12 @@ export default function Pull() {
               Checks
               <CheckPill full={ctx.full} sha={head()} client={ctx.repoClient} verbose />
             </h2>
-            <ContextRows full={ctx.full} sha={head()} client={ctx.repoClient} />
+            <Show
+              when={zeroChecks()}
+              fallback={<ContextRows full={ctx.full} sha={head()} client={ctx.repoClient} />}
+            >
+              <ZeroChecksBlock full={ctx.full} required={requiredChecks()} />
+            </Show>
             <Show when={requiredChecks().length > 0}>
               <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
                 required: {requiredChecks().join(", ")}
