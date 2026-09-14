@@ -1375,8 +1375,10 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   report creates the index and moves no ref). Client (12_web_ui.md): the Checks tab hides
   when the flag is false (fail-open on unknown — loading, deleted, pre-#505 servers keep the
   tab), the `/checks` route still renders its empty state (deep links never 404), a
-  hidden-state shell stream plus the `check`→`repo:{full}` frame mapping reappear the tab
-  without a reload, and the header keeps the `/api#checks-ci` reporting link while hidden.
+   hidden-state shell stream plus the `check`→`repo:{full}` frame mapping reappear the tab
+   without a reload. (Forgejo #527 retired the header's `/api#checks-ci` meta-line pointer —
+   discoverability for check-less repos lives in Settings → CI tokens; the Checks toolbar
+   link stays.)
   Rationale: zero new client requests with a version-keyed ETag — the cheapest correct
   source, with the staleness story stated instead of silent.
 

@@ -2,8 +2,8 @@
 // on check-less repos and reappears on the first report. The visibility
 // rule is the pure showChecksTab helper in web/src/lib/tabs.js (the
 // settingsNav convention — no Solid, no DOM); the shell wiring (tab
-// filter, hidden-state stream, header reporting link) is pinned as
-// source text, mirroring fork-pill-split-464.test.js. The deep-link
+// filter, hidden-state stream) is pinned as source text, mirroring
+// fork-pill-split-464.test.js (#527 retired the header reporting link). The deep-link
 // route renders regardless — activeTab keeps mapping checks/check
 // segments even when the tab is hidden.
 import { test } from "node:test";
@@ -61,13 +61,15 @@ test("Repo.jsx: hidden-state shell stream reappears the tab without reload", () 
   assert.ok(REPO.includes("createMemo"), "a boolean memo guards the effect against per-refresh reconnects");
 });
 
-test("Repo.jsx: reporting-API discoverability survives the hidden tab", () => {
-  // The header meta line keeps the /api#checks-ci pointer exactly
-  // while the tab is hidden (same href/spelling as the Checks
-  // toolbar); the empty-state toolbar link itself is untouched.
+test("Repo.jsx: header meta line drops the reporting-API link (#527)", () => {
+  // #527 retires the #505 meta-line pointer: the header renders
+  // branches · tags only while the tab is hidden. Discoverability
+  // for check-less repos lives in Settings → CI tokens; the Checks
+  // toolbar link itself is untouched.
   const meta = REPO.slice(REPO.indexOf("repo-meta"));
-  assert.ok(meta.includes('href="/api#checks-ci"'), "header keeps a reporting-API link");
-  assert.ok(meta.includes("!showChecksTab(s())"), "the header link shows only while the tab is hidden");
+  assert.ok(!meta.includes('href="/api#checks-ci"'), "header keeps no reporting-API link");
+  assert.ok(!meta.includes("reporting API"), "no reporting-API label in the header meta line");
+  assert.ok(!meta.includes("!showChecksTab(s())"), "no hidden-state conditional link in the meta line");
   const checks = srcOf("../../src/pages/Checks.jsx");
   assert.ok(checks.includes('href="/api#checks-ci"'), "the Checks toolbar reporting link is untouched");
 });
