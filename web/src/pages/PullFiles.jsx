@@ -6,10 +6,10 @@
 import { createSignal, For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
-import { useData } from "../lib/data.js";
+import { useData, invalidate } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { useCollabStream } from "../components/collab.jsx";
-import { parsePatchFiles } from "../lib/diff.js";
+import { parsePatchFiles, normalizePatchBody } from "../lib/diff.js";
 import { DiffBody } from "../components/DiffTable.jsx";
 
 // Per-file unified/split toggle over the shared selectable DiffBody
@@ -42,14 +42,37 @@ export default function PullFiles() {
   const params = useParams();
   const num = () => params.num;
   const key = () => `pulldiff:${ctx.full}:${num()}`;
+  // Issue #520: useData surfaces fetch failures only in the global tray,
+  // so the page tracks its own error for the inline state + Retry below —
+  // otherwise a failed diff sits on "loading diff…" forever with a lying
+  // Files (0) heading.
+  const [getDiffError, setDiffError] = createSignal(null);
   const [getView] = useData(key, async () => {
-    const res = await ctx.repoClient.pulls.diff(num());
-    const patch = typeof res === "string" ? res : res.patch ?? res.diff ?? "";
-    return parsePatchFiles(patch);
+    setDiffError(null);
+    try {
+      const res = await ctx.repoClient.pulls.diff(num());
+      return parsePatchFiles(normalizePatchBody(res));
+    } catch (err) {
+      setDiffError(err);
+      throw err;
+    }
     // NOTE: TTL.pulls (5 s), not TTL.diff (∞) — the key is not
     // sha-addressed, so ∞ would serve a stale diff forever after the
     // head moves (08 §6 reserves ∞ for immutable content).
   }, TTL.pulls);
+  const retryDiff = () => {
+    setDiffError(null);
+    invalidate(key());
+  };
+  // Honest heading (issue #520): the count renders only once the view is
+  // loaded — "…" while loading, "failed to load" on error — never (0) for
+  // a diff that never arrived. A loaded-empty diff ({files: []}) is
+  // truthful: the For below renders "empty diff".
+  const diffCount = () => {
+    const v = getView();
+    if (v) return String((v.files ?? []).length);
+    return getDiffError() ? "failed to load" : "…";
+  };
   // `pull` frames (opened/head_force_pushed/merged) invalidate the
   // pulldiff key coalesced — the stream is the live path, TTL the backstop.
   useCollabStream(() => ctx.full, ctx.repoClient, ["pull"], (frame) => Number(frame.num) === Number(num()));
@@ -60,8 +83,17 @@ export default function PullFiles() {
           ← back to #{num()}
         </A>
       </p>
-      <h2 class="mb-3 text-lg font-semibold">Files on #{num()} ({(getView()?.files ?? []).length})</h2>
-      <Show when={getView()} fallback={<p class="muted">loading diff…</p>}>
+      <h2 class="mb-3 text-lg font-semibold">Files on #{num()} ({diffCount()})</h2>
+      <Show when={getView()} fallback={
+        <Show when={getDiffError()} fallback={<p class="muted">loading diff…</p>}>
+          <div class="card" role="alert">
+            <p class="text-sm">Couldn't load the diff: {String(getDiffError()?.message ?? getDiffError())}</p>
+            <button type="button" class="btn mt-2" onClick={retryDiff}>
+              Retry
+            </button>
+          </div>
+        </Show>
+      }>
         <For each={getView().files ?? []} fallback={<p class="muted">empty diff</p>}>
           {(file) => <PullDiffFile file={file} />}
         </For>

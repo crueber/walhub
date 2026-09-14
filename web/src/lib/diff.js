@@ -19,6 +19,18 @@ function stripRef(p) {
   return p.replace(/^[ab]\//, "");
 }
 
+/**
+ * normalizePatchBody(res) → patch string (issue #520): the pulls diff
+ * endpoint is text/plain so the SDK resolves a string (the live path); the
+ * object branch is dead defensive code for JSON-shaped payloads
+ * (`{patch}`/`{diff}`). Null-safe: null/undefined resolve to "" (an empty
+ * diff), never a TypeError on `.patch`.
+ */
+export function normalizePatchBody(res) {
+  if (typeof res === "string") return res;
+  return res?.patch ?? res?.diff ?? "";
+}
+
 /** parsePatchFiles(patch, sha) → {files:[{path, oldPath?, added?, deleted?, isBinary?, hunks:[…]}]} */
 export function parsePatchFiles(patch /* , sha */) {
   const files = [];

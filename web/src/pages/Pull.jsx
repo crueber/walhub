@@ -15,7 +15,7 @@ import repos from "../../sdk/src/index.js";
 import { useData, invalidate, invalidatePullLists, reportError } from "../lib/data.js";
 import { CheckPill, ContextRows, ZeroChecksBlock } from "./Checks.jsx";
 import { isZeroChecks, requiredCheckBlockers } from "../lib/checks-empty.js";
-import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
+import { parsePatchFiles, normalizePatchBody, anchorContextSha } from "../lib/diff.js";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import DateTime from "../components/DateTime.jsx";
 import CommentComposer from "../components/CommentComposer.jsx";
@@ -560,11 +560,31 @@ export default function Pull() {
   const [getReviews] = useData(reviewsKey, () => ctx.repoClient.pulls.reviews.list(num(), { n: 50 }));
   const [getThreads] = useData(threadsKey, () => ctx.repoClient.pulls.threads.list(num(), { n: 100 }));
   const [getRequests] = useData(requestsKey, () => ctx.repoClient.pulls.requests.list(num()));
+  // Issue #520: the inline diff tracks its own fetch error for the
+  // error state + Retry below — useData reports failures only to the
+  // global tray, otherwise this section sits on "loading diff…" forever.
+  const [getDiffError, setDiffError] = createSignal(null);
   const [getDiff] = useData(diffKey, async () => {
-    const res = await ctx.repoClient.pulls.diff(num());
-    const patch = typeof res === "string" ? res : res.patch ?? res.diff ?? "";
-    return parsePatchFiles(patch);
+    setDiffError(null);
+    try {
+      const res = await ctx.repoClient.pulls.diff(num());
+      return parsePatchFiles(normalizePatchBody(res));
+    } catch (err) {
+      setDiffError(err);
+      throw err;
+    }
   });
+  const retryDiff = () => {
+    setDiffError(null);
+    invalidate(diffKey());
+  };
+  // Honest count (issue #520): renders only once loaded — never (0) for
+  // a diff that never arrived.
+  const diffCount = () => {
+    const v = getDiff();
+    if (v) return String((v.files ?? []).length);
+    return getDiffError() ? "failed to load" : "…";
+  };
   const { role } = useRole(ctx.full, ctx.repoClient);
   const navigate = useNavigate();
   const location = useLocation();
@@ -783,24 +803,35 @@ export default function Pull() {
             </Show>
           </Show>
           <div aria-label="Files">
-            <h2 class="mb-2 text-sm font-semibold">Files ({(getDiff()?.files ?? []).length})</h2>
-            <For each={getDiff()?.files ?? []} fallback={<p class="text-sm text-zinc-500 dark:text-zinc-400">loading diff…</p>}>
-              {(file) => (
-                <div class="mb-4">
-                  <DiffFile
-                    file={file}
-                    files={getDiff()?.files ?? []}
-                    threads={threads()}
-                    num={num()}
-                    client={ctx.repoClient}
-                    head={head()}
-                    onStage={stage}
-                    reload={reloadReview}
-                    canResolve={canResolve()}
-                  />
+            <h2 class="mb-2 text-sm font-semibold">Files ({diffCount()})</h2>
+            <Show when={getDiff()} fallback={
+              <Show when={getDiffError()} fallback={<p class="text-sm text-zinc-500 dark:text-zinc-400">loading diff…</p>}>
+                <div class="card" role="alert">
+                  <p class="text-sm">Couldn't load the diff: {String(getDiffError()?.message ?? getDiffError())}</p>
+                  <button type="button" class="btn mt-2" onClick={retryDiff}>
+                    Retry
+                  </button>
                 </div>
-              )}
-            </For>
+              </Show>
+            }>
+              <For each={getDiff().files ?? []} fallback={<p class="text-sm text-zinc-500 dark:text-zinc-400">empty diff</p>}>
+                {(file) => (
+                  <div class="mb-4">
+                    <DiffFile
+                      file={file}
+                      files={getDiff()?.files ?? []}
+                      threads={threads()}
+                      num={num()}
+                      client={ctx.repoClient}
+                      head={head()}
+                      onStage={stage}
+                      reload={reloadReview}
+                      canResolve={canResolve()}
+                    />
+                  </div>
+                )}
+              </For>
+            </Show>
           </div>
         </div>
       </section>
