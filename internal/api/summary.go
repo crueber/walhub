@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/git"
 )
 
@@ -48,11 +49,19 @@ type summaryBody struct {
 	// once any check status was reported (hot window or backfilled — the
 	// index exists in both cases). Always present (false = none — the
 	// #319 badge discipline). Old clients ignore it (14 §14.12).
-	HasChecks   bool   `json:"has_checks"`
-	CloneURL    string `json:"clone_url"`
-	SSHCloneURL string `json:"ssh_clone_url,omitempty"`
-	HTMLURL     string `json:"html_url"`
-	APIURL      string `json:"api_url"`
+	HasChecks bool `json:"has_checks"`
+	// Features are the per-repo feature flags (Forgejo #522): six
+	// enabled booleans from the [features] settings section, resolved
+	// all-on when unset. Always present (never null — the #319 badge
+	// discipline); the tab bar and the star/watch/fork pills gate on
+	// this one payload with zero new requests (law 6: a dedicated
+	// endpoint would cost an extra request per repo view). Old clients
+	// ignore it (14 §14.12).
+	Features    config.ResolvedFeatures `json:"features"`
+	CloneURL    string                  `json:"clone_url"`
+	SSHCloneURL string                  `json:"ssh_clone_url,omitempty"`
+	HTMLURL     string                  `json:"html_url"`
+	APIURL      string                  `json:"api_url"`
 }
 
 func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +165,16 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 			checksSum, checksOK = cs, true
 		}
 	}
+	// The features projection (Forgejo #522): resolved flags from the
+	// view (the walView folds the manifest-inline settings TOML with
+	// zero new round trips — the Description precedent). A nil view
+	// field fails open to all-enabled, so an unpopulated view can never
+	// strand tabs hidden; the wire object itself is always present (the
+	// #319 badge discipline, never null).
+	features := config.AllFeatures()
+	if s.Features != nil {
+		features = *s.Features
+	}
 	body := summaryBody{
 		Owner:        id.Owner,
 		Name:         id.Name,
@@ -174,6 +193,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		ForkParent:   forkSum.Parent,
 		Forks:        forkSum.Count,
 		HasChecks:    checksSum.HasChecks,
+		Features:     features,
 		CloneURL:     base + "/" + id.Owner + "/" + id.Name + ".git",
 		SSHCloneURL:  h.env.sshCloneURL(r, id.Owner, id.Name),
 		HTMLURL:      base + "/" + id.Owner + "/" + id.Name,
@@ -240,6 +260,16 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// index is always Version >= 1.
 		etag += "~k0"
 	}
+	// Forgejo #522: the features suffix is unconditional, for the same
+	// #513 reason — a settings-only flip (no new commit, no ref move)
+	// must revalidate, and a pre-#522 cached summary (no features field
+	// at all) must never 304-match or the client keeps the stale tab
+	// gating forever. ~t carries the six resolved flags as fixed-order
+	// bits (config.ResolvedFeatures.ETagBits), so both a flip and the
+	// first sighting bust the cache. The summary already serves the
+	// mutable-collab class (private, no-cache), so this only sharpens
+	// revalidation — same cost class as the ~d/~m/~c/~v/~f/~k suffixes.
+	etag += "~t" + features.ETagBits()
 	// Forgejo #381: the summary serves the mutable-collab class
 	// (private, no-cache), NOT SWR. The ~d/~m/~c/~v/~f/~k suffixes above make
 	// *revalidation* correct, but SWR's stale-serve window still licensed

@@ -59,6 +59,7 @@ import (
 	"sync"
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -195,7 +196,15 @@ type Service struct {
 	// placeholder-create EnsureRepoAccess). Wired in composition
 	// (cmd/walhub); nil skips the write.
 	AccessBoot AccessBootstrapper
-	Now        func() time.Time
+	// Features reports the repo's resolved feature flags (Forgejo #522):
+	// StartFork refuses with ErrForbidden (→ 403) when the source repo's
+	// forks flag is off. Nil → all enabled; a declining hook (unreadable
+	// settings) also resolves all-on — display metadata must never
+	// break a write on a transient settings read (fail-open, the
+	// CollabCounts precedent). Wired by composition (cmd/walhub) over
+	// the WAL settings doc; tests substitute a fake.
+	Features func(ctx context.Context, owner, repo string) (config.ResolvedFeatures, bool)
+	Now      func() time.Time
 
 	// ServerID is the committer identity for merge commits
 	// ("walhub <server.identity_email>", default "walhub@localhost").

@@ -47,6 +47,7 @@ import (
 	"sync"
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -127,6 +128,14 @@ type Service struct {
 	Store store.ObjectStore
 	Roles RoleService
 	Now   func() time.Time
+	// Features reports the repo's resolved feature flags (Forgejo #522):
+	// Star refuses new stars with ErrForbidden (→ 403) when the star
+	// flag is off. Nil → all enabled; a declining hook (unreadable
+	// settings) also resolves all-on — display metadata must never
+	// break a write on a transient settings read (fail-open, the
+	// CollabCounts precedent). Wired by composition (cmd/walhub) over
+	// the WAL settings doc; tests substitute a fake.
+	Features func(ctx context.Context, owner, repo string) (config.ResolvedFeatures, bool)
 	// starShards serializes Star's check-then-act within this process: the
 	// star decision spans two keys (the per-principal record and the
 	// shared counter), so the counter CAS alone cannot arbitrate a
@@ -330,6 +339,21 @@ func (s *Service) requireRead(ctx context.Context, owner, repo string, p auth.Pr
 		}
 	}
 	return nil
+}
+
+// features resolves the repo's feature flags (Forgejo #522), failing open
+// to all-enabled when the hook is unwired or declines: display metadata
+// must never break a write on a transient settings read (the CollabCounts
+// precedent — only an explicit false refuses).
+func (s *Service) features(ctx context.Context, owner, repo string) config.ResolvedFeatures {
+	if s.Features == nil {
+		return config.AllFeatures()
+	}
+	f, ok := s.Features(ctx, owner, repo)
+	if !ok {
+		return config.AllFeatures()
+	}
+	return f
 }
 
 // requireAuthenticated rejects anonymous callers (stars/watches need a

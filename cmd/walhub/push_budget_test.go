@@ -187,6 +187,22 @@ func TestPushFastPathZeroCollabRoundTrips(t *testing.T) {
 	// The shipped composition: every feature package mounted, require_read
 	// gate wired, mirror guard wired — the push below runs through all of it.
 	collab := buildCollab(cs, cfg, reg, env)
+	// Forgejo #522: the feature-flag write guards are wired onto the
+	// shipped services and fail open on a settings-less repo (no doc
+	// published yet → all enabled, so the tab gating and the guards
+	// agree from birth).
+	for name, hook := range map[string]func(context.Context, string, string) (config.ResolvedFeatures, bool){
+		"social": collab.socialSvc.Features,
+		"notify": collab.notifySvc.Features,
+		"pulls":  collab.pullsSvc.Features,
+	} {
+		if hook == nil {
+			t.Fatalf("%s Features hook unwired", name)
+		}
+		if got, ok := hook(ctx, "e2e", "budget"); ok || got != config.AllFeatures() {
+			t.Fatalf("%s features = %+v, %v; want all-on, false", name, got, ok)
+		}
+	}
 	srv := server.New(server.Options{
 		Config:    cfg,
 		Store:     cs,

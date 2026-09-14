@@ -97,7 +97,7 @@ test("repo header Fork and Clone carry the shared icons on the canonical btn idi
   // retired ⑂ mark never comes back). The count still reads summary.forks
   // (no extra fetch); the count-left-of-label shape itself is pinned in
   // header-pills-447.test.js.
-  const pill = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  const pill = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "<CloneMenu");
   assert.ok(pill.includes('<span class="btn px-2 py-1 text-sm'), "Fork keeps the canonical btn metrics on one pill shell (was pill pre-#447, split links since #464)");
   // Forgejo #502: the label href goes through forkHref() — the fork page
   // for writers, the log-in interstitial (next = fork page) for anonymous

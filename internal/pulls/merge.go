@@ -688,6 +688,13 @@ func (s *Service) StartFork(ctx context.Context, owner, repo string, actor auth.
 	if err := s.requireRole(ctx, owner, repo, actor, "write"); err != nil {
 		return nil, "", err
 	}
+	// Forgejo #522: forking a forks-disabled repo is 403 — the source
+	// repo's policy, checked before input parsing (like the role gate
+	// above, policy precedes syntax). Existing forks and the fork
+	// network listing are untouched; re-enabling restores.
+	if !s.features(ctx, owner, repo).Forks {
+		return nil, "", fmt.Errorf("%w: forking is disabled for this repository", ErrForbidden)
+	}
 	targetOwner := strings.ToLower(strings.TrimSpace(in.TargetOwner))
 	if targetOwner == "" {
 		targetOwner = strings.ToLower(owner)

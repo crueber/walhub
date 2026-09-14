@@ -170,8 +170,8 @@ func TestSummaryVisibilityFieldAndETag(t *testing.T) {
 	if body.Visibility != "" {
 		t.Fatalf("unwired visibility = %q, want empty", body.Visibility)
 	}
-	if etag := w3.Header().Get("ETag"); etag != `"`+fakeSHA+`~k0"` {
-		t.Fatalf("unwired etag = %q, want ~k0 suffix", etag)
+	if etag := w3.Header().Get("ETag"); etag != `"`+fakeSHA+`~k0~t111111"` {
+		t.Fatalf("unwired etag = %q, want ~k0~t111111 suffix", etag)
 	}
 }
 
@@ -395,13 +395,14 @@ func TestSummaryMutableClassAndETagEconomics(t *testing.T) {
 	}
 	// Every mutable projection still busts the ETag: ~d (description),
 	// ~m (mirror), ~c (open-count index version), ~v (visibility),
-	// ~k0 (checks probe absent — Forgejo #513: always present).
+	// ~k0 (checks probe absent — Forgejo #513: always present),
+	// ~t111111 (features unset — Forgejo #522: always present).
 	wantETag := `"` + fakeSHA +
 		"~d" + descriptionHash("a description") +
 		"~m" + mirrorHash(mirror) +
 		"~c7" +
 		"~vpublic" +
-		"~k0" + `"`
+		"~k0" + "~t111111" + `"`
 	if etag := w.Header().Get("ETag"); etag != wantETag {
 		t.Fatalf("etag = %q, want %q", etag, wantETag)
 	}

@@ -236,6 +236,32 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	wireNotifyFanout(c.notifySvc, c.issuesSvc, c.pullsSvc, c.reviewSvc, c.checksSvc)
 	wireReleasesFanout(c.releasesSvc, c.notifySvc)
 	wireSocialForks(c.socialSvc, c.pullsSvc)
+	// Forgejo #522: the per-repo feature-flag write guards — Star
+	// refuses new stars, SetWatch refuses new watches, and StartFork
+	// refuses new forks when the repo's flag is off (DELETE/unstar/
+	// unwatch always work). One shared reader over the WAL settings
+	// doc (manifest-inline — the same read the summary fold uses, so
+	// the guards and the tab gating can never disagree); unreadable
+	// settings fail open to all-enabled at each guard (display
+	// metadata must never break a write on a transient read — the
+	// CollabCounts precedent). apiEnv.Repo is read lazily per call so
+	// startup ordering (view bound after buildCollab) is safe; a nil
+	// view (tests without the surface) fails open too.
+	if apiEnv != nil {
+		featuresOf := func(ctx context.Context, owner, repo string) (config.ResolvedFeatures, bool) {
+			if apiEnv.Repo == nil {
+				return config.AllFeatures(), false
+			}
+			doc, err := apiEnv.Repo.Settings(ctx, git.RepoId{Owner: owner, Name: repo})
+			if err != nil {
+				return config.AllFeatures(), false
+			}
+			return config.FeaturesOf([]byte(doc.TOML)), true
+		}
+		c.socialSvc.Features = featuresOf
+		c.notifySvc.Features = featuresOf
+		c.pullsSvc.Features = featuresOf
+	}
 	// Issue #457: the child-delete sweep — deleting a fork child unlists
 	// it from the parent-side fork index and decrements the parent's
 	// social counter. Wired here (composition owns both sides; core never

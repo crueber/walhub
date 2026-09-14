@@ -668,6 +668,13 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   Headless cover: `web/test/unit/issues-filter-dropdowns.test.js`; `vite
   build` green; live-browser proof open per the same shared-daemon guard
   as #334.
+- **Issues-tab disable is display-only (Forgejo #522).** When the repo's
+  `[features] issues` flag is off, the client hides the Issues tab and the
+  creation affordances (list button, empty-state action, thread-page action,
+  the `/issues/new` composer shows an explainer) — but existing threads stay
+  readable at their URLs and no issue API is refused. Rationale: Forgejo's
+  semantics; the tab-disable and the write-guards (star/watch/fork) are
+  different failure modes (07_api.md Decisions).
 
 ## Explicitly out of scope
 

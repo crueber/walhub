@@ -64,6 +64,7 @@ import (
 	"sync"
 	"time"
 
+	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
@@ -437,6 +438,14 @@ type Service struct {
 	// drops — every reserve/append failure path logs). Nil → discard
 	// (same convention as the events bridge Logger).
 	Logger *slog.Logger
+	// Features reports the repo's resolved feature flags (Forgejo #522):
+	// SetWatch refuses new watches with ErrForbidden (→ 403) when the
+	// watch flag is off. Nil → all enabled; a declining hook (unreadable
+	// settings) also resolves all-on — display metadata must never
+	// break a write on a transient settings read (fail-open, the
+	// CollabCounts precedent). Wired by composition (cmd/walhub) over
+	// the WAL settings doc; tests substitute a fake.
+	Features func(ctx context.Context, owner, repo string) (config.ResolvedFeatures, bool)
 
 	ubus  *userBus
 	rbus  *repoBus
@@ -646,6 +655,21 @@ func (s *Service) requireRead(ctx context.Context, owner, repo string, p auth.Pr
 		}
 	}
 	return nil
+}
+
+// features resolves the repo's feature flags (Forgejo #522), failing open
+// to all-enabled when the hook is unwired or declines: display metadata
+// must never break a write on a transient settings read (the CollabCounts
+// precedent — only an explicit false refuses).
+func (s *Service) features(ctx context.Context, owner, repo string) config.ResolvedFeatures {
+	if s.Features == nil {
+		return config.AllFeatures()
+	}
+	f, ok := s.Features(ctx, owner, repo)
+	if !ok {
+		return config.AllFeatures()
+	}
+	return f
 }
 
 // --- store helpers ------------------------------------------------------------

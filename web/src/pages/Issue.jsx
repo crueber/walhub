@@ -12,6 +12,7 @@ import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import repos from "../../sdk/src/index.js";
 import { useData, invalidate, invalidateIssueLists, patchCached, reportError } from "../lib/data.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 import { TTL } from "../lib/collab.js";
 import { toggleLabel, labelColorMap } from "../lib/labels.js";
 import { milestoneDisplay, milestonePatch } from "../lib/milestones.js";
@@ -536,10 +537,13 @@ export default function Issue() {
             outside it — full-width in the narrow column (no overflow at
             390px), btn primary to match the issues-list treatment.
             Forgejo #502: anonymous viewers keep the button — it routes to
-            the log-in interstitial instead of the composer. */}
-        <A class="btn primary w-full" href={newIssueHref()} title="Create a new issue">
-          New issue
-        </A>
+            the log-in interstitial instead of the composer.
+            Forgejo #522: hidden while issues are off. */}
+        <Show when={!isFeatureDisabled(ctx.summary?.(), "issues")}>
+          <A class="btn primary w-full" href={newIssueHref()} title="Create a new issue">
+            New issue
+          </A>
+        </Show>
         <Show when={thread()}>
           {(t) => (
             // One metadata container (#107): state lives in the header

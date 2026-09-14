@@ -17,6 +17,7 @@ import { validateRepoName } from "../../sdk/src/create.js";
 import { allowedOwners } from "../lib/orgs.js";
 import { forkDefaultName, forkBranchShort } from "../lib/fork.js";
 import { invalidate, useData } from "../lib/data.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 
 const POLL_MS = 1000;
@@ -33,6 +34,13 @@ export default function Fork() {
   const location = useLocation();
   const full = () => `${params.owner}/${params.name}`;
   const repoClient = repos.repo(full());
+  // Forgejo #522: the form goes away while forking is off — the shared
+  // summary entry (warm when arriving from the repo shell, one fetch on
+  // a cold load) gates it; POST …/forks refuses server-side regardless,
+  // so this is the affordance, not the rule. Fail-open (null summary →
+  // form shows): only an explicit false hides.
+  const [getSummary] = useData(() => `repo:${full()}`, () => repoClient.get().catch(() => null));
+  const forksOff = () => isFeatureDisabled(getSummary(), "forks");
   // Forgejo #502: anonymous viewers route to the log-in interstitial
   // instead of firing the fork (shared identity cache keys — zero new
   // requests); the write opts out of popup auth so a stale-identity 401
@@ -122,6 +130,12 @@ export default function Fork() {
   const submit = async (e) => {
     e.preventDefault();
     if (getBusy()) return;
+    // Forgejo #522: belt-and-braces — the form hides while forking is
+    // off, and the write never fires either (POST …/forks is the rule).
+    if (forksOff()) {
+      setErr("Forking is disabled for this repository.");
+      return;
+    }
     const gateHref = writeGateHref();
     if (gateHref) {
       navigate(gateHref);
@@ -211,6 +225,16 @@ export default function Fork() {
         A fork shares the parent's objects and starts from its refs — pushes
         to either side stay independent. Issues and pull requests start fresh.
       </p>
+      {/* Forgejo #522: a direct URL to a forks-disabled repo lands on
+          this explainer (sane, not a dead form), with the repo one click
+          back. */}
+      <Show when={forksOff()}>
+        <p class="card p-4 text-sm">
+          Forking is disabled for this repository.{" "}
+          <A class="hover:underline" href={`/${full()}`}>Back to {full()}</A>
+        </p>
+      </Show>
+      <Show when={!forksOff()}>
       <form class="card grid gap-3 p-4" onSubmit={submit} aria-label="Fork repository">
         {/* Forgejo #502: anonymous viewers keep a path forward — the sign-in
             interstitial (next = this composer) instead of a dead form. */}
@@ -326,6 +350,7 @@ export default function Fork() {
         </div>
         </Show>
       </form>
+      </Show>
     </div>
   );
 }

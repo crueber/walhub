@@ -2,7 +2,7 @@
 // the create form (title, markdown body, preview toggle).
 
 import { createSignal, Show } from "solid-js";
-import { useLocation, useNavigate } from "@solidjs/router";
+import { A, useLocation, useNavigate } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import repos from "../../sdk/src/index.js";
 import { reportError, useData } from "../lib/data.js";
@@ -10,6 +10,7 @@ import { renderBody } from "../lib/render-md.js";
 import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 
 export default function IssueNew() {
   const ctx = useRepo();
@@ -82,6 +83,16 @@ export default function IssueNew() {
   return (
     <div class="issue-new mx-auto max-w-2xl">
       <h2 class="mb-3 text-lg font-semibold">New issue</h2>
+      {/* Forgejo #522: the composer goes away while issues are off — a
+          direct URL lands on this explainer (sane, not a dead 404), with
+          the list one click back. Existing issues stay readable. */}
+      <Show when={isFeatureDisabled(ctx.summary?.(), "issues")}>
+        <p class="card p-4 text-sm">
+          Issues are disabled for this repository.{" "}
+          <A class="hover:underline" href={`/${ctx.full}/issues`}>Back to issues</A>
+        </p>
+      </Show>
+      <Show when={!isFeatureDisabled(ctx.summary?.(), "issues")}>
       <Show when={getError()}>
         <p class="card mb-3 border-red-300 p-3 text-sm text-red-700 dark:border-red-900 dark:text-red-400" role="alert">
           {getError()}
@@ -133,6 +144,7 @@ export default function IssueNew() {
           </button>
         </div>
       </form>
+      </Show>
     </div>
   );
 }

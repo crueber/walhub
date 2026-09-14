@@ -46,6 +46,14 @@ func (s *Service) Star(ctx context.Context, p auth.Principal, owner, repo string
 	if !s.repoAlive(ctx, owner, repo) {
 		return 0, fmt.Errorf("%w: repo %s not found", ErrNotFound, repoName(owner, repo))
 	}
+	// Forgejo #522: starring a star-disabled repo is 403 (the toggle
+	// binds everyone, including admins and already-starred re-PUTs —
+	// the PUT is the "new star" affordance, and a uniform refusal keeps
+	// the rule one line; unstar always works, counts are untouched,
+	// re-enabling restores).
+	if !s.features(ctx, owner, repo).Star {
+		return 0, fmt.Errorf("%w: starring is disabled for this repository", ErrForbidden)
+	}
 	who := normPrincipal(p.Name)
 	release := s.lockStar(starGateKey(owner, repo, who))
 	defer release()

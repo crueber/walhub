@@ -14,6 +14,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import { useData, invalidate } from "../lib/data.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 import { keyAssets, filterReleases, excerptBody, LATEST_ASSET_LIMIT } from "../lib/releases.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
@@ -80,9 +81,14 @@ export default function Releases() {
           <button type="button" class="btn" onClick={reload}>
             Refresh
           </button>
-          <A class="btn primary" href={newHref()}>
-            New release
-          </A>
+          {/* Forgejo #522: the creation affordance goes away while
+              releases are off (the shared summary — zero new requests);
+              the list keeps rendering. */}
+          <Show when={!isFeatureDisabled(ctx.summary?.(), "releases")}>
+            <A class="btn primary" href={newHref()}>
+              New release
+            </A>
+          </Show>
         </div>
       </div>
 
@@ -113,8 +119,8 @@ export default function Releases() {
                     icon="tag"
                     title="No releases yet"
                     hint="Tag a commit and publish release notes — drafts and prereleases are supported."
-                    actionHref={newHref()}
-                    actionLabel="New release"
+                    actionHref={isFeatureDisabled(ctx.summary?.(), "releases") ? undefined : newHref()}
+                    actionLabel={isFeatureDisabled(ctx.summary?.(), "releases") ? undefined : "New release"}
                   />
                 </div>
               }
