@@ -117,6 +117,14 @@
           bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300; }
   .chip-prerelease { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
           bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-300; }
+  /* Card headers (Forgejo #521): the ONE title treatment for sidebar +
+     conversation cards on the PR page (Mergeability, Reviewers, Checks,
+     Merge, Reviews, Review summary, Finish review, Files) — the text-sm
+     semibold idiom the app already uses, now a single class so the cards
+     cannot drift apart. Composes with layout utilities (the Checks h2
+     adds flex items-center gap-2 alongside it). Light is the base,
+     dark: carries the default dark theme (inherited body text colors). */
+  .card-header { @apply mb-2 text-sm font-semibold; }
 
   /* Forms */
   .input { @apply w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900

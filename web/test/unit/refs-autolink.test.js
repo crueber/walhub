@@ -192,7 +192,10 @@ test("Issue/Pull pages pass owner/repo mdCtx to ThreadTimeline", () => {
   const issue = readSrc("../../src/pages/Issue.jsx");
   assert.match(issue, /mdCtx=\{\{ owner: ctx\.owner, repo: ctx\.name \}\}/);
   const pull = readSrc("../../src/pages/Pull.jsx");
-  assert.match(pull, /mdCtx=\{\{ owner: ctx\.owner, repo: ctx\.name \}\}/);
+  // Forgejo #521: one shared repo mdCtx const feeds every renderBody call
+  // site on the page (timeline, description, reviews, thread comments).
+  assert.match(pull, /const mdCtx = \{ owner: ctx\.owner, repo: ctx\.name \};/);
+  assert.match(pull, /<ThreadTimeline events=\{[^}]*\} textFor=\{pullEventText\} mdCtx=\{mdCtx\} \/>/);
   const thread = readSrc("../../src/components/ThreadTimeline.jsx");
   assert.match(thread, /renderBody\(ev\.body \?\? "", props\.mdCtx\)/);
   const issueNew = readSrc("../../src/pages/IssueNew.jsx");

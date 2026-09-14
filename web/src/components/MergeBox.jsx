@@ -156,7 +156,7 @@ export default function MergeBox(props) {
       </Show>
       <Show when={!props.pr?.merged}>
         <form class="card" onSubmit={merge} aria-label="Merge">
-          <h2 class="mb-2 text-sm font-semibold">Merge ({state()})</h2>
+          <h2 class="card-header">Merge ({state()})</h2>
           <label class="field">
             <span>Strategy</span>
             <select value={getStrategy()} onInput={(e) => setStrategy(e.target.value)} disabled={getMerging()}>
