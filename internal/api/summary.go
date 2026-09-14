@@ -229,6 +229,16 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// index version or a revalidating client 304s and the Checks
 		// tab stays hidden after CI reports.
 		etag += "~k" + strconv.Itoa(checksSum.Version)
+	} else {
+		// Forgejo #513: the suffix is unconditional. A client holding
+		// a pre-#505 cached summary (no has_checks field at all)
+		// revalidates with a bare head-sha ETag; without this suffix
+		// the server 304s forever and the client never receives
+		// has_checks, so the Checks tab stays visible via the
+		// missing-field fail-open. ~k0 can never collide with a real
+		// index: updateIndex ++ before the first write, so a present
+		// index is always Version >= 1.
+		etag += "~k0"
 	}
 	// Forgejo #381: the summary serves the mutable-collab class
 	// (private, no-cache), NOT SWR. The ~d/~m/~c/~v/~f/~k suffixes above make

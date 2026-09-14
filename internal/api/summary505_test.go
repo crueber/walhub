@@ -23,12 +23,12 @@ func TestSummaryChecksWire(t *testing.T) {
 		name       string
 		hook       func(ctx context.Context, owner, repo string) (ChecksSummary, bool)
 		wantHas    bool
-		wantSuffix string // "" = bare head-sha etag
+		wantSuffix string // "~k0" = absent probe (Forgejo #513: never bare)
 	}{
-		{"nil hook", nil, false, ""},
+		{"nil hook", nil, false, "~k0"},
 		{"declined hook", func(ctx context.Context, owner, repo string) (ChecksSummary, bool) {
 			return ChecksSummary{}, false
-		}, false, ""},
+		}, false, "~k0"},
 		{"empty index still versioned", func(ctx context.Context, owner, repo string) (ChecksSummary, bool) {
 			return ChecksSummary{HasChecks: false, Version: 1}, true
 		}, false, "~k1"},
@@ -78,7 +78,8 @@ func TestSummaryChecksRevalidate(t *testing.T) {
 	f.view.summaries["demo/walgit"] = SummaryData{
 		Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1,
 	}
-	// No checks yet: the hook declines (absent index), the etag is bare.
+	// No checks yet: the hook declines (absent index). The etag still
+	// carries ~k0 (Forgejo #513) — never bare.
 	f.env.ChecksSummary = func(ctx context.Context, owner, repo string) (ChecksSummary, bool) {
 		return ChecksSummary{}, false
 	}
@@ -86,19 +87,39 @@ func TestSummaryChecksRevalidate(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d", w.Code)
 	}
-	bare := w.Header().Get("ETag")
-	if want := `"` + fakeSHA + `"`; bare != want {
-		t.Fatalf("etag = %q, want %q", bare, want)
+	absent := w.Header().Get("ETag")
+	if want := `"` + fakeSHA + `~k0"`; absent != want {
+		t.Fatalf("etag = %q, want %q", absent, want)
+	}
+
+	// Forgejo #513 regression: a client holding a pre-#505 cached
+	// summary (no has_checks field; bare head-sha ETag) revalidating
+	// against the current absent-index state must NOT 304 — the stale
+	// field-less body would keep the Checks tab visible via the
+	// missing-field fail-open.
+	w = f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": `"` + fakeSHA + `"`}, readP())
+	if w.Code != 200 {
+		t.Fatalf("pre-#505 bare etag must revalidate to 200, got %d", w.Code)
+	}
+	var preBody struct {
+		HasChecks bool `json:"has_checks"`
+	}
+	decodeJSON(t, w, &preBody)
+	if preBody.HasChecks {
+		t.Fatalf("has_checks = true on a check-less repo")
+	}
+	if !strings.Contains(w.Body.String(), `"has_checks":`) {
+		t.Fatalf("repopulated body missing has_checks: %s", w.Body.String())
 	}
 
 	// The first report creates the index and moves no ref (same head
-	// sha, version 1) — revalidation against the bare etag must NOT
+	// sha, version 1) — revalidation against the absent etag must NOT
 	// 304, or the Checks tab stays hidden after CI reports.
 	version := 1
 	f.env.ChecksSummary = func(ctx context.Context, owner, repo string) (ChecksSummary, bool) {
 		return ChecksSummary{HasChecks: true, Version: version}, true
 	}
-	w = f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": bare}, readP())
+	w = f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": absent}, readP())
 	if w.Code != 200 {
 		t.Fatalf("first-report etag must revalidate to 200, got %d", w.Code)
 	}

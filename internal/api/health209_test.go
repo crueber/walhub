@@ -55,66 +55,65 @@ func TestSummaryHealthVariants(t *testing.T) {
 		wantHealth  string
 		wantMissing uint64
 		wantETag    string
-		wantNoETag  bool
 	}{
 		{
 			name:       "healthy repo, never audited",
 			seed:       SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 2, Tags: 1},
 			wantHealth: "healthy",
-			wantETag:   `"` + fakeSHA + `"`,
+			wantETag:   `"` + fakeSHA + `~k0"`,
 		},
 		{
 			name:       "empty repo, never audited",
 			seed:       SummaryData{},
 			wantHealth: "empty",
-			wantNoETag: true,
+			wantETag:   `"~k0"`, // head nil, ~k0 still present (#513)
 		},
 		{
 			name:       "view-set healthy passes through",
 			seed:       SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1, Health: "healthy"},
 			wantHealth: "healthy",
-			wantETag:   `"` + fakeSHA + `"`,
+			wantETag:   `"` + fakeSHA + `~k0"`,
 		},
 		{
 			name:       "degraded override from cached report",
 			seed:       SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 2, Tags: 1},
 			fsck:       &proto.FsckReport{MissingTotal: 3, Missing: []string{"aaa"}, At: fsckTs(now)},
 			wantHealth: "degraded", wantMissing: 3,
-			wantETag: `"` + fakeSHA + `~degraded"`,
+			wantETag: `"` + fakeSHA + `~degraded~k0"`,
 		},
 		{
 			name:       "degraded from sample alone (total lost, sample kept)",
 			seed:       SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1},
 			fsck:       &proto.FsckReport{Missing: []string{"aaa", "bbb"}, At: fsckTs(now)},
 			wantHealth: "degraded", wantMissing: 2,
-			wantETag: `"` + fakeSHA + `~degraded"`,
+			wantETag: `"` + fakeSHA + `~degraded~k0"`,
 		},
 		{
 			name:       "clean report stays healthy",
 			seed:       SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1},
 			fsck:       &proto.FsckReport{At: fsckTs(now)},
 			wantHealth: "healthy",
-			wantETag:   `"` + fakeSHA + `"`,
+			wantETag:   `"` + fakeSHA + `~k0"`,
 		},
 		{
 			name:       "corrupt report stays healthy (probe fails soft)",
 			seed:       SummaryData{Head: &Ref{Name: "refs/heads/main", SHA: fakeSHA}, Branches: 1},
 			rawFsck:    []byte("not-protobuf"),
 			wantHealth: "healthy",
-			wantETag:   `"` + fakeSHA + `"`,
+			wantETag:   `"` + fakeSHA + `~k0"`,
 		},
 		{
 			name:       "empty skips the probe even with a stale damaging report",
 			seed:       SummaryData{},
 			fsck:       &proto.FsckReport{MissingTotal: 9, Missing: []string{"zzz"}, At: fsckTs(now)},
 			wantHealth: "empty",
-			wantNoETag: true,
+			wantETag:   `"~k0"`,
 		},
 		{
 			name:       "tags-only repo is healthy (refs exist, head null)",
 			seed:       SummaryData{Tags: 1},
 			wantHealth: "healthy",
-			wantNoETag: true, // head nil → "" etag, as today
+			wantETag:   `"~k0"`, // head nil, ~k0 still present (#513)
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,11 +141,7 @@ func TestSummaryHealthVariants(t *testing.T) {
 			if body.MissingTotal != tc.wantMissing {
 				t.Fatalf("missing_total = %d, want %d", body.MissingTotal, tc.wantMissing)
 			}
-			if tc.wantNoETag {
-				if etag := w.Header().Get("ETag"); etag != "" {
-					t.Fatalf("etag = %q, want absent", etag)
-				}
-			} else if etag := w.Header().Get("ETag"); etag != tc.wantETag {
+			if etag := w.Header().Get("ETag"); etag != tc.wantETag {
 				t.Fatalf("etag = %q, want %q", etag, tc.wantETag)
 			}
 		})
@@ -163,8 +158,13 @@ func TestSummaryDegraded304(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("stale healthy etag must revalidate to 200, got %d", w.Code)
 	}
-	// The degraded etag 304s while still degraded.
-	w = f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": `"` + fakeSHA + `~degraded"`}, readP())
+	// The degraded etag 304s while still degraded (read it live — it
+	// carries the unconditional ~k0 suffix per #513).
+	degraded := w.Header().Get("ETag")
+	if !strings.Contains(degraded, "~degraded") {
+		t.Fatalf("degraded etag = %q, want ~degraded", degraded)
+	}
+	w = f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": degraded}, readP())
 	if w.Code != http.StatusNotModified {
 		t.Fatalf("current degraded etag must 304, got %d", w.Code)
 	}
@@ -274,13 +274,16 @@ func TestEmptyMarkerSites(t *testing.T) {
 	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), emptyMarker) {
 		t.Fatalf("wire resolve 404 = %d %q, want marker", w.Code, w.Body.String())
 	}
-	// And the empty summary reports health empty with no ETag.
+	// And the empty summary reports health empty. Its ETag is the
+	// unconditional ~k0 (Forgejo #513): the empty body still carries
+	// has_checks:false, so a pre-#505 cached empty summary must not
+	// 304-match either.
 	w = fx.do("GET", "/demo/walgit/api")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"health":"empty"`) {
 		t.Fatalf("wire empty summary = %d %q", w.Code, w.Body.String())
 	}
-	if etag := w.Header().Get("ETag"); etag != "" {
-		t.Fatalf("empty summary etag = %q, want absent", etag)
+	if etag := w.Header().Get("ETag"); etag != `"~k0"` {
+		t.Fatalf("empty summary etag = %q, want ~k0", etag)
 	}
 
 	// Damaged repo (refs present, objects missing): the SAME 404s keep their

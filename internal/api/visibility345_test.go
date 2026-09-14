@@ -162,15 +162,16 @@ func TestSummaryVisibilityFieldAndETag(t *testing.T) {
 	if !strings.Contains(etagPriv, "~vprivate") || etagPriv == etagPub {
 		t.Fatalf("private etag = %q, must differ from %q", etagPriv, etagPub)
 	}
-	// Unwired hook → empty field, bare ref etag (legacy shape).
+	// Unwired hook → empty field; the ~k0 suffix is still present
+	// (Forgejo #513: unconditional, never a bare ref).
 	f.env.RepoVisibility = nil
 	w3 := f.do("GET", "/demo/walgit/api", nil, nil, nil)
 	decodeJSON(t, w3, &body)
 	if body.Visibility != "" {
 		t.Fatalf("unwired visibility = %q, want empty", body.Visibility)
 	}
-	if etag := w3.Header().Get("ETag"); etag != `"`+fakeSHA+`"` {
-		t.Fatalf("unwired etag = %q, want bare ref", etag)
+	if etag := w3.Header().Get("ETag"); etag != `"`+fakeSHA+`~k0"` {
+		t.Fatalf("unwired etag = %q, want ~k0 suffix", etag)
 	}
 }
 
@@ -393,12 +394,14 @@ func TestSummaryMutableClassAndETagEconomics(t *testing.T) {
 		t.Fatalf("summary cache must not permit stale-serve: %q", cc)
 	}
 	// Every mutable projection still busts the ETag: ~d (description),
-	// ~m (mirror), ~c (open-count index version), ~v (visibility).
+	// ~m (mirror), ~c (open-count index version), ~v (visibility),
+	// ~k0 (checks probe absent — Forgejo #513: always present).
 	wantETag := `"` + fakeSHA +
 		"~d" + descriptionHash("a description") +
 		"~m" + mirrorHash(mirror) +
 		"~c7" +
-		"~vpublic" + `"`
+		"~vpublic" +
+		"~k0" + `"`
 	if etag := w.Header().Get("ETag"); etag != wantETag {
 		t.Fatalf("etag = %q, want %q", etag, wantETag)
 	}

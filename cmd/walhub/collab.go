@@ -194,8 +194,9 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// Issue #505: the summary checks-existence projection behind the Env
 	// hook (api renders ChecksSummary without importing the feature, law
 	// 8 — the CollabCounts shape). One exact-key probe on the CAS'd
-	// hot-window index (absent → ok=false → has_checks:false with the
-	// byte-identical ETag). Store errors fail open to absent (display
+	// hot-window index (absent → ok=false → has_checks:false; the
+	// summary always carries a ~k suffix (#513: ~k0 when absent, so a
+	// pre-#505 cached summary can never 304-match). Store errors fail open to absent (display
 	// metadata must never fail the summary — the CollabCounts
 	// precedent).
 	if apiEnv != nil {
