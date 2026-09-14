@@ -366,18 +366,21 @@
   box-shadow: none;
 }
 .graph-on .commit-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-/* Commit-graph gutter continuity (Forgejo #512): each row draws only its
-   own rail segment (top-half + bottom-half verticals meeting at
-   GRAPH_ROW_MID), so lanes read as continuous only while consecutive row
-   boxes abut edge-to-edge. Rows are therefore margin-free (this guard pins
-   the py-2-padding-only convention against future mb-* reaches), and while
-   graph-on the divide-y row borders are dropped (Commits.jsx applies the
-   divide utilities only when the graph is OFF) because a 1px top border on
-   every row would cut the gutter at each boundary. Separation while
-   graph-on is an inset top edge drawn only on .commit-main — the column
-   right of the rail, never the row's left edge — so the rail column stays
-   a continuous strip in both themes. The empty-list placeholder follows the
-   same margin-free standard. */
+/* Commit-graph gutter continuity (Forgejo #512, hardened #513): each row
+   draws only its own rail segment (top-half + bottom-half verticals meeting
+   at GRAPH_ROW_MID), so lanes read as continuous only while the rail fills
+   its row box edge-to-edge. A stretched grid item fills only its track —
+   row-level vertical padding sits outside the track, so the row itself
+   carries none; each content column carries its own py-2 instead (measured
+   live: row py-2 left the rail 16px short with an 8px gap at every joint).
+   Rows are margin-free (this guard pins the convention against future mb-*
+   reaches), and while graph-on the divide-y row borders are dropped
+   (Commits.jsx applies the divide utilities only when the graph is OFF)
+   because a 1px top border on every row would cut the gutter at each
+   boundary. Separation while graph-on is an inset top edge drawn only on
+   .commit-main — the column right of the rail, never the row's left edge —
+   so the rail column stays a continuous strip in both themes. The
+   empty-list placeholder follows the same margin-free standard. */
 .commit-row, .commit-empty { margin: 0; }
 .graph-on > .commit-row + .commit-row .commit-main { box-shadow: inset 0 1px 0 0 #f4f4f5; }
 .dark .graph-on > .commit-row + .commit-row .commit-main { box-shadow: inset 0 1px 0 0 rgb(39 39 42 / 0.6); }

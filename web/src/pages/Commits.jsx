@@ -131,15 +131,20 @@ function GraphRail(props) {
 
 function CommitRow(props) {
   const c = () => props.commit;
-  // Forgejo #512: rows stay margin-free — vertical spacing is the py-2 cell
-  // padding only, never margins, so consecutive row boxes abut edge-to-edge
-  // and the GraphRail segments read as one continuous gutter.
+  // Forgejo #512 (follow-up #513): the rail must span the FULL row box,
+  // including vertical padding — a stretched grid item only fills its
+  // track, and row-level py-2 sits outside the track, leaving the rail
+  // 16px short with an 8px gap at every joint (measured live). So the
+  // row itself carries no vertical padding; each content column carries
+  // its own py-2, and the rail (self-stretch, no padding) fills the box
+  // edge-to-edge so GraphRail segments connect across rows. Rows stay
+  // margin-free — never margins.
   return (
-    <div class="commit-row grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2.5 px-3 py-2">
+    <div class="commit-row grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2.5 px-3">
       <Show when={props.showGraph && props.graphRow}>
         {(row) => <GraphRail row={row()} width={props.graphWidth} />}
       </Show>
-      <div class="commit-main min-w-0">
+      <div class="commit-main min-w-0 py-2">
         <A
           class="commit-subject block truncate text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100"
           href={`/${props.full}/commit/${c().sha}`}
@@ -159,7 +164,7 @@ function CommitRow(props) {
         </p>
         <ParentLinks full={props.full} parents={c().parents} />
       </div>
-      <div class="commit-sha-col flex shrink-0 items-center gap-0.5">
+      <div class="commit-sha-col flex shrink-0 items-center gap-0.5 py-2">
         <A
           class="sha block w-28 text-right font-mono text-xs tabular-nums text-emerald-700 hover:underline dark:text-emerald-400"
           href={`/${props.full}/commit/${c().sha}`}
@@ -169,7 +174,7 @@ function CommitRow(props) {
         </A>
         <CopySha sha={c().sha} />
       </div>
-      <span class="commit-check flex shrink-0 items-center">
+      <span class="commit-check flex shrink-0 items-center py-2">
         <CheckPill full={props.full} sha={String(c().sha)} client={props.client} />
       </span>
     </div>
@@ -280,8 +285,12 @@ function CommitList(props) {
             {/* Forgejo #512: divide-y would put a 1px top border on every
                 row and cut the rail column at each boundary, so the divider
                 utilities apply only while the graph is OFF. While graph-on,
-                separation is the py-2 row padding plus the .commit-main inset
-                rule in ui.css (right of the rail — never the row's edge). */}
+                separation is the py-2 content-column padding plus the
+                .commit-main inset rule in ui.css (right of the rail — never
+                the row's edge). The row itself carries no vertical padding:
+                a stretched grid item only fills its track, so row-level py-2
+                would leave the rail 16px short with an 8px gap at every
+                joint (measured live, #513 follow-up). */}
             <div
               class="commit-list card overflow-hidden"
               classList={{
