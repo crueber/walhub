@@ -728,6 +728,8 @@ func (s *Service) ensurePullHead(ctx context.Context, pr *PRDoc, headLive string
 // --- list --------------------------------------------------------------------
 
 // PROut is one row of GET …/pulls (§8): the index card enriched from pr.json.
+// Merged is always present (never omitempty — the PROut/Draft discipline):
+// additive per law 5, old clients ignore the unknown field.
 type PROut struct {
 	Num       int    `json:"num"`
 	Title     string `json:"title"`
@@ -737,6 +739,7 @@ type PROut struct {
 	HeadRef   string `json:"head_ref"`
 	HeadSHA   string `json:"head_sha"`
 	Draft     bool   `json:"draft"`
+	Merged    bool   `json:"merged"`
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -759,7 +762,9 @@ type ListResult struct {
 // ListPRs serves the PR list index-first (P4): the shared index supplies
 // nums in newest-activity order; each row is enriched from its pr.json
 // sidecar (one GET per listed row — page-bounded, never a LIST). Base/head
-// filters apply post-enrichment. Render order is ALWAYS number-descending
+// filters apply post-enrichment. Merged rides that same sidecar read (law 6:
+// zero new round trips — no per-row probe beyond the enrichment GET the row
+// already costs). Render order is ALWAYS number-descending
 // (newest PR first), regardless of the state filter — the merged open +
 // closed_recent pool is re-sorted by num before windowing (same rule as 02
 // issue #48). Auth: read.
@@ -801,7 +806,7 @@ func (s *Service) ListPRs(ctx context.Context, owner, repo string, p auth.Princi
 		rows = append(rows, PROut{
 			Num: pr.Num, Title: c.Title, State: c.State, Author: c.Author,
 			BaseRef: pr.Base.Ref, HeadRef: pr.Head.Ref, HeadSHA: pr.Head.SHA,
-			Draft: pr.Draft, UpdatedAt: c.UpdatedAt,
+			Draft: pr.Draft, Merged: pr.Merged, UpdatedAt: c.UpdatedAt,
 		})
 	}
 	if rows == nil {
