@@ -55,7 +55,9 @@ test("gap-2 owns all spacing: single mechanism, no child adds spacing", () => {
   assert.ok(cluster.includes("<StarToggle"), "StarToggle sits in the actions cluster");
   assert.ok(cluster.includes("<WatchToggle"), "WatchToggle sits in the actions cluster");
   assert.ok(cluster.includes("<TasksOverlay"), "TasksOverlay sits in the actions cluster");
-  assert.ok(cluster.includes("href={`/${full()}/fork`}"), "Fork sits in the actions cluster");
+  // Forgejo #502: the Fork label href goes through forkHref() (composer for
+  // writers, log-in interstitial for anonymous) — same shell, same cluster.
+  assert.ok(cluster.includes("href={forkHref()}"), "Fork sits in the actions cluster");
   assert.ok(cluster.includes("<CloneMenu"), "CloneMenu sits in the actions cluster");
   // No per-pair spacing: no space-x, no margin utilities on any row child
   // (the row's own ml-auto alignment is the one deliberate exception).

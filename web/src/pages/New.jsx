@@ -20,13 +20,14 @@
 // split, error slot below the grid) — identical on Import.jsx.
 
 import { createSignal, Show, onCleanup } from "solid-js";
-import { A, useNavigate, useSearchParams } from "@solidjs/router";
+import { A, useLocation, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { validateRepoName, isUiRouteCollision } from "../../sdk/src/create.js";
 import { allowedOwners } from "../lib/orgs.js";
 import { validateRepoChars } from "../lib/repo-name.js";
 import OwnerNameRow from "../components/OwnerNameRow.jsx";
-import { invalidate } from "../lib/data.js";
+import { invalidate, useData } from "../lib/data.js";
+import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 
 function winnerUrl(msg) {
   const m = String(msg ?? "").match(/https?:\/\/[^\s"']+/);
@@ -35,6 +36,7 @@ function winnerUrl(msg) {
 
 export default function New() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [search] = useSearchParams();
   const [getOwner, setOwner] = createSignal(search.owner ?? "");
   const [getName, setName] = createSignal("");
@@ -76,6 +78,14 @@ export default function New() {
     });
   const anonymous = () => getMe()?.anonymous !== false && !getMe()?.principal;
   const noWrite = () => getMe() != null && getMe().write === false;
+  // Forgejo #502: anonymous viewers route to the log-in interstitial
+  // instead of firing the create (discovery rides the shared cache key —
+  // zero new requests); the write opts out of popup auth so a
+  // stale-identity 401 routes the same way.
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const here = () => location.pathname + location.search;
+  const writeGateHref = () =>
+    anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, here(), "Create a new repository");
 
   const fieldError = () => validateRepoName(getOwner(), getName()).error ?? "";
 
@@ -88,6 +98,11 @@ export default function New() {
   const submit = async (e) => {
     e.preventDefault();
     if (getBusy()) return;
+    const gateHref = writeGateHref();
+    if (gateHref) {
+      navigate(gateHref);
+      return;
+    }
     const v = validateRepoName(getOwner(), getName());
     if (v.error) {
       setErr(v.error);
@@ -108,7 +123,7 @@ export default function New() {
           object_format: getFormat() || undefined,
           visibility: getVisibility(),
         },
-        { signal },
+        { signal, noPopupAuth: true },
       );
       const full = res?.full_name ?? `${v.owner}/${v.name}`;
       invalidate("owners");
@@ -130,8 +145,14 @@ export default function New() {
         }
         return;
       }
-      // Validation 400s render inline; anything else stays inline too (the
-      // form owns its errors — no tray on expected outcomes).
+      // Validation 400s render inline; a stale-identity 401 routes to the
+      // interstitial; anything else stays inline too (the form owns its
+      // errors — no tray on expected outcomes).
+      const target = write401Target(err, { me: getMe(), discovery: getDiscovery() }, here(), "Create a new repository");
+      if (target) {
+        navigate(target);
+        return;
+      }
       setErr(String(err?.message ?? err ?? "create failed"));
       setWinner("");
     } finally {
@@ -181,7 +202,16 @@ export default function New() {
             </select>
           </label>
         </div>
-        <Show when={anonymous() || noWrite()}>
+        <Show when={anonymous()}>
+          <p class="text-xs text-amber-700 dark:text-amber-400">
+            You are browsing as a guest —{" "}
+            <A class="hover:underline" href={writeGateHref() ?? here()}>
+              sign in to create a repository
+            </A>
+            .
+          </p>
+        </Show>
+        <Show when={!anonymous() && noWrite()}>
           <p class="text-xs text-amber-700 dark:text-amber-400">
             You are not signed in as a writer — the server will refuse the create (401/403). Sign in first.
           </p>

@@ -840,7 +840,11 @@ func writeBody(w http.ResponseWriter, r *http.Request, class, etag string, statu
 // --- auth gates (07_api.md §13) -----------------------------------------------
 
 // gate enforces the route's auth level. 401 carries WWW-Authenticate: Bearer
-// realm="walgit"; 403 for authenticated-but-insufficient.
+// realm="walgit"; 403 for authenticated-but-insufficient. Anonymous is
+// never "insufficient role" — it is unauthenticated, so AuthWrite/AuthAdmin
+// refuse an anonymous principal with 401 before any flag check (Forgejo
+// #502: with anonymous_read on, the old fall-through answered 403, which
+// the UI cannot distinguish from "signed in but lacking permission").
 func (e *Env) gate(w http.ResponseWriter, r *http.Request, level AuthLevel) bool {
 	if level == AuthOpen {
 		return true
@@ -855,7 +859,7 @@ func (e *Env) gate(w http.ResponseWriter, r *http.Request, level AuthLevel) bool
 			return false
 		}
 	case AuthWrite:
-		if p.Anonymous && !anonRead {
+		if p.Anonymous {
 			writePlain(w, http.StatusUnauthorized, "authentication required")
 			return false
 		}
@@ -864,7 +868,7 @@ func (e *Env) gate(w http.ResponseWriter, r *http.Request, level AuthLevel) bool
 			return false
 		}
 	case AuthAdmin:
-		if p.Anonymous && !anonRead {
+		if p.Anonymous {
 			writePlain(w, http.StatusUnauthorized, "authentication required")
 			return false
 		}

@@ -470,22 +470,31 @@ export class ReposClient {
   /**
    * The fetch wrapper proper (§1.2): send → on 401 or opaque redirect,
    * single-flight popup auth → retry exactly once → dispatch by content type.
+   *
+   * `noPopupAuth` (Forgejo #502): the anonymous write-interstitial flow
+   * pre-flights writes client-side, but a stale identity can still 401
+   * server-side — those calls pass `noPopupAuth: true` so the 401 surfaces
+   * as a ReposError (the page routes it to /login-required) instead of
+   * opening the sign-in popup and re-running the write.
    */
-  async _call(path, { method = "GET", headers, body, signal, onProgress, sse = true, raw = false, cache } = {}) {
+  async _call(path, { method = "GET", headers, body, signal, onProgress, sse = true, raw = false, cache, noPopupAuth = false } = {}) {
     const req = this._request(path, { method, headers, body, sse, cache });
     const controller = this._controller(signal);
     let res = await this._send(req, controller);
     if (res.status === 401 || this._isOpaqueRedirect(res)) {
-      try {
-        await this._authenticate();
-      } catch (authErr) {
-        if (authErr instanceof ReposError) throw authErr;
-        throw new ReposError(res.status, "authentication failed", req.url);
+      if (!noPopupAuth) {
+        try {
+          await this._authenticate();
+        } catch (authErr) {
+          if (authErr instanceof ReposError) throw authErr;
+          throw new ReposError(res.status, "authentication failed", req.url);
+        }
+        controller.abort();
+        const retryController = this._controller(signal);
+        res = await this._send(req, retryController);
+        return raw ? this._textResponse(res, req.url) : this._dispatch(res, { url: req.url, onProgress, signal: retryController.signal });
       }
-      controller.abort();
-      const retryController = this._controller(signal);
-      res = await this._send(req, retryController);
-      return raw ? this._textResponse(res, req.url) : this._dispatch(res, { url: req.url, onProgress, signal: retryController.signal });
+      return raw ? this._textResponse(res, req.url) : this._dispatch(res, { url: req.url, onProgress, signal: controller.signal });
     }
     return raw ? this._textResponse(res, req.url) : this._dispatch(res, { url: req.url, onProgress, signal: controller.signal });
   }

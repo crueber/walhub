@@ -115,13 +115,14 @@ func TestGateAnonymousWriteArms(t *testing.T) {
 	if w := f.do("GET", "/demo/walgit/api", nil, nil, anon); w.Code == http.StatusUnauthorized {
 		t.Fatal("anonymous read must pass with anonRead on")
 	}
-	// anonymous write → 403 (never 401, anonRead is on)
-	if w := f.do("PUT", "/demo/walgit/api", nil, nil, anon); w.Code != http.StatusForbidden {
-		t.Fatalf("anon write = %d, want 403", w.Code)
+	// anonymous write → 401 (Forgejo #502 defect B: anonymous is
+	// unauthenticated, never "insufficient role" — even with anonRead on).
+	if w := f.do("PUT", "/demo/walgit/api", nil, nil, anon); w.Code != http.StatusUnauthorized {
+		t.Fatalf("anon write = %d, want 401", w.Code)
 	}
-	// anonymous admin → 403
-	if w := f.do("DELETE", "/demo/walgit/api", nil, nil, anon); w.Code != http.StatusForbidden {
-		t.Fatalf("anon admin = %d, want 403", w.Code)
+	// anonymous admin → 401
+	if w := f.do("DELETE", "/demo/walgit/api", nil, nil, anon); w.Code != http.StatusUnauthorized {
+		t.Fatalf("anon admin = %d, want 401", w.Code)
 	}
 	// with anonRead off, anonymous write/admin → 401
 	f.env.Cfg.Server.Auth.AnonymousRead = false

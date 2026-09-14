@@ -8,8 +8,9 @@
 // (coalesced), they never carry full state.
 
 import { createEffect, createSignal, For, Show } from "solid-js";
-import { A, useParams } from "@solidjs/router";
+import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
+import repos from "../../sdk/src/index.js";
 import { useData, invalidate, invalidateIssueLists, patchCached, reportError } from "../lib/data.js";
 import { TTL } from "../lib/collab.js";
 import { toggleLabel, labelColorMap } from "../lib/labels.js";
@@ -25,6 +26,7 @@ import { reactionEmoji, summaryEntries, addableReactions, adjustSummary } from "
 import { appendOlderWindow, olderCursor, anchorScrollTop, reconcilePinnedWindow } from "../lib/thread-order.js";
 import ReactionMenu from "../components/ReactionMenu.jsx";
 import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-events.js";
+import { anonWriteTarget, isAnonymousViewer, write401Target } from "../lib/writeGate.js";
 
 // System-row text comes from the shared honest-event lib (null = comment
 // body). Never asserts a close reason the event does not carry.
@@ -44,9 +46,35 @@ export default function Issue() {
   const key = () => `issue:${ctx.full}:${num()}`;
   const [getView] = useData(key, () => ctx.repoClient.issues.get(num()));
   const { role } = useRole(ctx.full, ctx.repoClient);
-  const canComment = () => role() !== null;
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Forgejo #502: anonymous viewers (OIDC anonymous-read mode) execute zero
+  // writes — the comment composer and reaction chips route to the log-in
+  // interstitial (shared identity cache keys — zero new requests). useRole
+  // resolves read for anonymous on public repos, so the role signal alone
+  // cannot carry this; the server 401s either way.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const gate = () => ({ me: getMe(), discovery: getDiscovery() });
+  const here = () => location.pathname + location.search;
+  const anon = () => isAnonymousViewer(getMe(), getDiscovery());
+  // Pre-flight: the interstitial href for this write, or null when the
+  // viewer may write (comment bodies ride along in next only as the page
+  // url — the draft itself is not preserved).
+  const writeGateHref = (action) => anonWriteTarget(gate(), here(), action);
+  // 401-catch: a server refusal for an anonymous viewer (stale identity)
+  // routes to the same interstitial; anything else keeps the tray path.
+  const reportWrite = (err, key, action) => {
+    const target = write401Target(err, gate(), here(), action);
+    if (target) navigate(target);
+    else reportError(err, key);
+  };
+  const canComment = () => role() !== null && !anon();
   const canTriage = () => roleAtLeast(role(), "triage");
-  const canCreate = () => role() !== null;
+  const newIssueHref = () => {
+    const dest = `/${ctx.full}/issues/new`;
+    return writeGateHref("Create a new issue") ?? dest;
+  };
   // Create gate (issue #310): POST …/api/issues is read (authenticated)
   // — any principal passing the read gate (02 §11 table), NOT triage.
   // Client mirror is role() !== null (the same shape as canComment: the
@@ -139,7 +167,7 @@ export default function Issue() {
   const comment = async (body) => {
     const n = num();
     const ck = key();
-    await ctx.repoClient.issues.comment(n, body);
+    await ctx.repoClient.issues.comment(n, body, { noPopupAuth: true });
     afterMutation(n, ck);
   };
 
@@ -155,9 +183,9 @@ export default function Issue() {
     // success); after a comment-posted / close-failed split the plain
     // Close menu finishes the job.
     if (String(body ?? "").trim()) {
-      await ctx.repoClient.issues.comment(n, body);
+      await ctx.repoClient.issues.comment(n, body, { noPopupAuth: true });
     }
-    await ctx.repoClient.issues.patch(n, closePatch(reason));
+    await ctx.repoClient.issues.patch(n, closePatch(reason), { noPopupAuth: true });
     afterMutation(n, ck);
   };
 
@@ -166,7 +194,7 @@ export default function Issue() {
   const close = async (reason) => {
     const n = num();
     const ck = key();
-    await ctx.repoClient.issues.patch(n, closePatch(reason));
+    await ctx.repoClient.issues.patch(n, closePatch(reason), { noPopupAuth: true });
     afterMutation(n, ck);
   };
 
@@ -213,13 +241,18 @@ export default function Issue() {
   // the #143 sidebar mutations.
   const react = (seq, content) =>
     withBusy(seq, content, async () => {
+      const gateHref = writeGateHref("React to this thread");
+      if (gateHref) {
+        navigate(gateHref);
+        return;
+      }
       const n = num();
       const ck = key();
       bump(ck, seq, content, +1);
       try {
-        await ctx.repoClient.issues.reactions.add(n, { target_event_seq: seq, content });
+        await ctx.repoClient.issues.reactions.add(n, { target_event_seq: seq, content }, { noPopupAuth: true });
       } catch (err) {
-        reportError(err, "issue-react");
+        reportWrite(err, "issue-react", "React to this thread");
       }
       afterMutation(n, ck);
     });
@@ -233,21 +266,26 @@ export default function Issue() {
   // like react above (#146).
   const toggleReaction = (seq, content) =>
     withBusy(seq, content, async () => {
+      const gateHref = writeGateHref("React to this thread");
+      if (gateHref) {
+        navigate(gateHref);
+        return;
+      }
       const n = num();
       const ck = key();
       bump(ck, seq, content, -1);
       try {
-        await ctx.repoClient.issues.reactions.remove(n, seq, content);
+        await ctx.repoClient.issues.reactions.remove(n, seq, content, { noPopupAuth: true });
       } catch (err) {
         if (err?.notFound || err?.status === 404) {
           bump(ck, seq, content, +2);
           try {
-            await ctx.repoClient.issues.reactions.add(n, { target_event_seq: seq, content });
+            await ctx.repoClient.issues.reactions.add(n, { target_event_seq: seq, content }, { noPopupAuth: true });
           } catch (addErr) {
-            reportError(addErr, "issue-react");
+            reportWrite(addErr, "issue-react", "React to this thread");
           }
         } else {
-          reportError(err, "issue-react");
+          reportWrite(err, "issue-react", "React to this thread");
         }
       }
       afterMutation(n, ck);
@@ -257,10 +295,10 @@ export default function Issue() {
     const n = num();
     const ck = key();
     try {
-      await ctx.repoClient.issues.patch(n, fields);
+      await ctx.repoClient.issues.patch(n, fields, { noPopupAuth: true });
       afterMutation(n, ck);
     } catch (err) {
-      reportError(err, "issue-patch");
+      reportWrite(err, "issue-patch", "Update this issue");
     }
   };
 
@@ -282,9 +320,9 @@ export default function Issue() {
     const next = toggleLabel(thread()?.labels ?? [], name);
     patchCached(ck, (view) => ({ ...view, thread: { ...view.thread, labels: next } }));
     try {
-      await ctx.repoClient.issues.patch(n, { labels: next });
+      await ctx.repoClient.issues.patch(n, { labels: next }, { noPopupAuth: true });
     } catch (err) {
-      reportError(err, "issue-labels");
+      reportWrite(err, "issue-labels", "Change this issue's labels");
     }
     afterMutation(n, ck);
     setLabelBusy((prev) => {
@@ -312,9 +350,9 @@ export default function Issue() {
     setMilestoneBusy(true);
     patchCached(ck, (view) => ({ ...view, thread: { ...view.thread, milestone: fields.milestone } }));
     try {
-      await ctx.repoClient.issues.patch(n, fields);
+      await ctx.repoClient.issues.patch(n, fields, { noPopupAuth: true });
     } catch (err) {
-      reportError(err, "issue-milestone");
+      reportWrite(err, "issue-milestone", "Change this issue's milestone");
     }
     afterMutation(n, ck);
     setMilestoneBusy(false);
@@ -464,7 +502,18 @@ export default function Issue() {
                   );
                 }}
               />
-              <Show when={canComment()}>
+              <Show
+                when={canComment()}
+                fallback={
+                  <Show when={anon()}>
+                    <p class="muted text-sm">
+                      <A class="hover:underline" href={writeGateHref("Comment on this issue") ?? here()}>
+                        Sign in to comment
+                      </A>
+                    </p>
+                  </Show>
+                }
+              >
                 <CommentComposer
                   onSubmit={comment}
                   onCommentAndClose={t().state === "open" ? commentAndClose : undefined}
@@ -485,12 +534,12 @@ export default function Issue() {
       <aside class="grid content-start gap-3">
         {/* New-issue page action (#310): above the metadata card but
             outside it — full-width in the narrow column (no overflow at
-            390px), btn primary to match the issues-list treatment. */}
-        <Show when={canCreate()}>
-          <A class="btn primary w-full" href={`/${ctx.full}/issues/new`}>
-            New issue
-          </A>
-        </Show>
+            390px), btn primary to match the issues-list treatment.
+            Forgejo #502: anonymous viewers keep the button — it routes to
+            the log-in interstitial instead of the composer. */}
+        <A class="btn primary w-full" href={newIssueHref()} title="Create a new issue">
+          New issue
+        </A>
         <Show when={thread()}>
           {(t) => (
             // One metadata container (#107): state lives in the header

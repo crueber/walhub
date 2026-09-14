@@ -6,15 +6,27 @@
 // with help text, checkbox option rows, inline validation errors.
 
 import { createSignal, For, Show, onCleanup } from "solid-js";
-import { A, useNavigate } from "@solidjs/router";
+import { A, useLocation, useNavigate } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
+import repos from "../../sdk/src/index.js";
 import { useData, reportError } from "../lib/data.js";
 import { filterTagNames } from "../lib/releases.js";
 import { onSubmitKeys } from "../lib/submitKeys.js";
+import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 
 export default function ReleaseNew() {
   const ctx = useRepo();
   const navigate = useNavigate();
+  const location = useLocation();
+  // Forgejo #502: anonymous viewers route to the log-in interstitial
+  // instead of firing the create (shared identity cache keys — zero new
+  // requests); the write opts out of popup auth so a stale-identity 401
+  // routes the same way.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const here = () => location.pathname + location.search;
+  const writeGateHref = () =>
+    anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, here(), "Create a new release");
   const [getTags] = useData(`tags:${ctx.full}`, () => ctx.repoClient.tags({ n: 100 }));
   const [getTag, setTag] = createSignal("");
   const [getName, setName] = createSignal("");
@@ -49,6 +61,11 @@ export default function ReleaseNew() {
 
   const create = async (e) => {
     e.preventDefault();
+    const gateHref = writeGateHref();
+    if (gateHref) {
+      navigate(gateHref);
+      return;
+    }
     if (!getTag()) {
       setError("Choose a tag for this release.");
       return;
@@ -56,14 +73,23 @@ export default function ReleaseNew() {
     setBusy(true);
     setError("");
     try {
-      const rel = await ctx.repoClient.releases.put(getTag(), {
-        name: getName().trim() || undefined,
-        body: getBody(),
-        draft: getDraft(),
-        prerelease: getPrerelease(),
-      });
+      const rel = await ctx.repoClient.releases.put(
+        getTag(),
+        {
+          name: getName().trim() || undefined,
+          body: getBody(),
+          draft: getDraft(),
+          prerelease: getPrerelease(),
+        },
+        { noPopupAuth: true },
+      );
       navigate(`/${ctx.full}/releases/${encodeURIComponent(rel.tag)}`);
     } catch (err) {
+      const target = write401Target(err, { me: getMe(), discovery: getDiscovery() }, here(), "Create a new release");
+      if (target) {
+        navigate(target);
+        return;
+      }
       setError(errMsg(err));
       reportError(err, "release");
     } finally {

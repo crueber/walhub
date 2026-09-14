@@ -507,6 +507,24 @@ Session cookie `walgit_session`: `HttpOnly`; `SameSite=None; Secure` when CORS o
 
 **401/403/503 mapping:** Invalid/Unauthorized → 401 (+ `WWW-Authenticate: Bearer realm="walgit"`); Forbidden → 403; Unavailable → 503 (+ `Retry-After: 15`).
 
+**Anonymous write refusal + log-in interstitial (Forgejo #502):** in oidc
+mode with `anonymous_read = true`, a signed-out visitor browses everything
+but executes zero writes. Three layers enforce it: (1) every per-route gate
+answers 401 for anonymous on write levels — `api.Env.gate()` refuses
+anonymous with 401 on `AuthWrite`/`AuthAdmin` BEFORE the write/admin flag
+checks (anonymous is unauthenticated, never "insufficient role"; the old
+403 fall-through is gone), and the ssh-keys mutations carry an explicit
+anonymous check (self-service stays `AuthRead` for read-only principals;
+auth-none is unaffected — its principal is never anonymous); (2) the
+`apiServe` lane seam asserts after `Authenticate`: oidc mode + a
+state-changing method (anything but GET/HEAD/OPTIONS) + anonymous principal
+→ 401 without invoking the handler, so even a hypothetically-ungated route
+cannot write; (3) the SPA routes every write affordance to
+`/login-required?next=<action>&action=<label>` (static route, registered
+before `/:owner`), whose Log-in button enters the `/_auth/login?next=`
+flow above and lands the user back on the attempted action after the
+callback 302s to `next` (`sanitizeNext` confines it — no open redirect).
+
 ### 8.7 Operator example: end-to-end auth flow
 
 ```sh
@@ -756,6 +774,23 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   login retries); law 8 holds because the hook is a `func` field.
   Full semantics (opt-out, serving, determinism) live in
   docs/features/01_identity_permissions.md Decisions.
+
+- **NEW (2026-09-14) — anonymous write refusal + log-in interstitial** (Forgejo #502):
+  with OIDC anonymous-read mode (#345) a signed-out visitor browses but
+  executes zero writes. `api.Env.gate()` answers 401 for anonymous on
+  `AuthWrite`/`AuthAdmin` before the write/admin flag checks (anonymous is
+  unauthenticated, never "insufficient role" — the old 403 fall-through
+  with `anonymous_read` on is closed); the ssh-keys mutations carry an
+  explicit anonymous check (closing the defect-A leak that wrote a key
+  record for the synthetic "anonymous" principal — self-service stays
+  `AuthRead` for read-only principals, auth-none unaffected); `apiServe`
+  asserts after `Authenticate` (oidc + non-GET/HEAD/OPTIONS + anonymous →
+  401 without invoking the handler) as the defense-in-depth catch-all for
+  hypothetically-ungated routes. Rationale: uniform 401 lets the UI
+  distinguish "sign in" (401 → `/login-required?next=<action>`) from "you
+  lack permission" (403); the middleware guarantee lives in the identity
+  chain, not in each package remembering to gate. No new round trips
+  (law 6 — the assert reuses the already-resolved principal).
 
 **Divergence (2026-08-31):**
 
