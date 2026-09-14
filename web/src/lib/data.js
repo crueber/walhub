@@ -346,6 +346,23 @@ export function invalidateIssueLists(full) {
   invalidate(`repo:${full}`);
 }
 
+/**
+ * invalidatePullLists(full) — the mutation-site reconcile for PR
+ * close/reopen (Forgejo #517; the #318 issue-side precedent above). The
+ * promise cache is GLOBAL across Solid-router navigations, so the state
+ * flip invalidates the repo-wide PR surfaces directly instead of relying
+ * on the SSE round-trip through a page that may unmount mid-navigation:
+ * every `pulls:{full}:*` list window plus the shell's shared `repo:{full}`
+ * summary entry (the open_pulls badge numerator, #319 — a close/reopen
+ * moves it with no ref move). invalidate() on an uncached key is a silent
+ * no-op, so calling this when no list page was ever mounted is free.
+ * Callers still invalidate their own thread key separately.
+ */
+export function invalidatePullLists(full) {
+  invalidatePrefix(`pulls:${full}:`);
+  invalidate(`repo:${full}`);
+}
+
 // --- 08 §4 invalidation-storm coalescing (Forgejo #396) ----------------------
 // A burst of collab frames (CI posting 30 check runs) MUST coalesce:
 // keys are collected into a set and invalidated once per tick. The tick
