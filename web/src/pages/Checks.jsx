@@ -221,7 +221,7 @@ export default function Checks() {
             />
           }
         >
-          <ul class="card-list space-y-2">
+          <ul class="space-y-2">
             <For each={getPage().checks ?? []}>
               {(row) => (
                 <ShaRow

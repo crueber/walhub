@@ -57,11 +57,14 @@ test("Pulls list rows use the flat issues-row idiom (no card-meta box)", () => {
 });
 
 test("Pull ReviewsList card-meta separates author, badge, date with · separators", () => {
+  // Forgejo #545: the pill-based decisionBadge is gone — the badge slot
+  // rides the shared reviewVerdictChip mapping (chip family) — but the
+  // card-meta row (author · badge · date) is unchanged.
   const s = pull();
   assert.ok(s.includes('class="card-meta"'), "ReviewsList keeps the card-meta hook");
   const meta = s.slice(s.indexOf('class="card-meta"'));
   let at = -1;
-  for (const t of ["rv.by", "·", "decisionBadge", "·", "rv.at"]) {
+  for (const t of ["rv.by", "·", "reviewVerdictChip", "·", "rv.at"]) {
     const i = meta.indexOf(t, at + 1);
     assert.ok(i > at, `${t} follows in separator order author · badge · date`);
     at = i;
