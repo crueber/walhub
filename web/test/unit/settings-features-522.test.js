@@ -32,7 +32,9 @@ test("General tab renders six toggles from the shared flag model", () => {
   assert.ok(general.includes("FEATURE_KEYS"), "the checkboxes iterate the shared six-flag model (one model, six booleans)");
   assert.ok(general.includes("FEATURE_LABELS[key]"), "labels come from the shared model");
   assert.ok(general.includes("FEATURE_HINTS[key]"), "each toggle names its consequence");
-  assert.ok(general.includes('type="checkbox"'), "toggles are native checkboxes");
+  // Forgejo #533: the toggles are the shared ToggleSwitch (the native
+  // checkbox lives in the component, not inline here).
+  assert.ok(general.includes("<ToggleSwitch"), "toggles render through the shared ToggleSwitch");
   // Unset renders checked (the server default is enabled).
   assert.ok(general.includes("checked={flags()[key] !== false}"), "unset flags render checked (all-on default)");
 });

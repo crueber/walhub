@@ -41,6 +41,7 @@ import {
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import VisSelect from "../components/VisSelect.jsx";
+import ToggleSwitch from "../components/ToggleSwitch.jsx";
 import AccessTab from "./Access.jsx";
 import Wal from "./Wal.jsx";
 import { isVisibility } from "../lib/visibility.js";
@@ -323,17 +324,22 @@ function GeneralTab(props) {
           <div class="grid gap-2">
             <For each={FEATURE_KEYS}>
               {(key) => (
-                <label class="flex items-start gap-2 text-sm">
-                  <input
-                    class="input mt-0.5"
-                    type="checkbox"
-                    checked={flags()[key] !== false}
-                    onChange={(e) => setFlags({ ...flags(), [key]: e.currentTarget.checked })}
-                  />
-                  <span>
+                // Forgejo #533: each row is one aligned flex row — label
+                // (title + muted hint beneath) left, the shared
+                // ToggleSwitch anchored right. The row IS the label, so
+                // clicking anywhere on it toggles the switch natively.
+                // The text-field `input` class never belongs on a
+                // checkbox (it stretched the control full-width).
+                <label class="flex cursor-pointer items-center justify-between gap-4 text-sm">
+                  <span class="min-w-0">
                     <span class="font-medium">{FEATURE_LABELS[key]}</span>
                     <span class="muted block text-xs">{FEATURE_HINTS[key]}</span>
                   </span>
+                  <ToggleSwitch
+                    checked={flags()[key] !== false}
+                    onChange={(e) => setFlags({ ...flags(), [key]: e.currentTarget.checked })}
+                    label={FEATURE_LABELS[key]}
+                  />
                 </label>
               )}
             </For>
