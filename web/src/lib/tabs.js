@@ -66,18 +66,23 @@ export function tabBadge(summary, tabId) {
 }
 
 /**
- * showChecksTab(summary) → boolean: the Checks-tab visibility rule
- * (issue #505). The summary carries has_checks from the CAS'd
- * hot-window checks index (false = none — the #319 badge discipline).
+ * showChecksTab(summary, opts) → boolean: the Checks-tab visibility rule
+ * (issue #505, extended #513). The summary carries has_checks from the
+ * CAS'd hot-window checks index (false = none — the #319 badge discipline).
  * Fail-open everywhere else: loading/deleted summaries (null/undefined)
  * and pre-#505 servers (no field) keep the tab — hiding on unknown
  * would flicker the strip on every load and strand old servers with no
- * way into the Checks page. This gates the tab only, never navigation:
- * the /:owner/:name/checks route still renders its empty state
- * (deep links stay sane) and activeTab keeps mapping checks/check
- * segments above.
+ * way into the Checks page. The ONE exception is an explicit auth
+ * failure (issue #513: `opts.denied` — the shell's summary fetch
+ * answered 401, so "unknown" is the steady state, not a transient):
+ * a gated viewer can reach no check data at all, so the tab hides.
+ * Loading stays fail-open (flicker/old-server reasons above). This gates
+ * the tab only, never navigation: the /:owner/:name/checks route still
+ * renders its empty state (deep links stay sane) and activeTab keeps
+ * mapping checks/check segments above.
  */
-export function showChecksTab(summary) {
+export function showChecksTab(summary, opts = {}) {
+  if (opts.denied) return false;
   if (!summary) return true;
   return summary.has_checks !== false;
 }
