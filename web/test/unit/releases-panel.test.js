@@ -1,11 +1,11 @@
 // web/test/unit/releases-panel.test.js — keyAssets helper (issue #35):
-// shown/extra split for the Latest row card — plus filterTagNames
-// (issue #254): the client-side tag filter for the new-release combobox —
-// plus filterReleases/excerptBody (issue #270): the list filter chips and
-// row excerpts.
+// shown/extra split for the Latest row card — plus filterReleases/excerptBody
+// (issue #270): the list filter chips and row excerpts. (Forgejo #503 deleted
+// filterTagNames with the #254 combobox — the tag field is a native select of
+// existing tags now, no client-side filter remains.)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { keyAssets, LATEST_ASSET_LIMIT, filterTagNames, filterReleases, excerptBody } from "../../src/lib/releases.js";
+import { keyAssets, LATEST_ASSET_LIMIT, filterReleases, excerptBody } from "../../src/lib/releases.js";
 
 const assets = (n) => Array.from({ length: n }, (_, i) => ({ name: `a${i + 1}.zip` }));
 
@@ -47,29 +47,6 @@ test("non-positive or non-finite limits show none, count all as extra", () => {
   }
   // fractional limits floor
   assert.equal(keyAssets(assets(4), 2.9).shown.length, 2);
-});
-
-test("filterTagNames: blank query returns every name in stream order", () => {
-  const names = ["v2.0.0", "v1.1.0", "v1.0.0"];
-  assert.deepEqual(filterTagNames(names, ""), names);
-  assert.deepEqual(filterTagNames(names, "   "), names);
-  assert.deepEqual(filterTagNames(names, undefined), names);
-  // a fresh array, not the input itself
-  assert.notEqual(filterTagNames(names, ""), names);
-});
-
-test("filterTagNames: substring match, case-insensitive, order preserved", () => {
-  const names = ["v2.0.0", "v1.1.0", "v1.0.0", "nightly"];
-  assert.deepEqual(filterTagNames(names, "v1"), ["v1.1.0", "v1.0.0"]);
-  assert.deepEqual(filterTagNames(names, "V2"), ["v2.0.0"]);
-  assert.deepEqual(filterTagNames(names, "night"), ["nightly"]);
-  assert.deepEqual(filterTagNames(names, "zzz"), []);
-});
-
-test("filterTagNames: non-array input behaves as an empty list", () => {
-  assert.deepEqual(filterTagNames(undefined, "v1"), []);
-  assert.deepEqual(filterTagNames(null, ""), []);
-  assert.deepEqual(filterTagNames("v1.0.0", ""), []);
 });
 
 test("filterReleases: all returns every release as a fresh array", () => {

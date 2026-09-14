@@ -33,6 +33,10 @@ const liveCss = () => srcOf("../../src/ui.css");
 // Every popover hook class the #37/#115/#278 audits accumulated. They stay in
 // the markup as harmless markers (and keep their #278 viewport-bound rule)
 // but carry no opacity role since #405 — the structural rule subsumes them.
+// (Forgejo #503 retired `tag-drop` with the release tag combobox — the tag
+// field is a native select now, no floating panel remains — so it leaves
+// this list; the #278 viewport-bound CSS rule keeps covering the class name
+// harmlessly.)
 const LEGACY_PANELS = [
   "clone-body",
   "ref-drop",
@@ -42,7 +46,6 @@ const LEGACY_PANELS = [
   "label-drop",
   "milestone-drop",
   "close-drop",
-  "tag-drop",
 ];
 
 function jsxFiles(dirs) {
@@ -104,7 +107,7 @@ test("no floating .card panel ships a translucent bg utility", () => {
       if (isFloatingCard(cls)) floating.push(`${path.basename(f)}: ${cls}`);
     }
   }
-  // IdentityMenu plus the nine legacy popovers (some hooks appear twice).
+  // IdentityMenu plus the eight legacy popovers (some hooks appear twice).
   assert.ok(floating.length >= 10, `floating .card scan finds every popover (found ${floating.length})`);
   assert.ok(floating.some((c) => c.startsWith("IdentityMenu.jsx")), "IdentityMenu is among the covered panels");
   for (const hit of floating) {
