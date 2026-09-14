@@ -8,6 +8,7 @@ package identity
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,6 +120,71 @@ func TestGenerateRingsAvatar(t *testing.T) {
 		}
 		if svg != again {
 			t.Errorf("seed %q: same seed must render byte-identical SVG", seed)
+		}
+	}
+}
+
+// defaultRingsRingColors is the DiceBear "rings" style's built-in
+// figure collection (styles/v10 src/rings.json colors.ring.values):
+// a 16-color coral→blue→purple→pink rainbow. userAvatarRingColors
+// replaces it via the ringColor option (Forgejo #539) — this list
+// pins the replacement: none of these may appear in output.
+var defaultRingsRingColors = []string{
+	"f49383", "ed9b66", "dea552", "c6b14f",
+	"a7bc61", "83c57d", "5bc99e", "37c9be",
+	"34c5db", "55bef1", "7bb4fc", "9fa9fd",
+	"bd9ff2", "d597de", "e791c3", "f290a3",
+}
+
+// avatarFillRe matches 6-hex fill attributes (the only fill shape
+// the renderer emits for these avatars — verified by probe).
+var avatarFillRe = regexp.MustCompile(`(?i)fill="(?:#)?([0-9a-f]{6})"`)
+
+func TestGenerateGreensOnlyFigures(t *testing.T) {
+	// Forgejo #539: figures must come from the app greens-to-black
+	// override palette, never the style rainbow. Strong pin over
+	// ordinary + hostile seeds (the deterministic PRNG varies the
+	// figure per seed, so one seed cannot cover the palette): NONE
+	// of the 16 style defaults may appear in output, and every fill
+	// in the document must be an override-palette member (figures
+	// must not vanish to prove the override took — the background
+	// hue is itself a palette member, so this also covers the
+	// tone-on-tone figure case).
+	allowed := map[string]bool{}
+	for _, c := range userAvatarRingColors {
+		allowed[strings.ToLower(c)] = true
+	}
+	for _, seed := range []string{
+		`dave@example.com`,
+		`erin@example.com`,
+		`mallory@example.com`,
+		`zzz@example.com`,
+		`q3@example.com`,
+		`q5@example.com`,
+		`"></svg><script>alert(1)</script><svg x="`,
+		`a<b@example.com`,
+	} {
+		svg, err := GenerateUserAvatarSVG(seed)
+		if err != nil {
+			t.Fatalf("generate(%q): %v", seed, err)
+		}
+		lower := strings.ToLower(svg)
+		for _, c := range defaultRingsRingColors {
+			if strings.Contains(lower, c) {
+				t.Errorf("seed %q: style-rainbow color %q in output (ringColor override bypassed)", seed, c)
+			}
+		}
+		fills := avatarFillRe.FindAllStringSubmatch(svg, -1)
+		if len(fills) == 0 {
+			t.Fatalf("seed %q: no fills in output (override emptied the figure?)", seed)
+		}
+		for _, m := range fills {
+			if !allowed[strings.ToLower(m[1])] {
+				t.Errorf("seed %q: fill %q outside the greens-to-black palette", seed, m[1])
+			}
+		}
+		if err := checkAvatarSVG(svg, seed); err != nil {
+			t.Errorf("seed %q: sanitize gate rejected valid output: %v", seed, err)
 		}
 	}
 }
