@@ -40,9 +40,12 @@ export function attachPulls(repo) {
     /** Comment: `POST …/pulls/{num}/comments` → `201 {event}`. */
     comment: (num, body, opts) =>
       client._call(p(`/pulls/${num}/comments`), { method: "POST", ...json({ body }), ...opts }),
-    /** Diff: `GET …/pulls/{num}/diff` (text/plain unified `base...head` patch). */
+    /** Diff: `GET …/pulls/{num}/diff` (text/plain unified `base...head` patch).
+     * raw: true — the endpoint answers `text/plain`, so the body resolves
+     * as a string (issue #520: the default JSON path resolved an empty
+     * patch to null and threw on a real patch). */
     diff: (num, opts) =>
-      client._call(p(`/pulls/${num}/diff`), { method: "GET", ...opts }),
+      client._call(p(`/pulls/${num}/diff`), { method: "GET", raw: true, ...opts }),
     /** Commits: `GET …/pulls/{num}/commits?skip=&n=` → `{commits, more}`. */
     commits: (num, query = {}, opts) =>
       client._call(p(`/pulls/${num}/commits${qs(query)}`), { method: "GET", ...opts }),

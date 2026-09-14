@@ -5,7 +5,7 @@
 import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useData, SHA_TTL, EMPTY_REPO, isEmptySummary, isEmptyError, isDegradedSummary, summaryOf, reportError } from "../lib/data.js";
-import { parsePatchFiles, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
+import { parsePatchFiles, normalizePatchBody, linkifyBody, groupTrailers, trailerValue } from "../lib/diff.js";
 import { DiffBody } from "../components/DiffTable.jsx";
 import { CopySha, shortSha } from "../lib/sha.jsx";
 import { useRepo } from "./Repo.jsx";
@@ -260,7 +260,9 @@ function CommitDetail(props) {
     return {
       c,
       stats: data.stats ?? [],
-      files: parsePatchFiles(data.patch ?? "", c.sha).files,
+      // Issue #520: null-safe normalization — a null data/patch renders
+      // the loading fallback above (via !data), never a TypeError.
+      files: parsePatchFiles(normalizePatchBody(data), c.sha).files,
       groups: groupTrailers(c.trailers),
     };
   };
