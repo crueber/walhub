@@ -311,3 +311,62 @@
 .diff-row.line-hl > td { background-color: #fef3c7; }
 .diff-row.line-hl > .diff-num { box-shadow: inset 2px 0 0 #10b981; }
 .dark .diff-row.line-hl > td { background-color: rgba(245, 158, 11, 0.16); }
+
+/* Commit graph (Forgejo #506): deliberately UNLAYERED so the graph-on grid
+   template wins over the .commit-row Tailwind grid-cols utility above
+   regardless of cascade-layer order (the .blob-row.line-hl precedent).
+   Lane color lives here in vars — JSX carries only .gl-N classes, never
+   literals. Light vars are 700-grade hues (contrast on white); .dark vars
+   are 400-grade (contrast on zinc-950). The rail hides at phone widths
+   (≤480px): the row falls back to its 3-column shape and the ParentLinks
+   text keeps the parent info, so 390px never pans. */
+:root {
+  --graph-0: #047857;
+  --graph-1: #0369a1;
+  --graph-2: #b45309;
+  --graph-3: #be123c;
+  --graph-4: #6d28d9;
+  --graph-5: #c2410c;
+  --graph-6: #0e7490;
+  --graph-7: #4d7c0f;
+  --graph-ring: #ffffff;
+}
+.dark {
+  --graph-0: #34d399;
+  --graph-1: #38bdf8;
+  --graph-2: #fbbf24;
+  --graph-3: #fb7185;
+  --graph-4: #a78bfa;
+  --graph-5: #fb923c;
+  --graph-6: #22d3ee;
+  --graph-7: #a3e635;
+  --graph-ring: #27272a;
+}
+.gl-0 { color: var(--graph-0); }
+.gl-1 { color: var(--graph-1); }
+.gl-2 { color: var(--graph-2); }
+.gl-3 { color: var(--graph-3); }
+.gl-4 { color: var(--graph-4); }
+.gl-5 { color: var(--graph-5); }
+.gl-6 { color: var(--graph-6); }
+.gl-7 { color: var(--graph-7); }
+.graph-dot {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  transform: translate(-50%, -50%);
+  background-color: currentColor;
+  box-shadow: 0 0 0 2px var(--graph-ring);
+}
+.graph-dot-merge {
+  background-color: var(--graph-ring);
+  border: 2px solid currentColor;
+  box-shadow: none;
+}
+.graph-on .commit-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+@media (max-width: 480px) {
+  .graph-on .commit-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .graph-on .commit-rail { display: none; }
+}
