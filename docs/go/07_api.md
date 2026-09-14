@@ -596,8 +596,10 @@ the stale-serve window the suffix alone cannot close.
 present, `false` = none; old clients ignore it per 14 §14.12): true once any check
 status was reported (hot window or backfilled — the CAS'd `checks/index.json` exists
 in both cases), read index-first behind the `Env.ChecksSummary` hook (one exact-key
-GET — probe, don't list, law 4; absent index → `false` with the byte-identical ETag,
-so pre-checks repos are untouched). Riding the summary costs zero new client requests
+GET — probe, don't list, law 4; absent index → `false`, and the `~k`
+suffix is unconditional (`~k0` when absent — Forgejo #513: otherwise a
+pre-#505 cached summary 304-matches forever and never receives the
+flag). Riding the summary costs zero new client requests
 (the tab bar already holds the shared summary signal; a dedicated endpoint would cost
 an extra request per repo view) at +1 server-side probe per summary — off the law-6
 budgeted paths (push/sync/checkpoint never call here, so their sim budgets hold unchanged).
@@ -1339,8 +1341,8 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   for free; a dedicated endpoint would cost an extra request per repo view, rejected). Source
   is the CAS'd hot-window `checks/index.json` read index-first behind the `Env.ChecksSummary`
   hook (the `MirrorSummary`/`CollabCounts` shape — api never imports the feature, law 8; one
-  exact-key GET, probe-don't-list law 4; absent index → `false` with the byte-identical ETag).
-  Deliberately the index, not a per-sha LIST scan (the summary is a per-page-view path; the
+  exact-key GET, probe-don't-list law 4; absent index → `false`, with an unconditional
+  `~k0` suffix — Forgejo #513). Deliberately the index, not a per-sha LIST scan (the summary is a per-page-view path; the
   per-sha objects stay the backfill truth — a lost index update reads absent until the next
   report, the same staleness envelope the table page already reads under). `ETag` gains the
   `~k<index-version>` suffix (same trap as `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`: the first
@@ -1351,3 +1353,12 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   without a reload, and the header keeps the `/api#checks-ci` reporting link while hidden.
   Rationale: zero new client requests with a version-keyed ETag — the cheapest correct
   source, with the staleness story stated instead of silent.
+
+- **Unconditional `~k` suffix (Forgejo #513).** The `~k<index-version>` suffix is
+  always present — `~k0` when the checks probe is absent or the hook is nil.
+  Rationale: with a conditional suffix, a zero-check repo's ETag was
+  byte-identical to its pre-#505 ETag, so any client holding a pre-#505 cached
+  summary revalidated to 304 forever, never received `has_checks`, and kept
+  the Checks tab visible via the missing-field fail-open. `~k0` can never
+  collide with a real index (versions start at 1). Absent→present transitions
+  bust the cache exactly as before.

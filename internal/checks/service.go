@@ -524,8 +524,9 @@ func (s *Service) loadIndex(ctx context.Context, owner, repo string) (*IndexDoc,
 // (issue #505): the summary Checks-tab visibility flag. One exact-key
 // GET on the CAS'd hot-window index (IndexKey — probe, don't list, law
 // 4); an absent index → ok=false (a repo that never reported carries no
-// flag and no ETag suffix, so its summary stays byte-identical — the
-// OpenCounts precedent). Present → ok=true with HasChecks = len(shas) >
+// flag; the summary still emits an unconditional ~k0 ETag suffix —
+// Forgejo #513 — so a pre-#505 cached summary can never 304-match).
+// Present → ok=true with HasChecks = len(shas) >
 // 0 and Version = the index version (the summary ETag suffix input —
 // the ~c precedent). The per-sha objects are the backfill truth but the
 // index is the cheap flag: a lost index update (writer died between the

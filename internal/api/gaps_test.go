@@ -130,8 +130,11 @@ func TestSummaryWithoutHead(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if etag := w.Header().Get("ETag"); etag != "" {
-		t.Fatalf("unborn head must omit etag, got %q", etag)
+	// No head, so the ETag is just the unconditional ~k0 suffix
+	// (Forgejo #513): the empty body still carries has_checks:false,
+	// so a pre-#505 cached empty summary must not 304-match either.
+	if etag := w.Header().Get("ETag"); etag != `"~k0"` {
+		t.Fatalf("unborn head etag = %q, want ~k0", etag)
 	}
 }
 

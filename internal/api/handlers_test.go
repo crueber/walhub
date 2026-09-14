@@ -334,8 +334,8 @@ func TestRepoSummary(t *testing.T) {
 	if cc := w.Header().Get("Cache-Control"); cc != ccMutable {
 		t.Fatalf("summary cache = %q", cc)
 	}
-	if etag := w.Header().Get("ETag"); etag != `"`+fakeSHA+`"` {
-		t.Fatalf("etag = %q", etag)
+	if etag := w.Header().Get("ETag"); etag != `"`+fakeSHA+`~k0"` {
+		t.Fatalf("summary etag = %q", etag)
 	}
 	var body struct {
 		Owner    string `json:"owner"`
@@ -364,9 +364,11 @@ func TestRepoSummary(t *testing.T) {
 	if !strings.HasSuffix(body.APIURL, "/demo/walgit/api") {
 		t.Fatalf("api_url = %q", body.APIURL)
 	}
-	// 304 path
+	// 304 path: the CURRENT etag revalidates (a stale pre-#505 bare
+	// head-sha etag must 200 — see TestSummaryChecksRevalidate).
+	cur := w.Header().Get("ETag")
 	w = f.req("GET", "/demo/walgit/api")
-	w2 := f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": `"` + fakeSHA + `"`}, readP())
+	w2 := f.do("GET", "/demo/walgit/api", nil, map[string]string{"If-None-Match": cur}, readP())
 	if w2.Code != http.StatusNotModified {
 		t.Fatalf("if-none-match status = %d", w2.Code)
 	}
