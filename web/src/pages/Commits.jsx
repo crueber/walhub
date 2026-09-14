@@ -131,7 +131,7 @@ function GraphRail(props) {
 
 function CommitRow(props) {
   const c = () => props.commit;
-  // Forgejo #512 (follow-up #513): the rail must span the FULL row box,
+  // Forgejo #512 (reopened): the rail must span the FULL row box,
   // including vertical padding — a stretched grid item only fills its
   // track, and row-level py-2 sits outside the track, leaving the rail
   // 16px short with an 8px gap at every joint (measured live). So the
@@ -290,7 +290,7 @@ function CommitList(props) {
                 the row's edge). The row itself carries no vertical padding:
                 a stretched grid item only fills its track, so row-level py-2
                 would leave the rail 16px short with an 8px gap at every
-                joint (measured live, #513 follow-up). */}
+                joint (measured live, reopened #512). */}
             <div
               class="commit-list card overflow-hidden"
               classList={{

@@ -366,7 +366,7 @@
   box-shadow: none;
 }
 .graph-on .commit-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-/* Commit-graph gutter continuity (Forgejo #512, hardened #513): each row
+/* Commit-graph gutter continuity (Forgejo #512, reopened hardening): each row
    draws only its own rail segment (top-half + bottom-half verticals meeting
    at GRAPH_ROW_MID), so lanes read as continuous only while the rail fills
    its row box edge-to-edge. A stretched grid item fills only its track —

@@ -1,5 +1,5 @@
 // web/test/unit/commit-graph-gutter-512.test.js — Forgejo #512
-// (+ #513 follow-up): the commit-graph lane gutter must read as one
+// (+ reopened follow-up): the commit-graph lane gutter must read as one
 // continuous line while the graph is ON. Each row draws only its own rail
 // segment, so the rail must fill its row box edge-to-edge: the row itself
 // carries no vertical padding (a stretched grid item only fills its track,
@@ -25,7 +25,7 @@ const CSS = srcOf("../../src/ui.css");
 test("#512: .commit-row carries no vertical padding and no margins — the rail fills the box", () => {
   const rowClass = COMMITS.match(/class="commit-row ([^"]*)"/)?.[1] ?? "";
   // No vertical padding on the row itself: a stretched grid item fills
-  // only its track, and row-level py-* sits outside the track (#513).
+  // only its track, and row-level py-* sits outside the track (reopened #512).
   const vpad = rowClass.split(/\s+/).find((t) => /^(py-|pt-|pb-)/.test(t));
   assert.equal(vpad, undefined, `no vertical padding on the row (found: ${vpad})`);
   const marginUtil = rowClass.split(/\s+/).find((t) => /^(m[xytrbl]?|space-[xy])-/.test(t));
