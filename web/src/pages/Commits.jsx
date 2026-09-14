@@ -131,6 +131,9 @@ function GraphRail(props) {
 
 function CommitRow(props) {
   const c = () => props.commit;
+  // Forgejo #512: rows stay margin-free — vertical spacing is the py-2 cell
+  // padding only, never margins, so consecutive row boxes abut edge-to-edge
+  // and the GraphRail segments read as one continuous gutter.
   return (
     <div class="commit-row grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2.5 px-3 py-2">
       <Show when={props.showGraph && props.graphRow}>
@@ -274,9 +277,19 @@ function CommitList(props) {
                 </button>
               </span>
             </nav>
+            {/* Forgejo #512: divide-y would put a 1px top border on every
+                row and cut the rail column at each boundary, so the divider
+                utilities apply only while the graph is OFF. While graph-on,
+                separation is the py-2 row padding plus the .commit-main inset
+                rule in ui.css (right of the rail — never the row's edge). */}
             <div
-              class="commit-list card divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800/60"
-              classList={{ "graph-on": graphOn() }}
+              class="commit-list card overflow-hidden"
+              classList={{
+                "graph-on": graphOn(),
+                "divide-y": !graphOn(),
+                "divide-zinc-100": !graphOn(),
+                "dark:divide-zinc-800/60": !graphOn(),
+              }}
             >
               <For each={hist().commits ?? []}>
                 {(c, i) => (
@@ -291,7 +304,8 @@ function CommitList(props) {
                 )}
               </For>
               <Show when={(hist().commits ?? []).length === 0}>
-                <p class="muted p-4 text-sm">No commits in this view.</p>
+                {/* Forgejo #512: same margin-free standard as .commit-row. */}
+                <p class="commit-empty muted p-4 text-sm">No commits in this view.</p>
               </Show>
             </div>
             <Show when={hist().more}>
