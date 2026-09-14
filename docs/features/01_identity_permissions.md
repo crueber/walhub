@@ -178,6 +178,25 @@ already carries the repo's permission model is the single place a reader consult
   and every repo-scoped read endpoint. The gate runs at the `require_read` boundary so no route can
   forget it. Per-repo private-read is therefore no longer "deferred": this object IS the hook's
   implementation, and policy.json stays push-only (the 14 §14.4 contract is untouched).
+
+**Anonymous write refusal + log-in interstitial (Forgejo #502):** anonymous
+resolves to read-at-most (access.go Resolve — exactly one grant: read on
+public visibility), and the server turns that into "and never writes": every
+inventoried write route refuses an anonymous principal with a consistent 401
+(`api.Env.gate()` checks anonymous before the write/admin flag checks, so
+anonymous is never "insufficient role"; the ssh-keys mutations carry an
+explicit anonymous check; the releases/tags local `requireRole` copies map
+anonymous to 401 like every other package), and the `apiServe` lane seam
+asserts after `Authenticate` (oidc + non-GET/HEAD/OPTIONS + anonymous → 401
+without invoking the handler) as the defense-in-depth catch-all. The UI
+meets the refusal with one pattern (`web/src/lib/writeGate.js`): write
+affordances (star/watch/fork pills, New-issue/New-pull buttons,
+comment/composer forms, reactions, create forms) pre-flight — anonymous
+viewers route to `/login-required?next=<action>&action=<label>` instead of
+firing the SDK call, and the calls pass the SDK's `noPopupAuth` opt-out so
+a stale-identity 401 routes to the same interstitial instead of opening the
+sign-in popup. The interstitial's Log-in button enters `/_auth/login?next=`
+and lands the user back on the attempted action.
 - Cost: one conditional GET of `access.json` per read request (control-plane, sub-second) with an
   in-process LRU stamped by the CAS version — a changed version invalidates lazily, exactly the
   ref→sha LRU pattern (07 §5). Anonymous hot clones of public repos therefore cost one extra
@@ -805,3 +824,14 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   `Repos.jsx` `view="orgs"` branch; an org literally named `organizations` loses its UI page,
   client-side only — same reservation class as #422's `repositories`); no endpoint, ETag, or
   cache-key change. Headless cover: `web/test/unit/owner-orgs-tab-430.test.js`; `vite build` green.
+- **Anonymous write refusal + log-in interstitial (issue #502, 2026-09-14)** — anonymous
+  resolves to read-at-most (§4), and the server enforces "and never writes": every inventoried
+  write route answers 401 for anonymous (the core `api.Env.gate()` checks anonymous before the
+  write/admin flag checks; the ssh-keys mutations carry an explicit anonymous check closing the
+  leak that wrote a key record for the synthetic "anonymous" principal; the releases/tags local
+  `requireRole` copies already mapped anonymous to 401 — confirmed, not changed), and the
+  `apiServe` lane seam asserts after `Authenticate` (oidc + non-GET/HEAD/OPTIONS + anonymous →
+  401 without invoking the handler). Rationale: uniform 401 lets the UI route "sign in" (401 →
+  `/login-required`) apart from "you lack permission" (403); the catch-all lives in the identity
+  chain, not in each package remembering to gate. No new round trips (the assert reuses the
+  resolved principal).

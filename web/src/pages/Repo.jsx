@@ -14,6 +14,7 @@ import { activeTab, tabBadge } from "../lib/tabs.js";
 import { mountStream } from "../lib/sse.js";
 import Icon from "../lib/icons.jsx";
 import { shortRef, pillHead, pillLabel, pinnedDefault, dedupeRefs } from "../lib/ref-pill.js";
+import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 export { shortRef };
 
 export const BUSY_MS = 5000; // poll cadence while something runs (Forgejo #396: 1.5 s hammered …/tasks — the hottest endpoint — while maintenance/follow tasks ran; progress percentages stay live at 5 s)
@@ -178,6 +179,13 @@ const TABS = [
 // --- watch toggle (06 §7): optimistic flip, reconcile on error -------------
 
 function WatchToggle(props) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Shared identity cache keys (App.jsx seeds them — zero new requests):
+  // Forgejo #502 pre-flights the write for anonymous viewers.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const gate = () => ({ me: getMe(), discovery: getDiscovery() });
   const [getWatch, setWatch] = createSignal(null);
   const load = async () => {
     try {
@@ -191,13 +199,21 @@ function WatchToggle(props) {
   const flip = async () => {
     const cur = getWatch();
     if (!cur) return;
+    const here = location.pathname + location.search;
+    const gateHref = anonWriteTarget(gate(), here, "Watch this repository");
+    if (gateHref) {
+      navigate(gateHref);
+      return;
+    }
     setWatch({ watching: !cur.watching, watchers: cur.watchers }); // optimistic
     try {
-      const res = await props.repo.watch.set(!cur.watching);
+      const res = await props.repo.watch.set(!cur.watching, { noPopupAuth: true });
       setWatch(res);
     } catch (e) {
       setWatch(cur); // reconcile on error
-      reportError(e, "watch");
+      const target = write401Target(e, gate(), here, "Watch this repository");
+      if (target) navigate(target);
+      else reportError(e, "watch");
     }
   };
   return (
@@ -398,6 +414,13 @@ function RefPicker(props) {
 // --- star toggle (07 §8): optimistic flip, reconcile on error -------------
 
 function StarToggle(props) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Shared identity cache keys (App.jsx seeds them — zero new requests):
+  // Forgejo #502 pre-flights the write for anonymous viewers.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const gate = () => ({ me: getMe(), discovery: getDiscovery() });
   const [getSocial, setSocial] = createSignal(null);
   const load = async () => {
     try {
@@ -411,14 +434,22 @@ function StarToggle(props) {
   const flip = async () => {
     const cur = getSocial();
     if (!cur) return;
+    const here = location.pathname + location.search;
+    const gateHref = anonWriteTarget(gate(), here, "Star this repository");
+    if (gateHref) {
+      navigate(gateHref);
+      return;
+    }
     const starred = !cur.viewer?.starred;
     setSocial({ ...cur, stars: (cur.stars ?? 0) + (starred ? 1 : -1), viewer: { ...cur.viewer, starred } }); // optimistic
     try {
-      const res = starred ? await props.repo.star.set() : await props.repo.star.remove();
+      const res = starred ? await props.repo.star.set({ noPopupAuth: true }) : await props.repo.star.remove({ noPopupAuth: true });
       setSocial({ ...cur, stars: res.stars ?? cur.stars, viewer: { ...cur.viewer, starred } });
     } catch (e) {
       setSocial(cur); // reconcile on error
-      reportError(e, "star");
+      const target = write401Target(e, gate(), here, "Star this repository");
+      if (target) navigate(target);
+      else reportError(e, "star");
     }
   };
   return (
@@ -570,6 +601,14 @@ export default function Repo(props) {
   // renders "not found" instead of "loading…" forever. Any other error keeps
   // the data-layer contract (tray, value stays undefined → still loading).
   const [getSummary] = useData(() => `repo:${full()}`, () => tolerateMissing(repoClient.get(), null), REPO_TTL);
+  // Forgejo #502: the Fork pill label routes anonymous viewers to the
+  // log-in interstitial (shared identity cache keys — zero new requests).
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const forkHref = () => {
+    const dest = `/${full()}/fork`;
+    return anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, dest, "Fork this repository") ?? dest;
+  };
   // Issue #252: the currently viewed ref ({name, sha} — full ref name, commit
   // sha), published by ref-addressed tabs (Tree/Blob/Commits/Commit/
   // CheckDetail) via createEffect + onCleanup (cleared on unmount so non-ref
@@ -730,7 +769,7 @@ export default function Repo(props) {
                       {s().forks ?? 0}
                     </A>
                     {" "}
-                    <A class="hover:underline" href={`/${full()}/fork`}>
+                    <A class="hover:underline" href={forkHref()} title="Fork this repository">
                       Fork
                     </A>
                   </span>

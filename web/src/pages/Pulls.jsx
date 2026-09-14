@@ -8,12 +8,14 @@
 import { createSignal, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
+import repos from "../../sdk/src/index.js";
 import { useData, invalidate } from "../lib/data.js";
 import { sortByNumDesc } from "../lib/sort.js";
 import { resolvePullState, pullListState } from "../lib/pullState.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 import DateTime from "../components/DateTime.jsx";
+import { anonWriteTarget } from "../lib/writeGate.js";
 
 export default function Pulls() {
   const ctx = useRepo();
@@ -47,13 +49,18 @@ export default function Pulls() {
 
   // Carry the head/base filters into the new-PR page so a filtered empty
   // list ("no PRs from refs/heads/topic") opens the composer prefilled.
+  // Forgejo #502: anonymous viewers land on the log-in interstitial instead
+  // (shared identity cache keys — zero new requests).
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
   const newHref = () => {
     const params = new URLSearchParams({
       ...(search.base ? { base: search.base } : {}),
       ...(search.head ? { head: search.head } : {}),
     });
     const qs = params.toString();
-    return `/${ctx.full}/pulls/new${qs ? `?${qs}` : ""}`;
+    const dest = `/${ctx.full}/pulls/new${qs ? `?${qs}` : ""}`;
+    return anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, dest, "Open a new pull request") ?? dest;
   };
 
   const emptyTitle = () => (resolvePullState(search.state) === "closed" ? "No closed pull requests" : "No pull requests");

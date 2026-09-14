@@ -48,6 +48,7 @@ import Apidocs from "./pages/Apidocs.jsx";
 import Setup from "./pages/Setup.jsx";
 import Keys from "./pages/Keys.jsx";
 import Invitations from "./pages/Invitations.jsx";
+import LoginRequired from "./pages/LoginRequired.jsx";
 
 initData(repos); // the dogfood client, one instance
 
@@ -67,6 +68,10 @@ render(
           "invitations"). */}
       <Route path="/invitations" component={Invitations} />
       <Route path="/notifications" component={Notifications} />
+      {/* Static before dynamic: /login-required must not fall into /:owner
+          (Forgejo #502 — the anonymous write interstitial, never an owner
+          named "login-required"). */}
+      <Route path="/login-required" component={LoginRequired} />
       {/* Static before dynamic: /orgs/new must not fall into /:owner/:name
           (Forgejo #348 — the shell serves it either way, but the router
           must resolve the create form, never a repo named orgs/new). */}

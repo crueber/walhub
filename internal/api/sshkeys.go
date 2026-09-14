@@ -68,8 +68,21 @@ func (h *handlers) sshKeysList(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/v1/ssh-keys — register a public key for the calling principal.
+//
+// Self-service stays AuthRead (a read-only principal may manage their own
+// keys — their SSH rights still resolve per principal at auth time), but an
+// anonymous principal is never admitted: with anonymous_read on, the
+// AuthRead gate lets anonymous reads through, and without this check the
+// call would write a key record for the synthetic "anonymous" principal
+// (Forgejo #502 defect A). Auth-none is unaffected — its principal is
+// auth.None(), never anonymous.
 func (h *handlers) sshKeysAdd(w http.ResponseWriter, r *http.Request) {
 	if !h.env.gate(w, r, AuthRead) {
+		return
+	}
+	p := h.env.PrincipalOf(r)
+	if p.Anonymous {
+		writePlain(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if h.env.SSHKeys == nil {
@@ -88,7 +101,6 @@ func (h *handlers) sshKeysAdd(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusBadRequest, "key is required (an authorized_keys line)")
 		return
 	}
-	p := h.env.PrincipalOf(r)
 	rec, err := h.env.SSHKeys.Add(r.Context(), p.Name, req.Key, req.Title)
 	if err != nil {
 		switch {
@@ -105,8 +117,16 @@ func (h *handlers) sshKeysAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 // DELETE /api/v1/ssh-keys/{id} — remove one of the calling principal's keys.
+//
+// Same anonymous refusal as sshKeysAdd (Forgejo #502 defect A): the route
+// is AuthRead for self-service, so the handler refuses anonymous itself.
 func (h *handlers) sshKeysDelete(w http.ResponseWriter, r *http.Request) {
 	if !h.env.gate(w, r, AuthRead) {
+		return
+	}
+	p := h.env.PrincipalOf(r)
+	if p.Anonymous {
+		writePlain(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if h.env.SSHKeys == nil {
@@ -118,7 +138,6 @@ func (h *handlers) sshKeysDelete(w http.ResponseWriter, r *http.Request) {
 		writePlain(w, http.StatusBadRequest, "key id is required")
 		return
 	}
-	p := h.env.PrincipalOf(r)
 	if err := h.env.SSHKeys.Delete(r.Context(), p.Name, id); err != nil {
 		switch {
 		case errors.Is(err, ErrKeyNotFound):

@@ -9,8 +9,9 @@
 // box recomputes on every header fetch.
 
 import { createSignal, For, Show } from "solid-js";
-import { A, useParams } from "@solidjs/router";
+import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
+import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { CheckPill, ContextRows } from "./Checks.jsx";
 import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
@@ -21,6 +22,7 @@ import MergeBox from "../components/MergeBox.jsx";
 import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
+import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
 
 function eventText(ev) {
   switch (ev.type) {
@@ -562,7 +564,17 @@ export default function Pull() {
     return parsePatchFiles(patch);
   });
   const { role } = useRole(ctx.full, ctx.repoClient);
-  const canComment = () => role() !== null;
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Forgejo #502: anonymous viewers execute zero writes — the PR composer
+  // routes to the log-in interstitial (shared identity cache keys — zero
+  // new requests). Review/merge affordances already hide below write.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const anon = () => isAnonymousViewer(getMe(), getDiscovery());
+  const here = () => location.pathname + location.search;
+  const writeGateHref = (action) => anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, here(), action);
+  const canComment = () => role() !== null && !anon();
   const canReview = () => roleAtLeast(role(), "write");
   const canResolve = () => roleAtLeast(role(), "triage");
   const canDismiss = () => roleAtLeast(role(), "maintain");
@@ -630,7 +642,7 @@ export default function Pull() {
   const unstage = (i) => setPending((list) => list.filter((_, j) => j !== i));
 
   const comment = async (body) => {
-    await ctx.repoClient.pulls.comment(num(), body);
+    await ctx.repoClient.pulls.comment(num(), body, { noPopupAuth: true });
     reload();
   };
 
@@ -654,7 +666,18 @@ export default function Pull() {
         {/* #340: thread bodies have no file coordinates (relative URLs stay
             verbatim) but carry the repo — owner/repo feeds the #N/PRN autolinker. */}
         <ThreadTimeline events={getView()?.events ?? []} textFor={eventText} mdCtx={{ owner: ctx.owner, repo: ctx.name }} />
-        <Show when={canComment()}>
+        <Show
+          when={canComment()}
+          fallback={
+            <Show when={anon()}>
+              <p class="muted text-sm">
+                <A class="hover:underline" href={writeGateHref("Comment on this pull request") ?? here()}>
+                  Sign in to comment
+                </A>
+              </p>
+            </Show>
+          }
+        >
           <CommentComposer
             onSubmit={comment}
             errorKey="pull-comment"

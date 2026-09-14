@@ -30,6 +30,16 @@ func (s *Server) Handler() http.Handler {
 // and injected (06 §8): invalid credentials get a real 401 here (the seam
 // handlers then see the same principal the git paths resolve). Anonymous
 // requests pass through untouched, preserving legacy read behavior.
+//
+// Defense in depth (Forgejo #502): in oidc mode the identity contract
+// (internal/identity/access.go Resolve) grants an anonymous principal
+// read-at-most, so any state-changing method (anything but GET/HEAD/OPTIONS)
+// from an anonymous principal is refused here with 401 before the handler
+// runs — the guarantee lives in the identity chain, not in each package
+// remembering to gate. The per-route requireAuthenticated calls stay (they
+// keep error messages precise and cover other modes); this assert is the
+// catch-all. Auth-none is unaffected (its principal is never anonymous);
+// token mode keeps its per-route gates.
 func (s *Server) apiServe(w http.ResponseWriter, r *http.Request) {
 	p, aerr := s.authSvc.Authenticate(r, s.cfg)
 	if aerr != nil {
@@ -37,8 +47,24 @@ func (s *Server) apiServe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p = s.authSvc.identityForward(r, p)
+	if p.Anonymous && s.cfg != nil && s.cfg.Server.Auth.Mode == "oidc" && isWriteMethod(r) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="walgit"`)
+		plainStatus(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	s.maybeRefreshSession(w, r, p)
 	s.api.Serve(w, injectPrincipal(r, p))
+}
+
+// isWriteMethod reports whether the request may change server state (Forgejo
+// #502: the oidc anonymous write-assert fires on every method but
+// GET/HEAD/OPTIONS — POST/PUT/PATCH/DELETE and any other verb).
+func isWriteMethod(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	return true
 }
 
 // gated wraps a handler for the gated group (requireAuth = read).

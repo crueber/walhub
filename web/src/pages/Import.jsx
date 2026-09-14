@@ -28,18 +28,20 @@
 // LFS/ssh limits live in a collapsed details, not prose.
 
 import { createSignal, For, Show, onCleanup } from "solid-js";
-import { A, useNavigate, useSearchParams } from "@solidjs/router";
+import { A, useLocation, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { normalizeSource } from "../../sdk/src/import.js";
 import { MIRROR_PRESETS, DEFAULT_MIRROR_PRESET, validateMirrorCreate } from "../lib/mirror.js";
 import { allowedOwners } from "../lib/orgs.js";
 import { validateRepoChars } from "../lib/repo-name.js";
 import OwnerNameRow from "../components/OwnerNameRow.jsx";
-import { reportError, invalidate } from "../lib/data.js";
+import { reportError, invalidate, useData } from "../lib/data.js";
+import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 
 export default function Import() {
   const [search] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [getUrl, setUrl] = createSignal("");
   const [getOwner, setOwner] = createSignal(search.owner ?? "");
   const [getName, setName] = createSignal("");
@@ -88,6 +90,22 @@ export default function Import() {
       setOwners([]);
     });
   const anonymous = () => getMe()?.anonymous !== false && !getMe()?.principal;
+  // Forgejo #502: the submit stays disabled for anonymous viewers (no SDK
+  // call fires); the amber note below routes them to the log-in
+  // interstitial instead (discovery rides the shared cache key — zero new
+  // requests). Stale-identity 401s on start route the same way.
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const here = () => location.pathname + location.search;
+  const writeGateHref = () =>
+    anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, here(), getMode() === "mirror" ? "Create a mirror" : "Start an import");
+  const reportWrite = (err) => {
+    const target = write401Target(err, { me: getMe(), discovery: getDiscovery() }, here(), "Start an import");
+    if (target) {
+      navigate(target);
+      return true;
+    }
+    return false;
+  };
 
   const suggestion = () => normalizeSource(getUrl());
 
@@ -170,13 +188,14 @@ export default function Import() {
         };
         if (getToken()) payload.token = getToken();
         if (getDangerous()) payload.dangerous = true;
-        const created = await repos.mirrors.create(payload, { signal });
+        const created = await repos.mirrors.create(payload, { signal, noPopupAuth: true });
         const target = created?.target ?? `${payload.owner}/${payload.name}`;
         landedVisible(target);
         navigate(`/${target}`);
         return;
       } catch (err) {
         if (err?.status === 499 || signal.aborted) return; // navigated away
+        if (reportWrite(err)) return;
         const msg = String(err?.message ?? err ?? "mirror create failed");
         setErr(msg);
         pushLog(`error: ${msg}`);
@@ -201,7 +220,7 @@ export default function Import() {
         format: getFormat() || undefined,
       };
       if (getToken()) payload.token = getToken();
-      const started = await repos.imports.start(payload, { signal });
+      const started = await repos.imports.start(payload, { signal, noPopupAuth: true });
       if (started?.repo && started?.import) {
         // Idempotent no-op (200): the source already landed.
         setOutcome({ ...started.import, repo: started.repo, noop: true });
@@ -218,6 +237,7 @@ export default function Import() {
       landedVisible(result?.repo ?? `${getOwner().trim()}/${getName().trim()}`);
     } catch (err) {
       if (err?.status === 499 || signal.aborted) return; // navigated away
+      if (reportWrite(err)) return;
       const msg = String(err?.message ?? err ?? "import failed");
       setErr(msg);
       pushLog(`error: ${msg}`);
@@ -364,7 +384,11 @@ export default function Import() {
           </label>
           <Show when={anonymous()}>
             <p class="text-xs text-amber-700 dark:text-amber-400">
-              You are not signed in — the server will refuse the {getMode() === "mirror" ? "mirror create" : "import"} (401). Sign in first.
+              You are not signed in — the server will refuse the {getMode() === "mirror" ? "mirror create" : "import"} (401).{" "}
+              <A class="hover:underline" href={writeGateHref() ?? here()}>
+                Sign in first
+              </A>
+              .
             </p>
           </Show>
           <Show when={getMode() === "mirror" && validateMirrorCreate({ sourceUrl: getUrl(), owner: getOwner(), name: getName(), schedule: getSchedule() }).error && (getUrl() || getOwner() || getName())}>

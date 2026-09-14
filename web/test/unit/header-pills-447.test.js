@@ -80,7 +80,10 @@ test("all four align on one row in the ml-auto cluster; the header wraps as a un
   const cluster = block(REPO, '<div class="ml-auto flex items-center gap-2">', "</div>");
   assert.ok(cluster.includes("<StarToggle"), "StarToggle sits in the actions cluster");
   assert.ok(cluster.includes("<WatchToggle"), "WatchToggle sits in the actions cluster");
-  assert.ok(cluster.includes("href={`/${full()}/fork`}"), "Fork sits in the actions cluster");
+  // Forgejo #502: the Fork label href goes through forkHref() (composer for
+  // writers, log-in interstitial for anonymous) — the pill shell still
+  // carries the fork destination, so Fork stays in the cluster.
+  assert.ok(cluster.includes("href={forkHref()}"), "Fork sits in the actions cluster");
   assert.ok(cluster.includes("<CloneMenu"), "CloneMenu sits in the actions cluster");
   // Single aligned row: flex + items-center + gap-2, no per-control wrap.
   // Narrow widths (the #438 mobile-collapse precedent): the repo-header
@@ -99,15 +102,22 @@ test("toggle behavior untouched: optimistic flip + reconcile on error", () => {
     assert.ok(b.includes("reportError"), `${name} still reports flip failures`);
     assert.ok(b.includes('classList={{ primary'), `${name} keeps the primary active state`);
   }
-  assert.ok(star.includes("props.repo.star.set()") && star.includes("props.repo.star.remove()"), "Star still writes through the SDK star endpoints");
-  assert.ok(watch.includes("props.repo.watch.set(") && watch.includes("props.repo.watch.get()"), "Watch still reads/writes through the SDK watch endpoints");
+  // Forgejo #502: the writes still ride the same SDK endpoints, now with
+  // the popup-auth opt-out (stale-identity 401s route to the log-in
+  // interstitial instead of opening the sign-in popup and re-running).
+  assert.ok(star.includes("props.repo.star.set({ noPopupAuth: true })") && star.includes("props.repo.star.remove({ noPopupAuth: true })"), "Star still writes through the SDK star endpoints (popup opt-out)");
+  assert.ok(watch.includes("props.repo.watch.set(!cur.watching, { noPopupAuth: true })") && watch.includes("props.repo.watch.get()"), "Watch still reads/writes through the SDK watch endpoints (popup opt-out)");
 });
 
 test("Fork navigation + Clone popover untouched", () => {
   const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
-  assert.ok(fork.includes('href={`/${full()}/fork`}'), "Fork label still navigates to the fork composer");
+  // Forgejo #502: the label href goes through forkHref() — the fork
+  // composer for writers (pinned below), the log-in interstitial for
+  // anonymous viewers. Count order + tooltip + Clone popover unchanged.
+  assert.ok(fork.includes("href={forkHref()}"), "Fork label routes through the #502 write gate");
+  assert.ok(REPO.includes("`/${full()}/fork`"), "the gate preserves the fork-composer destination for writers");
   assert.ok(fork.includes('href={`/${full()}/forks`}'), "Fork count navigates to the fork-network page (#464 split)");
-  assert.ok(fork.indexOf("/forks`}") < fork.indexOf("/fork`}"), "count link (network) sits left of the label link (composer)");
+  assert.ok(fork.indexOf("/forks`}") < fork.indexOf("forkHref()"), "count link (network) sits left of the label link (composer)");
   assert.ok(fork.includes("title={`Fork ${full()}`}"), "Fork keeps its tooltip title");
   const menu = block(REPO, "function CloneMenu(props)", "--- tabs ---");
   assert.ok(menu.includes('<details ref={root} class="clone-menu relative"'), "Clone stays a native <details> popover");

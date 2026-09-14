@@ -99,7 +99,11 @@ test("repo header Fork and Clone carry the shared icons on the canonical btn idi
   // header-pills-447.test.js.
   const pill = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
   assert.ok(pill.includes('<span class="btn px-2 py-1 text-sm'), "Fork keeps the canonical btn metrics on one pill shell (was pill pre-#447, split links since #464)");
-  assert.ok(pill.includes('href={`/${full()}/fork`}'), "Fork label still links to the fork page");
+  // Forgejo #502: the label href goes through forkHref() — the fork page
+  // for writers, the log-in interstitial (next = fork page) for anonymous
+  // viewers. The fork-page destination itself is pinned below.
+  assert.ok(pill.includes("href={forkHref()}"), "Fork label routes through the #502 write gate");
+  assert.ok(REPO.includes("`/${full()}/fork`"), "the gate preserves the fork-page destination for writers");
   assert.ok(pill.includes('href={`/${full()}/forks`}'), "Fork count links to the fork-network page (#464 split)");
   assert.ok(pill.includes("summary.forks") || pill.includes("s().forks"), "Fork count still reads summary.forks (no extra fetch)");
   assert.ok(pill.includes('<Icon name="fork"'), "Fork pill leads with the shared fork icon (#465)");

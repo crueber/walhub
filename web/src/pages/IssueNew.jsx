@@ -2,16 +2,27 @@
 // the create form (title, markdown body, preview toggle).
 
 import { createSignal, Show } from "solid-js";
-import { useNavigate } from "@solidjs/router";
+import { useLocation, useNavigate } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
-import { reportError } from "../lib/data.js";
+import repos from "../../sdk/src/index.js";
+import { reportError, useData } from "../lib/data.js";
 import { renderBody } from "../lib/render-md.js";
 import { filesFromPasteEvent, filesFromDropEvent, uploadFilesSequential } from "../lib/attachUpload.js";
 import { onSubmitKeys } from "../lib/submitKeys.js";
+import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 
 export default function IssueNew() {
   const ctx = useRepo();
   const navigate = useNavigate();
+  const location = useLocation();
+  // Forgejo #502: anonymous viewers route to the log-in interstitial
+  // instead of firing the create (shared identity cache keys — zero new
+  // requests); the write opts out of popup auth so a stale-identity 401
+  // routes the same way.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const here = () => location.pathname + location.search;
+  const writeGateHref = () => anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, here(), "Create a new issue");
   const [getTitle, setTitle] = createSignal("");
   const [getBody, setBody] = createSignal("");
   const [getPreview, setPreview] = createSignal(false);
@@ -44,12 +55,22 @@ export default function IssueNew() {
 
   const submit = async (e) => {
     e.preventDefault();
+    const gateHref = writeGateHref();
+    if (gateHref) {
+      navigate(gateHref);
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      const res = await ctx.repoClient.issues.create({ title: getTitle(), body: getBody() });
+      const res = await ctx.repoClient.issues.create({ title: getTitle(), body: getBody() }, { noPopupAuth: true });
       navigate(`/${ctx.full}/issues/${res.thread.num}`, { replace: true });
     } catch (err) {
+      const target = write401Target(err, { me: getMe(), discovery: getDiscovery() }, here(), "Create a new issue");
+      if (target) {
+        navigate(target);
+        return;
+      }
       const msg = String(err?.message ?? err);
       setError(msg);
       reportError(err, "issue-create");

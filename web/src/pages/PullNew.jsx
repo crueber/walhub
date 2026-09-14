@@ -34,14 +34,15 @@
 // their monotonic run id is still current. No shared mutable state.
 
 import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
-import { A, useNavigate, useSearchParams } from "@solidjs/router";
+import { A, useLocation, useNavigate, useSearchParams } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { useRepo } from "./Repo.jsx";
-import { reportError } from "../lib/data.js";
+import { reportError, useData } from "../lib/data.js";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { mountStream } from "../lib/sse.js";
 import { roleAtLeast } from "../components/perms.jsx";
 import { useRole } from "../components/perms.jsx";
+import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 import { shortSha } from "../lib/sha.jsx";
 import { PREVIEW_WINDOW, compareHistories, tipSubject, fmtBounded, toShortRef } from "../lib/compare.js";
 import {
@@ -250,8 +251,18 @@ function ComparePreview(props) {
 export default function PullNew() {
   const ctx = useRepo();
   const navigate = useNavigate();
+  const location = useLocation();
   const [search] = useSearchParams();
   const { role } = useRole(ctx.full, ctx.repoClient);
+  // Forgejo #502: anonymous viewers route to the log-in interstitial
+  // instead of firing the open (shared identity cache keys — zero new
+  // requests); the write opts out of popup auth so a stale-identity 401
+  // routes the same way.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const here = () => location.pathname + location.search;
+  const writeGateHref = () =>
+    anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, here(), "Open a new pull request");
   const [getTitle, setTitle] = createSignal("");
   const [getTitleTouched, setTitleTouched] = createSignal(false);
   const [getBody, setBody] = createSignal("");
@@ -417,6 +428,11 @@ export default function PullNew() {
   const open = async (e) => {
     e.preventDefault();
     if (getBusy() || !getTitle().trim() || !getFromRef().trim()) return;
+    const gateHref = writeGateHref();
+    if (gateHref) {
+      navigate(gateHref);
+      return;
+    }
     setBusy(true);
     setOpenError("");
     try {
@@ -428,10 +444,15 @@ export default function PullNew() {
         title: getTitle().trim(),
         body: getBody().trim() || undefined,
       });
-      const res = await repos.repo(baseRepo).pulls.open(payload);
+      const res = await repos.repo(baseRepo).pulls.open(payload, { noPopupAuth: true });
       const num = res.thread?.num ?? res.pr?.num;
       navigate(`/${baseRepo}/pull/${num}`);
     } catch (err) {
+      const target = write401Target(err, { me: getMe(), discovery: getDiscovery() }, here(), "Open a new pull request");
+      if (target) {
+        navigate(target);
+        return;
+      }
       setOpenError(openErrorMessage(err));
       reportError(err, "pull-open");
     } finally {
@@ -442,6 +463,18 @@ export default function PullNew() {
   return (
     <div class="mx-auto max-w-2xl">
       <h2 class="mb-3 text-lg font-semibold">New pull request</h2>
+      {/* Forgejo #502: anonymous viewers keep a path forward — the sign-in
+          interstitial (next = this composer) instead of the role message. */}
+      <Show
+        when={writeGateHref() === null}
+        fallback={
+          <p class="card text-sm">
+            <A class="hover:underline" href={writeGateHref() ?? here()}>
+              Sign in to open a pull request
+            </A>
+          </p>
+        }
+      >
       <Show when={role() === null} fallback={
         <Show when={roleAtLeast(role(), "write")} fallback={
           <p class="card text-sm">opening pull requests needs the write role — your role: {role() ?? "none"}.</p>
@@ -536,6 +569,7 @@ export default function PullNew() {
         </Show>
       }>
         <p class="card text-sm">sign in to open a pull request.</p>
+      </Show>
       </Show>
     </div>
   );

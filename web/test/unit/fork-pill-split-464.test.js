@@ -34,9 +34,16 @@ const META = block(REPO, '<div class="repo-meta', "</div>");
 
 test("split navigation: count lands on /forks, label lands on /fork", () => {
   assert.ok(PILL.includes('href={`/${full()}/forks`}'), "count links to the fork-network page");
-  assert.ok(PILL.includes('href={`/${full()}/fork`}'), "label keeps the fork-composer navigation");
+  // Forgejo #502: the label href goes through forkHref() — the fork-composer
+  // navigation for writers, the log-in interstitial (next = composer) for
+  // anonymous viewers. The composer destination itself is pinned below.
+  assert.ok(PILL.includes("href={forkHref()}"), "label routes through the #502 write gate");
+  assert.ok(
+    REPO.includes("`/${full()}/fork`") && REPO.includes("Fork this repository"),
+    "the gate preserves the fork-composer destination for writers",
+  );
   const countAt = PILL.indexOf("/forks`}");
-  const labelAt = PILL.indexOf("/fork`}");
+  const labelAt = PILL.indexOf("forkHref()");
   assert.ok(countAt !== -1 && labelAt !== -1 && countAt < labelAt, "count sits left of the label (the #447 order)");
   // Sibling links, never a nested anchor (invalid HTML): exactly two <A>
   // opens inside the shell, each closed before the shell closes.

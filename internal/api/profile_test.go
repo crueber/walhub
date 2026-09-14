@@ -182,10 +182,12 @@ func TestOwnerProfileAuthMatrix(t *testing.T) {
 	if w := f.do("PUT", "/api/v1/owners/demo/profile", strings.NewReader(body), nil, nil); w.Code != http.StatusUnauthorized {
 		t.Fatalf("anon (auth required) = %d, want 401", w.Code)
 	}
-	// Anonymous with public reads → 403 (never a silent allow).
+	// Anonymous with public reads → 401 (Forgejo #502 defect B: anonymous
+	// is unauthenticated, never "insufficient role" — the UI routes 401
+	// to the log-in interstitial, 403 to the permission error).
 	f.env.Cfg.Server.Auth.AnonymousRead = true
-	if w := f.do("PUT", "/api/v1/owners/demo/profile", strings.NewReader(body), nil, nil); w.Code != http.StatusForbidden {
-		t.Fatalf("anon (public) = %d, want 403", w.Code)
+	if w := f.do("PUT", "/api/v1/owners/demo/profile", strings.NewReader(body), nil, nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("anon (public) = %d, want 401", w.Code)
 	}
 	// Authenticated without write → 403.
 	if w := f.do("PUT", "/api/v1/owners/demo/profile", strings.NewReader(body), nil, readP()); w.Code != http.StatusForbidden {

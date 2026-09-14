@@ -11,12 +11,13 @@
 // owner/name come from route params, so no repo context is needed).
 
 import { createSignal, Show, For, onCleanup } from "solid-js";
-import { A, useParams, useNavigate } from "@solidjs/router";
+import { A, useLocation, useParams, useNavigate } from "@solidjs/router";
 import repos from "../../sdk/src/index.js";
 import { validateRepoName } from "../../sdk/src/create.js";
 import { allowedOwners } from "../lib/orgs.js";
 import { forkDefaultName, forkBranchShort } from "../lib/fork.js";
-import { invalidate } from "../lib/data.js";
+import { invalidate, useData } from "../lib/data.js";
+import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
 
 const POLL_MS = 1000;
 const POLL_TIMEOUT_MS = 60000;
@@ -29,8 +30,18 @@ function winnerUrl(msg) {
 export default function Fork() {
   const params = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const full = () => `${params.owner}/${params.name}`;
   const repoClient = repos.repo(full());
+  // Forgejo #502: anonymous viewers route to the log-in interstitial
+  // instead of firing the fork (shared identity cache keys — zero new
+  // requests); the write opts out of popup auth so a stale-identity 401
+  // routes the same way.
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const here = () => location.pathname + location.search;
+  const writeGateHref = () =>
+    anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, here(), "Fork this repository");
 
   const [getOwner, setOwner] = createSignal("");
   const [getName, setName] = createSignal(forkDefaultName(params.name));
@@ -111,6 +122,11 @@ export default function Fork() {
   const submit = async (e) => {
     e.preventDefault();
     if (getBusy()) return;
+    const gateHref = writeGateHref();
+    if (gateHref) {
+      navigate(gateHref);
+      return;
+    }
     const v = validateRepoName(getOwner(), getName());
     if (v.error) {
       setErr(v.error);
@@ -136,13 +152,16 @@ export default function Fork() {
           // let the server decide (its 409 names the winner).
         }
       }
-      const res = await repoClient.forks.create({
-        target_owner: v.owner,
-        name: v.name,
-        visibility: getVisibility(),
-        branch: getBranch() || undefined,
-        description: getDescription().trim() || undefined,
-      });
+      const res = await repoClient.forks.create(
+        {
+          target_owner: v.owner,
+          name: v.name,
+          visibility: getVisibility(),
+          branch: getBranch() || undefined,
+          description: getDescription().trim() || undefined,
+        },
+        { noPopupAuth: true },
+      );
       const child = res?.repo ?? `${v.owner}/${v.name}`;
       // The 202 only queued the task: poll the child summary until the
       // shared manifest lands (servable), then enter the fork.
@@ -168,6 +187,11 @@ export default function Fork() {
         failInline(err);
         return;
       }
+      const target = write401Target(err, { me: getMe(), discovery: getDiscovery() }, here(), "Fork this repository");
+      if (target) {
+        navigate(target);
+        return;
+      }
       setErr(String(err?.message ?? err ?? "fork failed"));
       setWinner("");
     } finally {
@@ -188,6 +212,15 @@ export default function Fork() {
         to either side stay independent. Issues and pull requests start fresh.
       </p>
       <form class="card grid gap-3 p-4" onSubmit={submit} aria-label="Fork repository">
+        {/* Forgejo #502: anonymous viewers keep a path forward — the sign-in
+            interstitial (next = this composer) instead of a dead form. */}
+        <Show when={writeGateHref() === null} fallback={
+          <p class="text-sm">
+            <A class="hover:underline" href={writeGateHref() ?? here()}>
+              Sign in to fork this repository
+            </A>
+          </p>
+        }>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label class="grid gap-1">
             <span class="text-sm font-medium">Owner</span>
@@ -291,6 +324,7 @@ export default function Fork() {
             cancel
           </A>
         </div>
+        </Show>
       </form>
     </div>
   );

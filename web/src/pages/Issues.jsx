@@ -8,6 +8,7 @@
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
+import repos from "../../sdk/src/index.js";
 import { useData, invalidate, reportError } from "../lib/data.js";
 import { sortByNumDesc } from "../lib/sort.js";
 import { resolveIssueState, issueListState } from "../lib/issueState.js";
@@ -18,6 +19,7 @@ import { milestoneDisplay, milestoneFilterHref } from "../lib/milestones.js";
 import { LabelChip } from "../components/LabelPicker.jsx";
 import DateTime from "../components/DateTime.jsx";
 import Icon from "../lib/icons.jsx";
+import { anonWriteTarget } from "../lib/writeGate.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 
@@ -180,6 +182,14 @@ export default function Issues() {
   const ctx = useRepo();
   const [search, setSearch] = useSearchParams();
   const [getAfter, setAfter] = createSignal(0);
+  // Forgejo #502: the New-issue affordance routes anonymous viewers to the
+  // log-in interstitial (shared identity cache keys — zero new requests).
+  const [getMe] = useData("me", () => repos.me().catch(() => null));
+  const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
+  const newHref = () => {
+    const dest = `/${ctx.full}/issues/new`;
+    return anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, dest, "Create a new issue") ?? dest;
+  };
 
   // State default is open-only (#323): an absent ?state= param resolves to
   // "open"; the explicit both-choice is ?state=all (URL-honest,
@@ -249,7 +259,7 @@ export default function Issues() {
           <A class="btn" href={`/${ctx.full}/milestones`}>
             <Icon name="milestone-open" /> Milestones
           </A>
-          <A class="btn primary" href={`/${ctx.full}/issues/new`}>
+          <A class="btn primary" href={newHref()} title="Create a new issue">
             New issue
           </A>
         </div>
@@ -330,7 +340,7 @@ export default function Issues() {
                   icon="issue"
                   title="No issues match"
                   hint="Try widening the filters — or file the first issue for this repo."
-                  actionHref={`/${ctx.full}/issues/new`}
+                  actionHref={newHref()}
                   actionLabel="New issue"
                 />
               }
