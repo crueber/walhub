@@ -70,6 +70,59 @@ func TestGenerateDeterminism(t *testing.T) {
 	}
 }
 
+func TestGenerateRingsAvatar(t *testing.T) {
+	// Forgejo #525: the generated avatar is the DiceBear rings style on
+	// a flat walhub-green background. Table-driven over hostile and
+	// ordinary seeds — every row checks the style pin, the solid
+	// background, flatness (no gradients), the seed contract, and the
+	// sanitize gate.
+	for _, seed := range []string{
+		`dave@example.com`,
+		`erin@example.com`,
+		`"></svg><script>alert(1)</script><svg x="`,
+		`a<b@example.com`,
+	} {
+		svg, err := GenerateUserAvatarSVG(seed)
+		if err != nil {
+			t.Fatalf("generate(%q): %v", seed, err)
+		}
+		if !strings.Contains(svg, "<dc:title>Rings</dc:title>") {
+			t.Errorf("seed %q: output is not the rings style", seed)
+		}
+		if !strings.Contains(strings.ToLower(svg), "059669") {
+			t.Errorf("seed %q: walhub-green background missing from output", seed)
+		}
+		if !strings.Contains(svg, "<rect") {
+			t.Errorf("seed %q: background rect missing (not a solid fill)", seed)
+		}
+		for _, grad := range []string{"linearGradient", "radialGradient", "<pattern"} {
+			if strings.Contains(svg, grad) {
+				t.Errorf("seed %q: output carries %q (background must be flat)", seed, grad)
+			}
+		}
+		if strings.Contains(svg, seed) {
+			t.Errorf("seed %q leaked into generated SVG", seed)
+		}
+		if strings.Contains(strings.ToLower(svg), "<script") {
+			t.Errorf("seed %q produced a script element", seed)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(svg), "<svg") {
+			t.Errorf("seed %q did not produce an SVG document", seed)
+		}
+		if err := checkAvatarSVG(svg, seed); err != nil {
+			t.Errorf("seed %q: sanitize gate rejected valid output: %v", seed, err)
+		}
+		// Determinism per row: same seed re-renders byte-identical.
+		again, err := GenerateUserAvatarSVG(seed)
+		if err != nil {
+			t.Fatalf("generate again(%q): %v", seed, err)
+		}
+		if svg != again {
+			t.Errorf("seed %q: same seed must render byte-identical SVG", seed)
+		}
+	}
+}
+
 func TestGenerateSeedAbsent(t *testing.T) {
 	// Hostile seeds: markup-breaking email spellings must never appear
 	// in the output (the seed feeds the PRNG only — verified, not

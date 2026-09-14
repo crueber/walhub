@@ -587,7 +587,8 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
 - **Auto-generated user avatars (issue #376, §8 — law-1 exception, user-authorized
   2026-09-12, AGENTS.md §1):** `github.com/dicebear/dicebear-go/v10` +
   `github.com/dicebear/styles/v10` render the deterministic avatar (DiceBear
-  "constellation", seed = verified email) in-process on first login. Verified
+  "rings" on a solid walhub-green background since #525 — "constellation"
+  before; seed = verified email) in-process on first login. Verified
   deviations from the issue's assumptions: (a) the library carries two
   build-required transitives (`github.com/dicebear/schema` +
   `github.com/santhosh-tekuri/jsonschema/v6` — option validation; `go mod graph`
@@ -609,6 +610,23 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   the `/:owner` header with self-service regenerate/remove. Rationale: logins
   must never block on generation, emails must never leak into markup or other
   users' views, and the task table must not gain a non-repo kind.
+- **Rings avatars with walhub-green background (issue #525, §8):** the style
+  switches from constellation to DiceBear "rings" with
+  `backgroundColor: ["059669"]` (emerald-600 #059669, the canonical brand
+  green from `web/src/ui.css`) passed as a core-library option alongside the
+  seed. Verified against the vendored sources (not guessed): rings defines no
+  per-style options, `backgroundColor` is the core option key (there is no
+  `backgroundType` in dicebear-go v10 — a v5-era name), and
+  `backgroundColorFill` defaults to solid, which is the flat greyscale-preset
+  treatment (single `<rect>` fill, no gradients — pinned by
+  `TestGenerateRingsAvatar`). ONE hue for both themes: the SVG is generated
+  once server-side and served as static bytes, so it cannot theme-switch;
+  emerald-600 reads on light and dark. Seed contract and sanitize gate
+  unchanged; existing holders keep their avatars (no retroactive regen —
+  POST regen and next-login generation produce the new look). No new
+  dependencies (same dicebear modules, law 1 exception already covers this).
+  Rationale: constellation offered no background hook, so the brand treatment
+  the issue asked for was only possible on a style with background support.
 
 ## Explicitly out of scope
 
