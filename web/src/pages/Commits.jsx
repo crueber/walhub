@@ -4,10 +4,21 @@
 // here and the ref arrives as a query param). The "older →" link carries the
 // query forward, keeping pagination URL-addressable.
 
-import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, For, Show } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { useData, useResolved, SHA_TTL } from "../lib/data.js";
 import { CopySha, shortSha } from "../lib/sha.jsx";
+import {
+  assignLanes,
+  laneClass,
+  laneX,
+  railWidth,
+  rowDiagonals,
+  readGraphEnabled,
+  writeGraphEnabled,
+  GRAPH_ROW_H,
+  GRAPH_ROW_MID,
+} from "../lib/commit-graph.js";
 import { shortRef, useRepo } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import { CheckPill } from "./Checks.jsx";
@@ -40,10 +51,91 @@ function ParentLinks(props) {
   );
 }
 
+// Lane rail for one commit row (Forgejo #506): verticals ride the top/bottom
+// boundary snapshots, diagonals ride rowDiagonals (branch-out + merge-in);
+// the node is an HTML dot (an svg circle would ellipse under the
+// preserveAspectRatio="none" stretch — rows vary in height). Merge commits
+// (multiple parents) render a hollow node. Lane color is class-only
+// (.gl-N → ui.css vars, light + dark) — no color literals in this file.
+function GraphRail(props) {
+  const row = () => props.row;
+  const w = () => railWidth(props.width);
+  const diag = () => rowDiagonals(row());
+  const nodeMerge = () => (row().parents?.length ?? 0) > 1;
+  return (
+    <div
+      class="commit-rail relative self-stretch shrink-0"
+      style={{ width: `${w()}px` }}
+      aria-hidden="true"
+    >
+      <svg
+        class="absolute inset-0 h-full w-full"
+        viewBox={`0 0 ${w()} ${GRAPH_ROW_H}`}
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <For each={row().top}>
+          {(s, k) => (
+            <Show when={s}>
+              <line
+                x1={laneX(k())}
+                y1="0"
+                x2={laneX(k())}
+                y2={GRAPH_ROW_MID}
+                class={laneClass(k())}
+                stroke="currentColor"
+                stroke-width="2"
+                vector-effect="non-scaling-stroke"
+              />
+            </Show>
+          )}
+        </For>
+        <For each={row().bottom}>
+          {(s, k) => (
+            <Show when={s}>
+              <line
+                x1={laneX(k())}
+                y1={GRAPH_ROW_MID}
+                x2={laneX(k())}
+                y2={GRAPH_ROW_H}
+                class={laneClass(k())}
+                stroke="currentColor"
+                stroke-width="2"
+                vector-effect="non-scaling-stroke"
+              />
+            </Show>
+          )}
+        </For>
+        <For each={diag()}>
+          {(d) => (
+            <line
+              x1={laneX(d.from)}
+              y1={GRAPH_ROW_MID}
+              x2={laneX(d.to)}
+              y2={GRAPH_ROW_H}
+              class={laneClass(d.to)}
+              stroke="currentColor"
+              stroke-width="2"
+              vector-effect="non-scaling-stroke"
+            />
+          )}
+        </For>
+      </svg>
+      <span
+        class={`graph-dot ${laneClass(row().lane)}${nodeMerge() ? " graph-dot-merge" : ""}`}
+        style={{ left: `${laneX(row().lane)}px` }}
+      />
+    </div>
+  );
+}
+
 function CommitRow(props) {
   const c = () => props.commit;
   return (
     <div class="commit-row grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2.5 px-3 py-2">
+      <Show when={props.showGraph && props.graphRow}>
+        {(row) => <GraphRail row={row()} width={props.graphWidth} />}
+      </Show>
       <div class="commit-main min-w-0">
         <A
           class="commit-subject block truncate text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100"
@@ -128,6 +220,20 @@ function CommitList(props) {
   });
   const h = () => (skip() === 0 && !path() ? getFirst() : getPage());
 
+  // Forgejo #506: the graph toggle (default OFF, persisted like the theme
+  // in lib/store.js) and its per-window lane derivation. The memo reads
+  // h() — the sha+path+skip-keyed useData window — so lanes re-derive
+  // exactly when the visible window changes, with zero new fetches. The
+  // derivation is per-window by design: crossing the pager restarts the
+  // lane layout (called out under the pager when the graph is on).
+  const [graphOn, setGraphOn] = createSignal(readGraphEnabled());
+  const flipGraph = () => {
+    const next = !graphOn();
+    setGraphOn(next);
+    writeGraphEnabled(next);
+  };
+  const graph = createMemo(() => (graphOn() ? assignLanes(h()?.commits ?? []) : null));
+
   return (
     <div class="commits-page">
       <Show when={h()} fallback={<p class="muted animate-pulse">loading history…</p>}>
@@ -154,10 +260,35 @@ function CommitList(props) {
                   history of <code class="font-mono text-xs">{path()}</code>
                 </span>
               </Show>
+              <span class="ml-auto">
+                <button
+                  type="button"
+                  class="pill cursor-pointer"
+                  classList={{ "btn-active": graphOn() }}
+                  onClick={flipGraph}
+                  aria-pressed={graphOn()}
+                  aria-label={graphOn() ? "Hide commit graph" : "Show commit graph"}
+                  title="Show the commit graph (lanes derive per page)"
+                >
+                  graph
+                </button>
+              </span>
             </nav>
-            <div class="commit-list card divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800/60">
+            <div
+              class="commit-list card divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800/60"
+              classList={{ "graph-on": graphOn() }}
+            >
               <For each={hist().commits ?? []}>
-                {(c) => <CommitRow full={props.full} commit={c} client={props.repoClient} />}
+                {(c, i) => (
+                  <CommitRow
+                    full={props.full}
+                    commit={c}
+                    client={props.repoClient}
+                    showGraph={graphOn()}
+                    graphRow={graph()?.rows[i()]}
+                    graphWidth={graph()?.width ?? 0}
+                  />
+                )}
               </For>
               <Show when={(hist().commits ?? []).length === 0}>
                 <p class="muted p-4 text-sm">No commits in this view.</p>
@@ -176,6 +307,11 @@ function CommitList(props) {
                   {`showing ${skip() + (hist().commits ?? []).length} so far`}
                 </span>
               </div>
+            </Show>
+            <Show when={graphOn()}>
+              <p class="muted mt-2 text-xs">
+                Graph lanes derive per page — crossing “older →” restarts the lane layout.
+              </p>
             </Show>
             </>
             </Show>
