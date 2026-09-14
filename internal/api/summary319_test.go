@@ -26,7 +26,7 @@ func TestSummaryCollabCountsWire(t *testing.T) {
 		hook       func(ctx context.Context, owner, repo string) (CollabCounts, bool)
 		wantIssues int
 		wantPulls  int
-		wantSuffix string // collab suffix; ~k0 always appended (no checks hook here — #513)
+		wantSuffix string // collab suffix; ~k0 + ~t111111 always appended (no checks hook here — #513; no features seed — #522 fail-open)
 	}{
 		{"nil hook", nil, 0, 0, ""},
 		{"declined hook", func(ctx context.Context, owner, repo string) (CollabCounts, bool) {
@@ -65,7 +65,7 @@ func TestSummaryCollabCountsWire(t *testing.T) {
 				}
 			}
 			etag := w.Header().Get("ETag")
-			if want := `"` + fakeSHA + c.wantSuffix + `~k0"`; etag != want {
+			if want := `"` + fakeSHA + c.wantSuffix + `~k0~t111111"`; etag != want {
 				t.Fatalf("etag = %q, want %q", etag, want)
 			}
 			// The class is the #280 mutable-collab no-cache class (Forgejo
@@ -93,8 +93,8 @@ func TestSummaryCollabCountsRevalidate(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	current := w.Header().Get("ETag")
-	if !strings.HasSuffix(current, `~c7~k0"`) {
-		t.Fatalf("etag = %q, want ~c7~k0 suffix", current)
+	if !strings.HasSuffix(current, `~c7~k0~t111111"`) {
+		t.Fatalf("etag = %q, want ~c7~k0~t111111 suffix", current)
 	}
 
 	// A close with no ref move (same head sha, version 7→8, count 2→1)

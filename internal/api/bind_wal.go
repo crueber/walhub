@@ -561,7 +561,26 @@ func (v *walView) Summary(ctx context.Context, id git.RepoId) (SummaryData, erro
 		s.Health = RepoHealthEmpty
 	}
 	s.Description = v.repoDescription(ctx, id)
+	features := v.repoFeatures(ctx, id)
+	s.Features = &features
 	return s, nil
+}
+
+// repoFeatures reads the Forgejo-#522 feature flags from the
+// manifest-inline settings TOML. Costs zero new store round trips: the
+// manifest is served from the open handle's in-memory snapshot (the same
+// guarantee repoDescription relies on). Fail-open to all-enabled: display
+// metadata must never fail the summary, and a missing/unparseable doc
+// renders as all-on (the zero-migration default).
+func (v *walView) repoFeatures(ctx context.Context, id git.RepoId) config.ResolvedFeatures {
+	if v.engine == nil {
+		return config.AllFeatures()
+	}
+	m, err := v.engine.Manifest(ctx, id)
+	if err != nil || m == nil || m.Settings == nil {
+		return config.AllFeatures()
+	}
+	return config.FeaturesOf([]byte(m.Settings.Toml))
 }
 
 // repoDescription reads the issue-#235 description from the manifest-inline

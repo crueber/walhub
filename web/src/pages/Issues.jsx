@@ -20,6 +20,7 @@ import { LabelChip } from "../components/LabelPicker.jsx";
 import DateTime from "../components/DateTime.jsx";
 import Icon from "../lib/icons.jsx";
 import { anonWriteTarget } from "../lib/writeGate.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 
@@ -190,6 +191,9 @@ export default function Issues() {
     const dest = `/${ctx.full}/issues/new`;
     return anonWriteTarget({ me: getMe(), discovery: getDiscovery() }, dest, "Create a new issue") ?? dest;
   };
+  // Forgejo #522: the creation affordance goes away while issues are
+  // off (the shared summary — zero new requests); the list keeps
+  // rendering (reads stay, deep links stay sane).
 
   // State default is open-only (#323): an absent ?state= param resolves to
   // "open"; the explicit both-choice is ?state=all (URL-honest,
@@ -259,9 +263,11 @@ export default function Issues() {
           <A class="btn" href={`/${ctx.full}/milestones`}>
             <Icon name="milestone-open" /> Milestones
           </A>
-          <A class="btn primary" href={newHref()} title="Create a new issue">
-            New issue
-          </A>
+          <Show when={!isFeatureDisabled(ctx.summary?.(), "issues")}>
+            <A class="btn primary" href={newHref()} title="Create a new issue">
+              New issue
+            </A>
+          </Show>
         </div>
       </div>
 
@@ -340,8 +346,8 @@ export default function Issues() {
                   icon="issue"
                   title="No issues match"
                   hint="Try widening the filters — or file the first issue for this repo."
-                  actionHref={newHref()}
-                  actionLabel="New issue"
+                  actionHref={isFeatureDisabled(ctx.summary?.(), "issues") ? undefined : newHref()}
+                  actionLabel={isFeatureDisabled(ctx.summary?.(), "issues") ? undefined : "New issue"}
                 />
               }
             >

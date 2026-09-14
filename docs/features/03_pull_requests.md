@@ -699,6 +699,14 @@ every call goes through the SDK).
   the Fork pill (with count) sits in the Clone row; "forked from" links
   the parent from the identity block. SDK `repo.forks.create/list`
   (dogfood rule); Apidocs rows updated.
+- **Forks-disable refuses at the service boundary; pulls-tab disable is display-only
+  (Forgejo #522).** `StartFork` refuses with `ErrForbidden` (→ 403 + reason) when the
+  source repo's `[features] forks` flag is off — checked after the auth/role gates, before
+  input parsing (policy precedes syntax); the guard is a nil-safe `Features` hook wired in
+  `buildCollab` (unreadable settings fail open — display metadata must never break a write).
+  The `/fork` form hides with an explainer (the fork-network list stays). The pulls-tab flag
+  is display-only like issues (02 Decisions): tab + composer hide, existing PRs stay readable,
+  no PR API is refused.
 
 - **Fork-deletion safety (issue #451, 2026-09-13): delete-with-children converts the parent to a
   meta repository.** Ruling: deleting a fork parent that still has live fork children must not

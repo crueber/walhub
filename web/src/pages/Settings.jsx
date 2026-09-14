@@ -26,6 +26,13 @@ import {
   validateDescription,
 } from "../lib/repoDescription.js";
 import {
+  FEATURE_KEYS,
+  FEATURE_LABELS,
+  FEATURE_HINTS,
+  extractFeatures,
+  withFeatures,
+} from "../lib/repoFeatures.js";
+import {
   MIRROR_PRESETS,
   DEFAULT_MIRROR_PRESET,
   formatNextSync,
@@ -93,6 +100,14 @@ function GeneralTab(props) {
   const [getVis, setVis] = createSignal(null); // null = not yet prefilled
   const [getVisBase, setVisBase] = createSignal(null); // null = unseeded (loading)
   const [getVisNote, setVisNote] = createSignal("");
+  // Forgejo #522: six feature toggles ride the same WAL-published
+  // settings TOML ([features] section) with the existing General-tab
+  // save path (admin-gated PUT, 403 in the note, settings:* +
+  // repo:{full} invalidations). null = not yet prefilled (renders
+  // checked: the server default is enabled).
+  const [getFlags, setFlags] = createSignal(null);
+  const [getFlagsBase, setFlagsBase] = createSignal(null);
+  const [getFlagsNote, setFlagsNote] = createSignal("");
 
   const [getDoc] = useData(`settings:${props.ctx.full}`, () => props.repo.settings.get(), 5000);
   const [getAccess] = useData(`access:${props.ctx.full}`, () => props.repo.access.get().catch(() => null), 5000);
@@ -111,6 +126,14 @@ function GeneralTab(props) {
     const doc = getDoc();
     if (doc !== undefined && getText() === null) {
       setText(extractDescription(typeof doc === "string" ? doc : String(doc?.toml ?? "")));
+    }
+    // Forgejo #522: seed the toggles from the [features] section the
+    // same way — untouched editors follow the doc, user edits are never
+    // clobbered (null sentinel, like the description prefill above).
+    if (doc !== undefined && getFlags() === null) {
+      const seed = extractFeatures(typeof doc === "string" ? doc : String(doc?.toml ?? ""));
+      setFlags(seed);
+      setFlagsBase(seed);
     }
   });
 
@@ -195,6 +218,45 @@ function GeneralTab(props) {
     }
   }
 
+  const flagsDirty = () => JSON.stringify(getFlags() ?? {}) !== JSON.stringify(getFlagsBase() ?? {});
+
+  async function saveFeatures() {
+    const flags = getFlags();
+    if (!flags) return;
+    try {
+      const doc = getDoc();
+      const current = typeof doc === "string" ? doc : String(doc?.toml ?? "");
+      // withFeatures preserves every other section (description,
+      // bundles, …) — only the [features] block is set.
+      await props.repo.settings.put(withFeatures(current, flags), "");
+      setFlagsBase({ ...flags });
+      setFlagsNote("saved");
+      // Reflect without a full reload: the tab bar and pills read the
+      // shared summary, the editors read the shared settings entries.
+      invalidate(`repo:${props.ctx.full}`);
+      invalidate(`settings:${props.ctx.full}`);
+      invalidate(`settings-effective:${props.ctx.full}`);
+      invalidate(`settings-history:${props.ctx.full}`);
+    } catch (e) {
+      // Authoritative + loud (the visibility-save discipline): on ANY
+      // failure the toggles reseed from server truth (never left
+      // showing an unsaved value) and the note names the cause
+      // (403 = not admin). The shared entry is invalidated too so the
+      // editors converge on the same truth.
+      setFlagsNote(String(e.message ?? e));
+      try {
+        const fresh = await props.repo.settings.get();
+        const toml = typeof fresh === "string" ? fresh : String(fresh?.toml ?? "");
+        const seed = extractFeatures(toml);
+        setFlags(seed);
+        setFlagsBase(seed);
+      } catch {
+        // Keep the attempted values; the note names the cause.
+      }
+      invalidate(`settings:${props.ctx.full}`);
+    }
+  }
+
   return (
     <section class="card p-4">
       <h3 class="mb-2 font-semibold">General</h3>
@@ -246,6 +308,46 @@ function GeneralTab(props) {
             <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getVisNote()}</p>
           </Show>
         </Show>
+      </Show>
+      <hr class="my-4 border-current opacity-10" />
+      {/* Forgejo #522: six per-repo feature toggles. Unchecked hides the
+          tab (Issues/Pulls/Releases) or refuses new stars/watches/forks
+          at the API level; existing content, counts, and watchers stay,
+          and re-enabling restores everything. Unset renders checked (the
+          server default is enabled). Saving requires admin — a
+          non-admin save surfaces the 403 in the note, the same
+          read-mostly behavior as the description save. */}
+      <h4 class="mb-2 font-semibold">Features</h4>
+      <Show when={getFlags()} fallback={<p class="muted text-sm">loading…</p>}>
+        {(flags) => (
+          <div class="grid gap-2">
+            <For each={FEATURE_KEYS}>
+              {(key) => (
+                <label class="flex items-start gap-2 text-sm">
+                  <input
+                    class="input mt-0.5"
+                    type="checkbox"
+                    checked={flags()[key] !== false}
+                    onChange={(e) => setFlags({ ...flags(), [key]: e.currentTarget.checked })}
+                  />
+                  <span>
+                    <span class="font-medium">{FEATURE_LABELS[key]}</span>
+                    <span class="muted block text-xs">{FEATURE_HINTS[key]}</span>
+                  </span>
+                </label>
+              )}
+            </For>
+          </div>
+        )}
+      </Show>
+      <Show when={flagsDirty()}>
+        <p class="warn-line !mt-1 !text-sm">unsaved changes</p>
+      </Show>
+      <div class="mt-2 flex flex-wrap items-center gap-2">
+        <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={saveFeatures} disabled={getFlags() === null}>Save features</button>
+      </div>
+      <Show when={getFlagsNote()}>
+        <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getFlagsNote()}</p>
       </Show>
     </section>
   );

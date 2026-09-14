@@ -399,8 +399,18 @@ type SummaryData struct {
 	// from the `description` key of the WAL-published settings TOML. Always
 	// present on the wire ("" = unset); old clients ignore it (14 §14.12).
 	Description string `json:"description"`
-	Branches    int    `json:"branches"`
-	Tags        int    `json:"tags"`
+	// Features are the per-repo feature flags (Forgejo #522), sourced from
+	// the `[features]` section of the WAL-published settings TOML (the
+	// Description precedent: manifest-inline, zero new store round trips
+	// — the refs sync already fetched the manifest). Nil means the view
+	// did not populate flags (test fakes, older views): the summary
+	// handler projects all-enabled then — fail-open, so an unpopulated
+	// view can never strand tabs hidden. The wire field itself is always
+	// present (the #319 badge discipline, never null); old clients ignore
+	// it (14 §14.12).
+	Features *config.ResolvedFeatures
+	Branches int `json:"branches"`
+	Tags     int `json:"tags"`
 	// Health is the repo-state vocabulary (07_api.md §9.1; issue #209):
 	// "empty" (unborn: no resolvable head, zero branches/tags),
 	// "healthy", or "degraded" (refs present, cached fsck.pb lists missing

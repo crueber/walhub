@@ -103,7 +103,7 @@ const routes = [
   ["POST", "/{o}/{r}/api/webhooks/{id}/ping", "test delivery → {delivery} (admin)"],
   ["GET", "/{o}/{r}/api/webhooks/{id}/deliveries", "recent deliveries (admin, no-store)"],
   ["GET", "/{o}/{r}/api/collab/stream", "repo activity SSE (read-gated; § Streams)"],
-  ["GET|PUT|DELETE", "/{o}/{r}/api", "repo summary (mutable-collab no-cache + ETag, +placeholder projection when empty; open_issues/open_pulls tab-badge counts) · create (write; ?placeholder=true) · delete (admin)"],
+  ["GET|PUT|DELETE", "/{o}/{r}/api", "repo summary (mutable-collab no-cache + ETag, +placeholder projection when empty; open_issues/open_pulls tab-badge counts; features flag object) · create (write; ?placeholder=true) · delete (admin)"],
   ["GET", "/{o}/{r}/api/refs", "O(1) default-branch head"],
   ["GET", "/{o}/{r}/api/refs/{branches|tags}", "paged ref list (prefix/q/after/n) — SSE dialect available"],
   ["GET", "/{o}/{r}/api/resolve[/{rest}]", "ref/path split → {ref, sha, path, kind} (SWR)"],
@@ -480,6 +480,9 @@ export default function Apidocs() {
             repo visibility; unstarring always works for authenticated
             callers. Watch mutation lives here too: get needs auth, set/clear
             need auth + read. Forks are counted through the pulls fork task.
+            Per-repo feature flags (General settings) can disable new
+            stars/watches/forks (403 with a reason; unstar/unwatch always
+            work; existing counts kept).
           </p>
           <p class="muted">
             SDK: <code class="font-mono text-xs">repo.social.*</code> (star,

@@ -10,7 +10,8 @@ import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } fr
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText } from "../lib/clone.js";
 import { formatNextSync } from "../lib/mirror.js";
 import { visibilityBadge } from "../lib/visibility.js";
-import { activeTab, tabBadge, showChecksTab } from "../lib/tabs.js";
+import { activeTab, tabBadge, showChecksTab, showFeatureTab } from "../lib/tabs.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 import { mountStream } from "../lib/sse.js";
 import { useCollabStream } from "../components/collab.jsx";
 import Icon from "../lib/icons.jsx";
@@ -200,6 +201,10 @@ function WatchToggle(props) {
   const flip = async () => {
     const cur = getWatch();
     if (!cur) return;
+    // Forgejo #522: watching is disabled and the viewer isn't watching —
+    // the button renders disabled with a reason; the write never fires
+    // either (unwatch always stays enabled).
+    if (isFeatureDisabled(props.summary?.(), "watch") && !cur.watching) return;
     const here = location.pathname + location.search;
     const gateHref = anonWriteTarget(gate(), here, "Watch this repository");
     if (gateHref) {
@@ -219,19 +224,28 @@ function WatchToggle(props) {
   };
   return (
     <Show when={getWatch()}>
-      {(w) => (
-        <button
-          type="button"
-          class="btn px-2 py-1 text-sm"
-          classList={{ primary: w().watching }}
-          onClick={flip}
-          title={w().watching ? "Unwatch this repo" : "Watch this repo"}
-          aria-pressed={w().watching}
-          aria-label={w().watching ? "Unwatch this repo" : "Watch this repo"}
-        >
-          <Icon name={w().watching ? "watch-on" : "watch-off"} /> {w().watchers ?? 0} Watch
-        </button>
-      )}
+      {(w) => {
+        // Forgejo #522: same disabled affordance as the star pill —
+        // muted, reason on hover/focus — while watching is off and the
+        // viewer isn't watching. A retained watch keeps the enabled
+        // Unwatch button (unwatch always works, fan-out untouched).
+        const off = () => isFeatureDisabled(props.summary?.(), "watch") && !w().watching;
+        return (
+          <button
+            type="button"
+            class="btn px-2 py-1 text-sm"
+            classList={{ primary: w().watching }}
+            onClick={flip}
+            disabled={off()}
+            title={off() ? "Watching is disabled for this repository" : w().watching ? "Unwatch this repo" : "Watch this repo"}
+            aria-pressed={w().watching}
+            aria-disabled={off() || undefined}
+            aria-label={off() ? "Watching is disabled for this repository" : w().watching ? "Unwatch this repo" : "Watch this repo"}
+          >
+            <Icon name={w().watching ? "watch-on" : "watch-off"} /> {w().watchers ?? 0} Watch
+          </button>
+        );
+      }}
     </Show>
   );
 }
@@ -435,6 +449,11 @@ function StarToggle(props) {
   const flip = async () => {
     const cur = getSocial();
     if (!cur) return;
+    // Forgejo #522: starring is disabled and the viewer hasn't starred —
+    // the button renders disabled with a reason, but belt-and-braces the
+    // write never fires either (unstar always stays enabled so a
+    // retained star can still be removed while disabled).
+    if (isFeatureDisabled(props.summary?.(), "star") && !cur.viewer?.starred) return;
     const here = location.pathname + location.search;
     const gateHref = anonWriteTarget(gate(), here, "Star this repository");
     if (gateHref) {
@@ -455,19 +474,29 @@ function StarToggle(props) {
   };
   return (
     <Show when={getSocial()}>
-      {(s) => (
-        <button
-          type="button"
-          class="btn px-2 py-1 text-sm"
-          classList={{ primary: s().viewer?.starred }}
-          onClick={flip}
-          title={s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
-          aria-pressed={s().viewer?.starred}
-          aria-label={s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
-        >
-          <Icon name={s().viewer?.starred ? "star-on" : "star-off"} /> {s().stars ?? 0} Star
-        </button>
-      )}
+      {(s) => {
+        // Forgejo #522: the star pill follows the #447 idiom (count left
+        // of label) with a disabled affordance — same metrics, muted,
+        // reason on hover/focus — while starring is off and the viewer
+        // hasn't starred. A retained star keeps the enabled Unstar button
+        // (unstar always works, counts stay).
+        const off = () => isFeatureDisabled(props.summary?.(), "star") && !s().viewer?.starred;
+        return (
+          <button
+            type="button"
+            class="btn px-2 py-1 text-sm"
+            classList={{ primary: s().viewer?.starred }}
+            onClick={flip}
+            disabled={off()}
+            title={off() ? "Starring is disabled for this repository" : s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
+            aria-pressed={s().viewer?.starred}
+            aria-disabled={off() || undefined}
+            aria-label={off() ? "Starring is disabled for this repository" : s().viewer?.starred ? "Unstar this repo" : "Star this repo"}
+          >
+            <Icon name={s().viewer?.starred ? "star-on" : "star-off"} /> {s().stars ?? 0} Star
+          </button>
+        );
+      }}
     </Show>
   );
 }
@@ -642,7 +671,7 @@ export default function Repo(props) {
   // (headless-test) environments where the ref is unset.
   let tabsNav;
   createEffect(() => {
-    const id = activeTab(location.pathname);
+    const id = activeTab(location.pathname, getSummary());
     const el = tabsNav?.querySelector?.('[aria-current="page"]');
     if (id && el && typeof el.scrollIntoView === "function") {
       el.scrollIntoView({ block: "nearest", inline: "center" });
@@ -759,8 +788,11 @@ export default function Repo(props) {
             </Show>
           </Show>
           <div class="ml-auto flex items-center gap-2">
-            <StarToggle repo={repoClient} />
-            <WatchToggle repo={repoClient} />
+            {/* Forgejo #522: the toggles read the shared summary for the
+                star/watch flags (zero new requests) — the disabled
+                affordance gates on it, the write guards live server-side. */}
+            <StarToggle repo={repoClient} summary={getSummary} />
+            <WatchToggle repo={repoClient} summary={getSummary} />
             <TasksOverlay repo={repoClient} />
             <Show when={getSummary()}>
               {(s) => (
@@ -810,9 +842,17 @@ export default function Repo(props) {
                       {s().forks ?? 0}
                     </A>
                     {" "}
-                    <A class="hover:underline" href={forkHref()} title="Fork this repository">
-                      Fork
-                    </A>
+                    {/* Forgejo #522: the Fork CTA is hidden-or-disabled —
+                        the count link (network page) stays — with the
+                        reason on hover/focus. POST …/forks refuses
+                        server-side; the pill is the affordance. */}
+                    <Show when={!isFeatureDisabled(s(), "forks")} fallback={
+                      <span class="muted" title="Forking is disabled for this repository" aria-disabled="true">Fork</span>
+                    }>
+                      <A class="hover:underline" href={forkHref()} title="Fork this repository">
+                        Fork
+                      </A>
+                    </Show>
                   </span>
                   <CloneMenu full={full()} summary={s()} />
                 </>
@@ -846,15 +886,18 @@ export default function Repo(props) {
               // forever); plain loading still fails open (no flicker).
               // The <Show> gates the tab only: the route keeps
               // rendering its empty state, so deep links never 404.
+              // Forgejo #522: Issues/Pulls/Releases hide the same way when
+              // their feature flag is explicitly off (fail-open on unknown
+              // — loading and pre-#522 servers keep every tab).
               const n = () => tabBadge(getSummary(), t.id);
               return (
-                <Show when={t.id !== "checks" || showChecksTab(getSummary(), { denied: summaryDenied() })}>
+                <Show when={(t.id !== "checks" || showChecksTab(getSummary(), { denied: summaryDenied() })) && showFeatureTab(getSummary(), t.id)}>
                 <A
                   href={t.href(full())}
                   end={t.id === "code"}
                   class="rounded-t px-3 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                  classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": activeTab(location.pathname) === t.id }}
-                  aria-current={activeTab(location.pathname) === t.id ? "page" : undefined}
+                  classList={{ "!border-b-2 !border-emerald-500 !font-medium !text-zinc-900 dark:!text-zinc-100": activeTab(location.pathname, getSummary()) === t.id }}
+                  aria-current={activeTab(location.pathname, getSummary()) === t.id ? "page" : undefined}
                 >
                   {t.label}
                   <Show when={n() > 0}>

@@ -16,6 +16,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import Empty from "../components/Empty.jsx";
 import DateTime from "../components/DateTime.jsx";
 import { anonWriteTarget } from "../lib/writeGate.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 
 export default function Pulls() {
   const ctx = useRepo();
@@ -96,9 +97,14 @@ export default function Pulls() {
         <button type="button" class="btn ml-auto px-2 py-1" onClick={reload}>
           refresh
         </button>
-        <A class="btn primary px-2 py-1" href={newHref()}>
-          New pull request
-        </A>
+        {/* Forgejo #522: the composer affordance goes away while pulls
+            are off (the shared summary — zero new requests); the list
+            keeps rendering. */}
+        <Show when={!isFeatureDisabled(ctx.summary?.(), "pulls")}>
+          <A class="btn primary px-2 py-1" href={newHref()}>
+            New pull request
+          </A>
+        </Show>
       </div>
       <Show when={getPage()} fallback={<p class="muted">loading…</p>}>
         <Show
@@ -108,8 +114,8 @@ export default function Pulls() {
               icon="pull"
               title={emptyTitle()}
               hint={emptyHint()}
-              actionHref={newHref()}
-              actionLabel="New pull request"
+              actionHref={isFeatureDisabled(ctx.summary?.(), "pulls") ? undefined : newHref()}
+              actionLabel={isFeatureDisabled(ctx.summary?.(), "pulls") ? undefined : "New pull request"}
             />
           }
         >

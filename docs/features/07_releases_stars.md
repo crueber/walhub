@@ -389,6 +389,17 @@ server-side copy (e.g. from a fork parent) lands if ever wanted; v1 does not reg
   the manifest (one HEAD, fail-open on store errors so a blip never mass-hides lists); writers must
   fail closed (ghost writes mint un-cleanable records); the counter heals per stale starrer because a
   global recount is unrepresentable without the index.
+- **Star-disable refuses new stars at the service boundary (Forgejo #522).** `Star` refuses with
+  `ErrForbidden` (→ 403 + reason) when the repo's `[features] star` flag is off — after the
+  auth/read/alive gates (a deleted repo still 404s), before any record/counter mutation (the
+  refusal is side-effect free). The toggle binds everyone including admins and already-starred
+  re-PUTs (uniform refusal — the PUT is the "new star" affordance); `Unstar` always works;
+  existing stars and counts are untouched; re-enabling restores. The Star pill disables with a
+  reason while off (a retained star keeps its working Unstar button). The guard is a nil-safe
+  `Features` hook wired in `buildCollab` (unreadable settings fail open). The releases-tab flag
+  is display-only like issues/pulls (02/03 Decisions): tab + composer hide, existing releases stay
+  readable, no release API is refused. Rationale: the pill is an affordance, the API check is
+  the rule (07_api.md Decisions).
 
 ## Explicitly out of scope
 

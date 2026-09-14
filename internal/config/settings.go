@@ -25,14 +25,123 @@ const MaxRepoDescriptionRunes = 512
 // Zero pointers mean "not set, inherit host config". Description is display
 // metadata (issue #235): it rides the same TOML document — persistence,
 // revisioning, authorship, and admin-only writes free — but it never merges
-// into the host config (Merge ignores it).
+// into the host config (Merge ignores it). Features (Forgejo #522) is the
+// same kind of passenger: six per-repo feature flags validated, persisted,
+// and revisioned with the doc, but never merged (there is no host-config
+// counterpart — an absent section means every feature enabled).
 type RepoSettings struct {
 	Description  string                    `toml:"description"`
+	Features     *RepoFeatures             `toml:"features"`
 	Bundles      *Bundles                  `toml:"bundles"`
 	Maintenance  *Maintenance              `toml:"maintenance"`
 	Compaction   *Compaction               `toml:"compaction"`
 	Upstream     *Upstream                 `toml:"upstream"`
 	Integrations map[string]toml.Primitive `toml:"integrations"` // accepted, forward-compat, never interpreted
+}
+
+// RepoFeatures are the six per-repo feature flags (Forgejo #522), carried
+// as the [features] TOML section. Every key is an *enabled* flag: nil (key
+// absent) means enabled, so an absent section — every existing repo —
+// resolves to all-on with zero migration. Pointers (not plain bools) are
+// what keep "unset" distinct from "explicitly disabled": a plain bool
+// would read an absent key as false and strand every pre-#522 repo with
+// all features off.
+type RepoFeatures struct {
+	Issues   *bool `toml:"issues"`
+	Pulls    *bool `toml:"pulls"`
+	Releases *bool `toml:"releases"`
+	Forks    *bool `toml:"forks"`
+	Watch    *bool `toml:"watch"`
+	Star     *bool `toml:"star"`
+}
+
+// ResolvedFeatures are the effective flags: plain bools, always fully
+// populated (absent keys resolved to enabled). This is what the summary
+// projects and what the write guards consult — never a nil-meaning
+// question at a read or write boundary.
+type ResolvedFeatures struct {
+	Issues   bool `json:"issues"`
+	Pulls    bool `json:"pulls"`
+	Releases bool `json:"releases"`
+	Forks    bool `json:"forks"`
+	Watch    bool `json:"watch"`
+	Star     bool `json:"star"`
+}
+
+// AllFeatures is the zero-migration default: every feature enabled.
+func AllFeatures() ResolvedFeatures {
+	return ResolvedFeatures{Issues: true, Pulls: true, Releases: true, Forks: true, Watch: true, Star: true}
+}
+
+// Resolve maps the [features] section onto effective flags: nil section
+// or nil key means enabled; an explicit false disables.
+func (f *RepoFeatures) Resolve() ResolvedFeatures {
+	out := AllFeatures()
+	if f == nil {
+		return out
+	}
+	if f.Issues != nil {
+		out.Issues = *f.Issues
+	}
+	if f.Pulls != nil {
+		out.Pulls = *f.Pulls
+	}
+	if f.Releases != nil {
+		out.Releases = *f.Releases
+	}
+	if f.Forks != nil {
+		out.Forks = *f.Forks
+	}
+	if f.Watch != nil {
+		out.Watch = *f.Watch
+	}
+	if f.Star != nil {
+		out.Star = *f.Star
+	}
+	return out
+}
+
+// ETagBits renders the resolved flags as six fixed-order 0/1 chars
+// (issues, pulls, releases, forks, watch, star): the short summary-ETag
+// suffix covering a settings-only flip with no ref move (the #235/#505
+// suffix discipline). Fixed order and fixed length — always six chars,
+// so the suffix is stable and greppable.
+func (f ResolvedFeatures) ETagBits() string {
+	bits := []byte{'1', '1', '1', '1', '1', '1'}
+	if !f.Issues {
+		bits[0] = '0'
+	}
+	if !f.Pulls {
+		bits[1] = '0'
+	}
+	if !f.Releases {
+		bits[2] = '0'
+	}
+	if !f.Forks {
+		bits[3] = '0'
+	}
+	if !f.Watch {
+		bits[4] = '0'
+	}
+	if !f.Star {
+		bits[5] = '0'
+	}
+	return string(bits)
+}
+
+// FeaturesOf extracts the resolved feature flags from a stored settings
+// TOML body, returning all-enabled for empty bodies and for bodies that
+// no longer parse (display metadata must never fail a read path — the
+// summary renders all-on then, exactly like DescriptionOf renders "").
+func FeaturesOf(body []byte) ResolvedFeatures {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return AllFeatures()
+	}
+	rs, err := ParseRepoSettings(body)
+	if err != nil {
+		return AllFeatures()
+	}
+	return rs.Features.Resolve()
 }
 
 // hostOnlyRepoSettings sections produce a clearer error than "unknown".
@@ -45,8 +154,9 @@ var hostOnlyRepoSettings = map[string]bool{
 }
 
 // ParseRepoSettings validates and decodes a settings payload (§4.2): size
-// budget, allowed sections only ([bundles] [maintenance] [compaction]
-// [upstream], plus [integrations] stored verbatim), and host-only keys
+// budget, allowed sections only ([features] [bundles] [maintenance]
+// [compaction] [upstream], plus the top-level description key and
+// [integrations] stored verbatim), and host-only keys
 func ParseRepoSettings(payload []byte) (*RepoSettings, error) {
 	if len(payload) > MaxRepoSettingsBytes {
 		return nil, fmt.Errorf("repo settings payload is %d bytes; limit is %d", len(payload), MaxRepoSettingsBytes)
@@ -104,7 +214,8 @@ func DescriptionOf(body []byte) string {
 
 // Merge ("with_settings"): pointer-set fields override base; unset sections
 // inherit. upstream.token_env never comes from settings — the base value is
-// preserved. Description never merges: it is display metadata, not config.
+// preserved. Description and Features never merge: they are display/behavior
+// metadata, not config (there is no host-config counterpart).
 func (r *RepoSettings) Merge(base *Config) (*Config, error) {
 	c := *base
 	if r.Bundles != nil {

@@ -57,6 +57,13 @@ func (s *Service) SetWatch(ctx context.Context, principal, owner, repo string, o
 		if !s.repoAlive(ctx, owner, repo) {
 			return WatchState{}, fmt.Errorf("%w: repo %s/%s not found", ErrNotFound, owner, repo)
 		}
+		// Forgejo #522: watching a watch-disabled repo is 403 (the
+		// toggle binds everyone, including already-watching re-PUTs —
+		// uniform with the star guard; unwatch always works, existing
+		// watchers and fan-out are untouched, re-enabling restores).
+		if !s.features(ctx, owner, repo).Watch {
+			return WatchState{}, fmt.Errorf("%w: watching is disabled for this repository", ErrForbidden)
+		}
 		rec := WatchRecord{Repo: owner + "/" + repo, WatchedAt: s.nowUTC().Format(dateTimeFmt)}
 		raw, err := encode(rec)
 		if err != nil {

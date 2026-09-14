@@ -29,7 +29,7 @@ function block(src, start, end) {
   return src.slice(s, e);
 }
 
-const PILL = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+const PILL = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "<CloneMenu");
 const META = block(REPO, '<div class="repo-meta', "</div>");
 
 test("split navigation: count lands on /forks, label lands on /fork", () => {

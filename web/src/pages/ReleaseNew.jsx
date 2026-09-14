@@ -13,6 +13,7 @@ import repos from "../../sdk/src/index.js";
 import { useData, reportError } from "../lib/data.js";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 
 export default function ReleaseNew() {
   const ctx = useRepo();
@@ -134,6 +135,16 @@ export default function ReleaseNew() {
           {getError()}
         </p>
       </Show>
+      {/* Forgejo #522: the composer goes away while releases are off — a
+          direct URL lands on this explainer (sane, not a dead 404), with
+          the list one click back. Existing releases stay readable. */}
+      <Show when={isFeatureDisabled(ctx.summary?.(), "releases")}>
+        <p class="card p-4 text-sm">
+          Releases are disabled for this repository.{" "}
+          <A class="hover:underline" href={`/${ctx.full}/releases`}>Back to releases</A>
+        </p>
+      </Show>
+      <Show when={!isFeatureDisabled(ctx.summary?.(), "releases")}>
       <form class="card grid gap-5 p-4" onSubmit={create} aria-label="New release">
         <fieldset class="grid gap-3">
           <legend class="text-sm font-medium">Target</legend>
@@ -263,6 +274,7 @@ export default function ReleaseNew() {
           </p>
         </div>
       </form>
+      </Show>
     </div>
   );
 }

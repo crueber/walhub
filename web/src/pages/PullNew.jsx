@@ -43,6 +43,7 @@ import { mountStream } from "../lib/sse.js";
 import { roleAtLeast } from "../components/perms.jsx";
 import { useRole } from "../components/perms.jsx";
 import { anonWriteTarget, write401Target } from "../lib/writeGate.js";
+import { isFeatureDisabled } from "../lib/repoFeatures.js";
 import { shortSha } from "../lib/sha.jsx";
 import { PREVIEW_WINDOW, compareHistories, tipSubject, fmtBounded, toShortRef } from "../lib/compare.js";
 import {
@@ -463,6 +464,16 @@ export default function PullNew() {
   return (
     <div class="mx-auto max-w-2xl">
       <h2 class="mb-3 text-lg font-semibold">New pull request</h2>
+      {/* Forgejo #522: the composer goes away while pulls are off — a
+          direct URL lands on this explainer (sane, not a dead 404), with
+          the list one click back. Existing PRs stay readable. */}
+      <Show when={isFeatureDisabled(ctx.summary?.(), "pulls")}>
+        <p class="card p-4 text-sm">
+          Pull requests are disabled for this repository.{" "}
+          <A class="hover:underline" href={`/${ctx.full}/pulls`}>Back to pulls</A>
+        </p>
+      </Show>
+      <Show when={!isFeatureDisabled(ctx.summary?.(), "pulls")}>
       {/* Forgejo #502: anonymous viewers keep a path forward — the sign-in
           interstitial (next = this composer) instead of the role message. */}
       <Show
@@ -569,6 +580,7 @@ export default function PullNew() {
         </Show>
       }>
         <p class="card text-sm">sign in to open a pull request.</p>
+      </Show>
       </Show>
       </Show>
     </div>

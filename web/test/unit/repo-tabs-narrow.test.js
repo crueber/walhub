@@ -69,11 +69,11 @@ test("strip hides its own scrollbar but stays keyboard/touch scrollable", () => 
 
 test("active tab is obvious and scrolled into view on navigation", () => {
   const nav = block(REPO, "<nav ref={tabsNav}", "</nav>");
-  assert.ok(nav.includes('aria-current={activeTab(location.pathname) === t.id ? "page" : undefined}'),
+  assert.ok(nav.includes('aria-current={activeTab(location.pathname, getSummary()) === t.id ? "page" : undefined}'),
     "active tab keeps aria-current=\"page\" (obvious + queryable)");
   const effect = block(REPO, "Issue #274: keep the active tab visible", "const ctx = {");
   assert.ok(effect.includes("createEffect"), "a createEffect tracks navigation");
-  assert.ok(effect.includes("activeTab(location.pathname)"), "the effect tracks the active tab reactively");
+  assert.ok(effect.includes("activeTab(location.pathname, getSummary())"), "the effect tracks the active tab reactively (Forgejo #522: the highlight follows the feature flags)");
   assert.ok(effect.includes('[aria-current="page"]'), "the effect finds the active link by aria-current");
   assert.ok(effect.includes("scrollIntoView"), "the effect scrolls the active link into view");
   assert.ok(effect.includes('inline: "center"'), "active link centers in the strip (fully visible, neighbors peek)");

@@ -528,7 +528,7 @@ Host); `ssh_clone_url` (17_ssh.md §3 — the SSH transport advertisement, `exte
 listen port on the same public host, `:22` omitted; absent while SSH is disabled with no external
 override); `api_url` = the `/api` lane URL; mutable-collab class (`private, no-cache`,
 Forgejo #381 — SWR's stale-serve window defeated the suffix-covered ETag, see below)
-+ `ETag: "<head sha>"` with the `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`/`~k` suffixes. `PUT` here creates (require_write,
++ `ETag: "<head sha>"` with the `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`/`~k`/`~t` suffixes. `PUT` here creates (require_write,
 `?object_format=sha1|sha256`, `201`/`409` exists); `DELETE` (require_admin) → `204`.
 
 `health` is the **repo-state vocabulary** (issue #209 — scoped: this field describes the repo,
@@ -606,6 +606,25 @@ budgeted paths (push/sync/checkpoint never call here, so their sim budgets hold 
 `ETag` covers the flag with the `~k<index-version>` suffix: the first report creates the
 index and moves no ref, so without it a revalidating client would 304 and the Checks tab
 would stay hidden after CI reports (same trap as `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`).
+
+`features` are the per-repo feature flags (Forgejo #522 — additive object, always
+present, never null; old clients ignore it per 14 §14.12): six enabled booleans
+`{issues, pulls, releases, forks, watch, star}` from the `[features]` settings
+section (§11), resolved all-on when unset. Folded in `walView.Summary` from the
+manifest-inline settings TOML the refs sync already holds (**zero new store round
+trips** — the `description` precedent; unparseable docs fail open to all-on, and a
+nil view field projects all-on so an unpopulated view can never strand tabs
+hidden). Riding the summary costs zero new client requests (the tab bar and the
+star/watch/fork pills already hold the shared summary signal; a dedicated endpoint
+would cost an extra request per repo view) at **+0 server-side probes** per summary
+(cheaper than the badge/index projections — the manifest is already in hand) — off
+the law-6 budgeted paths (push/sync/checkpoint never call here, so their sim
+budgets hold unchanged). `ETag` covers the flags with the **unconditional**
+`~t<bits>` suffix (six fixed-order 0/1 chars): a settings-only flip moves no ref,
+so without it a revalidating client would 304 and keep the stale tab gating (same
+trap as `~degraded`/`~d`/`~m`/`~c`/`~v`/`~f`/`~k`), and per the Forgejo #513 ruling
+a pre-#522 cached summary (no `features` field at all) must never 304-match or the
+client keeps the field-less body forever.
 
 ### 9.1.1 Explicit create — `POST /api/v1/repos` (+ `/api-browser/v1` twin; issue #210)
 
@@ -835,10 +854,17 @@ so the UI can guide instead of traying without parsing prose.
 - `GET …/settings` → `{revision, author, updated_at, message, toml}` (revision `0` = none ever published).
   `toml` is the raw per-repo TOML body as published.
 - `PUT …/settings?message=…` (require_admin): body = TOML, **≤ 16 KiB else `413`** (plain text). Validate
-  against THIS serving host's build: only sections `[bundles]`, `[maintenance]`, `[compaction]`,
-  `[upstream]` allowed (`[integrations]` accepted and ignored, forward compat); `upstream.token_env` and
-  everything under auth/store/server/wal/cache is host-only and refused. Invalid → `400` + reason, **nothing
-  published**. Valid → publish through the WAL (SETTINGS entry + manifest inline) → `200 {"revision":N}`.
+  against THIS serving host's build: only the top-level `description` key and sections `[features]`,
+  `[bundles]`, `[maintenance]`, `[compaction]`, `[upstream]` allowed (`[integrations]` accepted and
+  ignored, forward compat); `upstream.token_env` and everything under auth/store/server/wal/cache is
+  host-only and refused; unknown keys (including unknown keys inside an allowed section) are refused.
+  Invalid → `400` + reason, **nothing published**. Valid → publish through the WAL (SETTINGS entry +
+  manifest inline) → `200 {"revision":N}`. The `[features]` section (Forgejo #522) carries six
+  *enabled* booleans (`issues`, `pulls`, `releases`, `forks`, `watch`, `star` — absent key = enabled,
+  so an absent section resolves all-on with zero migration for existing repos); like `description`
+  it rides the doc (persistence, revisioning, authorship, admin-only writes) but never merges into
+  the host config (`Merge` ignores it — there is no host counterpart) and stays out of
+  `settings/effective` and the `describe` overridden-`fields` (it is behavior metadata, not config).
 - `DELETE …/settings` (require_admin) → publishes empty (back to host config), new revision.
 - `GET …/settings/effective` → `application/toml` of the effective `[bundles]`/`[maintenance]`/
   `[compaction]`/`[upstream]` (host config ⊕ repo settings). No host secrets, no `token_env` values.
@@ -1362,3 +1388,22 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   the Checks tab visible via the missing-field fail-open. `~k0` can never
   collide with a real index (versions start at 1). Absent→present transitions
   bust the cache exactly as before.
+- **Per-repo feature flags: `[features]` settings + `features` summary projection (Forgejo #522).**
+  One settings model, six booleans (§11): each key is an *enabled* flag defaulting on
+  (pointer-per-key server-side, so "unset" stays distinct from "explicitly disabled" —
+  a plain bool would read absent as false and strand every pre-#522 repo all-off).
+  The summary projects the resolved flags (§9.1 `features`, always present, never null)
+  folded from the manifest-inline TOML at +0 probes, with the unconditional `~t<bits>`
+  ETag suffix (the #513 ruling — a settings-only flip and a pre-#522 cached body both
+  revalidate). Guards live at the service write boundary and refuse with 403 + a naming
+  reason (law 9 guard statuses): `Star` refuses new stars, `SetWatch` refuses new watches,
+  `StartFork` refuses new forks — each behind a nil-safe `Features` hook wired in
+  `buildCollab` over the WAL settings doc (unreadable settings fail open to all-on at
+  every guard — display metadata must never break a write; the `CollabCounts` precedent).
+  `DELETE` (unstar/unwatch) always works; existing stars/watchers/forks and their counts
+  are untouched; re-enabling restores. The toggle binds everyone including admins (no
+  bypass — admins re-enable through settings, the same doc). Issues/pulls/releases-disable
+  is display-only (Forgejo's semantics): tabs hide and creation affordances go away, but
+  existing threads/releases stay readable at their URLs and no issue/PR/release API is
+  refused. Rationale: the UI pill is an affordance, the API check is the rule — and one
+  shared summary fetch gates everything client-side with zero new requests (law 6).

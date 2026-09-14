@@ -23,7 +23,7 @@ func TestSummaryChecksWire(t *testing.T) {
 		name       string
 		hook       func(ctx context.Context, owner, repo string) (ChecksSummary, bool)
 		wantHas    bool
-		wantSuffix string // "~k0" = absent probe (Forgejo #513: never bare)
+		wantSuffix string // "~k0" = absent probe (Forgejo #513: never bare); "~t111111" always appended (no features seed — #522 fail-open)
 	}{
 		{"nil hook", nil, false, "~k0"},
 		{"declined hook", func(ctx context.Context, owner, repo string) (ChecksSummary, bool) {
@@ -59,7 +59,7 @@ func TestSummaryChecksWire(t *testing.T) {
 				t.Fatalf("wire missing has_checks: %s", w.Body.String())
 			}
 			etag := w.Header().Get("ETag")
-			if want := `"` + fakeSHA + c.wantSuffix + `"`; etag != want {
+			if want := `"` + fakeSHA + c.wantSuffix + `~t111111"`; etag != want {
 				t.Fatalf("etag = %q, want %q", etag, want)
 			}
 			// The class is the #280 mutable-collab no-cache class (Forgejo
@@ -88,7 +88,7 @@ func TestSummaryChecksRevalidate(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	absent := w.Header().Get("ETag")
-	if want := `"` + fakeSHA + `~k0"`; absent != want {
+	if want := `"` + fakeSHA + `~k0~t111111"`; absent != want {
 		t.Fatalf("etag = %q, want %q", absent, want)
 	}
 
@@ -131,8 +131,8 @@ func TestSummaryChecksRevalidate(t *testing.T) {
 		t.Fatalf("has_checks = false after the first report")
 	}
 	flipped := w.Header().Get("ETag")
-	if !strings.HasSuffix(flipped, `~k1"`) {
-		t.Fatalf("etag = %q, want ~k1 suffix", flipped)
+	if !strings.HasSuffix(flipped, `~k1~t111111"`) {
+		t.Fatalf("etag = %q, want ~k1~t111111 suffix", flipped)
 	}
 
 	// A second report (version 1→2, same head sha) must bust again.

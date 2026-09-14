@@ -33,7 +33,7 @@ function block(src, start, end) {
 test("all four controls share the canonical btn px-2 py-1 text-sm metrics", () => {
   const star = block(REPO, "function StarToggle(props)", "function TasksOverlay");
   const watch = block(REPO, "function WatchToggle(props)", "function RefPicker");
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "<CloneMenu");
   const clone = block(REPO, "<summary class=\"btn", "</summary>");
   for (const [name, b] of [["StarToggle", star], ["WatchToggle", watch], ["Fork link", fork], ["Clone summary", clone]]) {
     for (const cls of ["btn", "px-2", "py-1", "text-sm"]) {
@@ -51,7 +51,7 @@ test("all four controls share the canonical btn px-2 py-1 text-sm metrics", () =
 test("every count renders left of its label; Clone is label-only", () => {
   const star = block(REPO, "function StarToggle(props)", "function TasksOverlay");
   const watch = block(REPO, "function WatchToggle(props)", "function RefPicker");
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "<CloneMenu");
   const clone = block(REPO, "<summary class=\"btn", "</summary>");
   assert.ok(star.includes('{s().stars ?? 0} Star'), "Star reads {n} Star (count left of label)");
   assert.ok(star.includes('<Icon name={s().viewer?.starred ? "star-on" : "star-off"}'), "Star leads with the shared Icon (on/off swap, #465)");
@@ -59,7 +59,10 @@ test("every count renders left of its label; Clone is label-only", () => {
   assert.ok(watch.includes('<Icon name={w().watching ? "watch-on" : "watch-off"}'), "Watch leads with the shared Icon (on/off swap, #465)");
   assert.ok(fork.includes("{s().forks ?? 0}"), "Fork count reads the summary source (renders at 0, #464)");
   const countAt = fork.indexOf("{s().forks ?? 0}");
-  const labelAt = fork.indexOf("Fork\n                    </A>");
+  // Forgejo #522: the label link moved one indent deeper inside the
+  // disabled-state <Show> (the pill shell now holds a nested span for
+  // the disabled label, so the block runs to <CloneMenu above).
+  const labelAt = fork.indexOf("Fork\n                      </A>");
   assert.ok(countAt !== -1 && labelAt !== -1 && countAt < labelAt, "Fork reads {n} Fork (count left of label, split across the two #464 links)");
   assert.ok(!fork.includes("Fork{"), "Fork never renders label-then-count");
   assert.ok(clone.endsWith('<Icon name="clone" /> Clone'), "Clone renders the shared icon left of the bare label (#465), no count");
@@ -71,7 +74,7 @@ test("Fork shows its count at zero, like Star/Watch show 0", () => {
   // so the group reads consistently. The hidden-at-zero direction (#446) is
   // absorbed, not adopted; the pill count itself links to the fork list
   // (#464), so > 0 discovery is preserved without a second count idiom.
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "<CloneMenu");
   assert.ok(!fork.includes("> 0 ?"), "Fork keeps no hidden-at-zero conditional");
   assert.ok(fork.includes("s().forks ?? 0"), "Fork falls back to 0 exactly like the toggles");
 });
@@ -110,7 +113,7 @@ test("toggle behavior untouched: optimistic flip + reconcile on error", () => {
 });
 
 test("Fork navigation + Clone popover untouched", () => {
-  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "</span>");
+  const fork = block(REPO, "Forgejo #447: the header action strip speaks ONE idiom", "<CloneMenu");
   // Forgejo #502: the label href goes through forkHref() — the fork
   // composer for writers (pinned below), the log-in interstitial for
   // anonymous viewers. Count order + tooltip + Clone popover unchanged.

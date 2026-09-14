@@ -793,6 +793,14 @@ a read notification while its tray page is open is harmless (404 → UI drops th
   and no notify-without-render for any bare-username token class; unresolvable bare names
   render as (dead, GitHub-style) profile links and drop silently from fan-out, exactly the
   #440 decision-(a) contract.
+- **Watch-disable refuses new watches at the service boundary (Forgejo #522).**
+  `SetWatch(on)` refuses with `ErrForbidden` (→ 403 + reason) when the repo's
+  `[features] watch` flag is off — behind a nil-safe `Features` hook wired in
+  `buildCollab` (unreadable settings fail open). Unwatch always works (even on
+  ghosts, per #63); existing watchers, counts, and fan-out are untouched;
+  re-enabling restores. The Watch pill disables with a reason while off (a
+  retained watch keeps its working Unwatch button). Rationale: the pill is an
+  affordance, the API check is the rule (07_api.md Decisions).
 
 ## Explicitly out of scope
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"git.packden.us/crueber/walhub/internal/config"
 	walgit "git.packden.us/crueber/walhub/internal/git"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/policy"
@@ -89,6 +90,21 @@ func (s *Service) requireRead(ctx context.Context, owner, repo string, p auth.Pr
 		}
 	}
 	return nil
+}
+
+// features resolves the repo's feature flags (Forgejo #522), failing open
+// to all-enabled when the hook is unwired or declines: display metadata
+// must never break a write on a transient settings read (the CollabCounts
+// precedent — only an explicit false refuses).
+func (s *Service) features(ctx context.Context, owner, repo string) config.ResolvedFeatures {
+	if s.Features == nil {
+		return config.AllFeatures()
+	}
+	f, ok := s.Features(ctx, owner, repo)
+	if !ok {
+		return config.AllFeatures()
+	}
+	return f
 }
 
 // requireAuthenticated rejects anonymous callers (open/comment/merge need a

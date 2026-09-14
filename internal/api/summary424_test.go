@@ -60,9 +60,10 @@ func TestSummaryForkWire(t *testing.T) {
 			}
 			etag := w.Header().Get("ETag")
 			if c.wantSuffix == "" {
-				// No fork hook here — but ~k0 is still present: the
-				// checks suffix is unconditional (Forgejo #513).
-				if want := `"` + fakeSHA + `~k0"`; etag != want {
+				// No fork hook here — but ~k0 + ~t111111 are still present:
+				// the checks and features suffixes are unconditional
+				// (Forgejo #513, Forgejo #522).
+				if want := `"` + fakeSHA + `~k0~t111111"`; etag != want {
 					t.Fatalf("etag = %q, want %q", etag, want)
 				}
 			} else {
