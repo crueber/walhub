@@ -111,6 +111,8 @@
           bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300; }
   .chip-closed { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
           bg-red-100 text-red-800 dark:bg-red-900/60 dark:text-red-300; }
+  .chip-merged { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
+          bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300; }
   .chip-draft { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide
           bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300; }
   .chip-prerelease { @apply inline-flex rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide

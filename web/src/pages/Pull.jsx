@@ -12,7 +12,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A, useLocation, useNavigate, useParams } from "@solidjs/router";
 import { useRepo } from "./Repo.jsx";
 import repos from "../../sdk/src/index.js";
-import { useData, invalidate, reportError } from "../lib/data.js";
+import { useData, invalidate, invalidatePullLists, reportError } from "../lib/data.js";
 import { CheckPill, ContextRows } from "./Checks.jsx";
 import { parsePatchFiles, anchorContextSha } from "../lib/diff.js";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
@@ -23,6 +23,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
+import { pullBadgeView, pullCloseVisibility } from "../lib/pull-state.js";
 
 function eventText(ev) {
   switch (ev.type) {
@@ -646,6 +647,61 @@ export default function Pull() {
     reload();
   };
 
+  // PR close/reopen (Forgejo #517): plain state flips via
+  // repo.pulls.update(num, {state}) — no reason (PR state is open|closed
+  // only), no review, no merge. Auth mirrors the server (author or triage;
+  // UpdatePR 403s anyone else and 409s a merged close). Errors propagate to
+  // the composer's tray path (toast, never silent); the reconcile runs only
+  // on success. Cross-page reconcile is the #318 pattern: the own thread
+  // key reloads NOW (so the badge flips + the timeline entry lands with no
+  // full-page reload) while pulls windows + the repo summary (open_pulls
+  // numerator) invalidate at the mutation site; other tabs follow the
+  // closed/reopened `pull` frames on the repo stream (the accept filter in
+  // useCollabStream below runs before invalidateCollab).
+  const afterPRMutation = (n, ck) => {
+    if (num() === n) reload();
+    else invalidate(ck);
+    invalidatePullLists(ctx.full);
+  };
+  const closePR = async () => {
+    const n = num();
+    const ck = key();
+    await ctx.repoClient.pulls.update(n, { state: "closed" }, { noPopupAuth: true });
+    afterPRMutation(n, ck);
+  };
+  const reopenPR = async () => {
+    const n = num();
+    const ck = key();
+    await ctx.repoClient.pulls.update(n, { state: "open" }, { noPopupAuth: true });
+    afterPRMutation(n, ck);
+  };
+  const commentAndClosePR = async (body) => {
+    const n = num();
+    const ck = key();
+    // GitHub semantics (the issue-page shape): post the body first when
+    // non-empty (empty body just closes), then close. Either step throwing
+    // keeps the composer text; after a comment-posted / close-failed split
+    // the plain Close button finishes the job.
+    if (String(body ?? "").trim()) {
+      await ctx.repoClient.pulls.comment(n, body, { noPopupAuth: true });
+    }
+    await ctx.repoClient.pulls.update(n, { state: "closed" }, { noPopupAuth: true });
+    afterPRMutation(n, ck);
+  };
+  // Header badge + Close/Reopen visibility read the live thread/pr fetch
+  // (the page's state source of truth, like the issue page) — never the
+  // repo-level summary (ref/state-blind by design). No closeChooser: PR
+  // closes carry no reason, so both controls stay plain buttons.
+  const badge = () => pullBadgeView(thread(), pr());
+  const closeVis = () =>
+    pullCloseVisibility({ thread: thread(), pr: pr(), mePrincipal: getMe()?.principal, role: role() });
+  const closeAction = () => {
+    const v = closeVis();
+    if (v.showClose) return closePR;
+    if (v.showReopen) return reopenPR;
+    return undefined;
+  };
+
   // The ONE repo collaboration stream (08 §4): pull/review/thread/check
   // frames for this PR invalidate coalesced keys; the header refetch
   // recomputes the MergeBox machine.
@@ -654,12 +710,22 @@ export default function Pull() {
   return (
     <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
       <section aria-label="Conversation">
-        <h1 class="mb-1 text-xl font-semibold">
-          #{num()} {thread()?.title}
-        </h1>
-        <p class="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          {thread()?.state} · {thread()?.author} · <DateTime value={thread()?.updated_at} />
-        </p>
+        {/* Header block (Forgejo #517, the Issue.jsx convention): title
+            left, state badge right — the badge is the state surface, so the
+            byline carries author + time only (no bare state token). */}
+        <header class="mb-4 border-b border-zinc-200 pb-3 dark:border-zinc-800">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <h1 class="min-w-0 flex-1 text-xl font-semibold">
+              #{num()} {thread()?.title}
+            </h1>
+            <Show when={thread()}>
+              <span class={`${badge().cls} mt-1 shrink-0`}>{badge().text}</span>
+            </Show>
+          </div>
+          <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            {thread()?.author} · <DateTime value={thread()?.updated_at} />
+          </p>
+        </header>
         <div class="mb-4">
           <ReviewSummaryBar summary={summary()} head={head()} />
         </div>
@@ -680,6 +746,10 @@ export default function Pull() {
         >
           <CommentComposer
             onSubmit={comment}
+            onCommentAndClose={closeVis().showClose ? commentAndClosePR : undefined}
+            commentAndCloseLabel="Comment and Close"
+            closeLabel={thread()?.state === "open" ? "Close" : "Reopen"}
+            onClose={closeAction()}
             errorKey="pull-comment"
             mentionId="mention-pull-comment"
             mentionNames={thread()?.participants}

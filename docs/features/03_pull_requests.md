@@ -762,3 +762,27 @@ every call goes through the SDK).
   schema decision — no disk/memory state per law 4). Pinned by `TestForkNetworkGCWideFanout`
   (40 children compact, cost pinned) and `TestForkNetworkGCCapExceeded` (300 children abort
   safely).
+
+- **PR Close/Reopen is plain client wiring over PUT state (Forgejo #517,
+  2026-09-14).** No backend change: the PR conversation page drives the
+  long-existing `repo.pulls.update(num, {state})` surface (PUT
+  `…/pulls/{num}`, open|closed). The header renders the Issue.jsx state
+  convention (title left, badge right, `chip-open`/`chip-closed`); merged
+  wins as "Merged" on a new `chip-merged` class because merge stamps
+  StateClosed too, so thread state alone cannot tell merged from
+  plain-closed. Visibility is the server auth mirrored client-side
+  (author-or-triage via `web/src/lib/pull-state.js`, hierarchical ladder
+  so write ⊇ triage; server authoritative, 403/409 surface in the tray):
+  open shows Close + Comment-and-Close, closed-unmerged shows Reopen,
+  merged shows no control. No close-reason chooser — PR state carries no
+  reason (the CommentComposer split-button reason path stays
+  issue-only). Reconcile is the #318 pattern: the mutation site reloads
+  the own thread key (badge flip + timeline entry, no full reload) and
+  invalidates via the new `invalidatePullLists` (`pulls:{full}:*` windows
+  + the `repo:{full}` open_pulls numerator); other tabs follow the
+  closed/reopened `pull` frames on the existing repo stream subscription
+  (no new kinds, no ETag change — no cached-SWR field is added). Rationale:
+  a stale or unwanted PR could previously only be abandoned open or merged
+  away; it now closes like an issue. Pinned by
+  `web/test/unit/pull-state-517.test.js` (badge matrix, visibility matrix,
+  ladder/auth mirror).
