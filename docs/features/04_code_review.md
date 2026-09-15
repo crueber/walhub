@@ -128,6 +128,13 @@ kinds; 04 only emits through its handler per P8).
 - `POST` adds entries (dedup by principal — re-request is a no-op); `DELETE` removes. Entries are
   removed implicitly when the principal submits a review or dismisses.
 - Auth: the PR author or `triage`+; a requested principal may self-remove.
+- Lifecycle (Forgejo #599): `POST` and `DELETE` are **open-PR only** — a closed or merged PR
+  refuses `422` (`review requests are only accepted on open pull requests`), uniformly, so
+  self-removal is refused too. `GET` (and `review-suggest`) stay allowed on terminal PRs, and
+  reopening a closed-but-unmerged PR restores writes (the gate keys on current state, like the
+  #594 thread lock); merged is terminal. Rationale: a terminal PR's request list is frozen
+  curation, not an inbox the requestee still owns — leaving self-removal open would let the
+  list mutate after the conversation it annotates is over.
 - `GET …/review-suggest?q=` merges, in order: `access.json` role bindings with role ≥ `read` (P6),
   org-team members of those bindings, then authors of commits in the PR's head branch (from
   `repo.commits` metadata); prefix-filtered by `q`, page size 20, no-store. LIST scope is bounded by
@@ -212,8 +219,8 @@ plain text (07 §2); arrays serialize `[]`; timestamps RFC 3339 UTC; SHAs full-h
 | `POST /{o}/{r}/api/pulls/{num}/threads/{tid}/resolve` | read (opener, review participants) or triage+ | → `{thread}` |
 | `POST /{o}/{r}/api/pulls/{num}/threads/{tid}/unresolve` | same as resolve | → `{thread}` |
 | `GET /{o}/{r}/api/pulls/{num}/review-requests` | read | → `{reviewers: [...]}` |
-| `POST /{o}/{r}/api/pulls/{num}/review-requests` | author or triage+ | `{reviewers: [principal]}` → `{reviewers}` |
-| `DELETE /{o}/{r}/api/pulls/{num}/review-requests` | author/triage+ or self | `{reviewers: [principal]}` → `{reviewers}` |
+| `POST /{o}/{r}/api/pulls/{num}/review-requests` | author or triage+ | `{reviewers: [principal]}` → `{reviewers}`; closed/merged → `422` (§5) |
+| `DELETE /{o}/{r}/api/pulls/{num}/review-requests` | author/triage+ or self | `{reviewers: [principal]}` → `{reviewers}`; closed/merged → `422` incl. self-removal (§5) |
 | `GET /{o}/{r}/api/pulls/{num}/review-suggest?q=` | read | → `{suggestions: [principal]}` (20/page) |
 
 Discovery: all routes land in `/api/v1` `endpoints[]` with provenance `review` (07 §9.6). Mutations
@@ -274,6 +281,18 @@ envelope handling; JSDoc `@typedef Review/ThreadAnchor/ThreadHeader` in `types.j
   Resolve/unresolve stay ungated (triage curation of existing threads, not new conversation). No
   maintainer/admin override in v1 (same simplest-contract rationale as 02/03). Client: the finish-review modal
   submit disables with reason, thread replies disable with reason, and new line-thread staging hides while locked.
+- **Review requests are open-PR only (Forgejo #599, 2026-09-15).** Service-layer gate
+  (`threadLocked(h, side)` on the `prHeadOf`-loaded header + sidecar — zero new store reads, law 6; no new locks,
+  law 3; no schema change, law 5) refusing `AddRequests` and `RemoveRequests` with typed
+  `ErrUnprocessable` → `422` (`review requests are only accepted on open pull requests`, the review-surface
+  422 wording). Placed right after `prHeadOf`, before the `selfOnly` branch, the summary refresh, and the
+  notify emit — so self-removal is refused uniformly (named decision, §5), nothing is stored, and nothing
+  is emitted on refusal. `GetRequests`/`Suggest` stay ungated (reads, like resolve/unresolve curation).
+  Client: the PR page's `ReviewersPanel` picker affordance gates on the same live state via the headless
+  `reviewRequestsEditable(canEdit, thread, pr)` helper (`pull-state.js` — role first, then the #594 lock,
+  so a reopen restores the picker with no reload); requested-reviewer chips always render, with the ×
+  remove affordance following the same gate (terminal PRs read read-only). No wire-shape or notify-class
+  change for open PRs (pinned in-suite).
 - **`required-reviews` is one policy effect with two honest halves** — push-time denial (enforceable at
   receive-pack) + merge-gate evaluation (where approvals are observable), per 14 §14.5.
 - **No new task kinds; author self-approval is per-repo conditional, enforced server-side;

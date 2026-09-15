@@ -511,7 +511,8 @@ func (s *Service) mutateRequests(ctx context.Context, owner, repo string, num in
 }
 
 // AddRequests serves POST …/review-requests (§7: PR author or triage+):
-// adds entries (dedup by principal), records by/at.
+// adds entries (dedup by principal), records by/at. Open PRs only (§5):
+// a closed or merged PR refuses 422 (ErrUnprocessable).
 func (s *Service) AddRequests(ctx context.Context, owner, repo string, num int, actor auth.Principal, principals []string) (*ReviewRequests, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, err
@@ -519,9 +520,15 @@ func (s *Service) AddRequests(ctx context.Context, owner, repo string, num int, 
 	if err := s.requireRead(ctx, owner, repo, actor); err != nil {
 		return nil, err
 	}
-	h, _, err := s.prHeadOf(ctx, owner, repo, num)
+	h, side, err := s.prHeadOf(ctx, owner, repo, num)
 	if err != nil {
 		return nil, err
+	}
+	// Forgejo #599: review requests are open-PR only. Keys on the
+	// already-loaded header + sidecar (no new store read, law 6), before
+	// the summary refresh + notify emit. GET stays ungated.
+	if threadLocked(h, side) {
+		return nil, fmt.Errorf("%w: review requests are only accepted on open pull requests", ErrUnprocessable)
 	}
 	who := normPrincipal(actor.Name)
 	if normPrincipal(h.Author) != who {
@@ -575,6 +582,10 @@ func (s *Service) AddRequests(ctx context.Context, owner, repo string, num int, 
 
 // RemoveRequests serves DELETE …/review-requests (§7: author/triage+ or
 // self-removal — a requested principal may remove only themselves).
+// Open PRs only (§5): a closed or merged PR refuses 422
+// (ErrUnprocessable), uniformly — self-removal included (Forgejo #599
+// decision: a terminal PR's request list is frozen curation, not an
+// inbox the requestee still owns).
 func (s *Service) RemoveRequests(ctx context.Context, owner, repo string, num int, actor auth.Principal, principals []string) (*ReviewRequests, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, err
@@ -582,9 +593,15 @@ func (s *Service) RemoveRequests(ctx context.Context, owner, repo string, num in
 	if err := s.requireRead(ctx, owner, repo, actor); err != nil {
 		return nil, err
 	}
-	h, _, err := s.prHeadOf(ctx, owner, repo, num)
+	h, side, err := s.prHeadOf(ctx, owner, repo, num)
 	if err != nil {
 		return nil, err
+	}
+	// Forgejo #599: same open-only gate as AddRequests, placed before the
+	// selfOnly branch so self-removal is refused uniformly (no new store
+	// read, law 6; before summary refresh + notify emit).
+	if threadLocked(h, side) {
+		return nil, fmt.Errorf("%w: review requests are only accepted on open pull requests", ErrUnprocessable)
 	}
 	who := normPrincipal(actor.Name)
 	var drop []string
