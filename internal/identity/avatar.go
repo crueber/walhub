@@ -1,5 +1,5 @@
 // avatar.go — auto-generated user avatars (Forgejo #376, restyled #525,
-// figures recolored #539).
+// figures recolored #539, palette widened #550).
 //
 // Every OIDC login for a user with no avatar enqueues a background
 // generation: the DiceBear "rings" style seeded by the verified
@@ -7,8 +7,8 @@
 // identity key), over a solid walhub-green (emerald-600 #059669)
 // background in the greyscale-preset treatment (flat, no gradients),
 // with the rings figures drawn from a greens-to-black override
-// palette (emerald-300→950 + black, userAvatarRingColors) instead of
-// the style's built-in rainbow.
+// palette (emerald/green/teal 300→950 + black, userAvatarRingColors)
+// instead of the style's built-in rainbow.
 // The SVG lives on the bucket at
 // users/<username>/avatar.svg (law 4 — memory is a cache, the bucket is
 // truth) with the pointer on profile.json (avatar_content_type /
@@ -75,8 +75,10 @@ const maxUserAvatarBytes = int64(1 << 20)
 const userAvatarBackgroundColor = "059669"
 
 // userAvatarRingColors is the rings-figure palette: the Tailwind
-// emerald run 300→950 plus black (bare hex, no "#", same spelling
-// the options schema accepts). Passed as the "ringColor"
+// emerald, green, and teal runs 300→950 plus black (bare hex, no "#",
+// same spelling the options schema accepts), ordered so the lightness
+// ramp interleaves by step (all 300s, then 400s, …) down to the dark
+// terminus. Passed as the "ringColor"
 // core-library option (name+"Color" in the vendored
 // dicebear-go/internal/render/options.go — a user-supplied color
 // list overrides the style collection per resolver.go's
@@ -84,17 +86,39 @@ const userAvatarBackgroundColor = "059669"
 // rainbow (coral→blue→purple→pink) whose indigo-family figures
 // clashed with the app-green background (Forgejo #539). Greens to
 // black only, all from the app palette (web/src/ui.css) + black —
-// pinned by TestGenerateGreensOnlyFigures, which asserts none of
-// the 16 style defaults appears in output across seeds.
+// no blue-adjacent hues (cyan reads as blue at avatar size), no
+// rainbow colors — pinned by TestGenerateGreensOnlyFigures, which
+// asserts none of the 16 style defaults appears in output across
+// seeds. Every step is a real Tailwind shade; the SVG is generated
+// once server-side and served as static bytes, so every entry must
+// read on both light and dark surfaces. The 600 steps sit near the
+// emerald-600 background hue — figure-on-figure there reads via the
+// ring gaps.
 var userAvatarRingColors = []string{
 	"6ee7b7", // emerald-300
+	"86efac", // green-300
+	"5eead4", // teal-300
 	"34d399", // emerald-400
+	"4ade80", // green-400
+	"2dd4bf", // teal-400
 	"10b981", // emerald-500
+	"22c55e", // green-500
+	"14b8a6", // teal-500
 	"059669", // emerald-600 (background hue — figure-on-figure reads via the ring gaps)
+	"16a34a", // green-600 (near-background hue — reads via the ring gaps)
+	"0d9488", // teal-600 (near-background hue — reads via the ring gaps)
 	"047857", // emerald-700
+	"15803d", // green-700
+	"0f766e", // teal-700
 	"065f46", // emerald-800
+	"166534", // green-800
+	"115e59", // teal-800
 	"064e3b", // emerald-900
+	"14532d", // green-900
+	"134e4a", // teal-900
 	"022c22", // emerald-950
+	"052e16", // green-950
+	"042f2e", // teal-950
 	"000000", // black
 }
 
