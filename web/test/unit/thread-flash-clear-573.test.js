@@ -106,9 +106,9 @@ test("jumpToStaged set path unchanged", () => {
 
 // --- 4. unflashed cards behave exactly as today ------------------------------
 
-test("unflashed cards: toggle-only behavior intact, label reads getOpen()", () => {
+test("unflashed cards: toggle-only behavior intact, label reads open() (#580 supersedes getOpen())", () => {
   const card = threadCard();
-  assert.ok(card.includes('{getOpen() ? "collapse" : "expand"}'), "toggle label still reads getOpen()");
+  assert.ok(card.includes('{open() ? "collapse" : "expand"}'), "toggle label reads open() (#580: agrees with the body Show); unflashed open()===getOpen() so behavior unchanged");
   assert.ok(card.includes("const [getOpen, setOpen] = createSignal(!t().resolved);"), "initial open state still !resolved");
   // Optional-chaining call: cards rendered without onCollapse (none exist
   // in-tree — both call sites wire it) would toggle exactly as before.
