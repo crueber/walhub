@@ -185,7 +185,7 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// Suggest's commit authors ride pulls' HeadAuthors; the
 	// push-time half (policy.RequiredReviewsEffect) enforces at
 	// receive-pack with no wiring. Registers NO task kinds.
-	c.reviewSvc, c.reviewHandler = newReviewService(st, c.ident, c.pullsSvc)
+	c.reviewSvc, c.reviewHandler = newReviewService(st, c.ident, c.pullsSvc, reg)
 	// Wave 05 checks (docs/features/05): commit statuses (Create-
 	// then-CAS per (sha, context)), the CAS'd checks/index.json
 	// projection with inline compaction, wct_ CI tokens (Seam 2

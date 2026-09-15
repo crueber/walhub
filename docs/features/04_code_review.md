@@ -175,8 +175,10 @@ explicit human actions; the timeline shows both).
   `review-required` sketch of 14 §14.5 — deny direct (non-bypass) pushes to matched refs. Pure, local
   evaluation per the Seam-3 concurrency rule.
 - **Merge-time half (the review gate):** 03's merge task, before publishing the merge ref, resolves
-  every `required-reviews` rule matching the PR's **base** ref and requires: surviving approvals ≥
-  `min_approvals` (most restrictive across matching rules), no surviving `CHANGES_REQUESTED`, and —
+  every `required-reviews` rule matching the PR's **base** ref and requires: surviving non-author
+  approvals ≥ `min_approvals` (most restrictive across matching rules; Forgejo #586 — an author's
+  self-approval never counts, even where submitting it is allowed), no surviving
+  `CHANGES_REQUESTED` (from anyone — an author's own request-changes still blocks), and —
   when `dismiss_stale` — only approvals whose `commit_sha` equals the current head count. Failed gate ⇒
   task narration states the shortfall (law 7) and the merge ref is not published.
 - Envelope rules are frozen: unknown keys inside the effect are parse errors, fail closed (400 on
@@ -200,7 +202,7 @@ plain text (07 §2); arrays serialize `[]`; timestamps RFC 3339 UTC; SHAs full-h
 | Method + path | Auth (P6) | Request → response |
 |---|---|---|
 | `GET /{o}/{r}/api/pulls/{num}/reviews` | read | → `{reviews: [review event], more}` (paged, `n` default 50) |
-| `POST /{o}/{r}/api/pulls/{num}/reviews` | read | `{state, body?, commit_sha, threads?: [{anchor, body}]}` → `{review, threads[]}`; author self-approve/request-changes → `422` |
+| `POST /{o}/{r}/api/pulls/{num}/reviews` | read | `{state, body?, commit_sha, threads?: [{anchor, body}]}` → `{review, threads[]}`; author self-approve/request-changes → `422` only when the repo's `[review] allow_self_approval` is off (default on — Forgejo #586) |
 | `GET /{o}/{r}/api/pulls/{num}/reviews/{seq}` | read | → review event; `404` unknown |
 | `POST /{o}/{r}/api/pulls/{num}/reviews/{seq}/dismiss` | maintain | `{reason}` → `{review: DISMISSED …}` |
 | `GET /{o}/{r}/api/pulls/{num}/threads` | read | → `{threads: [thread header], more}` (`?resolved=` filter) |
@@ -266,7 +268,13 @@ envelope handling; JSDoc `@typedef Review/ThreadAnchor/ThreadHeader` in `types.j
   events; racing writers converge, and the merge gate never trusts it (re-derives by scan).
 - **`required-reviews` is one policy effect with two honest halves** — push-time denial (enforceable at
   receive-pack) + merge-gate evaluation (where approvals are observable), per 14 §14.5.
-- **No new task kinds; no author self-approval, enforced server-side; maintain-only dismissal.**
+- **No new task kinds; author self-approval is per-repo conditional, enforced server-side;
+  maintain-only dismissal.** The submit-time rule is conditional (Forgejo #586 — a deliberate
+  design-rule change for user ratification: the old unconditional author-cannot-approve block is
+  replaced by the `[review] allow_self_approval` knob, default ON so fresh repos behave like
+  GitHub; OFF keeps the historical `422`). The merge gate is unconditional: a self-approval
+  NEVER counts toward `min_approvals` (protection semantics — self-attestation is not review),
+  while a surviving author `CHANGES_REQUESTED` still blocks like any reviewer's.
 
 ## Explicitly out of scope
 
@@ -343,3 +351,33 @@ envelope handling; JSDoc `@typedef Review/ThreadAnchor/ThreadHeader` in `types.j
   own deadline, never trusts the summary. Zero git on every review path.
   16-way concurrent submits converge with unique seqs (`-race`, in-suite).
 - **Client range anchors + comment index (Forgejo #546).** No backend change: the §4 anchor already admits ranges, and both comment paths now build anchors ONLY through the new headless `web/src/lib/review-anchor.js` (`buildAnchor`/`selectionToAnchor` over the #244 `diff-lines` numbering + `findHunkForSelection`; `freshnessOf` for view-time drift; `anchorLabel`; unresolved-first `sortThreadsForIndex`). Single-line anchors keep the exact `stageLine` shape (zeroed opposite pair, lines === 1); multi-line selections (DiffTable drag, already clamped to one chunk + one side; conversation `+` Shift+click within one file + side + hunk) set `new_lines`/`old_lines` > 1. Hash contract: `context_sha` is ALWAYS `anchorContextSha` fed byte-identically (`{path, lines}` + the contiguous hunk-lines span) — single-line spans hash `{start: idx, count: 1}` exactly as before, so the pinned Go-twin vector is untouched and NOT a pinned-contract change; freshness recomputes over the anchor's own span (which reduces to the old check for count: 1). Files-tab threads post through the existing `pulls.threads.create` SDK surface (OpenThread is authenticated + read, so the affordance gates like the conversation composer); the drift twin, validation, and resolve/unresolve semantics are unchanged.
+- **Per-repo self-approval knob, conditional submit rule (Forgejo #586 — deliberate design-rule
+  change for user ratification).** `SubmitReview` no longer rejects author `APPROVED` /
+  `CHANGES_REQUESTED` unconditionally: it consults the repo's `[review] allow_self_approval`
+  (WAL-published settings TOML, `GET AuthRead` / `PUT AuthAdmin`, ≤ 16 KiB — no new endpoint,
+  no new top-level route; the Settings UI toggles it with the shared `ToggleSwitch`).
+  Default ON (nil section/key — zero migration; fresh repos behave like GitHub); OFF keeps
+  the historical `422`; `COMMENTED` is always allowed; a policy-read failure fails the
+  submit closed (`503`), never guessed.
+  - **Decision 1 (merge-gate counting): (b) — author self-approvals NEVER count toward
+    `min_approvals`.** The submit toggle governs who may *record* a verdict; the gate
+    governs what *protects* the ref, and self-attestation is not protection. Options (a)
+    count-them and (c) a separate `count_self` knob were rejected: (a) lets an author
+    single-handedly satisfy a protection rule (the rule stops protecting), (c) adds a
+    second knob for a combination nobody asked for. An author's surviving
+    `CHANGES_REQUESTED` still blocks (uniform rule — no special-casing).
+  - **Decision 2: one coupled toggle.** The knob covers both `APPROVED` and
+    `CHANGES_REQUESTED` — no reason to split verdict types emerged.
+  - **Decision 3: `dismiss_stale` needs no special handling.** A stale self-approval
+    already fails the `commit_sha` freshness check like any other stale approval — and,
+    excluded as an author vote, it never counts fresh either. Both halves are tested.
+  - **Seam, not a fetch (laws 6 + 8).** `review.Service.Settings` (`SettingsResolver` —
+    nil means the default) is satisfied in composition by a WAL-manifest-backed closure
+    (`reg.Open` + snapshot + `config.AllowSelfApprovalOf`; warm path is in-memory, no
+    lock held across the call). Submits are control-plane-sized, off the push/sync
+    hot-path budgets — the same cost class as the gate's `policy.json` read. The gate
+    itself reads no setting (its rule is unconditional; the PR author comes from the
+    already-loaded header).
+  - **No summary/ETag projection (law 8).** The knob is enforced read-time, never
+    rendered from a cache — `review_summary`, the repo summary, and the ETag suffixes
+    are untouched, so no SWR-cached surface can serve a stale policy.

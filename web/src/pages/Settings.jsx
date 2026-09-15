@@ -33,6 +33,12 @@ import {
   withFeatures,
 } from "../lib/repoFeatures.js";
 import {
+  SELF_APPROVAL_LABEL,
+  SELF_APPROVAL_HINT,
+  extractSelfApproval,
+  withSelfApproval,
+} from "../lib/repoReview.js";
+import {
   MIRROR_PRESETS,
   DEFAULT_MIRROR_PRESET,
   formatNextSync,
@@ -109,6 +115,14 @@ function GeneralTab(props) {
   const [getFlags, setFlags] = createSignal(null);
   const [getFlagsBase, setFlagsBase] = createSignal(null);
   const [getFlagsNote, setFlagsNote] = createSignal("");
+  // Forgejo #586: the self-approval toggle rides the same
+  // WAL-published settings TOML ([review] allow_self_approval) with the
+  // existing General-tab save path (admin-gated PUT, 403 in the note,
+  // same invalidations). null = not yet prefilled (renders checked:
+  // the server default is allowed).
+  const [getSelf, setSelf] = createSignal(null);
+  const [getSelfBase, setSelfBase] = createSignal(null);
+  const [getSelfNote, setSelfNote] = createSignal("");
 
   const [getDoc] = useData(`settings:${props.ctx.full}`, () => props.repo.settings.get(), 5000);
   const [getAccess] = useData(`access:${props.ctx.full}`, () => props.repo.access.get().catch(() => null), 5000);
@@ -135,6 +149,13 @@ function GeneralTab(props) {
       const seed = extractFeatures(typeof doc === "string" ? doc : String(doc?.toml ?? ""));
       setFlags(seed);
       setFlagsBase(seed);
+    }
+    // Forgejo #586: seed the self-approval toggle from the [review]
+    // section the same way (null sentinel — user edits never clobbered).
+    if (doc !== undefined && getSelf() === null) {
+      const seed = extractSelfApproval(typeof doc === "string" ? doc : String(doc?.toml ?? ""));
+      setSelf(seed);
+      setSelfBase(seed);
     }
   });
 
@@ -220,6 +241,45 @@ function GeneralTab(props) {
   }
 
   const flagsDirty = () => JSON.stringify(getFlags() ?? {}) !== JSON.stringify(getFlagsBase() ?? {});
+
+  const selfDirty = () => getSelf() !== getSelfBase();
+
+  async function saveSelfApproval() {
+    const allowed = getSelf() !== false; // unset renders checked (default ON)
+    try {
+      const doc = getDoc();
+      const current = typeof doc === "string" ? doc : String(doc?.toml ?? "");
+      // withSelfApproval preserves every other section (description,
+      // features, bundles, …) — only the allow_self_approval line is set.
+      await props.repo.settings.put(withSelfApproval(current, allowed), "");
+      setSelf(allowed);
+      setSelfBase(allowed);
+      setSelfNote("saved");
+      // Same invalidations as the features save: the editors read the
+      // shared settings entries (the summary projects no review knob,
+      // so no ETag work — the setting is enforced read-time, never
+      // rendered from a cache).
+      invalidate(`repo:${props.ctx.full}`);
+      invalidate(`settings:${props.ctx.full}`);
+      invalidate(`settings-effective:${props.ctx.full}`);
+      invalidate(`settings-history:${props.ctx.full}`);
+    } catch (e) {
+      // Authoritative + loud (the visibility-save discipline): on ANY
+      // failure the toggle reseeds from server truth and the note names
+      // the cause (403 = not admin).
+      setSelfNote(String(e.message ?? e));
+      try {
+        const fresh = await props.repo.settings.get();
+        const toml = typeof fresh === "string" ? fresh : String(fresh?.toml ?? "");
+        const seed = extractSelfApproval(toml);
+        setSelf(seed);
+        setSelfBase(seed);
+      } catch {
+        // Keep the attempted value; the note names the cause.
+      }
+      invalidate(`settings:${props.ctx.full}`);
+    }
+  }
 
   async function saveFeatures() {
     const flags = getFlags();
@@ -354,6 +414,41 @@ function GeneralTab(props) {
       </div>
       <Show when={getFlagsNote()}>
         <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getFlagsNote()}</p>
+      </Show>
+      <hr class="my-4 border-current opacity-10" />
+      {/* Forgejo #586: the per-repo self-approval toggle. Checked lets
+          the author approve or request changes on their own pull request
+          (the GitHub-like default — unset renders checked); unchecked
+          restores the historical 422. A self-approval never counts
+          toward required reviews either way. Saving requires admin — a
+          non-admin save surfaces the 403 in the note, the same
+          read-mostly behavior as the description save. */}
+      <h4 class="mb-2 font-semibold">Code review</h4>
+      <Show when={getSelf() !== null} fallback={<p class="muted text-sm">loading…</p>}>
+        {/* Forgejo #533: one aligned flex row — label (title + muted
+            hint beneath) left, the shared ToggleSwitch anchored right.
+            The row IS the label, so clicking anywhere on it toggles the
+            switch natively. */}
+        <label class="flex cursor-pointer items-center justify-between gap-4 text-sm">
+          <span class="min-w-0">
+            <span class="font-medium">{SELF_APPROVAL_LABEL}</span>
+            <span class="muted block text-xs">{SELF_APPROVAL_HINT}</span>
+          </span>
+          <ToggleSwitch
+            checked={getSelf() !== false}
+            onChange={(e) => setSelf(e.currentTarget.checked)}
+            label={SELF_APPROVAL_LABEL}
+          />
+        </label>
+      </Show>
+      <Show when={selfDirty()}>
+        <p class="warn-line !mt-1 !text-sm">unsaved changes</p>
+      </Show>
+      <div class="mt-2 flex flex-wrap items-center gap-2">
+        <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={saveSelfApproval} disabled={getSelf() === null}>Save code review</button>
+      </div>
+      <Show when={getSelfNote()}>
+        <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getSelfNote()}</p>
       </Show>
     </section>
   );

@@ -24,7 +24,8 @@ var (
 	// (→ 409).
 	ErrConflict = errors.New("conflict")
 	// ErrUnprocessable marks submittable-but-unusable input: author
-	// self-approval (→ 422).
+	// self-approval on a repo with [review] allow_self_approval off
+	// (→ 422).
 	ErrUnprocessable = errors.New("unprocessable")
 	// ErrUnavailable marks a down dependency (→ 503 + Retry-After: 15).
 	ErrUnavailable = errors.New("temporarily unavailable")

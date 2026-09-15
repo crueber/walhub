@@ -36,7 +36,7 @@ func TestCollabServicesRegisterDiscovery(t *testing.T) {
 	newIdentityService(nil, cfg)
 	newIssuesService(nil, nil, cfg)
 	newPullsService(nil, nil, nil, nil, "git")
-	newReviewService(nil, nil, nil)
+	newReviewService(nil, nil, nil, nil)
 	newReleasesService(nil, nil, nil, "git", "", 0)
 	newSocialService(nil, nil)
 	newNotifyService(nil, nil)

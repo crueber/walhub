@@ -28,10 +28,14 @@ const MaxRepoDescriptionRunes = 512
 // into the host config (Merge ignores it). Features (Forgejo #522) is the
 // same kind of passenger: six per-repo feature flags validated, persisted,
 // and revisioned with the doc, but never merged (there is no host-config
-// counterpart — an absent section means every feature enabled).
+// counterpart — an absent section means every feature enabled). Review
+// (Forgejo #586) is the same kind of passenger again: the [review] section
+// carries the allow_self_approval knob (absent key means allowed — fresh
+// repos behave like GitHub), never merged (no host-config counterpart).
 type RepoSettings struct {
 	Description  string                    `toml:"description"`
 	Features     *RepoFeatures             `toml:"features"`
+	Review       *RepoReview               `toml:"review"`
 	Bundles      *Bundles                  `toml:"bundles"`
 	Maintenance  *Maintenance              `toml:"maintenance"`
 	Compaction   *Compaction               `toml:"compaction"`
@@ -144,6 +148,44 @@ func FeaturesOf(body []byte) ResolvedFeatures {
 	return rs.Features.Resolve()
 }
 
+// RepoReview is the [review] settings section (Forgejo #586): the
+// per-repo code-review policy knobs. Every key is a pointer so "unset"
+// stays distinct from "explicitly false": a plain bool would read an
+// absent key as false and strand every pre-#586 repo with self-approval
+// off (the #522 pointer discipline — an absent section means the
+// GitHub-like default, allowed).
+type RepoReview struct {
+	AllowSelfApproval *bool `toml:"allow_self_approval"`
+}
+
+// Allowed resolves the effective flag: nil section or nil key
+// means allowed (fresh repos behave like GitHub — the author may
+// APPROVE/CHANGES_REQUESTED their own pull request; the required-reviews
+// merge gate still never counts a self-approval toward min_approvals).
+func (r *RepoReview) Allowed() bool {
+	if r == nil || r.AllowSelfApproval == nil {
+		return true
+	}
+	return *r.AllowSelfApproval
+}
+
+// AllowSelfApprovalOf extracts the effective self-approval flag from a
+// stored settings TOML body, returning allowed (true) for empty bodies
+// and for bodies that no longer parse (the FeaturesOf fail-open
+// precedent: an unparseable body can never be published — publish
+// validates — so a read path must never fail on it; it renders the
+// default, exactly like DescriptionOf renders "").
+func AllowSelfApprovalOf(body []byte) bool {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return true
+	}
+	rs, err := ParseRepoSettings(body)
+	if err != nil {
+		return true
+	}
+	return rs.Review.Allowed()
+}
+
 // hostOnlyRepoSettings sections produce a clearer error than "unknown".
 var hostOnlyRepoSettings = map[string]bool{
 	"server": true,
@@ -154,9 +196,9 @@ var hostOnlyRepoSettings = map[string]bool{
 }
 
 // ParseRepoSettings validates and decodes a settings payload (§4.2): size
-// budget, allowed sections only ([features] [bundles] [maintenance]
-// [compaction] [upstream], plus the top-level description key and
-// [integrations] stored verbatim), and host-only keys
+// budget, allowed sections only ([features] [review] [bundles]
+// [maintenance] [compaction] [upstream], plus the top-level description
+// key and [integrations] stored verbatim), and host-only keys
 func ParseRepoSettings(payload []byte) (*RepoSettings, error) {
 	if len(payload) > MaxRepoSettingsBytes {
 		return nil, fmt.Errorf("repo settings payload is %d bytes; limit is %d", len(payload), MaxRepoSettingsBytes)
@@ -214,8 +256,9 @@ func DescriptionOf(body []byte) string {
 
 // Merge ("with_settings"): pointer-set fields override base; unset sections
 // inherit. upstream.token_env never comes from settings — the base value is
-// preserved. Description and Features never merge: they are display/behavior
-// metadata, not config (there is no host-config counterpart).
+// preserved. Description, Features, and Review never merge: they are
+// display/behavior metadata, not config (there is no host-config
+// counterpart).
 func (r *RepoSettings) Merge(base *Config) (*Config, error) {
 	c := *base
 	if r.Bundles != nil {

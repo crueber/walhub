@@ -132,16 +132,49 @@ type CommitAuthors interface {
 	HeadAuthors(ctx context.Context, owner, repo string, num, n int) ([]string, error)
 }
 
+// ReviewSettings is the per-repo review-policy projection SubmitReview
+// consults (Forgejo #586). Only the knobs review enforces live here —
+// the required-reviews merge gate needs none of them (it never counts a
+// self-approval toward min_approvals, unconditionally).
+type ReviewSettings struct {
+	// AllowSelfApproval gates author APPROVED/CHANGES_REQUESTED on
+	// their own pull request (COMMENTED is always allowed). Rides the
+	// WAL-published repo settings TOML ([review] allow_self_approval);
+	// default ON so fresh repos behave like GitHub.
+	AllowSelfApproval bool
+}
+
+// DefaultReviewSettings is the zero-migration default: self-approval
+// allowed (an absent [review] section — every pre-#586 repo — resolves
+// here with no migration).
+func DefaultReviewSettings() ReviewSettings { return ReviewSettings{AllowSelfApproval: true} }
+
+// SettingsResolver reports the per-repo review policy for SubmitReview's
+// self-approval check (narrow seam, same shape as CommitAuthors:
+// satisfied in composition by a WAL-manifest-backed closure over the
+// settings TOML; tests substitute a stub). Nil means the default policy
+// (self-approval allowed). Errors fail the submit closed (503) — a
+// resolver that cannot answer must not silently allow or deny.
+type SettingsResolver func(ctx context.Context, owner, repo string) (ReviewSettings, error)
+
 // Service is the review store client: immutable review events, CAS'd
 // thread headers + comment events, the CAS'd review-requests index, the
 // review_summary render cache, review-suggest, and the merge-time gate.
 // Construct with New; Roles/Authors/Expander may be nil in tests that
-// exercise pure paths (nil Roles falls back to principal flags).
+// exercise pure paths (nil Roles falls back to principal flags); nil
+// Settings means the default review policy (self-approval allowed).
 type Service struct {
 	Store    store.ObjectStore
 	Roles    RoleService
 	Authors  CommitAuthors
 	Expander GroupExpander
+	// Settings resolves the per-repo review policy (Forgejo #586):
+	// SubmitReview's self-approval check consults it. Nil means the
+	// default (allowed) — composition wires the WAL-manifest-backed
+	// resolver; the setting is read per submit (control-plane-sized,
+	// off the push/sync hot-path budgets — the same cost class as the
+	// gate's policy.json read), never cached across calls.
+	Settings SettingsResolver
 	Now      func() time.Time
 
 	// GateTimeout bounds the merge-time gate's authoritative event scan
@@ -169,6 +202,16 @@ func (s *Service) nowUTC() time.Time {
 	return s.Now().UTC()
 }
 
+// reviewPolicy resolves the per-repo review policy for a submit: the
+// Settings seam's answer, or the default (allowed) when unwired. A
+// resolver error fails closed (ErrUnavailable → 503 + Retry-After).
+func (s *Service) reviewPolicy(ctx context.Context, owner, repo string) (ReviewSettings, error) {
+	if s.Settings == nil {
+		return DefaultReviewSettings(), nil
+	}
+	return s.Settings(ctx, owner, repo)
+}
+
 // gateTimeout resolves the gate scan deadline.
 func (s *Service) gateTimeout() time.Duration {
 	if s.GateTimeout > 0 {
@@ -187,8 +230,9 @@ func ThreadKey(owner, repo string, num int) string {
 }
 
 // PRKey returns repos/<o>/<r>/pulls/<num:06x>/pr.json (the §2.1 sidecar 03
-// owns; review reads Head.SHA/Author for the commit_sha pin and the
-// self-approve check — never writes).
+// owns; review reads Head.SHA for the commit_sha pin and Author for the
+// conditional self-approval check + the gate's self-approval exclusion —
+// never writes).
 func PRKey(owner, repo string, num int) string {
 	return fmt.Sprintf("repos/%s/%s/pulls/%06x/pr.json", owner, repo, num)
 }

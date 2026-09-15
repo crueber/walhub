@@ -67,7 +67,7 @@ func TestHTTPReviews(t *testing.T) {
 	for _, lane := range []string{"api", "api-browser"} {
 		base := "/o/r/" + lane + "/pulls/7"
 		t.Run("lane "+lane, func(t *testing.T) {
-			h, _ := testHandler(t)
+			h, svc := testHandler(t)
 			// GET empty list → 200 {reviews:[],more:false}.
 			w := doReq(h, "GET", base+"/reviews", "carol", "")
 			if w.Code != 200 {
@@ -98,17 +98,30 @@ func TestHTTPReviews(t *testing.T) {
 			if w.Code != 404 {
 				t.Fatalf("unknown: %d", w.Code)
 			}
-			// Self-approve → 422; stale sha → 409.
+			// Self-approval rides the per-repo knob (Forgejo #586): the
+			// default (seam unwired) allows the author's submit — 201 —
+			// and the historical 422 stands only with the knob off.
+			w = doReq(h, "POST", base+"/reviews", "alice", submit)
+			if w.Code != 201 {
+				t.Fatalf("self default-on: %d", w.Code)
+			}
+			svc.Settings = func(_ context.Context, _, _ string) (ReviewSettings, error) {
+				return ReviewSettings{AllowSelfApproval: false}, nil
+			}
 			w = doReq(h, "POST", base+"/reviews", "alice", submit)
 			if w.Code != 422 {
-				t.Fatalf("self: %d", w.Code)
+				t.Fatalf("self knob-off: %d", w.Code)
 			}
+			svc.Settings = nil
 			w = doReq(h, "POST", base+"/reviews", "dave",
 				`{"state":"APPROVED","commit_sha":"`+testHead2+`"}`)
 			if w.Code != 409 || !strings.Contains(w.Body.String(), "reviewed commit is not the pull request head") {
 				t.Fatalf("stale: %d %s", w.Code, w.Body.String())
 			}
-			// Dismiss → 200 (maintain); non-maintain → 403.
+			// Dismiss → 200 (maintain); non-maintain → 403. Two
+			// approvals survive now (bob's seq 1 + alice's seq 2
+			// self-approval, #586 default-on) — both are dismissed so
+			// the summary returns to REVIEW_REQUIRED.
 			w = doReq(h, "POST", base+"/reviews/1/dismiss", "carol", `{"reason":"x"}`)
 			if w.Code != 403 {
 				t.Fatalf("dismiss non-maintain: %d", w.Code)
@@ -116,6 +129,10 @@ func TestHTTPReviews(t *testing.T) {
 			w = doReq(h, "POST", base+"/reviews/1/dismiss", "bob", `{"reason":"stale"}`)
 			if w.Code != 200 {
 				t.Fatalf("dismiss: %d %s", w.Code, w.Body.String())
+			}
+			w = doReq(h, "POST", base+"/reviews/2/dismiss", "bob", `{"reason":"self-approval withdrawn"}`)
+			if w.Code != 200 {
+				t.Fatalf("dismiss self: %d %s", w.Code, w.Body.String())
 			}
 			if mustJSON(t, w)["summary"].(map[string]any)["decision"] != "REVIEW_REQUIRED" {
 				t.Fatalf("dismissed summary wrong")

@@ -105,10 +105,10 @@ func TestSubmitReview(t *testing.T) {
 				func(e error) bool { return statusFor(e) == 400 }},
 			{"stale sha 409", testPrincipal("bob"), submitAs(nil, "bob", StateApproved, testHead2),
 				func(e error) bool { return statusFor(e) == 409 }},
-			{"author approve 422", testPrincipal("alice"), submitAs(nil, "alice", StateApproved, testHead),
-				func(e error) bool { return statusFor(e) == 422 }},
-			{"author request-changes 422", testPrincipal("alice"), submitAs(nil, "alice", StateChangesRequested, testHead),
-				func(e error) bool { return statusFor(e) == 422 }},
+			// Forgejo #586: author self-approval is allowed by default (nil
+			// seam) — the allowed/denied matrix lives in
+			// selfapprove586_test.go; the 422 survives only with the knob
+			// off, so no rejection row remains here.
 			{"unknown PR 404", testPrincipal("bob"), submitAs(nil, "bob", StateApproved, testHead),
 				func(e error) bool { return statusFor(e) == 404 }},
 		} {
