@@ -230,7 +230,11 @@ test("PullFiles.jsx shares the same renderer with a unified/split toggle", () =>
   const fs = require("node:fs");
   const src = fs.readFileSync(new URL("../../src/pages/PullFiles.jsx", import.meta.url), "utf8");
   assert.match(src, /from "\.\.\/components\/DiffTable\.jsx"/, "imports the shared renderer");
-  assert.match(src, /<DiffBody file=\{[^}]*\} mode=\{getMode\(\)\} \/>/, "renders DiffBody with a mode toggle");
+  // Forgejo #546: DiffBody also takes the comment affordance props
+  // (canComment + onCommentSelect) — the mode toggle still drives it.
+  assert.match(src, /<DiffBody/, "renders DiffBody");
+  assert.match(src, /mode=\{getMode\(\)\}/, "mode toggle drives DiffBody");
+  assert.match(src, /onCommentSelect/, "wires the #546 comment affordance");
 });
 
 test("DiffTable.jsx carries gutters, drag handlers, hash sync, and highlight", () => {
