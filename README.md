@@ -4,6 +4,8 @@ A git host in Go: **git over smart HTTP (v0/v2), LFS, bundle-uri, a JSON API wit
 
 It serves repositories whose entire state — refs, packs, config, policy, events, web UI — lives as objects in a bucket (filesystem, S3, or GCS). Instances are disposable; wipe one and you lose nothing but warmth.
 
+> No politics allowed — see our [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Inspired by walgit
 
 walhub exists because of **Tobi Lütke's fantastic [walgit](https://github.com/tobi/walgit)**. It proved that a git host can put everything on an object store, and it is the direct inspiration for this project. Thank you, Tobi.
