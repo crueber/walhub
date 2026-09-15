@@ -636,7 +636,7 @@ function DiffFile(props) {
                       </For>
                     </Show>
                     <For each={threadsAt(hi(), ri())}>
-                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
+                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} />}
                     </For>
                   </div>
                 )}
@@ -665,7 +665,7 @@ function DiffFile(props) {
         </For>
       </Show>
       <For each={placement().unplaced}>
-        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
+        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} />}
       </For>
     </div>
   );
@@ -718,7 +718,11 @@ function StagedCard(props) {
 /** One thread card: comments, resolve toggle, outdated collapse. The card
  *  carries id `thread-<tid>` so the jump-to-comments index can scroll to
  *  it; a flashed (just-jumped-to) card draws an emerald outline and
- *  expands, so the target reads in both themes. */
+ *  expands, so the target reads in both themes. Forgejo #573: the
+ *  collapse/expand toggle clears the page-level flash for this tid first
+ *  (the shared clearFlash(tid) lifecycle — the same mechanics #575's
+ *  collapse-click case reuses), so open() and the outline return to
+ *  tracking getOpen() and collapse never looks dead. */
 function ThreadCard(props) {
   const t = () => props.thread;
   const [getBody, setBody] = createSignal("");
@@ -769,7 +773,7 @@ function ThreadCard(props) {
             {t().resolved ? "unresolve" : "resolve"}
           </button>
         </Show>
-        <button type="button" class="link" onClick={() => setOpen(!getOpen())}>
+        <button type="button" class="link" onClick={() => { props.onCollapse?.(t().tid); setOpen(!getOpen()); }}>
           {getOpen() ? "collapse" : "expand"}
         </button>
       </div>
@@ -1036,6 +1040,18 @@ export default function Pull() {
     setFlashTid(tid);
     document.getElementById(`thread-${tid}`)?.scrollIntoView({ block: "center" });
   };
+  // Shared flash lifecycle (Forgejo #573, reused by #575): jump sets the
+  // flash tid (force-revealing the card); the card's collapse/expand toggle
+  // clears it back via this targeted clear — collapsing a jumped-to card
+  // returns open() and the outline to tracking getOpen(). Targeted
+  // (cur === tid ? null : cur) so collapsing an unflashed card never steals
+  // another card's flash. Set paths (jumpToThread/jumpToStaged) unchanged;
+  // resolve/unresolve + collab-stream thread frames deliberately do NOT
+  // clear (minimal bar is collapse — a resolve-triggered reload keeps the
+  // highlight on the acted card). StagedCard has no collapse control, so it
+  // takes no clear wiring — the same clearFlash pattern applies when one
+  // lands.
+  const clearFlashTid = (tid) => setFlashTid((cur) => (cur === tid ? null : cur));
   const jumpToStaged = (i) => {
     setFlashStaged(i);
     document.getElementById(`staged-${i}`)?.scrollIntoView({ block: "center" });
@@ -1292,6 +1308,7 @@ export default function Pull() {
                       canComment={canComment()}
                       mdCtx={mdCtx}
                       flashTid={getFlashTid}
+                      onCollapse={clearFlashTid}
                     />
                   </div>
                 )}
