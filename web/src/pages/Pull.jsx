@@ -32,6 +32,7 @@ import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
 import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewVerdictLabel, mergeabilityDisplay } from "../lib/pull-state.js";
+import { chronological } from "../lib/thread-order.js";
 import { renderBody } from "../lib/render-md.js";
 
 /** PR description block (Forgejo #521, the issue-page first-comment
@@ -934,13 +935,22 @@ function ThreadIndex(props) {
   );
 }
 
-/** Lazily loaded comments for one thread card. */
+/** Lazily loaded comments for one thread card (Forgejo #597): the wire
+ *  GET …/pulls/{num}/threads/{tid} returns comments newest-first by spec
+ *  design (internal/review/threads.go GetThread, 02 §7 Decisions — MUST
+ *  NOT CHANGE), but the card reads oldest-first (chronological), matching
+ *  the #225 issue-timeline convention, so the newest reply sits directly
+ *  above the reply textbox. The render goes through the shared
+ *  chronological() helper (web/src/lib/thread-order.js) — NO inline sort
+ *  re-implementation. Windowing caveat: with more:true the window is the
+ *  newest n; reversing is correct within the window; any future older-pager
+ *  must use appendOlderWindow + chronological assembly. */
 function ThreadComments(props) {
   const key = () => `thread:${props.num}:${props.tid}`;
   const [getView] = useData(key, () => props.client.pulls.threads.get(props.num, props.tid));
   return (
     <ul class="space-y-1">
-      <For each={getView()?.comments ?? []} fallback={<li class="text-xs text-zinc-500 dark:text-zinc-400">loading…</li>}>
+      <For each={chronological(getView()?.comments)} fallback={<li class="text-xs text-zinc-500 dark:text-zinc-400">loading…</li>}>
         {(c) => (
           <li class="text-xs">
             <span class="font-semibold">{c.by}</span> <span class="text-zinc-500 dark:text-zinc-400"><DateTime value={c.at} /></span>
