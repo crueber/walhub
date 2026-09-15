@@ -1,12 +1,13 @@
 // web/test/unit/mergeability-display-588.test.js — Forgejo #588:
-// MergeBox + the PR sidebar rendered raw machine/wire words (draft,
-// blocked, mergeable, "mergeable (behind)", "conflicts: …") with no
-// color. Display-only fix: one shared mergeabilityDisplay(state, detail)
-// in web/src/lib/pull-state.js maps every mergeState() return AND every
-// mergeable.state wire value to a human phrase + tone (green = Able,
-// soft red = blocked states, muted zinc = pending/terminal), applied at
-// both sites (MergeBox state line + sidebar mergeability value). Wire
-// and internal values stay byte-identical — mergeState returns,
+// The PR sidebar rendered raw wire words ("mergeable (behind)",
+// "conflicts: …") with no color. Display-only fix: one shared
+// mergeabilityDisplay(state, detail) in web/src/lib/pull-state.js maps
+// every mergeState() return AND every mergeable.state wire value to a
+// human phrase + tone (green = Able, soft red = blocked states, muted
+// zinc = pending/terminal), applied at the sidebar mergeability value.
+// Forgejo #592 removed the second call site (the MergeBox state line)
+// so the sidebar is the ONE headline — the helper itself is unchanged.
+// Wire and internal values stay byte-identical — mergeState returns,
 // mergeable.state comparisons, merge-button enable logic untouched.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -175,13 +176,20 @@ test("exactly one display mapping lives in pull-state.js", () => {
   assert.equal(defs.length, 1, "exactly one mapping definition");
 });
 
-test("MergeBox state line renders the helper phrase + tone (green/soft-red headless DOM pins)", () => {
-  assert.ok(MERGEBOX.includes('import { mergeabilityDisplay } from "../lib/pull-state.js"'), "helper imported");
-  assert.ok(MERGEBOX.includes("mergeabilityDisplay(state(),"), "state line maps the machine state");
-  assert.ok(!MERGEBOX.includes("<p class=\"text-sm\">{state()}</p>"), "raw machine word no longer renders");
-  assert.ok(MERGEBOX.includes("${disp().cls}") && MERGEBOX.includes("{disp().text}"), "phrase + tone classes render");
-  assert.ok(MERGEBOX.includes("{disp().sub}"), "behind sub-line renders as secondary detail");
-  // Headless DOM assertion: green renders emerald, blocked renders soft red.
+test("MergeBox renders NO status headline (Forgejo #592 — the #588 state line is gone)", () => {
+  // #592 deleted the disp() memo + its <p> headline: the phrase must not
+  // render twice. The helper import goes with it (sidebar owns the one
+  // call site); the amber reasons line, tooltip, mergeState, and the
+  // enabled() gate stay (pinned in the wire-intact test below).
+  assert.ok(!MERGEBOX.includes("from \"../lib/pull-state.js\""), "helper import gone with the memo");
+  assert.ok(!MERGEBOX.includes("mergeabilityDisplay("), "MergeBox no longer calls the helper");
+  assert.ok(!MERGEBOX.includes("disp()"), "the disp() memo is gone, not forked");
+  assert.ok(!MERGEBOX.includes("{disp().text}"), "no headline phrase renders in the MergeBox");
+  assert.ok(!MERGEBOX.includes("{disp().sub}"), "no behind sub-line renders in the MergeBox");
+  assert.ok(!MERGEBOX.includes("zeroChecks"), "the zeroChecks prop is gone with the memo");
+  assert.ok(!PULL.includes("zeroChecks={zeroChecks}"), "the call-site arg is gone with the prop");
+  // Headless DOM assertion: the sidebar still maps every tone through
+  // the shared helper (green renders emerald, blocked soft red).
   assert.equal(mergeabilityDisplay("mergeable", {}).cls, GREEN);
   assert.equal(mergeabilityDisplay("blocked", { checksBlockers: ["ci"] }).cls, RED);
 });

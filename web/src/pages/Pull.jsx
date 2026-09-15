@@ -56,11 +56,13 @@ function PRDescription(props) {
   );
 }
 
-/** Sidebar mergeability value (Forgejo #588): the mergeable.state wire
+/** Sidebar mergeability value (Forgejo #588, #592): the mergeable.state wire
  *  value renders through the ONE shared mergeabilityDisplay mapping
  *  (phrase + tone), with the page's checks/review/draft context passed
- *  through so the headline agrees with the MergeBox machine line below.
- *  The wire contract stays byte-identical — only rendered text changes. */
+ *  through. Since #592 this sidebar section is the ONLY status headline —
+ *  the MergeBox below renders strategy, buttons, and blocking reasons,
+ *  never a second headline. The wire contract stays byte-identical —
+ *  only rendered text changes. */
 function mergeabilityView(m, extra = {}) {
   return mergeabilityDisplay(m?.state, { mergeable: m, ...extra });
 }
@@ -1446,7 +1448,6 @@ export default function Pull() {
                 mergeable={mergeable()}
                 checksBlockers={checksBlockers}
                 reviewDecision={() => summary()?.decision}
-                zeroChecks={zeroChecks}
                 role={role}
                 canUpdate={canUpdateBranch}
                 onSettled={() => reload()}
