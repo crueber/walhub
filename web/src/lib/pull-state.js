@@ -211,6 +211,33 @@ export function mergeabilityDisplay(state, detail = {}) {
 }
 
 /**
+ * requiredReviewsApplies(policy, baseRef) → bool: the Forgejo #612 client
+ * mirror of the required-reviews rule-presence question (does ANY
+ * `required-reviews` effect rule select the PR's base ref?). Same list walk
+ * as Pull.jsx's requiredChecks(): a rule counts when its effect carries a
+ * `required-reviews` key and its match.refs is empty (applies to all refs)
+ * or exact-includes the base ref. Missing/null policy reads false (no
+ * policy ⇒ no rules ⇒ the server gate passes).
+ *
+ * Deliberate simplification (noted in 12_web_ui.md): rule PRESENCE drives
+ * the gate — min_approvals counts, dismiss_stale freshness, and bypass
+ * lists are NOT evaluated client-side (the server merge task stays
+ * authoritative and refuses when its exact gate fails). Ref matching is
+ * exact client-side while the server uses its glob match law — same
+ * advisory gap the required-checks list already carries.
+ */
+export function requiredReviewsApplies(policy, baseRef) {
+  const rules = policy?.rules ?? [];
+  for (const r of rules) {
+    if (r?.effect?.["required-reviews"] == null) continue;
+    const refs = r?.match?.refs ?? [];
+    if (refs.length && !refs.includes(baseRef ?? "")) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
  * pullCommentLock(thread, pr) → {locked, reason}: the Forgejo #594 client
  * mirror of the server threadLocked gate (internal/pulls + internal/review
  * service.go). Merged wins (merge stamps StateClosed too, so thread.state

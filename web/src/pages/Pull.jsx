@@ -31,7 +31,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewRequestsEditable, reviewVerdictLabel, mergeabilityDisplay, isTerminalPull, terminalMergeDetail } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewRequestsEditable, reviewVerdictLabel, mergeabilityDisplay, requiredReviewsApplies, isTerminalPull, terminalMergeDetail } from "../lib/pull-state.js";
 import { chronological } from "../lib/thread-order.js";
 import { renderBody } from "../lib/render-md.js";
 
@@ -1201,6 +1201,16 @@ export default function Pull() {
     return [...out].sort();
   };
   const checksBlockers = () => requiredCheckBlockers(requiredChecks(), getCombined()?.statuses);
+  // Reviews gate (Forgejo #612): CHANGES_REQUESTED blocks the merge box
+  // ONLY when a required-reviews rule selects the PR base — the same
+  // policy list the requiredChecks() walk above reads (any rule whose
+  // effect carries `required-reviews` with match.refs empty or
+  // exact-including the base). No rule ⇒ the #588 "Changes requested"
+  // headline stays as information but the merge button enables (the
+  // server merges it — GitHub-like, no rule → no block). The sidebar
+  // headline keeps the raw reviewDecision (informational either way);
+  // only the MergeBox gate takes this signal.
+  const requiresReviews = () => requiredReviewsApplies(getPolicy(), pr()?.base?.ref ?? "");
   // Zero-contexts empty state (Forgejo #518): the combined view's wire
   // state reads pending when nothing reported, so the card keys off the
   // statuses array it already fetches — never the state string.
@@ -1557,6 +1567,7 @@ export default function Pull() {
                 mergeable={mergeable()}
                 checksBlockers={checksBlockers}
                 reviewDecision={() => summary()?.decision}
+                requiresReviews={requiresReviews}
                 role={role}
                 canUpdate={canUpdateBranch}
                 onSettled={() => reload()}
