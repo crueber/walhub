@@ -812,7 +812,7 @@ function ThreadIndex(props) {
     <Show when={(props.threads ?? []).length > 0 || (props.pending ?? []).length > 0}>
       <nav class="card mb-4 p-3" aria-label="Comments index">
         <h2 class="card-header">
-          Comments ({(props.threads ?? []).length}{(props.pending ?? []).length > 0 ? ` + ${(props.pending ?? []).length} staged` : ""})
+          Comments
         </h2>
         <ul class="flex flex-wrap gap-1.5">
           <For each={entries()}>

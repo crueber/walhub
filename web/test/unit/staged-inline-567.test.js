@@ -198,11 +198,11 @@ test("ThreadIndex lists staged entries marked staged, linked to the inline card"
   assert.match(s, /const jumpToStaged = \(i\) => \{\s*setFlashStaged\(i\);\s*document\.getElementById\(`staged-\$\{i\}`\)\?\.scrollIntoView\(\{ block: "center" \}\);/, "jump scrolls to staged-<i> and flashes it (the jumpToThread idiom)");
 });
 
-test("index panel opens for staged-only reviews and counts them", () => {
+test("index panel opens for staged-only reviews without counting them (#572)", () => {
   const s = PULL();
   const index = s.slice(s.indexOf("function ThreadIndex(props)"), s.indexOf("function ThreadComments(props)"));
   assert.ok(index.includes("<Show when={(props.threads ?? []).length > 0 || (props.pending ?? []).length > 0}>"), "staged-only reviews still get the panel");
-  assert.ok(index.includes("+ ${(props.pending ?? []).length} staged"), "header counts staged alongside posted");
+  assert.ok(!index.includes("+ ${(props.pending ?? []).length} staged"), "no staged count in the heading (#572)");
   assert.ok(s.includes("pending={getPending()} onJumpStaged={jumpToStaged}"), "page wires pending + jump into the index");
 });
 
