@@ -94,7 +94,8 @@ test("merge section composes MergeBox with every gate prop intact", () => {
   for (const p of ["checksBlockers={checksBlockers}", "reviewDecision={() => summary()?.decision}", "role={role}", "canUpdate={canUpdateBranch}"]) {
     assert.ok(aside.includes(p), `MergeBox keeps ${p}`);
   }
-  assert.ok(MERGEBOX.includes("{disp().text}"), "display phrase still renders as a value line (#588)");
+  assert.ok(MERGEBOX.includes("blocking merge: {blockers().join"), "amber blocking reasons stay in the box (#592)");
+  assert.ok(!MERGEBOX.includes("{disp().text}"), "no second status headline in the box — the sidebar owns it (#592)");
   assert.ok(MERGEBOX.includes("merge pull request"), "merge affordance kept");
 });
 

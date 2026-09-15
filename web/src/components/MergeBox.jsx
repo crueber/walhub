@@ -2,8 +2,11 @@
 //
 // Forgejo #531: the box renders as a VALUE inside the PR sidebar's one
 // divide-y panel (the Issue.jsx:549 idiom) — no .card wrappers, no
-// card-header heading; the parent section owns the "Merge" micro-label
-// and the machine state renders as a value line below it.
+// card-header heading; the parent section owns the "Merge" micro-label.
+// Forgejo #592: the mergeability headline lives ONLY in the sidebar
+// Mergeability section (the ONE mergeabilityDisplay call site) — the box
+// renders strategy, buttons, and the amber blocking-reasons line, never
+// a second status headline.
 //
 // The PR merge control as an explicit state machine (per 03/04/05):
 // draft → ready → blocked{checks, reviews, conflicts} → mergeable →
@@ -25,7 +28,6 @@
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import { reportError } from "../lib/data.js";
 import { roleAtLeast } from "./perms.jsx";
-import { mergeabilityDisplay } from "../lib/pull-state.js";
 
 /**
  * Derive the machine state from object state + local task state.
@@ -75,16 +77,6 @@ export default function MergeBox(props) {
     return out;
   };
   const enabled = () => state() === "mergeable" && canMerge() && !getMerging();
-  // Forgejo #588: the machine state renders through the ONE shared
-  // mergeabilityDisplay mapping (phrase + tone); the disabled tooltip
-  // below deliberately keeps machine wording (debuggable, hover-only).
-  const disp = () =>
-    mergeabilityDisplay(state(), {
-      mergeable: props.mergeable,
-      checksBlockers: props.checksBlockers?.(),
-      reviewDecision: props.reviewDecision?.(),
-      zeroChecks: typeof props.zeroChecks === "function" ? props.zeroChecks() : (props.zeroChecks ?? false),
-    });
   const tooltip = () => {
     if (!canMerge()) return "merging requires the maintain role";
     const b = blockers();
@@ -172,10 +164,6 @@ export default function MergeBox(props) {
       </Show>
       <Show when={!props.pr?.merged}>
         <form onSubmit={merge} aria-label="Merge">
-          <p class={`text-sm ${disp().cls}`}>{disp().text}</p>
-          <Show when={disp().sub}>
-            <p class="text-xs text-zinc-500 dark:text-zinc-400">{disp().sub}</p>
-          </Show>
           <label class="grid gap-1 mt-2">
             <span class="text-sm font-medium">Strategy</span>
             <select class="input w-full" value={getStrategy()} onInput={(e) => setStrategy(e.target.value)} disabled={getMerging()}>
