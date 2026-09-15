@@ -49,9 +49,10 @@ test("self-approval save rides the existing General-tab path", () => {
   // visibility-save discipline — the form never shows an unsaved value).
   assert.ok(general.includes("setSelfNote(String(e.message ?? e))"), "failures surface in the note (403 = not admin)");
   assert.ok(general.includes("props.repo.settings.get()"), "failures reseed the toggle from server truth");
-  // The null sentinel keeps user edits unclobbered (the
-  // description-prefill pattern); the form flags unsaved changes.
-  assert.ok(general.includes("getSelf() === null"), "the null sentinel keeps user edits unclobbered");
+  // The undefined sentinel keeps user edits unclobbered (the
+  // description-prefill pattern, with null reserved for
+  // seeded-but-unset — Forgejo #605); the form flags unsaved changes.
+  assert.ok(general.includes("getSelf() === undefined"), "the undefined sentinel keeps user edits unclobbered");
   assert.ok(general.includes("selfDirty()"), "the form flags unsaved changes");
   // Invalidations: the editors read the shared settings entries (the
   // summary projects no review knob, so no summary-ETag work).
