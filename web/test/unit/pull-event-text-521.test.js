@@ -140,7 +140,11 @@ test("conversation cards keep the one card-header treatment (sidebar moved on)",
 
 test("chip-merged ships in ui.css (light + dark); conversation badge uses it", () => {
   assert.match(CSS, /\.chip-merged \{ @apply[^;]*bg-purple-100 text-purple-800 dark:bg-purple-900\/60 dark:text-purple-300/);
-  assert.match(PULL, /\$\{badge\(\)\.cls\}/);
+  // Forgejo #613: the badge shares its header row with the draft toggle,
+  // so the class moved from the `${badge().cls} mt-1 shrink-0` template
+  // onto the bare helper expression — still the single badge surface
+  // (the count pin above holds), still carrying chip-merged.
+  assert.match(PULL, /<span class=\{badge\(\)\.cls\}>\{badge\(\)\.text\}<\/span>/);
 });
 
 test("pulls list renders the merged chip from PROut.merged (Forgejo #530)", () => {

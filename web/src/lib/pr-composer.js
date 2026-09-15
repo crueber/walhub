@@ -40,13 +40,15 @@ export function roleAtLeast(role, want) {
 const clean = (s) => String(s ?? "").trim();
 
 /**
- * buildOpenCall({fromRepo, fromRef, toRepo, toRef, title, body}) →
+ * buildOpenCall({fromRepo, fromRef, toRepo, toRef, title, body, draft}) →
  * {baseRepo, payload, cross}: the SDK `pulls.open` call. baseRepo names
  * the client to open through (`repos.repo(baseRepo)`); payload keeps the
  * frozen wire keys; `fork` is set exactly when the From repo differs from
- * the To repo. `cross` mirrors that decision for the caller.
+ * the To repo. `draft` rides only when true (omitted = ready — an old
+ * server rejects the unknown key, so a plain open stays byte-identical).
+ * `cross` mirrors that decision for the caller.
  */
-export function buildOpenCall({ fromRepo, fromRef, toRepo, toRef, title, body }) {
+export function buildOpenCall({ fromRepo, fromRef, toRepo, toRef, title, body, draft }) {
   const fr = clean(fromRepo);
   const tr = clean(toRepo);
   const cross = fr !== "" && tr !== "" && fr !== tr;
@@ -57,6 +59,7 @@ export function buildOpenCall({ fromRepo, fromRef, toRepo, toRef, title, body })
   };
   const b = clean(body);
   if (b) payload.body = b;
+  if (draft) payload.draft = true;
   if (cross) payload.fork = { repo: fr };
   return { baseRepo: tr, payload, cross };
 }

@@ -107,6 +107,10 @@ func (s *Service) runMerge(ctx context.Context, owner, repo string, num int, act
 	if th.State == StateClosed {
 		return nil, fmt.Errorf("%w: pull request #%d is closed", ErrConflict, num)
 	}
+	if pr.Draft {
+		rec.notice("refusing: pull request #%d is a draft", num)
+		return nil, fmt.Errorf("%w: pull request #%d is a draft", ErrConflict, num)
+	}
 	baseDir, err := s.Dirs.Dir(ctx, pr.Base.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("%w: base repo unavailable: %v", ErrUnavailable, err)

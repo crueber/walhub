@@ -116,6 +116,10 @@
  *   approvals: number, requested: string[], threads_total: number,
  *   threads_unresolved: number}} ReviewSummary
  *
+ * @typedef {{num: number, title: string, state: "open"|"closed", author: string,
+ *   base_ref: string, head_ref: string, head_sha: string, draft: boolean,
+ *   merged: boolean, updated_at: string}} PullRow
+ *
  * @typedef {{role: "read"|"triage"|"write"|"maintain"|"admin"|null}} Permissions
  *
  * @typedef {{principal: string, role: "read"|"triage"|"write"|"maintain"|"admin",

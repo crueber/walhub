@@ -24,17 +24,22 @@ export function attachPulls(repo) {
     /** Paged PR cards: `GET …/pulls?state=&base=&head=&sort=&n=&after=` (index-first). */
     list: (query = {}, opts) =>
       client._call(p(`/pulls${qs(query)}`), { method: "GET", ...opts }),
-    /** Open: `POST …/pulls` → `201 {thread, pr}` (409 paired, 422 unresolvable). */
-    open: ({ title, base_ref, head_ref, body, fork } = {}, opts) =>
+    /** Open: `POST …/pulls` → `201 {thread, pr}` (409 paired, 422 unresolvable).
+     * draft (bool, optional): open as a draft — omitted reads false (ready),
+     * so plain opens stay byte-identical for old servers (unknown keys 400).
+     * Only true is ever sent by the UI composer. */
+    open: ({ title, base_ref, head_ref, body, fork, draft } = {}, opts) =>
       client._call(p("/pulls"), {
         method: "POST",
-        ...json({ title, base_ref, head_ref, body, fork }),
+        ...json({ title, base_ref, head_ref, body, fork, draft }),
         ...opts,
       }),
     /** Thread: `GET …/pulls/{num}` (header + pr.json + live mergeable; folded ETag, `private, no-cache` — issue #280). */
     get: (num, opts) =>
       client._call(p(`/pulls/${num}`), { method: "GET", ...opts }),
-    /** Edit: `PUT …/pulls/{num}` (title/body/state; unknown keys 400). */
+    /** Edit: `PUT …/pulls/{num}` (title/body/state/draft; unknown keys 400).
+     * draft flips ready↔draft (author or triage; 409 on merged). Fields pass
+     * through verbatim — set only what changes. */
     update: (num, fields = {}, opts) =>
       client._call(p(`/pulls/${num}`), { method: "PUT", ...json(fields), ...opts }),
     /** Comment: `POST …/pulls/{num}/comments` → `201 {event}`. */

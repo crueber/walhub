@@ -164,7 +164,7 @@ func (s *Service) savePR(ctx context.Context, owner, repo string, p *PRDoc, ver 
 
 // reapplyPR merges a stale writer's doc onto the fresh doc on a pr.json
 // CAS retry (§2.3 write discipline: disjoint owned field sets per writer —
-// UpdatePR owns Body, refreshHead owns Head.SHA/HeadForcePushedAt, the merge
+// UpdatePR owns Body + Draft, refreshHead owns Head.SHA/HeadForcePushedAt, the merge
 // task owns the outcome fields). The merge outcome is write-once/monotonic:
 // once the fresh doc records merged:true, no retry unsets it (or its
 // merged_at/merged_by/merge_commit_sha/merge_strategy). Symmetrically, a
@@ -300,13 +300,14 @@ func sortCardsByNum(cards []Card) {
 
 // --- open --------------------------------------------------------------------
 
-// OpenInput shapes POST …/pulls (§8): {title, base_ref, head_ref, body?, fork?}.
+// OpenInput shapes POST …/pulls (§8): {title, base_ref, head_ref, body?, fork?, draft?}.
 type OpenInput struct {
 	Title   string
 	BaseRef string
 	HeadRef string
 	Body    string
 	Fork    *ForkInfo // cross-fork head: fork repo holding head_ref
+	Draft   bool      // open as a draft (default false — ready for review)
 }
 
 // OpenPR opens a PR (§3): resolve + verify, allocate the number (shared
@@ -419,7 +420,7 @@ func (s *Service) OpenPR(ctx context.Context, owner, repo string, actor auth.Pri
 		Base:  Endpoint{Repo: baseRepo, Ref: in.BaseRef, SHA: baseSHA},
 		Head:  Endpoint{Repo: repoName(headOwner, headRepo), Ref: in.HeadRef, SHA: headSHA},
 		Body:  in.Body,
-		Draft: false, Version: 1,
+		Draft: in.Draft, Version: 1,
 	}
 	if !sameRepo {
 		pr.Fork = &ForkInfo{Repo: repoName(headOwner, headRepo)}
@@ -857,18 +858,22 @@ func threadLocked(th *Thread, pr *PRDoc) bool {
 
 // --- update + comment ---------------------------------------------------------
 
-// PRPatch carries the PUT fields (§8): title/body/state. Unknown keys are
+// PRPatch carries the PUT fields (§8): title/body/state/draft. Unknown keys are
 // rejected at the HTTP layer before this is built.
 type PRPatch struct {
 	Title *string
 	Body  *string
 	State *string
+	Draft *bool
 }
 
-// UpdatePR applies title/body/state edits (§8 PUT). Title/state append
-// events; body updates the pr.json description (additive optional field —
-// P3 events are never rewritten). Close/reopen append state events. Auth:
-// title/state/body — author or triage (triage may close others').
+// UpdatePR applies title/body/state/draft edits (§8 PUT). Title/state/draft
+// append events; body updates the pr.json description (additive optional field —
+// P3 events are never rewritten). Close/reopen append state events; draft
+// flips append draft_changed events. Auth: title/state/body/draft — author or
+// triage (triage may close others'). Draft is orthogonal to open/closed (a
+// closed-but-unmerged PR may flip either way); merged is terminal for draft
+// and state alike.
 func (s *Service) UpdatePR(ctx context.Context, owner, repo string, num int, actor auth.Principal, p PRPatch) (*Thread, *PRDoc, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, nil, err
@@ -935,6 +940,18 @@ func (s *Service) UpdatePR(ctx context.Context, owner, repo string, num int, act
 			return nil, nil, err
 		}
 	}
+	var draft *bool
+	if p.Draft != nil {
+		if !canMod {
+			return nil, nil, fmt.Errorf("%w: draft changes need author or triage", ErrForbidden)
+		}
+		if pr.Merged {
+			return nil, nil, fmt.Errorf("%w: pull request #%d is merged", ErrConflict, num)
+		}
+		if *p.Draft != pr.Draft {
+			draft = p.Draft
+		}
+	}
 	now := s.nowUTC().Format(dateTimeFmt)
 	if title != nil {
 		from := th.Title
@@ -975,15 +992,34 @@ func (s *Service) UpdatePR(ctx context.Context, owner, repo string, num int, act
 		s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: class, Actor: who, PullNum: num, Recipients: prParticipants(th, who)})
 		s.stream(ctx, StreamEvent{Name: "pull", Repo: repoName(owner, repo), Action: action, Num: num, Title: th.Title, State: th.State, Author: th.Author, BaseRef: pr.Base.Ref, HeadRef: pr.Head.Ref, HeadSHA: pr.Head.SHA})
 	}
-	if p.Body != nil {
-		// Owned-delta re-apply (§2.3): set the body on the fresh doc, so
-		// a concurrently-landed merge outcome (or head refresh) survives
-		// even when no CAS retry fires.
+	if p.Body != nil || draft != nil {
+		// Owned-delta re-apply (§2.3: UpdatePR owns body + draft): set the
+		// owned fields on the fresh doc, so a concurrently-landed merge
+		// outcome (or head refresh) survives even when no CAS retry fires.
 		if fresh, fver, ferr := s.loadPR(ctx, owner, repo, num); ferr == nil && fresh != nil {
 			pr, prVer = fresh, fver
 		}
-		if *p.Body != pr.Body {
+		if draft != nil {
+			// Merged is terminal for draft (mirrors the state flips): a
+			// merge landing between the two reads still refuses here.
+			// Body edits stay allowed on merged PRs, as before.
+			if pr.Merged {
+				return nil, nil, fmt.Errorf("%w: pull request #%d is merged", ErrConflict, num)
+			}
+			if *draft == pr.Draft {
+				draft = nil // a concurrent flip already reached the wanted state
+			}
+		}
+		changed := false
+		if p.Body != nil && *p.Body != pr.Body {
 			pr.Body = *p.Body
+			changed = true
+		}
+		if draft != nil {
+			pr.Draft = *draft
+			changed = true
+		}
+		if changed {
 			if serr := s.savePR(ctx, owner, repo, pr, prVer); serr != nil {
 				return nil, nil, serr
 			}
@@ -991,6 +1027,32 @@ func (s *Service) UpdatePR(ctx context.Context, owner, repo string, num int, act
 				pr = npr
 			}
 		}
+	}
+	if draft != nil {
+		// The pr.json flip above is the mutation (it precedes the event so
+		// a CAS shortfall fails with no phantom event); the draft_changed
+		// event below is the narration, mirroring the state flips.
+		from, to := "ready", "draft"
+		if !*draft {
+			from, to = "draft", "ready"
+		}
+		nt, _, aerr := s.appendEvent(ctx, owner, repo, num, func(t *Thread, seq int) (*Event, error) {
+			t.NextEventSeq = seq + 1
+			t.UpdatedAt = now
+			t.Participants = uniqSorted(append(t.Participants, who))
+			t.Version++
+			return &Event{Seq: seq, Type: EventDraftChanged, Actor: who, At: now, From: strPtr(from), To: strPtr(to)}, nil
+		})
+		if aerr != nil {
+			return nil, nil, aerr
+		}
+		th = nt
+		action, class := "converted_to_draft", "converted_to_draft"
+		if !*draft {
+			action, class = "ready_for_review", "ready_for_review"
+		}
+		s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: class, Actor: who, PullNum: num, Recipients: prParticipants(th, who)})
+		s.stream(ctx, StreamEvent{Name: "pull", Repo: repoName(owner, repo), Action: action, Num: num, Title: th.Title, State: th.State, Author: th.Author, BaseRef: pr.Base.Ref, HeadRef: pr.Head.Ref, HeadSHA: pr.Head.SHA})
 	}
 	s.updateIndex(ctx, owner, repo, prCardOf(th))
 	return th, pr, nil

@@ -268,6 +268,7 @@ export default function PullNew() {
   const [getTitleTouched, setTitleTouched] = createSignal(false);
   const [getBody, setBody] = createSignal("");
   const [getBodyTouched, setBodyTouched] = createSignal(false);
+  const [getDraft, setDraft] = createSignal(false);
   // From = head (changes come FROM here), To = base (changes go TO here).
   // `?base=`/`?head=` params keep their wire spellings for link compat.
   const [getFromRepo, setFromRepo] = createSignal(ctx.full);
@@ -444,6 +445,7 @@ export default function PullNew() {
         toRef: getToRef(),
         title: getTitle().trim(),
         body: getBody().trim() || undefined,
+        draft: getDraft(),
       });
       const res = await repos.repo(baseRepo).pulls.open(payload, { noPopupAuth: true });
       const num = res.thread?.num ?? res.pr?.num;
@@ -567,6 +569,24 @@ export default function PullNew() {
                 onKeyDown={onSubmitKeys(open, { isBusy: () => getBusy() })}
                 aria-label="body"
               />
+            </label>
+            {/* Forgejo #613: open-as-draft (the ReleaseNew checkbox idiom —
+                bordered label row, title + help; checkbox never carries a
+                text-field class). Rides buildOpenCall only when true, so a
+                plain open stays byte-identical for old servers. */}
+            <label class="flex cursor-pointer items-start gap-2 rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+              <input
+                type="checkbox"
+                class="mt-0.5"
+                checked={getDraft()}
+                onChange={(e) => setDraft(e.currentTarget.checked)}
+              />
+              <span>
+                <span class="block text-sm font-medium">Open as draft</span>
+                <span class="muted block text-xs">
+                  Drafts cannot merge until marked ready for review.
+                </span>
+              </span>
             </label>
             <Show when={getOpenError()}>
               <p class="err-line text-sm" role="alert">{getOpenError()}</p>

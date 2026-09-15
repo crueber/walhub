@@ -244,6 +244,7 @@ const (
 	EventCommented       = "commented"
 	EventTitleChanged    = "title_changed"
 	EventStateChanged    = "state_changed"
+	EventDraftChanged    = "draft_changed"
 	EventReferenced      = "referenced"
 	EventMerged          = "merged"
 	EventHeadForcePushed = "head_force_pushed"
