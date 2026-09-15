@@ -552,14 +552,18 @@ function ThreadCard(props) {
   );
 }
 
-/** Jump-to-comments index (Forgejo #546): one entry per anchored thread —
- *  path:line (or path:start-end for ranges) + resolved/outdated state —
- *  atop the conversation. Clicking scrolls to the inline ThreadCard and
- *  flashes it. Entries reflect the same placement truth the cards render:
- *  drifted/outdated anchors are marked and jump to their collapsed card
- *  at the file end (never to a line that no longer exists); threads whose
- *  file left the current diff render marked with no jump target. Order is
- *  unresolved-first, matching the inline cards. */
+/** Jump-to-comments index (Forgejo #546, padded Forgejo #557): one entry
+ *  per anchored thread — path:line (or path:start-end for ranges) +
+ *  resolved/outdated state — atop the conversation. Clicking scrolls to
+ *  the inline ThreadCard and flashes it. The panel composes the sibling
+ *  card padding (card p-3, the ReviewsList #554 / CommentComposer idiom)
+ *  so the pill entries sit inside the border instead of touching its
+ *  edges; the mb-4 conversation spacing stays. Entries reflect the same
+ *  placement truth the cards render: drifted/outdated anchors are marked
+ *  and jump to their collapsed card at the file end (never to a line
+ *  that no longer exists); threads whose file left the current diff
+ *  render marked with no jump target. Order is unresolved-first,
+ *  matching the inline cards. */
 function ThreadIndex(props) {
   const entries = () =>
     sortThreadsForIndex(props.threads ?? []).map((t) => {
@@ -570,7 +574,7 @@ function ThreadIndex(props) {
 
   return (
     <Show when={(props.threads ?? []).length > 0}>
-      <nav class="card mb-4" aria-label="Comments index">
+      <nav class="card mb-4 p-3" aria-label="Comments index">
         <h2 class="card-header">
           Comments ({(props.threads ?? []).length})
         </h2>
@@ -633,8 +637,12 @@ function ThreadComments(props) {
   );
 }
 
-/** Finish-review modal: pending staged line comments + top-level body +
- *  verdict, one POST reviews (threads open atomically with the review). */
+/** Finish-review modal (padded Forgejo #557): pending staged line
+ *  comments + top-level body + verdict, one POST reviews (threads open
+ *  atomically with the review). The form composes the sibling card
+ *  padding (card p-3, the ReviewsList #554 / CommentComposer idiom) so
+ *  the staged list, fields, and buttons sit inside the border instead of
+ *  touching its edges. */
 function FinishReview(props) {
   const [getBody, setBody] = createSignal("");
   const [getVerdict, setVerdict] = createSignal("COMMENTED");
@@ -659,7 +667,7 @@ function FinishReview(props) {
   };
 
   return (
-    <form class="card" aria-label="Finish review" onSubmit={submit}>
+    <form class="card p-3" aria-label="Finish review" onSubmit={submit}>
       <h2 class="card-header">Finish review</h2>
       <Show when={(props.pending ?? []).length > 0} fallback={<p class="text-xs text-zinc-500 dark:text-zinc-400">no staged line comments</p>}>
         <ul class="mb-2 space-y-1">
