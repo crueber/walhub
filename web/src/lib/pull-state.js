@@ -254,3 +254,36 @@ export function pullCloseVisibility({ thread, pr, mePrincipal, role } = {}) {
   if ((thread?.state ?? "open") === "open") return { showClose: true, showReopen: false };
   return { showClose: false, showReopen: true };
 }
+
+/**
+ * isTerminalPull(thread, pr) → bool: the Forgejo #602 sidebar gate.
+ * Merged wins (merge stamps StateClosed too, so state alone cannot tell
+ * merged from plain-closed — the merged check comes first, the badge
+ * precedent). Closed reads the live thread state (the page's state source
+ * of truth — PRDoc carries no `state` field, cf. pullCloseVisibility);
+ * `pr.state` is accepted first defensively (list-row PROut shapes carry
+ * one) but is always undefined in the page payload, so the thread decides
+ * in practice; loading (neither yet) reads open.
+ */
+export function isTerminalPull(thread, pr) {
+  if (pr?.merged) return true;
+  return ((pr?.state ?? thread?.state) ?? "open") === "closed";
+}
+
+/**
+ * terminalMergeDetail(pr, events) → {sha, strategy, by}: the Forgejo #602
+ * merged-Status secondary detail. The pr sidecar fields win
+ * (merge_commit_sha/merge_strategy/merged_by); the merged timeline event
+ * (merge_commit_sha/strategy/actor — the pullEventText #602 source) covers
+ * a sidecar that has not caught up. All client-side already in the page
+ * payload — no new fetch. Missing reads "" (the Status chip alone
+ * suffices; the caller gates the detail line on sha).
+ */
+export function terminalMergeDetail(pr, events = []) {
+  const ev = (events ?? []).find((e) => e?.type === "merged");
+  return {
+    sha: pr?.merge_commit_sha ?? ev?.merge_commit_sha ?? "",
+    strategy: pr?.merge_strategy ?? ev?.strategy ?? "",
+    by: pr?.merged_by ?? ev?.actor ?? "",
+  };
+}

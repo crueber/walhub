@@ -31,7 +31,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewRequestsEditable, reviewVerdictLabel, mergeabilityDisplay } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewRequestsEditable, reviewVerdictLabel, mergeabilityDisplay, isTerminalPull, terminalMergeDetail } from "../lib/pull-state.js";
 import { chronological } from "../lib/thread-order.js";
 import { renderBody } from "../lib/render-md.js";
 
@@ -1173,6 +1173,12 @@ export default function Pull() {
   const thread = () => getView()?.thread;
   const pr = () => getView()?.pr;
   const mergeable = () => getView()?.mergeable;
+  // Forgejo #602: terminal PRs (merged, or closed unmerged) swap the
+  // sidebar's Review summary slot for a Status section and hide the moot
+  // Mergeability section. Merged wins (merge stamps StateClosed too).
+  // Everything here is already in the page payload — no new fetch.
+  const isTerminal = () => isTerminalPull(thread(), pr());
+  const mergedDetail = () => terminalMergeDetail(pr(), getView()?.events);
   const head = () => getView()?.head_live_sha ?? pr()?.head?.sha ?? "";
   // Head checks (05 §9): the combined view + per-context rows for the
   // live head sha, and the required-checks advisory (union of
@@ -1427,13 +1433,49 @@ export default function Pull() {
           mergeability / reviewers / checks / merge as divided sections.
           Each section is a p-3 block with an uppercase micro-label above
           its value, so a "none" reads as that section's value. No
-          stacked sibling .card blocks, no card-header headings. */}
+          stacked sibling .card blocks, no card-header headings.
+          Forgejo #602: terminal PRs (merged, or closed unmerged) swap
+          the first slot for a Status section and hide the moot
+          Mergeability section; Reviewers / Checks / Merge keep
+          rendering. */}
       <aside aria-label="Details" class="grid content-start gap-3">
         <section class="card divide-y divide-zinc-200 text-sm dark:divide-zinc-800" aria-label="Pull request metadata">
-          <div class="p-3">
-            <span class="mb-1 block text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Review summary</span>
-            <ReviewSummaryBar summary={summary()} head={head()} />
-          </div>
+          {/* Forgejo #602: the terminal Status section REPLACES the Review
+              summary slot (same p-3 shape, same micro-label idiom) — one
+              slot, never both. */}
+          <Show when={isTerminal()} fallback={
+            <div class="p-3">
+              <span class="mb-1 block text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Review summary</span>
+              <ReviewSummaryBar summary={summary()} head={head()} />
+            </div>
+          }>
+            <div class="p-3">
+              <span class="mb-1 block text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Status</span>
+              <Show when={pr()?.merged} fallback={<span class="chip chip-closed">Closed</span>}>
+                <span class="chip chip-merged">Merged</span>
+              </Show>
+              <Show when={pr()?.merged && mergedDetail().sha}>
+                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  merged as{" "}
+                  {/* Forgejo #595 idiom reused: the merge SHA links to the
+                      commit page (full SHA in href, 12-char text). */}
+                  <A class="link font-mono" href={`/${ctx.full}/commit/${mergedDetail().sha}`}>
+                    {mergedDetail().sha.slice(0, 12)}
+                  </A>
+                  <Show when={mergedDetail().strategy}>
+                    {" "}({mergedDetail().strategy})
+                  </Show>
+                  <Show when={mergedDetail().by}>
+                    {" "}by {mergedDetail().by}
+                  </Show>
+                </p>
+              </Show>
+            </div>
+          </Show>
+          {/* Forgejo #602: Mergeability is moot once terminal — the whole
+              section hides. Reviewers / Checks below stay outside the
+              gate (out of scope, still rendered). */}
+          <Show when={!isTerminal()}>
           <div class="grid gap-1 p-3">
             {/* Mergeability is a VALUE, not a heading: the micro-label
                 above, the mergeabilityView display phrase as the value
@@ -1475,6 +1517,7 @@ export default function Pull() {
               <A href={`/${ctx.owner}/${ctx.name}/pull/${num()}/files`}>files</A>
             </div>
           </div>
+          </Show>
           <div class="grid gap-1 p-3">
             <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Reviewers</span>
             <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} canEdit={canReview()} thread={thread()} pr={pr()} lockReason={commentLock().reason} />

@@ -76,18 +76,20 @@ test(".link rule justifies itself as a shared pattern (the #405 precedent)", () 
   const css = CSS();
   const comment = css.slice(css.indexOf("Forgejo #568"), css.indexOf(".link {"));
   assert.ok(comment.includes("#405"), "comment cites the opaque-popover shared-rule precedent");
-  assert.ok(comment.includes("25"), "comment states the site census it covers");
+  assert.ok(comment.includes("26"), "comment states the site census it covers (#602: +1 terminal-Status SHA link)");
   assert.ok(/never a bare `a` rule|bare `a`/.test(comment), "comment records why a class, not a bare `a` rule");
 });
 
-// --- 2. census: all 25 sites keep class="link" (the rule is the treatment) ---
+// --- 2. census: all 26 sites keep class="link" (the rule is the treatment) ---
+// #602-scoped: Pull.jsx 5 → 6 (the terminal-Status merge SHA link reuses
+// the shared rule + the #595 href idiom — no new CSS, census grows by one).
 
 const EXPECTED = {
   "pages/Team": ["Team.jsx", 2],
   "pages/Settings": ["Settings.jsx", 4],
   "pages/PullFiles": ["PullFiles.jsx", 2],
   "pages/PullCommits": ["PullCommits.jsx", 1],
-  "pages/Pull": ["Pull.jsx", 5],
+  "pages/Pull": ["Pull.jsx", 6],
   "pages/Invitations": ["Invitations.jsx", 1],
   "pages/Commit": ["Commit.jsx", 1],
   "pages/Checks": ["Checks.jsx", 5],
@@ -95,7 +97,7 @@ const EXPECTED = {
   "components/NotificationTray": ["NotificationTray.jsx", 2],
 };
 
-test("per-file census: 25 class=\"link sites across 10 files", () => {
+test("per-file census: 26 class=\"link sites across 10 files", () => {
   let total = 0;
   for (const [key, [file, count]] of Object.entries(EXPECTED)) {
     const src = key.startsWith("pages/") ? PAGE(file.replace(".jsx", "")) : COMP(file.replace(".jsx", ""));
@@ -103,7 +105,7 @@ test("per-file census: 25 class=\"link sites across 10 files", () => {
     assert.equal(found, count, `${file}: expected ${count} class="link sites, found ${found}`);
     total += found;
   }
-  assert.equal(total, 25, "25 total sites — a newly added or silently dropped site fails here");
+  assert.equal(total, 26, "26 total sites — a newly added or silently dropped site fails here");
 });
 
 test("button action sites keep their handlers (behavior intact)", () => {
