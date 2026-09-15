@@ -698,12 +698,21 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   header (PR-kind cards ride through untouched — one numbering space, one
   index; threads at/below `compacted_through` stay evicted for LIST),
   stamps the current version, returns the repaired count (0 + stamp when
-  only the version was stale; second run is a no-op). Concurrency per the
+  only the version was stale; second run is a no-op). Review follow-up
+  (same issue): the backfill is reachable — `ListIssues` heals a
+  version-stale index best-effort while the header truth is in hand
+  (`healStaleIndex`: small repos only, `next-1 <= headerScanCap`, so one
+  scan provably covers every number; empty scans never stamp; failures
+  reuse the drop channel, never surface — the served window is already
+  healed), and production wires `Service.Log = slog.Default()` in
+  `newIssuesService` (notify.go precedent) so the counters are logs, not
+  just numbers. Concurrency per the
   package contract (13 §3/§5): bounded CAS loops only, no in-process lock,
   no lock spans the header scan and the index write. Tests:
   `internal/issues/indexfresh_test.go` (gate matrix, fallback heals,
   repair + stamp + no-op rerun, PR preservation, watermark, drop
-  counters/logging, fresh-index stamp, diff predicate); `go test
+  counters/logging, fresh-index stamp, diff predicate, read-path
+  self-heal, no stamp on issue-less reads); `go test
   ./internal/issues/ -race` green.
 
 ## Explicitly out of scope

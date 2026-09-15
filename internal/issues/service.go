@@ -873,7 +873,36 @@ func (s *Service) ListIssues(ctx context.Context, owner, repo string, p auth.Pri
 	merged = filterCards(merged, f)
 	sortCardsByNum(merged)
 	page, more := windowCards(merged, f.After, n)
+	if ix == nil || ix.CardVersion < CardProjectionVersion {
+		s.healStaleIndex(ctx, owner, repo, ix, scanned, next)
+	}
 	return &ListResult{Issues: page, More: more}, nil
+}
+
+// healStaleIndex is the #564 self-heal: a version-stale index forces the
+// LIST fallback on EVERY read (the fast path never trusts it again) and
+// nothing else stamps freshness — so heal it here, best-effort, while the
+// header truth is already in hand. Bounded and safe:
+//
+//   - small repos only: next-1 <= headerScanCap proves one scan covered
+//     every allocated number (one numbering space, §2), so RepairIndex
+//     cannot truncate; bigger repos keep the per-read fallback until an
+//     operator-sized repair runs.
+//   - non-empty scan only: issue-less repos must not gain a stamped empty
+//     index on a mere read (that write would repeat on every list).
+//   - best-effort: contention/parse failures are logged + counted through
+//     the existing drop channel, never surfaced — the served window above
+//     is already healed from headers.
+//
+// ### Concurrency: no lock; concurrent readers race the same CAS and the
+// loser retries into a no-op (RepairIndex detects the fresh stamp).
+func (s *Service) healStaleIndex(ctx context.Context, owner, repo string, ix *Index, scanned []Card, next int) {
+	if len(scanned) == 0 || next > headerScanCap+1 {
+		return
+	}
+	if _, rerr := s.RepairIndex(ctx, owner, repo); rerr != nil {
+		s.logIndexDrop("repair", owner, repo, "auto-repair", rerr)
+	}
 }
 
 // OpenCounts returns the repo-level open counts for the tab badges
@@ -965,13 +994,18 @@ func indexComplete(ix *Index, next int) bool {
 	return true
 }
 
+// headerScanCap bounds one header scan (P5 page): at most this many
+// headers per call, numeric order. RepairIndex and the #564 self-heal may
+// only stamp freshness when the counter proves one scan covered every
+// allocated number (next-1 <= headerScanCap, one numbering space).
+const headerScanCap = 2000
+
 // scanHeaders scans …/<num>/thread.json headers (P5 page: at most
-// scanCap headers per call, numeric order). Only kind:"issue" threads are
+// headerScanCap headers per call, numeric order). Only kind:"issue" threads are
 // returned. Callers merge with the index (header wins) and window by
 // cursor — the scan always starts at the top so the fallback is complete,
 // never cursor-truncated.
 func (s *Service) scanHeaders(ctx context.Context, owner, repo string) ([]Card, error) {
-	const scanCap = 2000
 	prefix := IssuesPrefix(owner, repo)
 	var keys []string
 	if err := s.Store.List(ctx, prefix, "", func(m store.ObjectMeta) error {
@@ -984,7 +1018,7 @@ func (s *Service) scanHeaders(ctx context.Context, owner, repo string) ([]Card, 
 	}
 	out := make([]Card, 0, len(keys))
 	for _, k := range keys {
-		if len(out) >= scanCap {
+		if len(out) >= headerScanCap {
 			break
 		}
 		raw, _, gerr := s.getJSON(ctx, k)

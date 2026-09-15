@@ -109,6 +109,59 @@ func TestListFallbackHealsStaleMilestoneCard(t *testing.T) {
 	}
 }
 
+// TestListFallbackSelfHealsStaleIndex pins the #564 review finding that
+// RepairIndex must be reachable: a version-stale index forces the LIST
+// fallback on every read, so ListIssues heals it best-effort while the
+// header truth is in hand — the next read is back on the O(1) fast path.
+func TestListFallbackSelfHealsStaleIndex(t *testing.T) {
+	roles := newFakeRoles()
+	grantTriage(roles, "acme", "repo")
+	s := testService(roles)
+	msID, _ := staleMilestoneSetup(t, s)
+
+	res, err := s.ListIssues(reqCtx(), "acme", "repo", aliceP, ListFilter{Milestone: msID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Issues) != 1 {
+		t.Fatalf("healed list = %d issues, want 1", len(res.Issues))
+	}
+	ix, _, err := s.loadIndex(reqCtx(), "acme", "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.CardVersion != CardProjectionVersion {
+		t.Fatalf("CardVersion = %d after self-heal, want %d", ix.CardVersion, CardProjectionVersion)
+	}
+	if !indexComplete(ix, s.loadCounter(reqCtx(), "acme", "repo")) {
+		t.Fatal("index still reads incomplete after self-heal")
+	}
+}
+
+// TestListDoesNotStampEmptyRepo pins the read-path write guard: an
+// issue-less repo must not gain a stamped empty index on a mere list —
+// that write would repeat on every read (next <= 0 never completes).
+func TestListDoesNotStampEmptyRepo(t *testing.T) {
+	roles := newFakeRoles()
+	grantTriage(roles, "acme", "repo")
+	s := testService(roles)
+
+	res, err := s.ListIssues(reqCtx(), "acme", "repo", aliceP, ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Issues) != 0 {
+		t.Fatalf("empty list = %d issues, want 0", len(res.Issues))
+	}
+	raw, _, err := s.getJSON(reqCtx(), IndexKey("acme", "repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != nil {
+		t.Fatalf("read created an index on an issue-less repo: %s", raw)
+	}
+}
+
 // TestRepairIndexHealsAndStamps pins the one-shot backfill: disagreeing
 // cards are rebuilt from headers, the version is stamped, the milestone
 // filter matches, and a second run is a no-op.
