@@ -7,22 +7,36 @@
 package main
 
 import (
+	"context"
 	"net/http"
 
 	"git.packden.us/crueber/walhub/internal/api"
+	"git.packden.us/crueber/walhub/internal/config"
 	"git.packden.us/crueber/walhub/internal/identity"
 	"git.packden.us/crueber/walhub/internal/pulls"
 	"git.packden.us/crueber/walhub/internal/review"
 	"git.packden.us/crueber/walhub/internal/server"
 	"git.packden.us/crueber/walhub/internal/server/auth"
 	"git.packden.us/crueber/walhub/internal/store"
+	"git.packden.us/crueber/walhub/internal/wal"
 )
 
 // newReviewService builds the review service over st/ident/pullsSvc.
 // Notify/Stream stay nil until internal/notify lands (documented no-op,
 // P8 backfill via the timeline). Suggest's team expansion rides
 // identity's ExpandGroups; its commit authors ride pulls' HeadAuthors.
-func newReviewService(st store.ObjectStore, ident *identity.Service, pullsSvc *pulls.Service) (*review.Service, *review.Handler) {
+// The self-approval policy (Forgejo #586) rides the WAL manifest: the
+// seam opens the handle (the production precedent — every engine op
+// opens; the warm path for an active PR is a mutex hit plus an
+// in-memory snapshot, no store call) and parses the settings TOML's
+// [review] section, failing open to the default on any unparseable body
+// (the config.AllowSelfApprovalOf contract — unpublishable bodies never
+// reach here anyway). An unopenable repo fails the submit closed (503),
+// never silently allowed or denied: no locks are held across the call
+// (13 §2 rule 4 — SubmitReview holds none), and submits are
+// control-plane-sized, off the push/sync hot-path budgets (the same cost
+// class as the gate's policy.json read).
+func newReviewService(st store.ObjectStore, ident *identity.Service, pullsSvc *pulls.Service, reg *wal.Registry) (*review.Service, *review.Handler) {
 	api.RegisterExposed(review.ExposedTemplates...)
 	svc := review.New(st, ident)
 	if ident != nil {
@@ -31,6 +45,20 @@ func newReviewService(st store.ObjectStore, ident *identity.Service, pullsSvc *p
 	if pullsSvc != nil {
 		svc.Authors = pullsSvc
 		pullsSvc.Reviews = svc
+	}
+	if reg != nil {
+		svc.Settings = func(ctx context.Context, owner, repo string) (review.ReviewSettings, error) {
+			h, err := reg.Open(ctx, owner+"/"+repo)
+			if err != nil {
+				return review.ReviewSettings{}, err
+			}
+			if m, _ := h.ManifestSnapshot(); m != nil && m.Settings != nil {
+				return review.ReviewSettings{
+					AllowSelfApproval: config.AllowSelfApprovalOf([]byte(m.Settings.Toml)),
+				}, nil
+			}
+			return review.DefaultReviewSettings(), nil
+		}
 	}
 	h := &review.Handler{Svc: svc}
 	return svc, h

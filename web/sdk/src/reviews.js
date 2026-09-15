@@ -31,7 +31,8 @@ export function attachReviews(repo) {
       client._call(p(`/pulls/${num}/reviews${qs(query)}`), { method: "GET", ...opts }),
     /**
      * Submit: `POST …/pulls/{num}/reviews` → `201 {review, threads, summary}`
-     * (422 author self-approve, 409 stale commit_sha).
+     * (422 author self-approval only when the repo's [review]
+     * allow_self_approval is off — default on; 409 stale commit_sha).
      */
     submit: (num, { state, body, commit_sha, threads } = {}, opts) =>
       client._call(p(`/pulls/${num}/reviews`), {

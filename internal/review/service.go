@@ -306,10 +306,14 @@ type SubmitInput struct {
 }
 
 // SubmitReview posts one immutable review (§3): server-checks commit_sha
-// against the PR head (else 409), rejects author self-approve/
-// request-changes (422), atomically opens attached line threads, removes
-// the reviewer from review-requests, recomputes the summary, and fans out
-// (P8). Auth: read (authenticated).
+// against the PR head (else 409), enforces the per-repo self-approval
+// policy (Forgejo #586: the author may APPROVE/CHANGES_REQUESTED their
+// own PR only when the repo's [review] allow_self_approval is on —
+// default ON; off keeps the historical 422), atomically opens attached
+// line threads, removes the reviewer from review-requests, recomputes
+// the summary, and fans out (P8). Auth: read (authenticated). COMMENTED
+// is always allowed, by anyone. A Settings-seam failure fails the submit
+// closed (503) rather than guessing the policy.
 func (s *Service) SubmitReview(ctx context.Context, owner, repo string, num int, actor auth.Principal, in SubmitInput) (*ReviewEvent, []*ThreadHeader, *ReviewSummary, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, nil, nil, err
@@ -343,7 +347,13 @@ func (s *Service) SubmitReview(ctx context.Context, owner, repo string, num int,
 	}
 	who := normPrincipal(actor.Name)
 	if normPrincipal(h.Author) == who && in.State != StateCommented {
-		return nil, nil, nil, fmt.Errorf("%w: author cannot approve their own pull request", ErrUnprocessable)
+		pol, perr := s.reviewPolicy(ctx, owner, repo)
+		if perr != nil {
+			return nil, nil, nil, fmt.Errorf("%w: review policy unavailable: %v", ErrUnavailable, perr)
+		}
+		if !pol.AllowSelfApproval {
+			return nil, nil, nil, fmt.Errorf("%w: author cannot approve their own pull request", ErrUnprocessable)
+		}
 	}
 	if !strings.EqualFold(side.Head.SHA, in.CommitSHA) {
 		return nil, nil, nil, fmt.Errorf("%w: reviewed commit is not the pull request head", ErrConflict)
@@ -685,12 +695,22 @@ type GateVerdict struct {
 // (the review-provided gate function wired into the merge path via pulls'
 // ReviewGate seam — the merge logic is NOT forked). It resolves every
 // required-reviews rule matching the PR's base ref and requires: surviving
-// approvals ≥ min_approvals (most restrictive across matching rules), no
-// surviving CHANGES_REQUESTED, and — when dismiss_stale — only approvals
+// non-author approvals ≥ min_approvals (most restrictive across matching
+// rules), no surviving CHANGES_REQUESTED (from anyone — an author's own
+// request-changes still blocks), and — when dismiss_stale — only approvals
 // whose commit_sha equals the current head count. No matching rules ⇒ nil
 // (gate passes). The scan runs under its own deadline inside the merge
 // task's context; a blown deadline fails closed. Bypass lists apply
 // unchanged: a merger bypassing EVERY matching rule skips the gate.
+//
+// Protection semantics (Forgejo #586, Decision 1b): an author's
+// self-approval NEVER counts toward min_approvals — even on repos where
+// [review] allow_self_approval permits submitting it. The submit-time
+// toggle governs who may *record* a verdict; the gate governs what
+// *protects* the ref, and self-attestation is not protection. Stale
+// self-approvals need no special handling (Decision 3): they already fail
+// the commit_sha freshness check like any other stale approval — and,
+// excluded as author votes, they never count fresh either.
 func (s *Service) CheckRequiredReviews(ctx context.Context, owner, repo string, num int, headSHA, baseRef, merger string) error {
 	gctx, cancel := context.WithTimeout(ctx, s.gateTimeout())
 	defer cancel()
@@ -750,9 +770,11 @@ func (s *Service) EvaluateGate(ctx context.Context, owner, repo string, num int,
 	if allBypassed {
 		return nil, nil
 	}
-	if _, _, err := s.prHeadOf(ctx, owner, repo, num); err != nil {
+	h, _, err := s.prHeadOf(ctx, owner, repo, num)
+	if err != nil {
 		return nil, err
 	}
+	author := normPrincipal(h.Author)
 	reviews, err := s.scanReviews(ctx, owner, repo, num)
 	if err != nil {
 		return nil, err
@@ -765,6 +787,14 @@ func (s *Service) EvaluateGate(ctx context.Context, owner, repo string, num int,
 		case StateChangesRequested:
 			blocking = append(blocking, who)
 		case StateApproved:
+			// Forgejo #586 Decision 1b: author self-approvals never
+			// count toward min_approvals (protection semantics —
+			// self-attestation is not review). normPrincipal both
+			// sides: event authors are pinned normalized at submit,
+			// header authors are not.
+			if normPrincipal(who) == author {
+				continue
+			}
 			if !stale || strings.EqualFold(l.CommitSHA, headSHA) {
 				approvals++
 			}

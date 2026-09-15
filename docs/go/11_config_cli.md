@@ -298,14 +298,26 @@ type RepoSettings struct {  // the four allowed sections; zero = "not set, inher
     Compaction   *CompactionConfig   `toml:"compaction"`
     Upstream     *UpstreamConfig     `toml:"upstream"`
     Integrations map[string]toml.Primitive `toml:"integrations"` // accepted, forward-compat, never interpreted
+    // Passengers (validated, persisted, revisioned, admin-written — never merged):
+    Description  string              // issue #235 display metadata
+    Features     *RepoFeatures       // Forgejo #522 [features] six flags, absent = all-on
+    Review       *RepoReview         // Forgejo #586 [review] allow_self_approval, absent = allowed
 }
 func (r *RepoSettings) Merge(base *Config) (*Config, error)  // "with_settings": pointer-set fields override base
 ```
 
 ### 4.2 Rules (normative, unchanged from Rust spec §15.2)
 
-- Allowed sections: `[bundles]`, `[maintenance]`, `[compaction]`, `[upstream]`; `[integrations]` accepted (stored verbatim, forward-compat). Anything else → 400 at publish.
+- Allowed sections: `[bundles]`, `[maintenance]`, `[compaction]`, `[upstream]`, `[features]`
+  (Forgejo #522), `[review]` (Forgejo #586); `[integrations]` accepted (stored verbatim,
+  forward-compat). Anything else → 400 at publish.
 - Top-level `description` key (issue #235): the per-repo short display string shown in the repo header. Single line (no CR/LF/NUL), at most 512 characters (`MaxRepoDescriptionRunes`); violations → 400 like any other invalid key. Display metadata only — never merged into the host config (`Merge` ignores it), never in `settings/effective`. Rides the same WAL-published document, so revision/author/admin-writes come free.
+- `[review] allow_self_approval` (Forgejo #586): the per-repo self-approval knob — `true`
+  (or absent key/section: default ON, fresh repos behave like GitHub) lets the PR author
+  `APPROVE`/`CHANGES_REQUESTED` their own PR; `false` keeps the historical `422`.
+  Behavior metadata only — never merged into the host config (`Merge` ignores it), never
+  in `settings/effective` (the `[features]` passenger precedent). Wrong type or unknown
+  `[review]` key → 400 like any other invalid key.
 - Size: the serialized settings payload MUST be ≤ 16 KiB; larger → 400.
 - `[integrations]` contents are stored verbatim and never interpreted; the 16 KiB budget includes them.
 - NOT settable via settings: auth, store, server, wal, cache, `upstream.token_env` (host-only). A `[server]`, `[store]`, `[wal]`, `[cache]`, or `upstream.token_env` key inside repo settings → 400.
@@ -508,6 +520,15 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
   path is built as `pack-<bare>.pack`, so the base lands under `wal/<bare>.pack` like the
   tier-0 trailer-derived packs. Same-file `AddPack` installs are a no-op (05_wal_engine.md).
 - **NEW (2026-09-09) — top-level `description` key in per-repo settings (#235):** a single-line ≤512-char display string riding the WAL-published settings TOML (persistence/revision/authorship/admin-writes free); never merged into the host config, never in `settings/effective`. Rationale: 14 §14.12 — additive key, existing keys never change meaning; the 16 KiB payload budget is unchanged and still covers it.
+- **NEW (2026-09-15) — `[review]` section in per-repo settings (Forgejo #586):**
+  `allow_self_approval` (default ON — nil section/key resolves allowed, zero migration)
+  gates author `APPROVE`/`CHANGES_REQUESTED` on their own PR (`COMMENTED` always allowed;
+  OFF restores the historical `422`). Same passenger discipline as `description`/`[features]`:
+  validated + persisted + revisioned + admin-written with the doc, never merged, never in
+  `settings/effective`. (This amendment also records the previously undocumented `[features]`
+  section, Forgejo #522, in §4.1/§4.2 — same passenger discipline; the code already accepted
+  it.) Rationale: 14 §14.12 — new sections are additive; existing keys never change meaning;
+  the 16 KiB payload budget is unchanged and still covers both sections.
 
 ### Divergence (2026-08-31)
 
