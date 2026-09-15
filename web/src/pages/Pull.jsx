@@ -129,13 +129,16 @@ function ReviewSummaryBar(props) {
   );
 }
 
-/** Reviews list (Forgejo #545): ONE .card panel with the card-header
- *  title (the #521/#531 conversation-column idiom) holding an unstyled
- *  flat list — the old wrapper class carried zero CSS rules and each item
- *  was itself a .card, i.e. bordered chrome inside bordered chrome.
- *  Items are plain divider rows (first row flush, like the flat PR-list
- *  rows); each reads author + chip verdict + timestamp in the .card-meta
- *  language, with the stale marker and dismiss affordance unchanged. */
+/** Reviews list (Forgejo #545, padded Forgejo #554): ONE .card panel with
+ *  the card-header title (the #521/#531 conversation-column idiom) holding
+ *  an unstyled flat list — the old wrapper class carried zero CSS rules
+ *  and each item was itself a .card, i.e. bordered chrome inside bordered
+ *  chrome. The panel composes the sibling card padding (card p-3, the
+ *  CommentComposer idiom) so review rows and the empty state sit inside
+ *  the border instead of touching its edges. Items are plain divider rows
+ *  (first row flush, like the flat PR-list rows); each reads author + chip
+ *  verdict + timestamp in the .card-meta language, with the stale marker
+ *  and dismiss affordance unchanged. */
 function ReviewsList(props) {
   const submitDismiss = async (seq) => {
     const reason = window.prompt("Dismissal reason (recorded on the compensating event):", "stale");
@@ -148,7 +151,7 @@ function ReviewsList(props) {
     }
   };
   return (
-    <div class="card" aria-label="Reviews">
+    <div class="card p-3" aria-label="Reviews">
       <h2 class="card-header">Reviews</h2>
       <ul class="divide-y divide-zinc-200 dark:divide-zinc-800">
         <For each={props.reviews ?? []} fallback={<li class="text-sm text-zinc-500 dark:text-zinc-400">No reviews yet.</li>}>
@@ -955,7 +958,7 @@ export default function Pull() {
           <Show when={canReview()}>
             <Show when={getFinishing()} fallback={
               <button type="button" class="btn px-3 py-1" onClick={() => setFinishing(true)}>
-                finish review{(getPending().length ? ` (${getPending().length} staged)` : "")}
+                Finish review{(getPending().length ? ` (${getPending().length} staged)` : "")}
               </button>
             }>
               <FinishReview
