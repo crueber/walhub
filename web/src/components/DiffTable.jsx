@@ -26,6 +26,23 @@
 // consumer's shared CommentComposer. Anchor construction lives in
 // lib/review-anchor.js — this component never hashes, never prompts.
 //
+// Per-line tap affordance (Forgejo #555): the gutter drag needs a SELECTION,
+// so a tap (touch) or a plain click (mouse) on code text staged nothing —
+// no affordance ever appeared. Every code line now ends with a "+" target
+// that stages a single-line draft directly ({path, side, start: no,
+// end: no} — the exact #546 single-line shape the consumer resolves and
+// hashes via lib/review-anchor.js; chunk clamping is inherent, one line
+// names its own hunk). The range flow is untouched: drag/shift still select,
+// and the "comment on selection" bar below still stages ranges. Tap-vs-drag
+// needs no movement threshold: the button is a discrete target (a press
+// starting on it never starts a drag) and the code text itself stays
+// handler-free, so text selection is never fought — there are deliberately
+// no touch handlers (a tap arrives as click; a custom touchstart would
+// double-stage against the synthesized click). Visibility without hover:
+// revealed on row hover (fine pointers), always visible on coarse pointers,
+// and on keyboard focus (the a11y floor). Gated exactly like the bar below
+// (onCommentSelect + canComment) — anonymous viewers get neither.
+//
 // Row backgrounds (issue #544): lineClass() applies per CELL, not per row
 // — unified rows color both cells (gutter + code, full-row background),
 // split rows color per side (a paired change row is red-left/green-right,
@@ -192,6 +209,24 @@ export function DiffBody(props) {
     </Show>
   );
 
+  // Per-line tap target (Forgejo #555 — see the header note): an inline "+"
+  // at the end of the code cell staging a single-line selection straight
+  // into onCommentSelect. Same gate as the bar below; code text itself
+  // carries no handlers.
+  const lineTap = (side, no, label) => (
+    <Show when={props.onCommentSelect && props.canComment !== false && no != null}>
+      <button
+        type="button"
+        class="ml-2 hidden shrink-0 px-1 text-emerald-600 group-hover:inline hover:text-emerald-700 focus-visible:inline pointer-coarse:inline dark:text-emerald-400 dark:hover:text-emerald-300"
+        onClick={() => props.onCommentSelect({ path: path(), side, start: no, end: no })}
+        aria-label={label}
+        title="Comment on this line"
+      >
+        +
+      </button>
+    </Show>
+  );
+
   const inSel = (side, no) => {
     const s = getSel();
     return !!s && s.side === side && no != null && no >= s.start && no <= s.end;
@@ -231,11 +266,11 @@ export function DiffBody(props) {
                         const no = unifiedNo(l);
                         const side = unifiedSide(l);
                         return (
-                          <tr id={uniId(hi(), li())} class="diff-row" classList={{ "line-hl": inSel(side, no) }}>
+                          <tr id={uniId(hi(), li())} class="diff-row group" classList={{ "line-hl": inSel(side, no) }}>
                             <td class={`diff-num ${lineClass(l.t)}`}>
                               {gutterLink(hi(), side, no, `Diff line ${no}${side === "old" ? " (old side)" : ""} in ${path()}`)}
                             </td>
-                            <td class={lineClass(l.t)}>{l.text || " "}</td>
+                            <td class={lineClass(l.t)}>{l.text || " "}{lineTap(side, no, `Comment on line ${no}${side === "old" ? " (old side)" : ""} in ${path()}`)}</td>
                           </tr>
                         );
                       }}
@@ -255,15 +290,15 @@ export function DiffBody(props) {
                   </tr>
                   <For each={annotateSplitRows(h)}>
                     {(row, ri) => (
-                      <tr id={splitId(hi(), ri())} class="diff-row" classList={{ "line-hl": inSel("old", row.left?.no) || inSel("new", row.right?.no) }}>
+                      <tr id={splitId(hi(), ri())} class="diff-row group" classList={{ "line-hl": inSel("old", row.left?.no) || inSel("new", row.right?.no) }}>
                         <td class={`diff-num ${row.left ? lineClass(row.left.t) : ""}`}>
                           {gutterLink(hi(), "old", row.left?.no, `Diff line ${row.left?.no} (old side) in ${path()}`)}
                         </td>
-                        <td class={row.left ? lineClass(row.left.t) : ""}>{row.left ? row.left.text || " " : ""}</td>
+                        <td class={row.left ? lineClass(row.left.t) : ""}>{row.left ? row.left.text || " " : ""}{lineTap("old", row.left?.no, `Comment on line ${row.left?.no} (old side) in ${path()}`)}</td>
                         <td class={`diff-num ${row.right ? lineClass(row.right.t) : ""}`}>
                           {gutterLink(hi(), "new", row.right?.no, `Diff line ${row.right?.no} (new side) in ${path()}`)}
                         </td>
-                        <td class={row.right ? lineClass(row.right.t) : ""}>{row.right ? row.right.text || " " : ""}</td>
+                        <td class={row.right ? lineClass(row.right.t) : ""}>{row.right ? row.right.text || " " : ""}{lineTap("new", row.right?.no, `Comment on line ${row.right?.no} in ${path()}`)}</td>
                       </tr>
                     )}
                   </For>
