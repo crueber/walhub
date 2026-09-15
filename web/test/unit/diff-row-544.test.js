@@ -74,8 +74,8 @@ test("Pull.jsx DiffFile reuses the shared lineClass on the row div", () => {
   );
   assert.match(
     src,
-    /diff-row flex cursor-pointer font-mono text-xs \$\{lineClass\(row\.line\.t\)\}/,
-    "the div row carries the add/del background + the #598 hover affordance classes (Forgejo #560 adds the row-click staging handler on the same div)",
+    /diff-row flex font-mono text-xs \$\{lineClass\(row\.line\.t\)\}\$\{props\.canComment !== false && !props\.commentLocked \? " cursor-pointer" : ""\}/,
+    "the div row carries the add/del background + the #598 hover affordance classes, cursor gated (Forgejo #560 adds the row-click staging handler on the same div)",
   );
   assert.match(
     src,

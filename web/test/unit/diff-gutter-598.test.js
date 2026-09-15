@@ -128,8 +128,9 @@ test("DiffTable: hunk headers span the sign columns too", () => {
 
 test("DiffFile: sign span is FIRST, ahead of the line numbers", () => {
   const s = diffFile();
-  const rowDiv = s.indexOf("diff-row flex cursor-pointer font-mono text-xs");
-  assert.ok(rowDiv > 0, "row div carries the diff-row + cursor-pointer affordance classes");
+  const rowDiv = s.indexOf("diff-row flex font-mono text-xs");
+  assert.ok(rowDiv > 0, "row div carries the diff-row hover-affordance classes");
+  assert.match(s, /props\.canComment !== false && !props\.commentLocked \? " cursor-pointer" : ""/, "cursor-pointer is gated (anon/locked rows promise no interactivity)");
   const sign = s.indexOf("{row.line.t}</span>", rowDiv);
   const oldNo = s.indexOf("{row.oldNo ?? ", rowDiv);
   const newNo = s.indexOf("{row.newNo ?? ", rowDiv);

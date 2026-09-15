@@ -537,7 +537,7 @@ function DiffFile(props) {
                 {(row, ri) => (
                   <div>
                     <div
-                      class={`diff-row flex cursor-pointer font-mono text-xs ${lineClass(row.line.t)}`}
+                      class={`diff-row flex font-mono text-xs ${lineClass(row.line.t)}${props.canComment !== false && !props.commentLocked ? " cursor-pointer" : ""}`}
                       tabindex="-1"
                       ref={(el) => el && triggerRefs.set(draftKey(hi(), ri()), el)}
                       onClick={(ev) => onRowClick(props.file, hunk, hi(), row, ri(), ev)}

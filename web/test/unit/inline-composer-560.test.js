@@ -67,8 +67,8 @@ const src = () => read("../../src/pages/Pull.jsx");
 test("row leads with its sign, ahead of the line numbers — no gutter trigger", () => {
   const s = src();
   assert.ok(!s.includes('<span class="w-6'), "the #560 gutter trigger column is gone");
-  const rowDiv = s.indexOf("diff-row flex cursor-pointer font-mono text-xs");
-  assert.ok(rowDiv > 0, "row div carries the diff-row hover-affordance classes");
+  const rowDiv = s.indexOf("diff-row flex font-mono text-xs");
+  assert.ok(rowDiv > 0, "row div carries the diff-row hover-affordance classes (cursor-pointer gated below)");
   const sign = s.indexOf("{row.line.t}</span>", rowDiv);
   assert.ok(sign > 0, "row renders its +/-/space sign");
   assert.ok(
@@ -84,7 +84,7 @@ test("sign is always visible and themed with the row (no trigger to reveal)", ()
     /<span class=\{`w-4 shrink-0 select-none text-center\$\{row\.line\.t === " " \? " text-zinc-400" : ""\}`\}>\{row\.line\.t\}<\/span>/,
     "sign span: centered; add/del inherit the row text, context muted",
   );
-  const rowDiv = s.indexOf("diff-row flex cursor-pointer font-mono text-xs");
+  const rowDiv = s.indexOf("diff-row flex font-mono text-xs");
   const rowEnd = s.indexOf("</div>", s.indexOf("{row.line.text}</span>", rowDiv));
   const rowBlock = s.slice(rowDiv, rowEnd);
   assert.ok(!rowBlock.includes("<button"), "no button in the row — the row itself is the target");
@@ -95,7 +95,7 @@ test("row content is shift-free: no trigger inside the row body", () => {
   const s = src();
   assert.ok(!s.includes("ml-2 hidden"), "the old inline-body trigger (ml-2 hidden…) is gone");
   assert.ok(!s.includes('<span class="w-6'), "no gutter trigger cell either");
-  const rowDiv = s.indexOf("diff-row flex cursor-pointer font-mono text-xs");
+  const rowDiv = s.indexOf("diff-row flex font-mono text-xs");
   const bodyAfterNumbers = s.slice(
     s.indexOf("{row.line.text}</span>", rowDiv),
     s.indexOf("</div>", s.indexOf("{row.line.text}</span>", rowDiv)),
@@ -106,7 +106,7 @@ test("row content is shift-free: no trigger inside the row body", () => {
 test("sign + row click carry the Files-tab conventions (no forked affordance)", () => {
   const s = src();
   assert.match(s, /tabindex="-1"/, "rows accept Escape refocus without joining tab order");
-  assert.match(s, /cursor-pointer/, "row advertises clickability");
+  assert.match(s, /props\.canComment !== false && !props\.commentLocked \? " cursor-pointer" : ""/, "row advertises clickability only when gated (anon/locked rows get no pointer)");
   assert.match(s, /if \(props\.canComment === false\) return;/, "row-click staging keeps the #502 gate");
 });
 
