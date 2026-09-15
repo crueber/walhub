@@ -83,9 +83,13 @@ test("review bodies + thread comments render through renderBody with mdCtx", () 
   assert.match(PULL, /innerHTML=\{renderBody\(rv\.body \?\? "", props\.mdCtx\)\}/);
   assert.match(PULL, /innerHTML=\{renderBody\(c\.body \?\? "", props\.mdCtx\)\}/);
   assert.doesNotMatch(PULL, /whitespace-pre-wrap">\{rv\.body\}|whitespace-pre-wrap text-sm">\{c\.body\}/);
-  // The finish-review modal draft preview stays plain text by design —
-  // exactly one pre-wrap site remains (the staged line comments).
-  assert.equal(count(PULL, "whitespace-pre-wrap"), 1);
+  // Plain-text sites by design (#567-scoped: two now) — the finish-review
+  // modal staged-line preview and the in-thread StagedCard body both
+  // render p.body plain (staged text is a draft, never markdown); review
+  // bodies + thread comments stay renderBody.
+  assert.equal(count(PULL, "whitespace-pre-wrap"), 2);
+  assert.match(PULL, /<span class="flex-1 whitespace-pre-wrap">\{p\.body\}<\/span>/);
+  assert.match(PULL, /<p class="whitespace-pre-wrap text-sm">\{props\.entry\?\.body\}<\/p>/);
   // One shared repo mdCtx (the #340 contract) feeds every call site.
   assert.match(PULL, /const mdCtx = \{ owner: ctx\.owner, repo: ctx\.name \};/);
   assert.ok(count(PULL, "mdCtx={mdCtx}") >= 4, "timeline + description + reviews + diff");

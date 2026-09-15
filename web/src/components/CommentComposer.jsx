@@ -146,6 +146,10 @@ function SplitCloseMenu(props) {
 
 export default function CommentComposer(props) {
   const [getBody, setBody] = createSignal("");
+  // Edit-prefill (Forgejo #567): reopening a staged inline comment mounts
+  // its composer with the staged body — fresh mounts pass no initialValue
+  // and stay empty (the #566 fresh-empty pin holds).
+  if (props.initialValue) setBody(props.initialValue);
   const [getBusy, setBusy] = createSignal(false);
   // Paste/drop image upload (02 §12): Issue.jsx passes `uploader` (the
   // repo attachments surface); surfaces without it (PRs, until #120's
