@@ -101,6 +101,34 @@ export function pullListChip(row) {
 }
 
 /**
+ * reviewVerdictLabel(state) → string: the ONE wire→display mapping for
+ * review verdicts on the PR page (Forgejo #561). The API wire contract
+ * (internal/review/model.go) is exact — APPROVED|CHANGES_REQUESTED|
+ * COMMENTED states, REVIEW_REQUIRED decision, DISMISSED rollup-only — and
+ * stays byte-identical on the wire; only rendered text is mapped here.
+ * Known values map to human labels; unknown values pass through as-is
+ * (debuggable, never blank); missing (null/undefined/"") reads Unknown.
+ */
+export function reviewVerdictLabel(state) {
+  switch (state) {
+    case "APPROVED":
+      return "Approved";
+    case "CHANGES_REQUESTED":
+      return "Changes requested";
+    case "COMMENTED":
+      return "Commented";
+    case "REVIEW_REQUIRED":
+      return "Review required";
+    case "DISMISSED":
+      return "Dismissed";
+    default:
+      break;
+  }
+  if (state == null || state === "") return "Unknown";
+  return String(state);
+}
+
+/**
  * pullCloseVisibility({thread, pr, mePrincipal, role}) → {showClose, showReopen}:
  * unmerged only (merged PRs expose no lifecycle control — a merged close is
  * a server 409), same author-or-triage rule both ways, driven by the live
