@@ -31,7 +31,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewVerdictLabel, mergeabilityDisplay } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewRequestsEditable, reviewVerdictLabel, mergeabilityDisplay } from "../lib/pull-state.js";
 import { chronological } from "../lib/thread-order.js";
 import { renderBody } from "../lib/render-md.js";
 
@@ -236,10 +236,23 @@ function ReviewersPanel(props) {
     }
   };
 
+  // Forgejo #599: the picker affordance gates on role AND open PR via the
+  // headless reviewRequestsEditable helper (role first, then the #594
+  // live-state lock over the same thread/pr fetch the page's commentLock
+  // reads — a reopen restores the picker with no reload).
+  // Requested-reviewer chips always render; the × remove affordance
+  // follows the same gate, so terminal PRs read read-only instead of
+  // hiding who was requested.
+  const editable = () => reviewRequestsEditable(props.canEdit, props.thread, props.pr);
+  const gateNote = () =>
+    !props.canEdit
+      ? "requesting reviewers needs the write role"
+      : (props.lockReason ?? "This conversation is closed");
+
   return (
     <>
-      <Show when={props.canEdit} fallback={
-        <p class="text-xs text-zinc-500 dark:text-zinc-400">requesting reviewers needs the write role</p>
+      <Show when={editable()} fallback={
+        <p class="text-xs text-zinc-500 dark:text-zinc-400">{gateNote()}</p>
       }>
       <div class="relative">
         <input
@@ -267,12 +280,13 @@ function ReviewersPanel(props) {
           </ul>
         </Show>
       </div>
+      </Show>
       <ul class="mt-2 flex flex-wrap gap-1.5">
         <For each={props.requested ?? []} fallback={<li class="text-xs text-zinc-500 dark:text-zinc-400">none requested</li>}>
           {(who) => (
             <li class="pill">
               {who}
-              <Show when={props.canEdit}>
+              <Show when={editable()}>
                 <button type="button" class="link ml-1" onClick={() => remove(who)} aria-label={`Remove ${who}`}>
                   ×
                 </button>
@@ -281,7 +295,6 @@ function ReviewersPanel(props) {
           )}
         </For>
       </ul>
-      </Show>
     </>
   );
 }
@@ -1464,7 +1477,7 @@ export default function Pull() {
           </div>
           <div class="grid gap-1 p-3">
             <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Reviewers</span>
-            <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} canEdit={canReview()} />
+            <ReviewersPanel num={num()} client={ctx.repoClient} requested={getRequests()?.reviewers?.map((r) => r.principal)} reload={reloadReview} canEdit={canReview()} thread={thread()} pr={pr()} lockReason={commentLock().reason} />
           </div>
           <Show when={head()}>
             <div class="grid gap-1 p-3" aria-label="Checks">

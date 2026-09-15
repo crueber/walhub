@@ -226,6 +226,21 @@ export function pullCommentLock(thread, pr) {
 }
 
 /**
+ * reviewRequestsEditable(canEdit, thread, pr) → bool: the Forgejo #599
+ * client mirror of the server review-request gate (internal/review
+ * threads.go Add/RemoveRequests: 422 unless open + unmerged). Role first
+ * (canEdit is the page's role-only canReview()), then the #594 live-state
+ * lock — closed/merged hides the picker affordance while the
+ * requested-reviewer chips stay visible read-only. Keys on the live
+ * thread/pr fetch like pullCommentLock, so a reopen restores the picker
+ * with no reload.
+ */
+export function reviewRequestsEditable(canEdit, thread, pr) {
+  if (!canEdit) return false;
+  return !pullCommentLock(thread, pr).locked;
+}
+
+/**
  * pullCloseVisibility({thread, pr, mePrincipal, role}) → {showClose, showReopen}:
  * unmerged only (merged PRs expose no lifecycle control — a merged close is
  * a server 409), same author-or-triage rule both ways, driven by the live

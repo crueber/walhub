@@ -30,7 +30,9 @@ var (
 	// decision, 04_code_review.md).
 	ErrLocked = errors.New("pull request is closed or merged: commenting is locked")
 	// ErrUnprocessable marks submittable-but-unusable input: author
-	// self-approval on a repo with [review] allow_self_approval off
+	// self-approval on a repo with [review] allow_self_approval off, or
+	// review-request writes (add/remove, self-removal included) on a
+	// closed/merged PR (Forgejo #599 — open PRs only)
 	// (→ 422).
 	ErrUnprocessable = errors.New("unprocessable")
 	// ErrUnavailable marks a down dependency (→ 503 + Retry-After: 15).
