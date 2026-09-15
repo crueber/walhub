@@ -31,7 +31,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility, pullEventText, reviewVerdictLabel } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullEventText, reviewVerdictLabel, mergeabilityDisplay } from "../lib/pull-state.js";
 import { renderBody } from "../lib/render-md.js";
 
 /** PR description block (Forgejo #521, the issue-page first-comment
@@ -56,20 +56,13 @@ function PRDescription(props) {
   );
 }
 
-function mergeableText(m) {
-  if (!m) return "unknown";
-  switch (m.state) {
-    case "clean":
-      return "mergeable";
-    case "behind":
-      return "mergeable (behind)";
-    case "dirty":
-      return `conflicts: ${(m.conflicts ?? []).join(", ")}`;
-    case "up_to_date":
-      return "already merged";
-    default:
-      return "checking…";
-  }
+/** Sidebar mergeability value (Forgejo #588): the mergeable.state wire
+ *  value renders through the ONE shared mergeabilityDisplay mapping
+ *  (phrase + tone), with the page's checks/review/draft context passed
+ *  through so the headline agrees with the MergeBox machine line below.
+ *  The wire contract stays byte-identical — only rendered text changes. */
+function mergeabilityView(m, extra = {}) {
+  return mergeabilityDisplay(m?.state, { mergeable: m, ...extra });
 }
 
 /** Review-verdict chip (Forgejo #545): the ONE state→chip mapping for
@@ -1376,12 +1369,27 @@ export default function Pull() {
           </div>
           <div class="grid gap-1 p-3">
             {/* Mergeability is a VALUE, not a heading: the micro-label
-                above, mergeableText(mergeable()) as the value line, the
-                base/head branches, pending-branch warning, and
+                above, the mergeabilityView display phrase as the value
+                line, the base/head branches, pending-branch warning, and
                 commits/files links as secondary value detail in the same
                 section. */}
             <span class="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-400">Mergeability</span>
-            <p class="text-sm">{mergeableText(mergeable())}</p>
+            {(() => {
+              const v = mergeabilityView(mergeable(), {
+                draft: pr()?.draft,
+                checksBlockers: checksBlockers(),
+                reviewDecision: summary()?.decision,
+                zeroChecks: zeroChecks(),
+              });
+              return (
+                <>
+                  <p class={`text-sm ${v.cls}`}>{v.text}</p>
+                  <Show when={v.sub}>
+                    <p class="text-xs text-zinc-500 dark:text-zinc-400">{v.sub}</p>
+                  </Show>
+                </>
+              );
+            })()}
             <Show when={!getView()?.head_ref_ok}>
               <p class="text-xs text-amber-600 dark:text-amber-400">From branch pending — push first.</p>
             </Show>
@@ -1438,6 +1446,7 @@ export default function Pull() {
                 mergeable={mergeable()}
                 checksBlockers={checksBlockers}
                 reviewDecision={() => summary()?.decision}
+                zeroChecks={zeroChecks}
                 role={role}
                 canUpdate={canUpdateBranch}
                 onSettled={() => reload()}

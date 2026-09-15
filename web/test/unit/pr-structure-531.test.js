@@ -5,7 +5,7 @@
 // - PR page right column: ONE card divide-y sectioned panel in the
 //   Issue.jsx:549 idiom (supersedes the #521 stacked sibling cards).
 //   Mergeability is a section VALUE under an uppercase micro-label (the
-//   Pull.jsx:52 mergeableText wording + the base/head branch lines,
+//   Pull.jsx mergeabilityView display phrase + the base/head branch lines,
 //   pending-branch warning, and commits/files links stay as secondary
 //   value detail).
 //   Review summary composes first; Reviewers / Checks / Merge follow as
@@ -65,7 +65,7 @@ test("sections follow the issues-sidebar anatomy in order: summary, mergeability
 test("mergeability is a value: micro-label + mergeableText line + kept sub-lines", () => {
   const aside = asideOf(PULL);
   assert.ok(aside.includes(">Mergeability</span>"), "Mergeability is a label span, not a heading");
-  assert.ok(aside.includes("{mergeableText(mergeable())}"), "value line keeps the Pull.jsx:52 state wording");
+  assert.ok(aside.includes("mergeabilityView(mergeable(),"), "value line renders the #588 shared display phrase");
   assert.ok(aside.includes("head_ref_ok"), "pending-branch warning stays in the section");
   assert.ok(aside.includes("pr()?.base?.ref") && aside.includes("pr()?.head?.ref"), "base/head refs stay as secondary detail");
   assert.ok(aside.includes("pr()?.fork?.repo"), "cross-repo fork line stays (#328)");
@@ -94,7 +94,7 @@ test("merge section composes MergeBox with every gate prop intact", () => {
   for (const p of ["checksBlockers={checksBlockers}", "reviewDecision={() => summary()?.decision}", "role={role}", "canUpdate={canUpdateBranch}"]) {
     assert.ok(aside.includes(p), `MergeBox keeps ${p}`);
   }
-  assert.ok(MERGEBOX.includes("{state()}"), "machine state still renders as a value line");
+  assert.ok(MERGEBOX.includes("{disp().text}"), "display phrase still renders as a value line (#588)");
   assert.ok(MERGEBOX.includes("merge pull request"), "merge affordance kept");
 });
 
