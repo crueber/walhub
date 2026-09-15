@@ -25,6 +25,7 @@
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import { reportError } from "../lib/data.js";
 import { roleAtLeast } from "./perms.jsx";
+import { mergeabilityDisplay } from "../lib/pull-state.js";
 
 /**
  * Derive the machine state from object state + local task state.
@@ -74,6 +75,16 @@ export default function MergeBox(props) {
     return out;
   };
   const enabled = () => state() === "mergeable" && canMerge() && !getMerging();
+  // Forgejo #588: the machine state renders through the ONE shared
+  // mergeabilityDisplay mapping (phrase + tone); the disabled tooltip
+  // below deliberately keeps machine wording (debuggable, hover-only).
+  const disp = () =>
+    mergeabilityDisplay(state(), {
+      mergeable: props.mergeable,
+      checksBlockers: props.checksBlockers?.(),
+      reviewDecision: props.reviewDecision?.(),
+      zeroChecks: typeof props.zeroChecks === "function" ? props.zeroChecks() : (props.zeroChecks ?? false),
+    });
   const tooltip = () => {
     if (!canMerge()) return "merging requires the maintain role";
     const b = blockers();
@@ -161,7 +172,10 @@ export default function MergeBox(props) {
       </Show>
       <Show when={!props.pr?.merged}>
         <form onSubmit={merge} aria-label="Merge">
-          <p class="text-sm">{state()}</p>
+          <p class={`text-sm ${disp().cls}`}>{disp().text}</p>
+          <Show when={disp().sub}>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">{disp().sub}</p>
+          </Show>
           <label class="grid gap-1 mt-2">
             <span class="text-sm font-medium">Strategy</span>
             <select class="input w-full" value={getStrategy()} onInput={(e) => setStrategy(e.target.value)} disabled={getMerging()}>

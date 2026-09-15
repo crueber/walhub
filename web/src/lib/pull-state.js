@@ -129,6 +129,87 @@ export function reviewVerdictLabel(state) {
 }
 
 /**
+ * Mergeability tone classes (Forgejo #588): Tailwind utilities only, no
+ * ad-hoc CSS. Green is the emerald family, soft red is the muted red
+ * already used for warnings, pending/terminal reads the muted zinc —
+ * every class carries its dark: variant (guideline F2).
+ */
+export const MERGEABILITY_OK_CLS = "text-emerald-600 dark:text-emerald-400";
+export const MERGEABILITY_BAD_CLS = "text-red-600 dark:text-red-400";
+export const MERGEABILITY_MUTED_CLS = "text-zinc-500 dark:text-zinc-400";
+
+/** Secondary detail line for a behind-but-mergeable branch (08 §2: behind
+ *  stays mergeable; the update-branch button covers remediation). */
+export const MERGEABILITY_BEHIND_SUB = "branch is behind — update";
+
+/**
+ * mergeabilityDisplay(state, detail) → {text, cls, sub}: the ONE
+ * machine→display mapping for mergeability on the PR page (Forgejo #588,
+ * the #561 pattern). `state` accepts EITHER a MergeBox machine value
+ * (draft|blocked|mergeable|ready|merging|failed|merged — mergeState() in
+ * MergeBox.jsx) OR a mergeable.state wire value
+ * (clean|behind|dirty|up_to_date); `detail` disambiguates the blocked
+ * headline and carries the behind wire object:
+ * {mergeable, checksBlockers[], reviewDecision, draft, zeroChecks}.
+ *
+ * Priority mirrors mergeState() order (merged → failed → merging →
+ * draft → checks → reviews → conflicts); the amber "blocking merge: …"
+ * reasons line keeps the full detail, this headline stays one phrase.
+ * Wire/internal values stay byte-identical — only rendered text/classes
+ * are mapped here. Missing (null/undefined/"") reads Unknown; any other
+ * unrecognized non-empty value passes through as-is (debuggable, never
+ * blank — the #561 precedent).
+ *
+ * Decisions: zeroChecks rewrites ONLY the pending/ready headline ("No
+ * checks required", NEUTRAL muted — an empty required set blocks nothing
+ * per checks-empty.js, so red would falsely signal blocked; a
+ * clean/behind wire still reads Able to be Merged). Behind stays
+ * mergeable per 08 §2: green headline + the behind sub-line.
+ */
+export function mergeabilityDisplay(state, detail = {}) {
+  const d = detail ?? {};
+  const blockers = Array.isArray(d.checksBlockers) ? d.checksBlockers : [];
+  const wire = d.mergeable?.state;
+  const behind = state === "behind" || wire === "behind";
+  if (state === "merged" || state === "up_to_date") {
+    return { text: "Already merged", cls: MERGEABILITY_MUTED_CLS, sub: null };
+  }
+  if (state === "failed") {
+    return { text: "Merge failed", cls: MERGEABILITY_BAD_CLS, sub: null };
+  }
+  if (state === "merging") {
+    return { text: "Merging…", cls: MERGEABILITY_MUTED_CLS, sub: null };
+  }
+  if (state === "draft" || d.draft) {
+    return { text: "Draft pull request", cls: MERGEABILITY_BAD_CLS, sub: null };
+  }
+  if (blockers.length > 0) {
+    return { text: "Checks failing", cls: MERGEABILITY_BAD_CLS, sub: null };
+  }
+  if (d.reviewDecision === "CHANGES_REQUESTED") {
+    return { text: "Changes requested", cls: MERGEABILITY_BAD_CLS, sub: null };
+  }
+  if (state === "dirty" || wire === "dirty") {
+    return { text: "Merge conflicts", cls: MERGEABILITY_BAD_CLS, sub: null };
+  }
+  if (state === "clean" || state === "mergeable" || behind) {
+    return {
+      text: "Able to be Merged",
+      cls: MERGEABILITY_OK_CLS,
+      sub: behind ? MERGEABILITY_BEHIND_SUB : null,
+    };
+  }
+  if (state === "ready" || state === "checking" || state === "unknown") {
+    if (d.zeroChecks) {
+      return { text: "No checks required", cls: MERGEABILITY_MUTED_CLS, sub: null };
+    }
+    return { text: "Checking mergeability", cls: MERGEABILITY_MUTED_CLS, sub: null };
+  }
+  if (state == null || state === "") return { text: "Unknown", cls: MERGEABILITY_MUTED_CLS, sub: null };
+  return { text: String(state), cls: MERGEABILITY_MUTED_CLS, sub: null };
+}
+
+/**
  * pullCloseVisibility({thread, pr, mePrincipal, role}) → {showClose, showReopen}:
  * unmerged only (merged PRs expose no lifecycle control — a merged close is
  * a server 409), same author-or-triage rule both ways, driven by the live
