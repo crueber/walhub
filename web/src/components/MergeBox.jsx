@@ -162,9 +162,9 @@ export default function MergeBox(props) {
       <Show when={!props.pr?.merged}>
         <form onSubmit={merge} aria-label="Merge">
           <p class="text-sm">{state()}</p>
-          <label class="field">
-            <span>Strategy</span>
-            <select value={getStrategy()} onInput={(e) => setStrategy(e.target.value)} disabled={getMerging()}>
+          <label class="grid gap-1 mt-2">
+            <span class="text-sm font-medium">Strategy</span>
+            <select class="input w-full" value={getStrategy()} onInput={(e) => setStrategy(e.target.value)} disabled={getMerging()}>
               <option value="merge">merge</option>
               <option value="squash">squash</option>
               <option value="rebase">rebase</option>
