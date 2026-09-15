@@ -757,7 +757,11 @@ function StagedCard(props) {
  *  click on the card body sets the same page-level flash (new `onFlash`
  *  prop — the page passes setFlashTid directly, so card click overwrites
  *  exactly like a pill jump and never scrolls; the cardFlashClick guard
- *  above keeps control clicks and selection drags from flashing). */
+ *  above keeps control clicks and selection drags from flashing).
+ *  Forgejo #581: the header renders no visible tid — the zero-padded
+ *  %08x id is an opaque internal key, so the mono tid span is gone
+ *  (plain removal, no tooltip); the card root id, aria-label, flashTid
+ *  mechanics, and the ThreadIndex anchorLabel pills are untouched. */
 function ThreadCard(props) {
   const t = () => props.thread;
   const [getBody, setBody] = createSignal("");
@@ -795,7 +799,6 @@ function ThreadCard(props) {
       onClick={(e) => cardFlashClick(e, () => props.onFlash?.(t().tid))}
     >
       <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
-        <span class="font-mono text-zinc-500 dark:text-zinc-400">{t().tid}</span>
         <Show when={t()._fresh === false}>
           <span class="pill bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300" title="anchor drifted past the current diff">
             outdated · {(t().anchor?.path ?? "")}:{(t().anchor?.side === "NEW" ? t().anchor?.new_start : t().anchor?.old_start) ?? ""}
