@@ -118,10 +118,12 @@ function GeneralTab(props) {
   // Forgejo #586: the self-approval toggle rides the same
   // WAL-published settings TOML ([review] allow_self_approval) with the
   // existing General-tab save path (admin-gated PUT, 403 in the note,
-  // same invalidations). null = not yet prefilled (renders checked:
-  // the server default is allowed).
-  const [getSelf, setSelf] = createSignal(null);
-  const [getSelfBase, setSelfBase] = createSignal(null);
+  // same invalidations). undefined = not yet seeded (loading);
+  // null = seeded-but-unset (renders checked: the server default is
+  // allowed — Forgejo #605: null can never double as the unseeded
+  // sentinel, or unset docs stick on "loading…" forever).
+  const [getSelf, setSelf] = createSignal(undefined);
+  const [getSelfBase, setSelfBase] = createSignal(undefined);
   const [getSelfNote, setSelfNote] = createSignal("");
 
   const [getDoc] = useData(`settings:${props.ctx.full}`, () => props.repo.settings.get(), 5000);
@@ -151,8 +153,10 @@ function GeneralTab(props) {
       setFlagsBase(seed);
     }
     // Forgejo #586: seed the self-approval toggle from the [review]
-    // section the same way (null sentinel — user edits never clobbered).
-    if (doc !== undefined && getSelf() === null) {
+    // section the same way (undefined sentinel — Forgejo #605: null
+    // means seeded-but-unset, so only undefined counts as untouched;
+    // user edits are never clobbered).
+    if (doc !== undefined && getSelf() === undefined) {
       const seed = extractSelfApproval(typeof doc === "string" ? doc : String(doc?.toml ?? ""));
       setSelf(seed);
       setSelfBase(seed);
@@ -424,7 +428,7 @@ function GeneralTab(props) {
           non-admin save surfaces the 403 in the note, the same
           read-mostly behavior as the description save. */}
       <h4 class="mb-2 font-semibold">Code review</h4>
-      <Show when={getSelf() !== null} fallback={<p class="muted text-sm">loading…</p>}>
+      <Show when={getSelf() !== undefined} fallback={<p class="muted text-sm">loading…</p>}>
         {/* Forgejo #533: one aligned flex row — label (title + muted
             hint beneath) left, the shared ToggleSwitch anchored right.
             The row IS the label, so clicking anywhere on it toggles the
@@ -445,7 +449,7 @@ function GeneralTab(props) {
         <p class="warn-line !mt-1 !text-sm">unsaved changes</p>
       </Show>
       <div class="mt-2 flex flex-wrap items-center gap-2">
-        <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={saveSelfApproval} disabled={getSelf() === null}>Save code review</button>
+        <button class="pill !border-emerald-500 cursor-pointer select-none" type="button" onClick={saveSelfApproval} disabled={getSelf() === undefined}>Save code review</button>
       </div>
       <Show when={getSelfNote()}>
         <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-400">{getSelfNote()}</p>
