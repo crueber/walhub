@@ -557,12 +557,14 @@ func TestUserAvatarAuth(t *testing.T) {
 	if w := doReq(other, "POST", "/api/v1/users/dave/avatar", ""); w.Code != http.StatusForbidden {
 		t.Errorf("foreign POST = %d, want 403", w.Code)
 	}
-	// Unknown principal DELETE → 404 (no synthesis); bogus method → 405.
+	// Unknown principal DELETE → 404 (no synthesis); bogus method → 405
+	// (PUT is the #601 upload now — an empty PUT body 415s on the sniff,
+	// pinned by the upload tests).
 	if w := doReq(god, "DELETE", "/api/v1/users/ghost/avatar", ""); w.Code != http.StatusNotFound {
 		t.Errorf("ghost DELETE = %d, want 404", w.Code)
 	}
-	if w := doReq(self, "PUT", "/api/v1/users/dave/avatar", ""); w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("PUT avatar = %d, want 405", w.Code)
+	if w := doReq(self, "PATCH", "/api/v1/users/dave/avatar", ""); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("PATCH avatar = %d, want 405", w.Code)
 	}
 }
 

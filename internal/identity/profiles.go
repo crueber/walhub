@@ -20,8 +20,10 @@ type Profile struct {
 	// email is visible to its owner alone, nowhere else). omitempty
 	// keeps stored docs and foreign views byte-identical.
 	Email string `json:"email,omitempty"`
-	// AvatarContentType is the magic value "image/svg+xml" when the
-	// user holds a generated avatar ("" = none — the render gate, so
+	// AvatarContentType is "image/svg+xml" when the user holds a
+	// generated avatar, "image/png" when the user holds a #601 upload
+	// (server-side center-cropped square, PNG re-encoded — the single
+	// canonical raster type), "" = none — the render gate, so
 	// GET profile answers avatar presence in its single round trip,
 	// the #359 org-avatar pointer shape). AvatarUpdatedAt is the
 	// install time (RFC3339): the ?v cache-buster on the stable

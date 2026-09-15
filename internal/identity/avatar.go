@@ -36,8 +36,13 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"net/mail"
 	"strings"
 	"sync"
@@ -49,13 +54,30 @@ import (
 	"git.packden.us/crueber/walhub/internal/store"
 )
 
-// userAvatarContentType is the only user-avatar media type: generated
-// SVGs, never uploads (unlike #359 org avatars, which accept PNG/JPEG/
-// GIF/WebP uploads and reject SVG — same-origin served SVG is script
-// execution in our origin, but THESE bytes are generated locally from
-// the style definition, never authored by the user, and the seed is
-// verified-absent from the output before the write).
+// User avatars are EITHER a generated SVG or an uploaded raster
+// (Forgejo #601 extends the #376 generated-only design): generated SVGs
+// are produced locally from the style definition (never authored by the
+// user — same-origin served SVG is script execution in our origin, so
+// user-authored SVG stays rejected); uploads accept PNG/JPEG/GIF,
+// center-cropped server-side to a square and re-encoded to PNG
+// (lossless + transparency, one canonical raster type). WebP is
+// 415-rejected for user uploads even though the #359 org twin accepts
+// it: stdlib cannot decode WebP (no new image dependency per law 1),
+// and accept-and-store without the server-side crop would serve
+// uncropped uploads — an inconsistency rejected in favor of a clear
+// 415. POST .../avatar stays "install fresh generated avatar" and
+// replaces an upload (documented opt-back-in after Remove); DELETE
+// clears either kind and opts out (avatar_disabled) until the next
+// install. The bucket key keeps its generated-era users/<username>/
+// avatar.svg spelling for both kinds (renaming would orphan existing
+// avatars); the profile pointer's avatar_content_type is authoritative
+// for the served Content-Type, never the key suffix.
 const userAvatarContentType = "image/svg+xml"
+
+// uploadedUserAvatarContentType is the single normalized raster type:
+// every accepted upload is center-cropped and PNG re-encoded, so the
+// pointer names one content type and GET serves one shape.
+const uploadedUserAvatarContentType = "image/png"
 
 // maxUserAvatarBytes caps one generated avatar (generation output is a
 // few KiB; the cap fails closed on a pathological style definition).
@@ -249,6 +271,158 @@ func (s *Service) putUserAvatar(ctx context.Context, username, svg string) (*Pro
 	return result, nil
 }
 
+// maxUserAvatarUploadBytes caps one avatar upload (2 MiB → 413 over
+// cap): the org-twin number (orgs.go) — avatars render at a few hundred
+// px, so 2 MiB is generous without letting one avatar become a bulk
+// transfer. Separate const from maxUserAvatarBytes (the 1 MiB
+// generation-output guard): different budgets, different failure modes.
+const maxUserAvatarUploadBytes = int64(2 << 20)
+
+// sniffUserAvatarUpload sniffs the PNG/JPEG/GIF allowlist from magic
+// bytes (never the extension, never the client Content-Type — the org
+// precedent). SVG is rejected (same-origin served SVG executes script
+// in our origin); WebP is rejected with its own message (see the
+// package design note: stdlib cannot decode WebP and law 1 forbids a
+// new image dependency, so the server-side center-crop this endpoint
+// promises is impossible for WebP — the deliberate divergence from the
+// org twin's PNG/JPEG/GIF/WebP list).
+func sniffUserAvatarUpload(head []byte) (string, bool) {
+	if len(head) >= 8 &&
+		head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4E && head[3] == 0x47 &&
+		head[4] == 0x0D && head[5] == 0x0A && head[6] == 0x1A && head[7] == 0x0A {
+		return "image/png", true
+	}
+	if len(head) >= 3 && head[0] == 0xFF && head[1] == 0xD8 && head[2] == 0xFF {
+		return "image/jpeg", true
+	}
+	if len(head) >= 6 && head[0] == 'G' && head[1] == 'I' && head[2] == 'F' &&
+		head[3] == '8' && (head[4] == '7' || head[4] == '9') && head[5] == 'a' {
+		return "image/gif", true
+	}
+	return "", false
+}
+
+// isWebP reports RIFF....WEBP magic (the rejected-but-named case: the
+// 415 names WebP explicitly so the caller learns the divergence instead
+// of guessing).
+func isWebP(head []byte) bool {
+	return len(head) >= 12 && head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F' &&
+		head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P'
+}
+
+// cropSquarePNG decodes src (PNG/JPEG/GIF via the stdlib registry),
+// center-crops to the largest centered square, and re-encodes PNG
+// (lossless + transparency — the one canonical raster type, so the
+// pointer names a single content type and display stays circular via
+// CSS rounded-full on every consumer). Pure stdlib (law 1 — no image
+// dependency). Animated GIFs collapse to their first frame
+// (image.Decode semantics) — documented, not detected: a first-frame
+// still is a valid square avatar.
+func cropSquarePNG(src []byte) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(src))
+	if err != nil {
+		return nil, fmt.Errorf("%w: avatar image does not decode: %v", ErrInvalid, err)
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("%w: avatar image is empty", ErrInvalid)
+	}
+	side := w
+	if h < side {
+		side = h
+	}
+	ox := b.Min.X + (w-side)/2
+	oy := b.Min.Y + (h-side)/2
+	sq := image.NewRGBA(image.Rect(0, 0, side, side))
+	for y := 0; y < side; y++ {
+		for x := 0; x < side; x++ {
+			sq.Set(x, y, img.At(ox+x, oy+y))
+		}
+	}
+	var out bytes.Buffer
+	if err := png.Encode(&out, sq); err != nil {
+		return nil, fmt.Errorf("%w: avatar re-encode failed: %v", ErrInvalid, err)
+	}
+	return out.Bytes(), nil
+}
+
+// PutUserAvatarBytes installs an uploaded avatar (the PUT .../avatar
+// path, self-or-admin checked by the handler): size-capped (413),
+// magic-sniffed (415, SVG and WebP rejected — see
+// sniffUserAvatarUpload), center-cropped to a square and PNG
+// re-encoded server-side, then stored bytes-first/pointer-second (the
+// #359 philosophy: orphaned bytes after a crashed pointer write are
+// inert, while a pointer without bytes can never render). The pointer
+// write bumps AvatarUpdatedAt on every upload — clients cache-bust
+// with ?v=<avatar_updated_at> and revalidate the user-avatar-<ts>
+// ETag, so a same-URL upload without the bump would serve stale. A
+// successful install clears AvatarDisabled: having an avatar is having
+// an avatar, whichever kind. Unknown principals 404 (no profile to
+// carry the pointer — synthesis must not manufacture authority, the
+// userExists rule; unlike the login-time generated path, which must
+// create the profile, an upload is an explicit action on an existing
+// account).
+//
+// Round trips: decode/crop are local CPU, then 1 PUT (bytes) + 1 CAS
+// loop on profile.json (human-rate, not a git hot path — law 6 budgets
+// don't cover collab mutations).
+//
+// ### Concurrency
+//
+// Hazard: two concurrent avatar installs (upload vs upload, or upload
+// vs regenerate) interleaving bytes and pointer writes (A's bytes +
+// B's pointer). Avoidance: last-writer-wins on both objects
+// independently — each PUT completes before its pointer CAS starts, so
+// either pointer always names bytes that exist (the render is always a
+// real image, just possibly the older install's). No lock is held
+// across any store call (the org-twin handling, orgs.go).
+func (s *Service) PutUserAvatarBytes(ctx context.Context, username string, data []byte) (*Profile, error) {
+	username = normPrincipal(username)
+	if !ValidPrincipal(username) {
+		return nil, fmt.Errorf("%w: invalid principal %q", ErrInvalid, username)
+	}
+	if int64(len(data)) > maxUserAvatarUploadBytes {
+		return nil, fmt.Errorf("%w: avatar exceeds %d bytes", ErrTooLarge, maxUserAvatarUploadBytes)
+	}
+	if _, ok := sniffUserAvatarUpload(data); !ok {
+		if isWebP(data) {
+			return nil, fmt.Errorf("%w: WebP avatars are not accepted for user avatars (only PNG, JPEG, and GIF — cropped server-side)", ErrUnsupportedMedia)
+		}
+		return nil, fmt.Errorf("%w: only PNG, JPEG, and GIF avatars are accepted", ErrUnsupportedMedia)
+	}
+	square, err := cropSquarePNG(data)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := store.PutBytes(ctx, s.Store, UserAvatarKey(username), square,
+		store.PutOptions{Mode: store.PutOverwrite, ContentType: uploadedUserAvatarContentType}); err != nil {
+		return nil, err
+	}
+	var result *Profile
+	_, err = s.casUpdate(ctx, ProfileKey(username), func(cur []byte, _ store.Version) ([]byte, bool, error) {
+		if cur == nil {
+			return nil, false, fmt.Errorf("%w: unknown principal %q", ErrNotFound, username)
+		}
+		prev, perr := parseProfile(cur)
+		if perr != nil {
+			return nil, false, perr
+		}
+		now := s.nowUTC().Format(time.RFC3339)
+		prev.Version++
+		prev.AvatarContentType = uploadedUserAvatarContentType
+		prev.AvatarUpdatedAt = now
+		prev.AvatarDisabled = false
+		prev.UpdatedAt = now
+		result = prev
+		return encodeProfile(prev), true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetUserAvatar reads the avatar bytes plus the pointer profile; prof
 // is nil when the user has no avatar (pointer unset or object missing
 // — a pruned bucket still renders the no-avatar state, never an
@@ -318,7 +492,12 @@ func (s *Service) DeleteUserAvatar(ctx context.Context, username string) (*Profi
 
 // RegenerateUserAvatar regenerates the avatar synchronously (explicit
 // user action — the POST /avatar path): clears the opt-out and
-// installs a fresh deterministic render. The seed resolves through
+// installs a fresh deterministic render. POST keeps this meaning when
+// the user holds an upload (Forgejo #601 decision): regenerate
+// REPLACES the upload (and stays visible beside the upload control),
+// doubling as the documented opt-back-in after Remove — hiding it
+// while an upload exists would strand the opt-back-in path behind a
+// delete-then-discover flow. The seed resolves through
 // the username registry (EmailForUsername); a legacy email spelling
 // seeds itself. An unmappable principal 404s — generation without a
 // verified email would break the seed=email contract.

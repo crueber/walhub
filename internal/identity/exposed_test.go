@@ -87,6 +87,7 @@ func TestExposedCoversRoutes(t *testing.T) {
 		{"user put", "PUT", "/api/v1/users/alice@example.com", true, "/api/v1/users/{principal}"},
 		{"user browser lane", "GET", "/api-browser/v1/users/alice@example.com", true, "/api/v1/users/{principal}"},
 		{"user avatar get", "GET", "/api/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},
+		{"user avatar upload", "PUT", "/api/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},
 		{"user avatar regenerate", "POST", "/api/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},
 		{"user avatar delete", "DELETE", "/api/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},
 		{"user avatar browser lane", "GET", "/api-browser/v1/users/alice/avatar", true, "/api/v1/users/{principal}/avatar"},

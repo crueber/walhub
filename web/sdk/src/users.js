@@ -40,14 +40,36 @@ export function attachUsers(client) {
        *  gate on the user profile's avatar_content_type — the client
        *  never probes the bytes. */
       url: (principal, v) => `${path(principal)}/avatar${v ? `?v=${enc(v)}` : ""}`,
+      /** Upload raw image bytes (PUT, self or admin): PNG/JPEG/GIF,
+       *  2 MiB cap — the server center-crops to a square PNG. WebP is
+       *  415-rejected (stdlib cannot crop it); SVG likewise. */
+      upload: async (principal, data, { contentType, ...opts } = {}) => {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(await toArrayBuffer(data));
+        return client._call(`${path(principal)}/avatar`, {
+          method: "PUT",
+          headers: { "Content-Type": contentType ?? "application/octet-stream" },
+          body: bytes,
+          ...opts,
+        });
+      },
       /** Regenerate the avatar (POST, self or admin): installs a fresh
-       *  deterministic render and clears the delete opt-out. */
+       *  deterministic render and clears the delete opt-out (replaces
+       *  an upload when one exists — Forgejo #601). */
       regenerate: (principal, opts) =>
         client._call(`${path(principal)}/avatar`, { method: "POST", ...opts }),
       /** Remove the avatar (DELETE, self or admin): opts out of
-       *  auto-generation until an explicit regenerate. */
+       *  auto-generation until an explicit regenerate (or re-upload). */
       remove: (principal, opts) =>
         client._call(`${path(principal)}/avatar`, { method: "DELETE", ...opts }),
     },
   };
+}
+
+/** Coerce upload input to bytes (File/Blob preferred — carries image data). */
+async function toArrayBuffer(data) {
+  if (data instanceof ArrayBuffer) return data;
+  if (data?.buffer instanceof ArrayBuffer) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  if (typeof data === "string") return new TextEncoder().encode(data).buffer;
+  if (data?.arrayBuffer instanceof Function) return data.arrayBuffer();
+  throw new Error("users.avatar.upload: data must be bytes, a string, or a Blob/File");
 }

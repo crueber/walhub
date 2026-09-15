@@ -321,6 +321,11 @@ function ProfileForm(props) {
  *  so editing one owner never opens the form on another owner's page. */
 const [getEditingOwner, setEditingOwner] = createSignal(null);
 
+/** Forgejo #601: the client-side pre-check mirroring the server's 2 MiB
+ *  user-avatar cap (the Org.jsx MAX_AVATAR_BYTES twin — separate const,
+ *  separate page, same number). */
+const MAX_USER_AVATAR_BYTES = 2 << 20;
+
 /** The owner page in all three views (Forgejo #422; third view Forgejo
  *  #430; sidebar tabs Forgejo #437, superseding the #435 top strip): one
  *  shared profile-layout grid on every view. The main column swaps per
@@ -435,6 +440,35 @@ function OwnerPage(props) {
     invalidate(`user:${owner()}`);
     invalidate("me"); // the navbar renders the same avatar
   };
+  // Forgejo #601: upload a custom avatar (PUT, self-or-admin
+  // server-side — the client never decides). Mirrors the org-avatar
+  // upload (Org.jsx): 2 MiB client pre-check, error mapping, and the
+  // same refresh. The server center-crops to a square PNG; the preview
+  // <img> below is already circular (rounded-full), so the upload
+  // renders in the same circle with zero new display code. PNG/JPEG/
+  // GIF only — the server 415s WebP (stdlib cannot crop it) and SVG
+  // (same-origin script risk).
+  const uploadAvatar = async (file) => {
+    setAvatarNote("");
+    if (!file) return;
+    if (file.size > MAX_USER_AVATAR_BYTES) {
+      setAvatarNote("avatar too large (max 2 MiB)");
+      return;
+    }
+    try {
+      await repos.users.avatar.upload(owner(), file, { contentType: file.type || undefined });
+      refreshAvatar();
+    } catch (err) {
+      reportError(err, `user:${owner()}`);
+      setAvatarNote(
+        err?.status === 413
+          ? "avatar too large (max 2 MiB)"
+          : err?.status === 415
+            ? "only PNG, JPEG, and GIF avatars are accepted (WebP is not supported)"
+            : String(err?.message ?? err)
+      );
+    }
+  };
   const regenerateAvatar = async () => {
     setAvatarNote("");
     try {
@@ -514,9 +548,9 @@ function OwnerPage(props) {
           DOM order stays main-first so the h1 keeps heading order. The
           Repositories toolbar lives on the repositories tab (#413, #422);
           the membership list lives on the organizations tab (#423, #430).
-          All gating byte-identical (Edit: server can_edit;
-          Regenerate/Remove: self-only; Manage: canManage; #376 cache
-          invalidation) — layout only. */}
+           All gating byte-identical (Edit: server can_edit;
+           Upload/Regenerate/Remove: self-only; Manage: canManage; #376 cache
+           invalidation) — layout only. */}
           <Show when={!isOrg()}>
             <div class="profile-header border-b border-zinc-200 pb-6 dark:border-zinc-700">
               <h1 class="text-2xl font-semibold">{displayName()}</h1>
@@ -691,14 +725,16 @@ function OwnerPage(props) {
               grouped in one vertical full-width stack (Edit profile when
               profile.can_edit, Regenerate/Remove avatar when self-only).
               The aside renders when there is an avatar to show, the
-              viewer can act (self without an avatar still gets Regenerate
-              to opt back in), or the viewer may edit (host admin on an
-              avatarless page); each action keeps its own byte-identical
-              gate below. Regenerate installs a fresh deterministic render
-              (and opts back in); remove deletes the avatar and opts out
-              of auto-generation until the next regenerate (Forgejo #376:
-              the server re-checks self-or-admin; the client never
-              decides). Non-org only — org avatars live in org settings. */}
+               viewer can act (self without an avatar still gets Regenerate
+               to opt back in), or the viewer may edit (host admin on an
+               avatarless page); each action keeps its own byte-identical
+               gate below. Regenerate installs a fresh deterministic render
+               (and opts back in, replacing an upload); upload installs a
+               custom square-cropped PNG (Forgejo #601, self-only file
+               input above Regenerate); remove deletes either kind and opts
+               out of auto-generation until the next regenerate or upload
+               (Forgejo #376: the server re-checks self-or-admin; the client
+               never decides). Non-org only — org avatars live in org settings. */}
           <Show when={!isOrg() && (userSrc() || isSelf() || getProfile()?.can_edit)}>
             <aside class="profile-sidebar flex min-w-0 flex-col items-center gap-3" aria-label="Profile actions">
               <Show when={userSrc()}>
@@ -727,6 +763,18 @@ function OwnerPage(props) {
                     </button>
                   </Show>
                   <Show when={isSelf()}>
+                    <label class="flex w-full flex-col items-center gap-1 text-center text-xs">
+                      <span class="muted block">upload avatar (PNG/JPEG/GIF, ≤ 2 MiB — cropped square)</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/gif"
+                        class="w-full text-xs"
+                        onChange={(e) => {
+                          uploadAvatar(e.currentTarget.files?.[0]);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
                     <button class="btn w-full justify-center px-3 py-1" type="button" onClick={regenerateAvatar}>
                       Regenerate avatar
                     </button>
