@@ -21,6 +21,11 @@
 // lib/diff.js, twin DriftHash in internal/review/model.go) are never
 // touched — the pinned vectors in diff-review.test.js are the tripwire.
 //
+// Commenting (Forgejo #546): pass onCommentSelect (+ canComment) and the
+// current selection gains a "comment on selection" button feeding the
+// consumer's shared CommentComposer. Anchor construction lives in
+// lib/review-anchor.js — this component never hashes, never prompts.
+//
 // Row backgrounds (issue #544): lineClass() applies per CELL, not per row
 // — unified rows color both cells (gutter + code, full-row background),
 // split rows color per side (a paired change row is red-left/green-right,
@@ -193,6 +198,7 @@ export function DiffBody(props) {
   };
 
   return (
+    <>
     <Show
       when={!props.file?.isBinary}
       fallback={
@@ -268,5 +274,30 @@ export function DiffBody(props) {
         </tbody>
       </table>
     </Show>
+      {/* Comment-on-selection affordance (Forgejo #546): when a consumer
+          passes onCommentSelect (+ canComment), the current drag/shift
+          selection gains a "comment on selection" button feeding the shared
+          CommentComposer on the consumer's side — never a prompt here. The
+          selection stays clamped to one chunk + one side by the drag logic,
+          which maps cleanly onto the §4 range anchor. Hidden everywhere
+          else (commit page, ungated consumers pass nothing). */}
+      <Show when={props.onCommentSelect && props.canComment !== false && getSel()}>
+        {(sel) => (
+          <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
+            <span class="muted font-mono">
+              {sel().path}:{sel().start}{sel().end !== sel().start ? `-${sel().end}` : ""}{sel().side === "old" ? " (old side)" : ""}
+            </span>
+            <button
+              type="button"
+              class="btn px-2 py-0.5"
+              onClick={() => props.onCommentSelect(sel())}
+              aria-label={`Comment on selected lines in ${sel().path}`}
+            >
+              comment on selection
+            </button>
+          </div>
+        )}
+      </Show>
+    </>
   );
 }

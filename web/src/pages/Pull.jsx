@@ -15,7 +15,13 @@ import repos from "../../sdk/src/index.js";
 import { useData, invalidate, invalidatePullLists, reportError } from "../lib/data.js";
 import { CheckPill, ContextRows, ZeroChecksBlock } from "./Checks.jsx";
 import { isZeroChecks, requiredCheckBlockers } from "../lib/checks-empty.js";
-import { parsePatchFiles, normalizePatchBody, anchorContextSha } from "../lib/diff.js";
+import { parsePatchFiles, normalizePatchBody } from "../lib/diff.js";
+import {
+  buildAnchor,
+  anchorLabel,
+  freshnessOf,
+  sortThreadsForIndex,
+} from "../lib/review-anchor.js";
 import { lineClass } from "../components/DiffTable.jsx";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
 import DateTime from "../components/DateTime.jsx";
@@ -302,22 +308,15 @@ function numberedLines(hunk) {
 
 /** Derive freshness for one thread against the CURRENT diff: recompute the
  *  §4 hash from the diff — mismatch (or an unlocatable anchor) renders the
- *  thread outdated (collapsed, original line shown), never relocated. */
+ *  thread outdated (collapsed, original line shown), never relocated.
+ *  Delegates to freshnessOf (lib/review-anchor.js): single-line anchors hash
+ *  {start: idx, count: 1} exactly as before (pinned vectors hold); range
+ *  anchors hash their own span. */
 function threadFreshness(thread, files) {
-  const a = thread.anchor ?? {};
-  for (const f of files) {
-    if (f.path !== a.path) continue;
-    for (const h of f.hunks ?? []) {
-      const rows = numberedLines(h);
-      const idx = rows.findIndex((r) =>
-        a.side === "NEW" ? r.newNo === a.new_start : r.oldNo === a.old_start
-      );
-      if (idx < 0) continue;
-      const fresh = anchorContextSha({ path: f.path, lines: h.lines }, { start: idx, count: 1 });
-      return { fresh: fresh === a.context_sha, hunk: h, idx };
-    }
-  }
-  return { fresh: false, hunk: null, idx: -1 };
+  const r = freshnessOf(thread.anchor, files);
+  if (r.hunkIndex < 0) return { fresh: false, hunk: null, idx: -1 };
+  const f = (files ?? []).find((x) => x.path === thread.anchor?.path);
+  return { fresh: r.fresh, hunk: f?.hunks?.[r.hunkIndex] ?? null, idx: r.startIdx };
 }
 
 /** One file's hunks with line comment affordances + inline thread cards
@@ -327,21 +326,39 @@ function threadFreshness(thread, files) {
  *  .diff-del tokens DiffBody uses, so the conversation diff matches the
  *  Files tab and commit diffs in both themes). */
 function DiffFile(props) {
-  const stageLine = (file, hunk, row) => {
-    // A line's comment affordance builds the anchor from the parsed hunk:
-    // side/old_*/new_* from hunk counters, path from the file header,
-    // commit_sha from the rendered head, context_sha via anchorContextSha.
+  // Staged line-comment draft (Forgejo #546): the "+" affordance builds the
+  // anchor via lib/review-anchor.js and opens the shared CommentComposer —
+  // never window.prompt. Plain click stages one line; Shift+click on another
+  // "+" in the same file + side + hunk extends a range (the DiffTable clamp
+  // convention), staged as new_lines/old_lines > 1. Submit hands
+  // {anchor, body} to onStage (the finish-review modal); cancel drops it.
+  const [getDraft, setDraft] = createSignal(null);
+  const [getLast, setLast] = createSignal(null);
+
+  const stageLine = (file, hunk, hunkIdx, row, ev) => {
     const isNew = row.line.t !== "-";
-    const anchor = isNew
-      ? { path: file.path, side: "NEW", old_start: 0, old_lines: 0, new_start: row.newNo, new_lines: 1, commit_sha: props.head, context_sha: "" }
-      : { path: file.path, side: "OLD", old_start: row.oldNo, old_lines: 1, new_start: 0, new_lines: 0, commit_sha: props.head, context_sha: "" };
-    anchor.context_sha = anchorContextSha(
-      { path: file.path, lines: hunk.lines },
-      { start: row.idx, count: 1 }
-    );
-    const body = window.prompt(`Comment on ${file.path}:${isNew ? row.newNo : row.oldNo} (staged into the finish-review modal):`, "");
-    if (body === null || !body.trim()) return;
-    props.onStage({ anchor, body: body.trim() });
+    const side = isNew ? "NEW" : "OLD";
+    const no = isNew ? row.newNo : row.oldNo;
+    if (no == null) return;
+    const last = getLast();
+    if (ev?.shiftKey && last && last.file === file.path && last.side === side && last.hunkIdx === hunkIdx) {
+      const anchor = buildAnchor({
+        file,
+        hunk,
+        side,
+        startNo: Math.min(last.no, no),
+        endNo: Math.max(last.no, no),
+        head: props.head,
+      });
+      if (anchor) {
+        setDraft({ anchor });
+        return;
+      }
+    }
+    const anchor = buildAnchor({ file, hunk, side, startNo: no, endNo: no, head: props.head });
+    if (!anchor) return;
+    setLast({ file: file.path, side, no, hunkIdx });
+    setDraft({ anchor });
   };
 
   // Placement is derived fresh every render: locate each thread's anchor
@@ -402,14 +419,15 @@ function DiffFile(props) {
                       <button
                         type="button"
                         class="link ml-2 hidden shrink-0 group-hover:inline"
-                        onClick={() => stageLine(props.file, hunk, row)}
+                        onClick={(ev) => stageLine(props.file, hunk, hi(), row, ev)}
                         aria-label={`Comment on line ${row.newNo ?? row.oldNo}`}
+                        title="Comment on this line (Shift+click another + for a range)"
                       >
                         +
                       </button>
                     </div>
                     <For each={threadsAt(hi(), ri())}>
-                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} />}
+                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
                     </For>
                   </div>
                 )}
@@ -421,17 +439,46 @@ function DiffFile(props) {
       {/* Anchors that no longer locate (drifted head, deleted lines)
           render once, collapsed, at the file end — never relocated. */}
       <For each={placement().unplaced}>
-        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} />}
+        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
       </For>
+      {/* Staged line-comment draft: the shared CommentComposer (never a
+          prompt); submit stages into the finish-review modal. */}
+      <Show when={getDraft()}>
+        {(d) => (
+          <div class="ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700" aria-label={`Draft comment on ${anchorLabel(d().anchor)}`}>
+            <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
+              commenting on <span class="font-mono">{anchorLabel(d().anchor)}</span>
+              <button type="button" class="link ml-2" onClick={() => setDraft(null)}>
+                cancel
+              </button>
+            </p>
+            <CommentComposer
+              onSubmit={async (body) => {
+                props.onStage({ anchor: d().anchor, body });
+                setDraft(null);
+              }}
+              submitLabel="Stage comment"
+              placeholder={`Comment on ${anchorLabel(d().anchor)}… (staged into the finish-review modal)`}
+              errorKey="line-comment-stage"
+              label={`Comment on ${anchorLabel(d().anchor)}`}
+            />
+          </div>
+        )}
+      </Show>
     </div>
   );
 }
 
-/** One thread card: comments, resolve toggle, outdated collapse. */
+/** One thread card: comments, resolve toggle, outdated collapse. The card
+ *  carries id `thread-<tid>` so the jump-to-comments index can scroll to
+ *  it; a flashed (just-jumped-to) card draws an emerald outline and
+ *  expands, so the target reads in both themes. */
 function ThreadCard(props) {
   const t = () => props.thread;
   const [getBody, setBody] = createSignal("");
   const [getOpen, setOpen] = createSignal(!t().resolved);
+  const flashed = () => props.flashTid?.() === t().tid;
+  const open = () => getOpen() || flashed();
 
   const comment = async (e) => {
     e.preventDefault();
@@ -456,7 +503,11 @@ function ThreadCard(props) {
   };
 
   return (
-    <div class="ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700" aria-label={`Thread ${t().tid}`}>
+    <div
+      id={`thread-${t().tid}`}
+      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${flashed() ? " outline outline-2 outline-emerald-500" : ""}`}
+      aria-label={`Thread ${t().tid}`}
+    >
       <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
         <span class="font-mono text-zinc-500 dark:text-zinc-400">{t().tid}</span>
         <Show when={t()._fresh === false}>
@@ -476,7 +527,7 @@ function ThreadCard(props) {
           {getOpen() ? "collapse" : "expand"}
         </button>
       </div>
-      <Show when={getOpen()}>
+      <Show when={open()}>
         <ThreadComments tid={t().tid} client={props.client} num={props.num} mdCtx={props.mdCtx} />
         <form class="mt-1 flex gap-2" onSubmit={comment}>
           <input class="input flex-1" value={getBody()} onInput={(e) => setBody(e.target.value)} placeholder="reply…" aria-label="Reply" />
@@ -486,6 +537,67 @@ function ThreadCard(props) {
         </form>
       </Show>
     </div>
+  );
+}
+
+/** Jump-to-comments index (Forgejo #546): one entry per anchored thread —
+ *  path:line (or path:start-end for ranges) + resolved/outdated state —
+ *  atop the conversation. Clicking scrolls to the inline ThreadCard and
+ *  flashes it. Entries reflect the same placement truth the cards render:
+ *  drifted/outdated anchors are marked and jump to their collapsed card
+ *  at the file end (never to a line that no longer exists); threads whose
+ *  file left the current diff render marked with no jump target. Order is
+ *  unresolved-first, matching the inline cards. */
+function ThreadIndex(props) {
+  const entries = () =>
+    sortThreadsForIndex(props.threads ?? []).map((t) => {
+      const filePresent = (props.files ?? []).some((f) => f?.path === t.anchor?.path);
+      const { fresh } = freshnessOf(t.anchor, props.files ?? []);
+      return { t, fresh, target: filePresent ? t.tid : null };
+    });
+
+  return (
+    <Show when={(props.threads ?? []).length > 0}>
+      <nav class="card mb-4" aria-label="Comments index">
+        <h2 class="card-header">
+          Comments ({(props.threads ?? []).length})
+        </h2>
+        <ul class="flex flex-wrap gap-1.5">
+          <For each={entries()}>
+            {(e) => (
+              <li>
+                <Show
+                  when={e.target}
+                  fallback={
+                    <span
+                      class="pill opacity-60"
+                      title={`${anchorLabel(e.t.anchor)} is not in the current diff`}
+                    >
+                      {anchorLabel(e.t.anchor)} · gone
+                    </span>
+                  }
+                >
+                  <button
+                    type="button"
+                    class="pill cursor-pointer"
+                    onClick={() => props.onJump(e.target)}
+                    title={`${anchorLabel(e.t.anchor)}${e.t.resolved ? " · resolved" : ""}${e.fresh ? "" : " · outdated"}`}
+                  >
+                    <span class="font-mono">{anchorLabel(e.t.anchor)}</span>
+                    <Show when={e.t.resolved}>
+                      <span> · resolved</span>
+                    </Show>
+                    <Show when={!e.fresh}>
+                      <span> · outdated</span>
+                    </Show>
+                  </button>
+                </Show>
+              </li>
+            )}
+          </For>
+        </ul>
+      </nav>
+    </Show>
   );
 }
 
@@ -543,7 +655,7 @@ function FinishReview(props) {
             {(p, i) => (
               <li class="flex items-start gap-2 text-xs">
                 <span class="font-mono">
-                  {p.anchor.path}:{(p.anchor.side === "NEW" ? p.anchor.new_start : p.anchor.old_start)}
+                  {anchorLabel(p.anchor)}
                 </span>
                 <span class="flex-1 whitespace-pre-wrap">{p.body}</span>
                 <button type="button" class="link" onClick={() => props.onUnstage(i())}>
@@ -638,6 +750,13 @@ export default function Pull() {
   const canUpdateBranch = () => roleAtLeast(role(), "write");
   const [getPending, setPending] = createSignal([]);
   const [getFinishing, setFinishing] = createSignal(false);
+  // Jump-to-comments target (Forgejo #546): the index sets this tid and
+  // scrolls to `thread-<tid>`; the matching card flashes + expands.
+  const [getFlashTid, setFlashTid] = createSignal(null);
+  const jumpToThread = (tid) => {
+    setFlashTid(tid);
+    document.getElementById(`thread-${tid}`)?.scrollIntoView({ block: "center" });
+  };
 
   // Cross-page reconcile (issue #319, the #318 pattern for PRs): a merge
   // or close/reopen moves the open_pulls badge numerator with no ref
@@ -799,6 +918,7 @@ export default function Pull() {
         {/* #340: thread bodies have no file coordinates (relative URLs stay
             verbatim) but carry the repo — owner/repo feeds the #N/PRN autolinker. */}
         <ThreadTimeline events={getView()?.events ?? []} textFor={pullEventText} mdCtx={mdCtx} />
+        <ThreadIndex threads={threads()} files={getDiff()?.files ?? []} onJump={jumpToThread} />
         <Show
           when={canComment()}
           fallback={
@@ -878,6 +998,7 @@ export default function Pull() {
                       reload={reloadReview}
                       canResolve={canResolve()}
                       mdCtx={mdCtx}
+                      flashTid={getFlashTid}
                     />
                   </div>
                 )}
