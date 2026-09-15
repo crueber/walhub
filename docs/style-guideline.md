@@ -118,6 +118,19 @@ is the scroll affordance.
   toolbar is the reference (§3).
 - `.btn-active` (`ui.css:76`) — toggled pill state (clone-menu
   protocol toggle, issue #37).
+- `.link` (`ui.css:85-101`, Forgejo #568) — the ONE shared treatment
+  for text-level actions and router links that must read as links, not
+  surrounding text (review dismiss/remove, thread resolve/expand
+  toggles, staged remove, member remove, token revoke, webhook
+  ping/deliveries/delete, back-links, check expand toggles,
+  notification actions — 25 call sites across 10 files). Accent
+  emerald both themes (the markdown-link language), hover underline +
+  pointer affordance. New text-link controls reuse it instead of
+  composing per-site accent/underline utilities (the #405 shared-rule
+  precedent). Deliberately a class, never a bare `a` rule — scoped
+  link styles and nav treatments keep their contexts. Button-shaped
+  actions (composer Cancels, staged edit/remove) stay `.btn`, never
+  `.link` (#566/#567).
 - `.pill` (`ui.css:85-86`) — filter chips, badges, doc-tab idiom.
 - `.tab-badge` (`ui.css:87-91`, issue #319) — count badges are
   white-on-emerald-500 (reads in both themes, so no `dark:` variant),
