@@ -15,6 +15,7 @@ import CommentComposer from "../components/CommentComposer.jsx";
 import { useRole } from "../components/perms.jsx";
 import repos from "../../sdk/src/index.js";
 import { isAnonymousViewer } from "../lib/writeGate.js";
+import { pullCommentLock } from "../lib/pull-state.js";
 import {
   findHunkForSelection,
   selectionToAnchor,
@@ -45,6 +46,7 @@ function PullDiffFile(props) {
   };
 
   const submitThread = async (body) => {
+    if (props.commentLocked) return; // #594: the write never fires while locked
     const anchor = stagedAnchor();
     if (!anchor) return;
     const { thread } = await props.client.pulls.threads.create(props.num, { anchor, body }, { noPopupAuth: true });
@@ -83,7 +85,7 @@ function PullDiffFile(props) {
         <DiffBody
           file={props.file}
           mode={getMode()}
-          canComment={props.canComment}
+          canComment={props.canComment && !props.commentLocked}
           onCommentSelect={(sel) => {
             setCreated(null);
             setStaged(sel);
@@ -115,6 +117,8 @@ function PullDiffFile(props) {
             onSubmit={submitThread}
             submitLabel="Start thread"
             onCancel={() => dismissStaged(false)}
+            disabled={props.commentLocked}
+            disabledReason={props.commentLockReason}
             placeholder={`Comment on ${anchorLabel(stagedAnchor())}…`}
             errorKey="thread-create"
             label={`Comment on ${anchorLabel(stagedAnchor())}`}
@@ -189,6 +193,11 @@ export default function PullFiles() {
   const [getDiscovery] = useData("discovery", () => repos.discovery().catch(() => null));
   const anon = () => isAnonymousViewer(getMe(), getDiscovery());
   const canComment = () => role() !== null && !anon();
+  // Forgejo #594: the comment lock keys off the live PR header (same
+  // pull stream invalidates the key, so a reopen unlocks with no
+  // reload). Locked hides the per-line staging triggers (DiffBody
+  // canComment) and disables any staged composer with the reason.
+  const commentLock = () => pullCommentLock(getPull()?.thread, getPull()?.pr);
   // `pull` frames (opened/head_force_pushed/merged) invalidate the
   // pulldiff key coalesced — the stream is the live path, TTL the backstop.
   useCollabStream(() => ctx.full, ctx.repoClient, ["pull"], (frame) => Number(frame.num) === Number(num()));
@@ -200,6 +209,9 @@ export default function PullFiles() {
         </A>
       </p>
       <h2 class="mb-3 text-lg font-semibold">Files on #{num()} ({diffCount()})</h2>
+      <Show when={commentLock().locked}>
+        <p class="muted mb-3 text-sm" role="note">{commentLock().reason}</p>
+      </Show>
       <Show when={getView()} fallback={
         <Show when={getDiffError()} fallback={<p class="muted">loading diff…</p>}>
           <div class="card" role="alert">
@@ -220,6 +232,8 @@ export default function PullFiles() {
               head={head()}
               threadsKey={threadsKey()}
               canComment={canComment()}
+              commentLocked={commentLock().locked}
+              commentLockReason={commentLock().reason}
             />
           )}
         </For>

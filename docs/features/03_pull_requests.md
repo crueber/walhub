@@ -323,7 +323,7 @@ starts. Auth levels are P6 roles resolved per P6 §1–4.
 | `GET …/pulls/{num}` | read | → header + `pr.json` + live `mergeable` (stamped; §4) — mutable-collab class (issue #280: `private, no-cache`) + folded ETag (live head/base shas + thread/pr versions + mergeable stamp) | RouteProvider |
 | `GET …/pulls/{num}/diff` | read | → `text/plain` unified diff `base…head` (one well-formed `git diff` patch per spec §9.5; the 12_web_ui.md parser's exact input; ref-dependent SWR, no ETag) | RouteProvider |
 | `GET …/pulls/{num}/commits` | read | → `{commits:[Commit], more}` (doc 07 `Commit` shape; skip/n pagination) | RouteProvider |
-| `PUT …/pulls/{num}` | write | `{title, body?, state?}` — title/state edits; close/reopen append events; triage may close others' | RouteProvider |
+| `PUT …/pulls/{num}` | write | `{title, body?, state?}` — title/state edits; close/reopen append events; triage may close others'. `state:"open"` on a merged PR → `409` (merged is terminal — Forgejo #594); `state:"closed"` on merged stays `409` as before | RouteProvider |
 | `POST …/pulls/{num}/merge` | maintain | `{strategy, commit_title?, commit_message?, delete_head?}` → SSE task attach (`pull-merge`) | RouteProvider + task kind `pull-merge` |
 | `POST …/pulls/{num}/update-branch` | write | `{expected_head_sha?}` → task `pull-update-branch` (merge base→head; 409 if dirty or sha mismatch) | task kind |
 | `DELETE …/pulls/{num}/head` | maintain | delete the head branch post-merge (policy-checked like any ref delete) | RouteProvider |
@@ -345,7 +345,7 @@ route components; exact-shape coordination with 08):
 | Route | Page | Notes |
 |---|---|---|
 | `/:o/:r/pulls` | PR list (state tabs open/closed/merged, index-first, SSE-refreshing cards) | extends the repo shell tabs |
-| `/:o/:r/pull/{num}` | Conversation: timeline (P3 events), comment box, merge box (strategy select, mergeable state, task progress via SSE) | |
+| `/:o/:r/pull/{num}` | Conversation: timeline (P3 events), comment box, merge box (strategy select, mergeable state, task progress via SSE). Forgejo #594: the conversation is read-only while merged/closed — `AddComment` refuses `409` (`ErrLocked`); the composer (`pullCommentLock` in `lib/pull-state.js`, merged wins with "Merged — commenting is locked") and thread replies render disabled-with-reason, new line-thread staging hides, and no reopen control renders for merged PRs. Reopening a closed-but-unmerged PR restores everything with no reload (stream-invalidated live state). | |
 | `/:o/:r/pull/{num}/commits` | commits of `base…head` (reuses `commits` page) | |
 | `/:o/:r/pull/{num}/files` | diff view: `parsePatchFiles` on the diff endpoint's patch (12 §2.8 grammar), per-file unified/split toggle, anchors for review threads | |
 
@@ -370,6 +370,15 @@ every call goes through the SDK).
   cross-feature locks.
 - Merge = task kind with per-repo single-flight + publish-time CAS; strategies are pure-plumbing git
   argv (`merge-tree`/`commit-tree`/`replay`) — no worktree, no index state.
+- **Comment lock + merged-terminal (Forgejo #594, 2026-09-15).** Service-layer gate (`threadLocked(th, pr)`:
+  `state != open` OR `pr.Merged` — merge stamps `StateClosed` alongside `Merged` in one header CAS, so the state arm
+  covers merged and the sidecar arm covers a stamp still in flight). `AddComment` consults the hoisted sidecar read
+  (the post-CAS `loadPR` it replaces was result-discarded — same read count, law 6; no new locks, law 3; no schema
+  change, law 5) and refuses with typed `ErrLocked` → `409`. `UpdatePR state:"open"` on a merged PR is refused `409`
+  (`ErrConflict`, mirroring the existing merged-close refusal — the reopen gap is closed server-side, not just by
+  hiding the button). Closed-but-unmerged PRs still reopen (author/triage, unchanged), which restores commenting.
+  No maintainer/admin override in v1 (same simplest-contract rationale as 02). Client mirrors in
+  `lib/pull-state.js` (`pullCommentLock`; `pullCloseVisibility` merged → no controls stays, now test-pinned).
 - Fork = fresh manifest referencing the parent's packs; sharing is by construction, and compaction's
   pack removal consults fork-network manifests before deleting.
 - Closing keywords ride 02's cross-ref contract; `merged` events are the PR-side trigger.

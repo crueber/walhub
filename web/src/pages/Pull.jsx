@@ -31,7 +31,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility, pullEventText, reviewVerdictLabel, mergeabilityDisplay } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewVerdictLabel, mergeabilityDisplay } from "../lib/pull-state.js";
 import { renderBody } from "../lib/render-md.js";
 
 /** PR description block (Forgejo #521, the issue-page first-comment
@@ -464,11 +464,14 @@ function DiffFile(props) {
   };
 
   // Row click stages a composer below that line. Guards: the #502 gate,
-  // plus the isolation check — clicks on interactive content (the gutter
+  // the #594 lock (no new threads while merged/closed — the composer
+  // below renders the reason on already-staged drafts), plus the
+  // isolation check — clicks on interactive content (the gutter
   // "+" stops propagation before reaching here; links/buttons/inputs any
   // other way) never stage.
   const onRowClick = (file, hunk, hunkIdx, row, rowIdx, ev) => {
     if (props.canComment === false) return;
+    if (props.commentLocked) return;
     if (ev?.target?.closest?.("button, a, input, textarea, select, [data-no-row-comment]")) return;
     stageLine(file, hunk, hunkIdx, row, rowIdx, ev);
   };
@@ -536,7 +539,7 @@ function DiffFile(props) {
                           get no trigger. stopPropagation so the gutter click
                           never double-stages through the row handler. */}
                       <span class="w-6 shrink-0 select-none text-center">
-                        <Show when={props.canComment !== false}>
+                        <Show when={props.canComment !== false && !props.commentLocked}>
                           <button
                             type="button"
                             class="shrink-0 px-1 text-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"
@@ -601,6 +604,8 @@ function DiffFile(props) {
                             submitLabel={d().editIndex != null ? "Save" : "Stage comment"}
                             onCancel={() => closeDraft(draftKey(hi(), ri()))}
                             initialValue={d().initialBody}
+                            disabled={props.commentLocked}
+                            disabledReason={props.commentLockReason}
                             placeholder={`Comment on ${anchorLabel(d().anchor)}… (staged into the finish-review modal)`}
                             errorKey="line-comment-stage"
                             label={`Comment on ${anchorLabel(d().anchor)}`}
@@ -632,7 +637,7 @@ function DiffFile(props) {
                       </For>
                     </Show>
                     <For each={threadsAt(hi(), ri())}>
-                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} onFlash={props.onFlashTid} />}
+                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} commentLocked={props.commentLocked} commentLockReason={props.commentLockReason} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} onFlash={props.onFlashTid} />}
                     </For>
                   </div>
                 )}
@@ -662,7 +667,7 @@ function DiffFile(props) {
         </For>
       </Show>
       <For each={placement().unplaced}>
-        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} onFlash={props.onFlashTid} />}
+        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} commentLocked={props.commentLocked} commentLockReason={props.commentLockReason} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} onFlash={props.onFlashTid} />}
       </For>
     </div>
   );
@@ -766,6 +771,7 @@ function ThreadCard(props) {
 
   const comment = async (e) => {
     e.preventDefault();
+    if (props.commentLocked) return; // #594: the write never fires while locked
     if (!getBody().trim()) return;
     try {
       await props.client.pulls.threads.comment(props.num, t().tid, getBody().trim());
@@ -813,9 +819,26 @@ function ThreadCard(props) {
       </div>
       <Show when={open()}>
         <ThreadComments tid={t().tid} client={props.client} num={props.num} mdCtx={props.mdCtx} />
+        {/* Forgejo #594: the reply locks with the PR (disabled-with-reason,
+            the composer idiom — a 409 here would only toast on submit). */}
         <form class="mt-1 flex gap-2" onSubmit={comment}>
-          <input class="input flex-1" value={getBody()} onInput={(e) => setBody(e.target.value)} placeholder="reply…" aria-label="Reply" />
-          <button type="submit" class="btn px-2 py-0.5">
+          <input
+            class="input flex-1 disabled:cursor-not-allowed disabled:opacity-50"
+            value={getBody()}
+            onInput={(e) => setBody(e.target.value)}
+            placeholder={props.commentLocked ? (props.commentLockReason ?? "This conversation is closed") : "reply…"}
+            aria-label="Reply"
+            title={props.commentLocked ? (props.commentLockReason ?? "This conversation is closed") : undefined}
+            aria-disabled={props.commentLocked || undefined}
+            disabled={props.commentLocked}
+          />
+          <button
+            type="submit"
+            class="btn px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+            title={props.commentLocked ? (props.commentLockReason ?? "This conversation is closed") : undefined}
+            aria-disabled={props.commentLocked || undefined}
+            disabled={props.commentLocked}
+          >
             reply
           </button>
         </form>
@@ -944,6 +967,7 @@ function FinishReview(props) {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (props.commentLocked) return; // #594: the write never fires while locked
     setBusy(true);
     try {
       await props.client.pulls.reviews.submit(props.num, {
@@ -996,8 +1020,20 @@ function FinishReview(props) {
         </select>
       </label>
       <p id="finish-review-head-help" class="muted mt-1 text-xs">reviewing {(props.head ?? "").slice(0, 12)}</p>
+      {/* Forgejo #594: review submits ride the comment lock (the server
+          409s them on merged/closed PRs) — disabled-with-reason here so
+          the modal never accepts a submit that only fails. */}
+      <Show when={props.commentLocked}>
+        <p class="muted mt-1 text-xs" role="note">{props.commentLockReason ?? "This conversation is closed"}</p>
+      </Show>
       <div class="mt-2 flex gap-2">
-        <button type="submit" class="btn primary px-3 py-1" disabled={getBusy()}>
+        <button
+          type="submit"
+          class="btn primary px-3 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={getBusy() || props.commentLocked}
+          title={props.commentLocked ? (props.commentLockReason ?? "This conversation is closed") : undefined}
+          aria-disabled={props.commentLocked || undefined}
+        >
           {getBusy() ? "submitting…" : "submit review"}
         </button>
         <button type="button" class="btn px-3 py-1" onClick={props.onDone}>
@@ -1216,6 +1252,11 @@ export default function Pull() {
   const openedEvent = () => (getView()?.events ?? []).find((ev) => ev?.type === "opened");
   const closeVis = () =>
     pullCloseVisibility({ thread: thread(), pr: pr(), mePrincipal: getMe()?.principal, role: role() });
+  // Forgejo #594: the comment lock keys off the live thread/pr fetch
+  // (the page's state source of truth) — pull stream frames invalidate
+  // the key, so a reopen unlocks with no reload. Merged is terminal:
+  // closeVis already exposes no control, and the lock reason names it.
+  const commentLock = () => pullCommentLock(thread(), pr());
   const closeAction = () => {
     const v = closeVis();
     if (v.showClose) return closePR;
@@ -1276,6 +1317,8 @@ export default function Pull() {
             onSubmit={comment}
             onCommentAndClose={closeVis().showClose ? commentAndClosePR : undefined}
             commentAndCloseLabel="Comment and Close"
+            disabled={commentLock().locked}
+            disabledReason={commentLock().reason}
             closeLabel={thread()?.state === "open" ? "Close" : "Reopen"}
             onClose={closeAction()}
             errorKey="pull-comment"
@@ -1304,6 +1347,8 @@ export default function Pull() {
                 client={ctx.repoClient}
                 head={head()}
                 pending={getPending()}
+                commentLocked={commentLock().locked}
+                commentLockReason={commentLock().reason}
                 onUnstage={unstage}
                 onDone={() => {
                   setFinishing(false);
@@ -1344,6 +1389,8 @@ export default function Pull() {
                       reload={reloadReview}
                       canResolve={canResolve()}
                       canComment={canComment()}
+                      commentLocked={commentLock().locked}
+                      commentLockReason={commentLock().reason}
                       mdCtx={mdCtx}
                       flashTid={getFlashTid}
                       onCollapse={clearFlashTid}

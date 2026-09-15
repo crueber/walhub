@@ -208,6 +208,7 @@ export default function CommentComposer(props) {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (locked()) return; // #594: the write never fires while locked
     const body = getBody().trim();
     if (!body || getBusy()) return; // double-submit guard
     setBusy(true);
@@ -280,7 +281,13 @@ export default function CommentComposer(props) {
           />
         </Show>
       </Show>
-      <button type="submit" class="btn primary" disabled={getBusy() || !getBody().trim()}>
+      <button
+        type="submit"
+        class="btn primary disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={getBusy() || !getBody().trim() || locked()}
+        title={locked() ? lockReason() : undefined}
+        aria-disabled={locked() || undefined}
+      >
         {getBusy() ? "Posting…" : (props.submitLabel ?? "Comment")}
       </button>
     </>
@@ -311,19 +318,35 @@ export default function CommentComposer(props) {
     }
   };
 
+  // Forgejo #594 lock: `disabled` (+ `disabledReason`) renders the
+  // composer disabled-with-reason instead of accepting input that only
+  // fails on submit (the #522/#586-family disabled-with-reason idiom:
+  // muted, reason on hover/focus via title + aria). The textarea and the
+  // primary submit disable; the close controls stay live — a closed
+  // thread's Reopen is the way back, and the page keys `disabled` off the
+  // live thread so a reopen unlocks without reload.
+  const locked = () => !!props.disabled;
+  const lockReason = () => props.disabledReason ?? "This conversation is closed";
+
   return (
     <form class="card mt-3 grid gap-2 p-3" onSubmit={submit} aria-label={props.label ?? "New comment"}>
       {/* #450: Cmd/Ctrl+Enter posts the primary submit only, never comment-and-close. */}
+      <Show when={locked()}>
+        <p class="muted text-sm" role="note">{lockReason()}</p>
+      </Show>
       <textarea
         ref={textRef}
-        class="input min-h-24 font-mono text-sm"
+        class="input min-h-24 font-mono text-sm disabled:cursor-not-allowed disabled:opacity-50"
         value={getBody()}
         onInput={(e) => setBody(e.target.value)}
         onPaste={onPaste}
         onDrop={onDrop}
         onKeyDown={onSubmitKeys(submit, { isBusy: () => getBusy() })}
-        placeholder={props.placeholder ?? "Write a comment… (#N links issues, @user mentions)"}
+        placeholder={locked() ? lockReason() : (props.placeholder ?? "Write a comment… (#N links issues, @user mentions)")}
         aria-label="comment body"
+        aria-disabled={locked() || undefined}
+        title={locked() ? lockReason() : undefined}
+        disabled={locked()}
         list={listId()}
       />
       <Show when={props.mentionNames}>

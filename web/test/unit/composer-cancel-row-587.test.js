@@ -63,7 +63,10 @@ test("Cancel shares the bottom flex row with the submit", () => {
   // The onCancel branch is one outer flex row holding the Cancel button
   // AND the right-slot cluster (which holds the type=submit).
   assert.ok(branch.includes('type="button" class="btn"'), "Cancel wears the canonical .btn");
-  assert.ok(branch.includes('type="submit" class="btn primary"') || s.includes('type="submit" class="btn primary"'), "primary submit intact");
+  // Forgejo #594 appended the canonical disabled treatment (the
+  // milestone-picker idiom) to the submit class — the pin tracks the
+  // full literal, primary idiom intact.
+  assert.ok(s.includes('class="btn primary disabled:cursor-not-allowed disabled:opacity-50"'), "primary submit intact");
   assert.ok(
     branch.includes('<div class="flex flex-wrap items-center justify-end gap-2">{actions()}</div>'),
     "right slot is its own inner flex — the cluster never spreads across the row",

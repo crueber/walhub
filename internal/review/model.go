@@ -23,6 +23,12 @@ var (
 	// ErrConflict marks state conflicts: stale CAS, double dismissal
 	// (→ 409).
 	ErrConflict = errors.New("conflict")
+	// ErrLocked marks inline-thread writes (open/reply/submit) on a merged
+	// or closed PR (→ 409). The lock keys on current PR state (Forgejo
+	// #594): reopening a closed-but-unmerged PR restores threading;
+	// merged is terminal. No maintainer/admin override in v1 (named
+	// decision, 04_code_review.md).
+	ErrLocked = errors.New("pull request is closed or merged: commenting is locked")
 	// ErrUnprocessable marks submittable-but-unusable input: author
 	// self-approval on a repo with [review] allow_self_approval off
 	// (→ 422).
@@ -45,6 +51,8 @@ func statusFor(err error) int {
 	case errors.Is(err, ErrForbidden):
 		return 403
 	case errors.Is(err, ErrConflict):
+		return 409
+	case errors.Is(err, ErrLocked):
 		return 409
 	case errors.Is(err, ErrUnprocessable):
 		return 422

@@ -184,6 +184,10 @@ next issue event touching that milestone; the counter is display state, thread h
 
 - `PATCH {state: "closed", state_reason: "completed"|"not_planned"}` → `state_changed` event; reopen clears `state_reason` to
   `null`. Author may close/reopen own thread; others' need triage (P6).
+- **Comment lock (Forgejo #594):** a closed issue is read-only for conversation writes — `AddComment` and `AddReaction`
+  refuse `409` (`ErrLocked`, human-readable toast text) while `state != open`. The lock keys on CURRENT state, never a
+  one-way latch: reopening restores commenting. Reaction REMOVAL stays available on locked threads (personal undo, not
+  conversation activity). No maintainer/admin override in v1 (named decision, Decisions).
 - **Closing keywords (`fixes #N`) — decided: parsed at PR MERGE time, never at push.** The receive-pack path is git-only (README
   law; a push may contain commits that never merge), the merge task is the single place where "landed on the default branch" is a
   fact, and P8 wants exactly one mutating handler per mutation. The push path stays untouched.
@@ -306,6 +310,7 @@ Pages (SolidJS SPA per `12_web_ui.md`, D-WEB-6; `.jsx` route components, `useDat
 | `/:o/:r/issues` | list: filter bar (state/assignee/labels/milestone/since, #415), paged cards from the index | SSE `issue` upserts/patches cards in place |
 | `/:o/:r/issues/new` | create form (title, markdown-lite body, preview toggle) | — |
 | `/:o/:r/issues/:num` | thread: header (`#N` state badge — the single source of state), timeline (seq-window, older on demand; renders oldest → newest, #225), comment composer, one sidebar metadata card (labels + `+` dropdown / assignees / milestone with a linked title to the filtered issue list; triage sees the `+` dropdown when unset and a direct `−` clear button when set — issue #148) | `issue_event` appends timeline frames; `issue` updates the header |
+| | Forgejo #594: the composer keys `disabled` off the live thread (`issueCommentLock` in `lib/issue-events.js`) — a closed thread renders disabled-with-reason ("This conversation is closed") while the Reopen control stays live, so a reopen unlocks with no reload. The add-reaction `+` menu disables the same way; summary chips stay live (removal-only on locked threads). A raced 409 toasts verbatim through the tray path (no raw TypeError). | |
 | `/:o/:r/labels` | label CRUD (triage-gated UI) | on save, refetch |
 | `/:o/:r/milestones` | milestone CRUD + progress bars + per-milestone linked issues (each milestone lists/links its issues via the server-side `milestone=` list filter; the title links to the filtered issue list) | on save, refetch |
 
@@ -393,6 +398,14 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   `milestones:{o}/{r}` set (`milestoneDisplay` pending state + the honest generic "changed the milestone"
   interim in `issueEventText`) instead of rendering bare ids; deleted ids keep the bare-id self-heal.
   Label chips needed no gate (label names ride the thread payload; only the color dot resolves late).
+
+- **Comment lock on closed issues (Forgejo #594, 2026-09-15).** Service-layer gate (`threadLocked`, checked inside the
+  `AddComment` CAS mutator and against the already-loaded header in `AddReaction` — zero new store reads, law 6; no new
+  locks, law 3; no schema change, law 5) refusing with typed `ErrLocked` → `409`. Two named sub-decisions: (a) reaction
+  REMOVAL stays allowed on locked threads (personal undo, not conversation activity — blank-block would have been cheaper
+  but less correct); (b) NO maintainer/admin override in v1 (simplest contract — a closed thread is closed for everyone;
+  revisit only with a real use case). `referenced`/`cross_referenced` fan-out onto closed TARGET threads is untouched
+  (system bookkeeping, not user commenting).
 
 - Issue nums are `<num:06x>` hex keys (decimal on the wire) — numeric order from byte-order LIST scans, same idiom as P3's `012x` seqs.
 - `issues/index.json` carries cards for BOTH kinds; issue endpoints filter `kind: "issue"` — one index for one numbering space (03 lists PRs from the same object).

@@ -10,6 +10,11 @@ var (
 	// ErrConflict maps to 409: CAS version mismatch after bounded retries,
 	// duplicate label, milestone delete with open issues.
 	ErrConflict = errors.New("conflict")
+	// ErrLocked maps to 409: a comment/reaction write on a closed issue.
+	// The lock keys on current thread state (Forgejo #594) — reopening
+	// restores commenting. No maintainer/admin override in v1 (named
+	// decision, 02_issues.md).
+	ErrLocked = errors.New("issue is closed: commenting is locked")
 	// ErrInvalid maps to 400: bad title/body/label/color/role/state
 	// transitions, unknown request keys, unknown reaction content.
 	ErrInvalid = errors.New("invalid")
@@ -43,6 +48,8 @@ func statusFor(err error) int {
 	case errors.Is(err, ErrUnauthorized):
 		return http.StatusUnauthorized
 	case errors.Is(err, ErrConflict):
+		return http.StatusConflict
+	case errors.Is(err, ErrLocked):
 		return http.StatusConflict
 	case errors.Is(err, ErrTooLarge):
 		return http.StatusRequestEntityTooLarge

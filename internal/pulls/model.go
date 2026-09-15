@@ -21,6 +21,12 @@ var (
 	// ErrConflict marks state conflicts: duplicate open PR, stale CAS,
 	// milestone-style 409s (→ 409).
 	ErrConflict = errors.New("conflict")
+	// ErrLocked marks conversation writes on a merged or closed PR
+	// (→ 409). The lock keys on current thread state (Forgejo #594):
+	// reopening a closed-but-unmerged PR restores commenting; merged is
+	// terminal. No maintainer/admin override in v1 (named decision,
+	// 03_pull_requests.md).
+	ErrLocked = errors.New("pull request is closed or merged: commenting is locked")
 	// ErrUnprocessable marks resolvable-but-unusable refs: unknown revision,
 	// unreachable head (→ 422).
 	ErrUnprocessable = errors.New("unprocessable")
@@ -43,6 +49,8 @@ func statusFor(err error) int {
 	case errors.Is(err, ErrForbidden):
 		return 403
 	case errors.Is(err, ErrConflict):
+		return 409
+	case errors.Is(err, ErrLocked):
 		return 409
 	case errors.Is(err, ErrUnprocessable):
 		return 422

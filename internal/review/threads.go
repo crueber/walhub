@@ -59,7 +59,8 @@ func (s *Service) reserveTID(ctx context.Context, owner, repo string, num int, w
 
 // OpenThread opens one line-anchored thread with its first comment (§4):
 // reserve tid from the PR header CAS, Create the header, Create comment
-// seq 1. Auth: read (authenticated). Returns the header.
+// seq 1. Auth: read (authenticated). Refused 409 on a merged or closed PR
+// (ErrLocked). Returns the header.
 func (s *Service) OpenThread(ctx context.Context, owner, repo string, num int, actor auth.Principal, anchor Anchor, body string) (*ThreadHeader, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, err
@@ -76,9 +77,12 @@ func (s *Service) OpenThread(ctx context.Context, owner, repo string, num int, a
 	if err := validateBody(body); err != nil {
 		return nil, err
 	}
-	h, _, err := s.prHeadOf(ctx, owner, repo, num)
+	h, side, err := s.prHeadOf(ctx, owner, repo, num)
 	if err != nil {
 		return nil, err
+	}
+	if threadLocked(h, side) {
+		return nil, fmt.Errorf("%w: pull request #%d", ErrLocked, num)
 	}
 	who := normPrincipal(actor.Name)
 	tid, err := s.reserveTID(ctx, owner, repo, num, who)
@@ -253,7 +257,8 @@ func (s *Service) GetThread(ctx context.Context, owner, repo string, num int, ti
 // AddThreadComment appends a comment via the P3 two-step on the thread
 // header (reserve seq → Create). Concurrent comments race the header CAS —
 // the loser re-reads and retries; the reserved-seq discipline makes Create
-// unambiguous. Auth: read (authenticated).
+// unambiguous. Auth: read (authenticated). Refused 409 on a merged or
+// closed PR (ErrLocked).
 func (s *Service) AddThreadComment(ctx context.Context, owner, repo string, num int, tid string, actor auth.Principal, body string) (*ThreadComment, error) {
 	if err := validateTID(tid); err != nil {
 		return nil, err
@@ -270,9 +275,12 @@ func (s *Service) AddThreadComment(ctx context.Context, owner, repo string, num 
 	if err := validateBody(body); err != nil {
 		return nil, err
 	}
-	h, _, err := s.prHeadOf(ctx, owner, repo, num)
+	h, side, err := s.prHeadOf(ctx, owner, repo, num)
 	if err != nil {
 		return nil, err
+	}
+	if threadLocked(h, side) {
+		return nil, fmt.Errorf("%w: pull request #%d", ErrLocked, num)
 	}
 	who := normPrincipal(actor.Name)
 	now := s.nowUTC().Format(dateTimeFmt)

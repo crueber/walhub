@@ -112,3 +112,17 @@ export function closedStateLabel(stateReason) {
   if (stateReason === CLOSE_COMPLETED) return "Closed as completed";
   return "Closed";
 }
+
+/**
+ * issueCommentLock(thread) → {locked, reason}: the Forgejo #594 client
+ * mirror of the server threadLocked gate (internal/issues/service.go).
+ * The lock keys on CURRENT thread state — a reopen flips it back, so the
+ * composer reacts to issue stream frames with no reload. Loading (no
+ * thread yet) reads unlocked, like the open default elsewhere.
+ */
+export function issueCommentLock(thread) {
+  if ((thread?.state ?? "open") !== "open") {
+    return { locked: true, reason: "This conversation is closed" };
+  }
+  return { locked: false, reason: null };
+}
