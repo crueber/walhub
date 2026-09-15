@@ -60,6 +60,10 @@ func runServe(ctx context.Context, c *cli, args []string) int {
 	// live in the directory the operator named. The loaded config keeps every
 	// file/env value (backend, auth, …) — re-deriving FirstRunDefaults here
 	// would silently discard the WALHUB__* overlay.
+	// resolveConfig already applied this same sync for every subcommand
+	// (Forgejo #611: syncDataDirFlag in config.go); this pass is kept as an
+	// idempotent no-op (post-sync values no longer equal the env-derived
+	// paths, so neither branch fires twice).
 	envDataDir := config.ResolveDataDir(os.Getenv)
 	cfg.DataDir = dataDir
 	if cfg.Store.Root == filepath.Join(envDataDir, "store") {

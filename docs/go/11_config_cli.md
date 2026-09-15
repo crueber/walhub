@@ -228,7 +228,7 @@ All writable state lives under one **data dir**, selected by:
 
 The data dir holds `<data-dir>/store/` (filesystem store backend root, `store.root` when `backend = "filesystem"`, D4), `<data-dir>/cache/` (first-run `cache.dir`, §2.3), and the saved config `<data-dir>/walhub.toml` (written by the setup UI, §3.7; `walgit.toml` alias accepted).
 
-The directory is created (mode `0700`) on first boot if missing. `--data-dir` never sets a config value directly — it only relocates the file leg (§3.1 step 2) and provides the default expansion for `store.root` / `cache.dir` in the first-run table; an explicit `store.root` or `cache.dir` in the file or env always wins. Like `--config`, `--data-dir` is peeled before subcommand dispatch (§6.3) and is honored by every subcommand that loads config.
+The directory is created (mode `0700`) on first boot if missing. `--data-dir` never sets a config value directly — it only relocates the file leg (§3.1 step 2) and provides the default expansion for `store.root` / `cache.dir` in the first-run table; an explicit `store.root` or `cache.dir` in the file or env always wins. Like `--config`, `--data-dir` is peeled before subcommand dispatch (§6.3) and is honored by every subcommand that loads config. Concretely, after the ladder, `resolveConfig` re-points the flag-derived paths (`DataDir`, plus `Store.Root`/`Cache.Dir` when they still equal the env-default-derived paths) at the flag dir — the shared #611 sync; `serve` repeats the same comparison as an idempotent no-op.
 
 ### 3.2 Env override mechanics
 
@@ -550,6 +550,20 @@ $ WALGIT__STORE__BKUET=x walhub config check --config /etc/walhub/walgit.toml --
   the old pair-only check let a partially-configured instance boot into a dead login state
   (browser login disabled ⇒ every browser GET a bare 401, `/_auth/login` a 501); refuse-to-start
   was preferred over a degraded boot (see 06_server_http.md §14 for the login-page half).
+- **NEW (2026-09-15) — `--data-dir` sync lives in the shared CLI path (Forgejo #611):**
+  `resolveConfig` (`cmd/walhub/config.go`, via `syncDataDirFlag`) re-points the flag-derived
+  paths (`DataDir`, `Store.Root`, `Cache.Dir`) to the effective `--data-dir` whenever they
+  currently equal the `ResolveDataDir(env)`-derived paths — the exact comparison `serve` always
+  performed. Previously only `serve` did this fixup, so every other store-touching subcommand
+  (`repo policy set/get`, `config dump`, `wal`, `compact`, `bundle`, `import`, `repo create`,
+  …) operated on the default store when `--data-dir` differed from the default. Explicit file
+  values and `WALHUB__*` env overlay never equal the env-derived paths and are preserved by
+  construction (no re-derivation of `FirstRunDefaults` — that would discard the overlay, per
+  the §3.1.1 field lesson). Serve's own fixup is kept as an idempotent no-op second pass.
+  `openEngine` needs no change: `openStore` already prefers `cfg.Store.Root` and falls back to
+  `<dataDir>/store` with the same flag dir, and the WAL registry/cache consumers read the
+  already-synced `cfg.Cache.Dir`. Pinned by `TestDataDirFlagSyncMatrix` (flag vs env vs file
+  vs defaults) + `TestServeFixupIdempotent` in `cmd/walhub/datadir_sync_test.go`.
 - **NEW (2026-09-12) — oidc allows `anonymous_read = true` (Forgejo #371):** §5 rule 2 no
   longer refuses `anonymous_read` in oidc mode — the old blanket prohibition predates #345
   (visibility as the read authority for repo surfaces) and made public repos unbrowsable on

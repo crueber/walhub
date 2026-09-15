@@ -44,6 +44,7 @@ func resolveConfig(c *cli) (*config.Config, string, error) {
 			}
 			return nil, stateInvalid, err
 		}
+		syncDataDirFlag(cfg, c, os.Getenv)
 		return cfg, statePresent, nil
 	}
 	cands := defaultConfigPaths(c)
@@ -51,6 +52,7 @@ func resolveConfig(c *cli) (*config.Config, string, error) {
 	if err != nil {
 		return nil, stateInvalid, err
 	}
+	syncDataDirFlag(cfg2, c, os.Getenv)
 	for _, p := range cands {
 		if _, statErr := os.Stat(p); statErr == nil {
 			return cfg2, statePresent, nil
@@ -83,6 +85,34 @@ func configCandidates(c *cli) []string {
 		return []string{explicit}
 	}
 	return defaultConfigPaths(c)
+}
+
+// syncDataDirFlag applies the --data-dir flag sync shared by every subcommand
+// (11_config_cli.md §3.1.1; Forgejo #611): the flag is authoritative over the
+// env/default data dir, so the flag-derived PATHS are re-pointed to the
+// effective flag dir when they currently equal the env-default-derived paths.
+// Explicit file values and WALHUB__* env overlay never equal those paths, so
+// they are preserved by construction — only flag-derived paths move. This is
+// the same comparison serve.go performs; serve's own fixup is therefore an
+// idempotent second pass (kept, harmless).
+//
+// ### Concurrency
+// Hazard: none — runs once during startup config resolution, before any
+// goroutine that reads the config is started; the config is never mutated
+// afterwards (§3.6).
+func syncDataDirFlag(cfg *config.Config, c *cli, getenv func(string) string) {
+	if c.dataDir == "" {
+		return
+	}
+	dataDir := c.dataDir
+	envDataDir := config.ResolveDataDir(getenv)
+	cfg.DataDir = dataDir
+	if cfg.Store.Root == filepath.Join(envDataDir, "store") {
+		cfg.Store.Root = filepath.Join(dataDir, "store")
+	}
+	if cfg.Cache.Dir == filepath.Join(envDataDir, "cache") {
+		cfg.Cache.Dir = filepath.Join(dataDir, "cache")
+	}
 }
 
 // dataDirFor resolves the data dir for a command.
@@ -171,6 +201,7 @@ func loadWithEnvFiles(c *cli, envFiles multiFlag) (*config.Config, string, error
 			}
 			return nil, stateInvalid, err
 		}
+		syncDataDirFlag(cfg, c, getenv)
 		return cfg, statePresent, nil
 	}
 	cands := defaultConfigPaths(c)
@@ -178,6 +209,7 @@ func loadWithEnvFiles(c *cli, envFiles multiFlag) (*config.Config, string, error
 	if err != nil {
 		return nil, stateInvalid, err
 	}
+	syncDataDirFlag(cfg, c, getenv)
 	for _, p := range cands {
 		if _, statErr := os.Stat(p); statErr == nil {
 			return cfg, statePresent, nil
