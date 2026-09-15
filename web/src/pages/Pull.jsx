@@ -683,14 +683,17 @@ function DiffFile(props) {
  *  a thread card. Edit re-opens the keyed composer in place pre-filled;
  *  remove unstages through the same pending-list mutation the
  *  finish-review modal uses. Unplaced cards (anchor no longer locates)
- *  render at the file end with no edit control — there is no row to
- *  reopen under. */
+  *  render at the file end with no edit control — there is no row to
+  *  reopen under. Flashed geometry (Forgejo #574): the emerald outline is
+  *  INSET (`outline-offset-[-2px]`, shared byte-identically with ThreadCard
+  *  below — pinned by flash-ring-574.test.js) so the ring paints inside the
+  *  border box and the hunk scroll wrapper never clips it. */
 function StagedCard(props) {
   const label = () => anchorLabel(props.entry?.anchor);
   return (
     <div
       id={`staged-${props.index}`}
-      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${props.flashed ? " outline outline-2 outline-emerald-500" : ""}`}
+      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${props.flashed ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
       aria-label={`Staged comment on ${label()}`}
     >
       <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
@@ -717,8 +720,11 @@ function StagedCard(props) {
 
 /** One thread card: comments, resolve toggle, outdated collapse. The card
  *  carries id `thread-<tid>` so the jump-to-comments index can scroll to
- *  it; a flashed (just-jumped-to) card draws an emerald outline and
- *  expands, so the target reads in both themes. Forgejo #573: the
+  *  it; a flashed (just-jumped-to) card draws an inset emerald outline
+  *  (Forgejo #574: `outline-offset-[-2px]` — the ring paints inside the
+  *  border box, hugging the rounded corners, so the hunk scroll wrapper
+  *  never clips it; byte-identical with the StagedCard fragment)
+  *  and expands, so the target reads in both themes. Forgejo #573: the
  *  collapse/expand toggle clears the page-level flash for this tid first
  *  (the shared clearFlash(tid) lifecycle — the same mechanics #575's
  *  collapse-click case reuses), so open() and the outline return to
@@ -755,7 +761,7 @@ function ThreadCard(props) {
   return (
     <div
       id={`thread-${t().tid}`}
-      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${flashed() ? " outline outline-2 outline-emerald-500" : ""}`}
+      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${flashed() ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
       aria-label={`Thread ${t().tid}`}
     >
       <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
