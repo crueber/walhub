@@ -145,14 +145,24 @@ test("rule never fights scoped link styles (class only, no bare `a` rule added)"
 
 // --- 3. #566/#567 surfaces stay .btn (button actions are never .link) ---
 
-test("composer Cancels stay small secondary .btn (the #566 idiom holds)", () => {
+test("composer Cancels stay .btn (the #566 idiom holds)", () => {
+  // #587-scoped update: Cancel moved from the per-surface header <p>
+  // into CommentComposer's onCancel bottom-row slot — same .btn idiom,
+  // one definition instead of two call-site buttons. Intent unchanged:
+  // dismiss actions are button-shaped (.btn), never text links (.link).
+  const composer = read("../../src/components/CommentComposer.jsx");
   assert.ok(
-    PAGE("Pull").includes('<button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => closeDraft(draftKey(hi(), ri()))}>'),
-    "conversation draft Cancel still .btn",
+    composer.includes('<button type="button" class="btn" disabled={getBusy()} onClick={() => props.onCancel()}>'),
+    "composer Cancel is a canonical .btn invoking onCancel",
+  );
+  assert.ok(!composer.includes('class="link'), "no .link anywhere in the composer");
+  assert.ok(
+    PAGE("Pull").includes("onCancel={() => closeDraft(draftKey(hi(), ri()))}"),
+    "conversation draft Cancel still wired (.btn via the composer slot)",
   );
   assert.ok(
-    PAGE("PullFiles").includes('<button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => dismissStaged(false)}>'),
-    "Files-tab staged Cancel still .btn",
+    PAGE("PullFiles").includes("onCancel={() => dismissStaged(false)}"),
+    "Files-tab staged Cancel still wired (.btn via the composer slot)",
   );
 });
 

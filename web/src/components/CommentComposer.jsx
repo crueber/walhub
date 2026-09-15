@@ -17,7 +17,14 @@
 // to choose). Menus are native buttons (role menu/menuitem), Escape
 // closes and refocuses the toggle, any outside click dismisses. All
 // actions share one right-aligned row; the composer clears only when the
-// handler resolves, so a failed post keeps its text for retry.
+// handler resolves, so a failed post keeps its text for retry. Optional
+// dismiss control (Forgejo #587): `onCancel` (+ `cancelLabel`) renders a
+// Cancel button at the LEFT of the bottom row (left slot = Cancel, right
+// slot = the existing close/submit cluster in its own inner flex, so the
+// cluster never spreads) — the row switches to justify-between only when
+// onCancel is present, and renders byte-identically (same class, same
+// flat children) without it. The handler runs synchronously with no busy
+// guard: dismissal drops a draft the caller owns, never a post.
 
 import { createSignal, createEffect, For, Show, onCleanup } from "solid-js";
 import { reportError } from "../lib/data.js";
@@ -216,6 +223,69 @@ export default function CommentComposer(props) {
 
   const listId = () => props.mentionId ?? "mention-composer";
 
+  // The right-slot cluster (close controls + primary submit), shared by
+  // both bottom-row shapes below so the two cannot drift: without onCancel
+  // it renders as the row's flat children (the pre-#587 shape, DOM
+  // byte-identical); with onCancel it renders inside the right-slot flex
+  // next to the left-slot Cancel.
+  const actions = () => (
+    <>
+      <Show when={props.onClose}>
+        <Show
+          when={props.closeChooser}
+          fallback={
+            <button type="button" class="btn" disabled={getBusy()} onClick={() => runClose()}>
+              {props.closeLabel ?? "Close"}
+            </button>
+          }
+        >
+          <SplitCloseMenu
+            primaryLabel={props.closeLabel ?? "Close"}
+            primaryAria={`Close as completed`}
+            menuLabel="Close options"
+            alternateVerb="Close as not planned"
+            alternateReason={CLOSE_NOT_PLANNED}
+            disabled={getBusy()}
+            onPrimary={() => runClose(CLOSE_COMPLETED)}
+            onPick={(reason) => runClose(reason)}
+          />
+        </Show>
+      </Show>
+      <Show when={props.onCommentAndClose}>
+        <Show
+          when={props.closeChooser}
+          fallback={
+            <button
+              type="button"
+              class="btn"
+              disabled={getBusy()}
+              onClick={(e) => {
+                e.preventDefault();
+                commentAndClose(getBody());
+              }}
+            >
+              {props.commentAndCloseLabel ?? "Comment and Close"}
+            </button>
+          }
+        >
+          <SplitCloseMenu
+            primaryLabel={props.commentAndCloseLabel ?? "Comment and Close"}
+            primaryAria={`Comment and close as completed`}
+            menuLabel="Comment and close options"
+            alternateVerb="Comment and close as not planned"
+            alternateReason={CLOSE_NOT_PLANNED}
+            disabled={getBusy()}
+            onPrimary={() => commentAndClose(getBody(), CLOSE_COMPLETED)}
+            onPick={(reason) => commentAndClose(getBody(), reason)}
+          />
+        </Show>
+      </Show>
+      <button type="submit" class="btn primary" disabled={getBusy() || !getBody().trim()}>
+        {getBusy() ? "Posting…" : (props.submitLabel ?? "Comment")}
+      </button>
+    </>
+  );
+
   const commentAndClose = async (body, reason) => {
     if (getBusy() || !props.onCommentAndClose) return;
     setBusy(true);
@@ -259,61 +329,20 @@ export default function CommentComposer(props) {
       <Show when={props.mentionNames}>
         <MentionDatalist id={listId()} names={props.mentionNames} />
       </Show>
-      <div class="flex flex-wrap items-center justify-end gap-2">
-        <Show when={props.onClose}>
-          <Show
-            when={props.closeChooser}
-            fallback={
-              <button type="button" class="btn" disabled={getBusy()} onClick={() => runClose()}>
-                {props.closeLabel ?? "Close"}
-              </button>
-            }
-          >
-            <SplitCloseMenu
-              primaryLabel={props.closeLabel ?? "Close"}
-              primaryAria={`Close as completed`}
-              menuLabel="Close options"
-              alternateVerb="Close as not planned"
-              alternateReason={CLOSE_NOT_PLANNED}
-              disabled={getBusy()}
-              onPrimary={() => runClose(CLOSE_COMPLETED)}
-              onPick={(reason) => runClose(reason)}
-            />
-          </Show>
-        </Show>
-        <Show when={props.onCommentAndClose}>
-          <Show
-            when={props.closeChooser}
-            fallback={
-              <button
-                type="button"
-                class="btn"
-                disabled={getBusy()}
-                onClick={(e) => {
-                  e.preventDefault();
-                  commentAndClose(getBody());
-                }}
-              >
-                {props.commentAndCloseLabel ?? "Comment and Close"}
-              </button>
-            }
-          >
-            <SplitCloseMenu
-              primaryLabel={props.commentAndCloseLabel ?? "Comment and Close"}
-              primaryAria={`Comment and close as completed`}
-              menuLabel="Comment and close options"
-              alternateVerb="Comment and close as not planned"
-              alternateReason={CLOSE_NOT_PLANNED}
-              disabled={getBusy()}
-              onPrimary={() => commentAndClose(getBody(), CLOSE_COMPLETED)}
-              onPick={(reason) => commentAndClose(getBody(), reason)}
-            />
-          </Show>
-        </Show>
-        <button type="submit" class="btn primary" disabled={getBusy() || !getBody().trim()}>
-          {getBusy() ? "Posting…" : (props.submitLabel ?? "Comment")}
-        </button>
-      </div>
+      {/* #587: with onCancel the row is Cancel-left / cluster-right
+          (justify-between); without it the pre-#587 flat right-aligned
+          row renders unchanged. */}
+      <Show
+        when={props.onCancel}
+        fallback={<div class="flex flex-wrap items-center justify-end gap-2">{actions()}</div>}
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <button type="button" class="btn" disabled={getBusy()} onClick={() => props.onCancel()}>
+            {props.cancelLabel ?? "Cancel"}
+          </button>
+          <div class="flex flex-wrap items-center justify-end gap-2">{actions()}</div>
+        </div>
+      </Show>
     </form>
   );
 }
