@@ -810,7 +810,7 @@ function ThreadCard(props) {
           </button>
         </Show>
         <button type="button" class="link" onClick={(e) => { e.stopPropagation(); props.onCollapse?.(t().tid); setOpen(!getOpen()); }}>
-          {getOpen() ? "collapse" : "expand"}
+          {open() ? "collapse" : "expand"}
         </button>
       </div>
       <Show when={open()}>
