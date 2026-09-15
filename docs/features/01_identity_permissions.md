@@ -38,8 +38,8 @@ A **user profile** is a bucket object keyed by the principal name:
 
 | Key | Kind | Schema |
 |---|---|---|
-| `users/<principal>/profile.json` | CAS'd (overwritable family) | `{"version":1,"principal":"jane@example.com","display_name":"Jane Doe","bio":"","created_at":"RFC3339","updated_at":"RFC3339"}` (+ `avatar_content_type`/`avatar_updated_at` when the user holds a generated avatar, `avatar_disabled` when opted out — Forgejo #376, append-only) |
-| `users/<username>/avatar.svg` | overwritable (Forgejo #376) | generated avatar bytes (`image/svg+xml`); pointer on profile.json, same bytes-first/pointer-second discipline as the #359 org avatar |
+| `users/<principal>/profile.json` | CAS'd (overwritable family) | `{"version":1,"principal":"jane@example.com","display_name":"Jane Doe","bio":"","created_at":"RFC3339","updated_at":"RFC3339"}` (+ `avatar_content_type`/`avatar_updated_at` when the user holds an avatar (`image/svg+xml` generated, `image/png` #601 upload), `avatar_disabled` when opted out — Forgejo #376, append-only) |
+| `users/<username>/avatar.svg` | overwritable (Forgejo #376, uploads #601) | avatar bytes — generated SVG (`image/svg+xml`) or uploaded square PNG (`image/png`); the key keeps its generated-era spelling for both kinds (renaming would orphan existing avatars), the profile pointer is authoritative for the served Content-Type; same bytes-first/pointer-second discipline as the #359 org avatar |
 | `users/<principal>/invitations/index.json` | CAS'd (overwritable family) | inbox index, §7 |
 
 Rules: `<principal>` is the lowercased email, percent-encoded per segment for keys with `@` → `%40`
@@ -422,9 +422,10 @@ RouteProvider (Seam 1).
 |---|---|---|
 | `GET /api/v1/users/{principal}` | any (public read) | → `{profile}` (carries `avatar_content_type`/`avatar_updated_at` when the user holds an avatar, `avatar_disabled` when opted out); 404 unknown |
 | `PUT /api/v1/users/{principal}` | self or admin | body = profile → 200 profile; 400 invalid |
-| `GET /api/v1/users/{principal}/avatar` | any (public read) | generated SVG (`image/svg+xml`, immutable max-age + version ETag, `?v=` busting); 404 when none |
-| `POST /api/v1/users/{principal}/avatar` | self or admin | regenerate (clears opt-out, installs fresh deterministic render) → 200 profile; 404 without a verified email |
-| `DELETE /api/v1/users/{principal}/avatar` | self or admin | remove + opt out of auto-generation → 200 profile; 404 unknown |
+| `GET /api/v1/users/{principal}/avatar` | any (public read) | avatar bytes (generated SVG `image/svg+xml` or #601 uploaded square PNG `image/png`, immutable max-age + version ETag, `?v=` busting); 404 when none |
+| `PUT /api/v1/users/{principal}/avatar` | self or admin | upload raw bytes → server-side center-crop to square PNG → 200 profile (clears opt-out, bumps `avatar_updated_at`); 413 over 2 MiB; 400 over 4096px/16M decoded px (bomb guard); 415 outside PNG/JPEG/GIF (SVG rejected — same-origin script risk; WebP rejected — stdlib cannot crop it, the deliberate #359 divergence); 404 unknown |
+| `POST /api/v1/users/{principal}/avatar` | self or admin | regenerate (clears opt-out, installs fresh deterministic render, REPLACES an upload when one exists — #601) → 200 profile; 404 without a verified email |
+| `DELETE /api/v1/users/{principal}/avatar` | self or admin | remove (either kind) + opt out of auto-generation → 200 profile; 404 unknown |
 | `GET /api/v1/users/{principal}/orgs` | any (mutable-collab, content ETag) | → sorted `["acme", …]` over `MemberOrgsFor` (any roster role, #370 alias matching); `[]` when none, 200 for unknown principals (never 404); GET-only |
 | `GET /api/v1/orgs` | any (mutable-collab, no version token) | → sorted `["acme", …]` |
 | `POST /api/v1/orgs` | write | `{org, display_name}` → 201 `{org}`; 409 taken; creator becomes owner |
@@ -491,7 +492,7 @@ Pages (SolidJS SPA per 12_web_ui.md, D-WEB-6; Solid signals, `useData` 5 s TTL):
   renders the same avatar from `me().avatar_url` (username fallback when absent).
 
 SDK additions (submodules under `web/sdk/src/`, bundled by esbuild into `repos.js`; JSDoc typedefs in
-`types.js`): `users.js` (`users.get/put`, `users.avatar.url/regenerate/remove` — issue #376), `orgs.js` (`orgs.*`, members, teams,
+`types.js`): `users.js` (`users.get/put`, `users.avatar.url/upload/regenerate/remove` — issue #376, upload #601), `orgs.js` (`orgs.*`, members, teams,
 `orgs.avatar.url/upload/remove` — issue #359), `access.js`
 (`repo.access.get/put`), `invites.js` (`invites.list/mine/accept/cancel`), `transfer.js`
 (`repo.transfer({owner, repo?})` — issue #358). The `/:owner` org header and the
@@ -610,6 +611,40 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   the `/:owner` header with self-service regenerate/remove. Rationale: logins
   must never block on generation, emails must never leak into markup or other
   users' views, and the task table must not gain a non-repo kind.
+- **User-uploaded avatars (issue #601, §8):** `PUT /api/v1/users/{principal}/avatar`
+  (self-or-admin, the org-twin verb on its avatar path — both avatar families
+  share one convention; PUT was free on the user path since POST owns
+  regenerate) installs a custom avatar: 2 MiB cap (413, the org number),
+  decoded-dimension bound 4096px/16M px (400 — the input cap alone does
+  not bound pixels, a solid-color 8000×8000 PNG is ~424 KiB on the wire;
+  the gate reads the header via DecodeConfig before any pixel buffer is
+  allocated),
+  magic-sniff allowlist PNG/JPEG/GIF (415 otherwise, SVG rejected — same-origin
+  script risk), server-side center-crop to the largest centered square with PNG
+  re-encoding (lossless + transparency — ONE canonical raster type, so the
+  pointer names a single content type). Image processing is pure Go stdlib
+  (`image`, `image/jpeg`, `image/png`, `image/gif` — already stdlib, NO new
+  module): decode → crop → `png.Encode`, no new dependency (law 1 needs a
+  written amendment BEFORE code lands — avoided entirely). Consequence: stdlib
+  cannot decode WebP, so WebP 415s for user uploads with an explicit message
+  while the org twin keeps accepting it — the deliberate divergence
+  (accept-and-store without the promised crop would serve uncropped uploads;
+  cropping via stdlib is impossible; rejecting loudly beats both). Animated
+  GIFs collapse to their first frame (`image.Decode` semantics — documented, a
+  valid square still). POST keeps meaning "install fresh generated avatar" and
+  REPLACES an upload (stays visible beside the upload control — hiding it would
+  strand the opt-back-in path behind a delete-then-discover flow); DELETE
+  clears either kind and opts out; re-upload also opts back in (install clears
+  the flag). Every upload bumps `avatar_updated_at` (else `?v=`/ETag clients
+  serve stale). Concurrency mirrors the org twin: last-writer-wins on bytes
+  and pointer independently (each PUT completes before its pointer CAS), no
+  lock across store calls. Uploads require an existing profile (404 unknown —
+  no synthesis; the login-time generated path is the one that creates). No
+  schema change (law 5 — the pointer already carries a content type). UI: file
+  input on the owner page beside Regenerate/Remove (isSelf gate), the existing
+  circular preview reused, SDK `users.avatar.upload`, `?v=` busting preserved.
+  Rationale: custom avatars without a new dependency, one raster shape to
+  serve, and the regenerate/opt-out contract unchanged for both kinds.
 - **Rings avatars with walhub-green background (issue #525, §8):** the style
   switches from constellation to DiceBear "rings" with
   `backgroundColor: ["059669"]` (emerald-600 #059669, the canonical brand

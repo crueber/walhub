@@ -244,7 +244,7 @@ func (h *Handler) handleTop(w http.ResponseWriter, r *http.Request, rest []strin
 }
 
 // routeUsers: GET/PUT /api/v1/users/{principal},
-// GET/POST/DELETE /api/v1/users/{principal}/avatar (Forgejo #376).
+// GET/PUT/POST/DELETE /api/v1/users/{principal}/avatar (Forgejo #376, uploads #601).
 func (h *Handler) routeUsers(w http.ResponseWriter, r *http.Request, rest []string) bool {
 	if len(rest) == 0 || rest[0] == "" {
 		return false
@@ -399,12 +399,15 @@ func (h *Handler) routeUserOrgs(w http.ResponseWriter, r *http.Request, principa
 	return true
 }
 
-// routeUserAvatar: GET/POST/DELETE /api/v1/users/{principal}/avatar
-// (Forgejo #376). GET is public (same anonymous-read rule as the
-// profile itself) and serves the generated SVG with the sniffed
-// Content-Type; POST regenerates (explicit opt-back-in, self-or-admin);
-// DELETE removes the avatar and opts out (self-or-admin — the same
-// gate as PUT on the profile).
+// routeUserAvatar: GET/PUT/POST/DELETE /api/v1/users/{principal}/avatar
+// (Forgejo #376, uploads #601). GET is public (same anonymous-read rule as the
+// profile itself) and serves the avatar bytes (generated SVG or uploaded
+// square PNG) with the pointer's Content-Type; POST regenerates (explicit
+// opt-back-in, replaces an upload, self-or-admin); PUT installs an upload
+// (PNG/JPEG/GIF, 2 MiB cap, server-side center-crop to square PNG,
+// self-or-admin — the org-twin verb on its avatar path, so both avatar
+// families share one convention); DELETE removes either kind and opts out
+// (self-or-admin — the same gate as PUT on the profile).
 func (h *Handler) routeUserAvatar(w http.ResponseWriter, r *http.Request, principal string) bool {
 	p, aerr := h.principal(r)
 	if aerr != nil {
@@ -429,11 +432,11 @@ func (h *Handler) routeUserAvatar(w http.ResponseWriter, r *http.Request, princi
 		hdr := w.Header()
 		hdr.Set("Content-Type", prof.AvatarContentType)
 		hdr.Set("Content-Length", strconv.Itoa(len(raw)))
-		// Immutable-until-regenerate: the pointer's updated_at changes
-		// on every install, and clients cache-bust with
-		// ?v=<avatar_updated_at> (UserAvatarURL), so a long max-age
-		// is safe (the #359 org-avatar reasoning). The ETag names the
-		// same version for cheap revalidation.
+		// Immutable-until-reinstall: the pointer's updated_at changes
+		// on every install (generated or uploaded), and clients
+		// cache-bust with ?v=<avatar_updated_at> (UserAvatarURL), so a
+		// long max-age is safe (the #359 org-avatar reasoning). The ETag
+		// names the same version for cheap revalidation.
 		hdr.Set("Cache-Control", "public, max-age=86400, immutable")
 		etag := "user-avatar-" + prof.AvatarUpdatedAt
 		hdr.Set("ETag", `"`+etag+`"`)
@@ -445,13 +448,31 @@ func (h *Handler) routeUserAvatar(w http.ResponseWriter, r *http.Request, princi
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(raw)
 		return true
-	case http.MethodPost, http.MethodDelete:
+	case http.MethodPut, http.MethodPost, http.MethodDelete:
 		if p.Anonymous {
 			writePlain(w, http.StatusUnauthorized, "authentication required")
 			return true
 		}
 		if !p.Admin && normPrincipal(p.Name) != principal {
 			writePlain(w, http.StatusForbidden, "self or admin")
+			return true
+		}
+		if r.Method == http.MethodPut {
+			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxUserAvatarUploadBytes+1))
+			if err != nil {
+				writePlain(w, http.StatusRequestEntityTooLarge, "avatar too large")
+				return true
+			}
+			if int64(len(raw)) > maxUserAvatarUploadBytes {
+				writePlain(w, http.StatusRequestEntityTooLarge, "avatar too large")
+				return true
+			}
+			prof, verr := h.Svc.PutUserAvatarBytes(r.Context(), principal, raw)
+			if verr != nil {
+				writeErr(w, verr)
+				return true
+			}
+			writeCached(w, r, ccNoStore, "", http.StatusOK, prof)
 			return true
 		}
 		var prof *Profile
@@ -468,7 +489,7 @@ func (h *Handler) routeUserAvatar(w http.ResponseWriter, r *http.Request, princi
 		writeCached(w, r, ccNoStore, "", http.StatusOK, prof)
 		return true
 	}
-	methodNotAllowed(w, "GET", "POST", "DELETE")
+	methodNotAllowed(w, "GET", "PUT", "POST", "DELETE")
 	return true
 }
 

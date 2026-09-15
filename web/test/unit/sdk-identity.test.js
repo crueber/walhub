@@ -23,6 +23,7 @@ test("identity SDK surface: users/orgs/access/invites paths", async () => {
     { name: "users.get", run: (c) => c.users.get("Jane@X.c"), method: "GET", path: "/api/v1/users/jane%40x.c" },
     { name: "users.put", run: (c) => c.users.put("a@b.c", { display_name: "A" }), method: "PUT", path: "/api/v1/users/a%40b.c" },
     { name: "users.orgs", run: (c) => c.users.orgs("A@B.c"), method: "GET", path: "/api/v1/users/a%40b.c/orgs" },
+    { name: "users.avatar.upload", run: (c) => c.users.avatar.upload("alice", new Uint8Array([1, 2, 3])), method: "PUT", path: "/api/v1/users/alice/avatar" },
     { name: "users.avatar.regenerate", run: (c) => c.users.avatar.regenerate("alice"), method: "POST", path: "/api/v1/users/alice/avatar" },
     { name: "users.avatar.remove", run: (c) => c.users.avatar.remove("alice"), method: "DELETE", path: "/api/v1/users/alice/avatar" },
     { name: "orgs.list", run: (c) => c.orgs.list(), method: "GET", path: "/api/v1/orgs" },
