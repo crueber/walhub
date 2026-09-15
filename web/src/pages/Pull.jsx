@@ -702,11 +702,11 @@ function StagedCard(props) {
         </span>
         <span class="font-mono text-zinc-500 dark:text-zinc-400">{label()}</span>
         <Show when={props.onEdit}>
-          <button type="button" class="link" onClick={props.onEdit}>
+          <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={props.onEdit}>
             edit
           </button>
         </Show>
-        <button type="button" class="link" onClick={props.onUnstage}>
+        <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={props.onUnstage}>
           remove
         </button>
       </div>

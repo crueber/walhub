@@ -107,6 +107,13 @@ test("staged card carries a stable jump id + aria label, flashing like a thread 
   assert.ok(card.includes("outline outline-2 outline-emerald-500"), "flashed card draws the ThreadCard emerald outline");
 });
 
+test("staged card controls are visible buttons (no new invisible .link)", () => {
+  const s = PULL();
+  const card = s.slice(s.indexOf("function StagedCard(props)"), s.indexOf("function ThreadCard(props)"));
+  assert.ok(!card.includes('class="link"'), "no .link in StagedCard — .link ships zero CSS rules (the #566 lesson)");
+  assert.ok(card.includes('class="btn ml-2 px-2 py-0.5 text-xs"'), "edit/remove use the #566 canonical small-btn treatment");
+});
+
 // --- 3. keyed multi-instance: several staged per file/line --------------------
 
 test("multiple staged comments per file render simultaneously", () => {
@@ -132,7 +139,8 @@ test("edit re-opens the keyed composer in place pre-filled with the staged body"
   assert.ok(s.includes("editIndex: s.i"), "draft records the pending position");
   assert.ok(s.includes("initialBody: s.p.body"), "draft records the staged body");
   assert.ok(s.includes("initialValue={d().initialBody}"), "composer mounts pre-filled");
-  assert.ok(COMPOSER().includes("if (props.initialValue) setBody(props.initialValue);"), "composer honors initialValue");
+  assert.ok(COMPOSER().includes("const v = props.initialValue;"), "composer tracks initialValue reactively");
+  assert.ok(COMPOSER().includes("if (v) setBody(v);"), "effect prefills on a real initialValue — re-prefills on edit-target switches, never clobbers typing");
   assert.ok(COMPOSER().includes('const [getBody, setBody] = createSignal("");'), "fresh mounts stay empty (the #566 pin holds)");
 });
 
