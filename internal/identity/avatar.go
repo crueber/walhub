@@ -310,15 +310,39 @@ func isWebP(head []byte) bool {
 		head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P'
 }
 
+// maxUserAvatarDimension / maxUserAvatarPixels bound the DECODED image
+// (decompression-bomb guard, Forgejo #601 review): the 2 MiB input cap
+// alone does not bound pixels — a solid-color PNG reaches 8000×8000 in
+// ~424 KiB (64M px → 244 MiB RGBA, doubled by the crop copy below), so
+// an unauthenticated-shape input from any signed-in user could OOM the
+// server. DecodeConfig reads only the header, so oversized images are
+// rejected before any pixel buffer is allocated. 4096px / 16M px admit
+// modern phone photos (4032×3024 = 12M) while keeping one upload's
+// transient under ~128 MiB (human-rate endpoint, never a hot path).
+const maxUserAvatarDimension = 4096
+const maxUserAvatarPixels = 16 << 20
+
 // cropSquarePNG decodes src (PNG/JPEG/GIF via the stdlib registry),
 // center-crops to the largest centered square, and re-encodes PNG
 // (lossless + transparency — the one canonical raster type, so the
 // pointer names a single content type and display stays circular via
 // CSS rounded-full on every consumer). Pure stdlib (law 1 — no image
-// dependency). Animated GIFs collapse to their first frame
+// dependency). Dimensions are gated from the header (DecodeConfig)
+// before the pixel decode — see maxUserAvatarDimension. Animated GIFs
+// collapse to their first frame
 // (image.Decode semantics) — documented, not detected: a first-frame
 // still is a valid square avatar.
 func cropSquarePNG(src []byte) ([]byte, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(src))
+	if err != nil {
+		return nil, fmt.Errorf("%w: avatar image does not decode: %v", ErrInvalid, err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 ||
+		cfg.Width > maxUserAvatarDimension || cfg.Height > maxUserAvatarDimension ||
+		int64(cfg.Width)*int64(cfg.Height) > maxUserAvatarPixels {
+		return nil, fmt.Errorf("%w: avatar dimensions too large (max %dx%d, %d px total)", ErrInvalid,
+			maxUserAvatarDimension, maxUserAvatarDimension, maxUserAvatarPixels)
+	}
 	img, _, err := image.Decode(bytes.NewReader(src))
 	if err != nil {
 		return nil, fmt.Errorf("%w: avatar image does not decode: %v", ErrInvalid, err)
@@ -349,6 +373,8 @@ func cropSquarePNG(src []byte) ([]byte, error) {
 
 // PutUserAvatarBytes installs an uploaded avatar (the PUT .../avatar
 // path, self-or-admin checked by the handler): size-capped (413),
+// decoded-dimension-bounded (400 — the maxUserAvatarDimension
+// decompression-bomb guard),
 // magic-sniffed (415, SVG and WebP rejected — see
 // sniffUserAvatarUpload), center-cropped to a square and PNG
 // re-encoded server-side, then stored bytes-first/pointer-second (the

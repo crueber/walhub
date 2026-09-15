@@ -10,7 +10,9 @@ package identity
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
@@ -442,5 +444,77 @@ func TestDeleteOptsOutUpload(t *testing.T) {
 	}
 	if up.AvatarDisabled || up.AvatarContentType != uploadedUserAvatarContentType {
 		t.Fatalf("re-upload must clear opt-out + set pointer: %+v", up)
+	}
+}
+
+// fakeUploadDims rewrites the IHDR dimensions of a real small PNG and
+// fixes the chunk CRC, so DecodeConfig reports w×h while the body stays
+// tiny: the dimension gate must reject from the header alone, before
+// any pixel buffer is allocated (the decompression-bomb guard — a
+// solid-color 8000×8000 PNG is ~424 KiB on the wire but 244 MiB
+// decoded, doubled by the crop copy).
+func fakeUploadDims(t *testing.T, w, h int) []byte {
+	t.Helper()
+	raw := append([]byte(nil), encodeUploadPNG(t, 4, 4)...)
+	// PNG layout: 8-byte signature, 4-byte length, 4-byte "IHDR",
+	// then width (16..20) and height (20..24).
+	binary.BigEndian.PutUint32(raw[16:20], uint32(w))
+	binary.BigEndian.PutUint32(raw[20:24], uint32(h))
+	binary.BigEndian.PutUint32(raw[29:33], crc32.ChecksumIEEE(raw[12:29]))
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(raw)); err != nil || cfg.Width != w || cfg.Height != h {
+		t.Fatalf("fake dims unreadable: %+v %v", cfg, err)
+	}
+	return raw
+}
+
+func TestCropSquarePNGRejectsDimensions(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		w, h int
+	}{
+		{"side over cap", 5000, 100},
+		{"tall side over cap", 100, 5000},
+		{"pixels over cap, sides within", 4000, 4200}, // 16.8M > 16M
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			raw := fakeUploadDims(t, c.w, c.h)
+			if _, err := cropSquarePNG(raw); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("cropSquarePNG = %v, want ErrInvalid", err)
+			} else if !strings.Contains(err.Error(), "dimensions") {
+				t.Errorf("dimension error must say dimensions: %v", err)
+			}
+		})
+	}
+	// Service + HTTP surface: dimension rejects are 400 (bad image),
+	// never 500 — and must not clobber the installed avatar.
+	s := testService()
+	ctx := reqCtx()
+	if _, err := s.EnsureProfile(ctx, "dave"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PutUserAvatarBytes(ctx, "dave", encodeUploadPNG(t, 4, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PutUserAvatarBytes(ctx, "dave", fakeUploadDims(t, 5000, 5000)); !errors.Is(err, ErrInvalid) {
+		t.Errorf("oversize upload = %v, want ErrInvalid", err)
+	}
+	self := testHandler(s, authPrincipal("dave"))
+	if w := doReqBytes(self, "PUT", "/api/v1/users/dave/avatar", fakeUploadDims(t, 5000, 5000), "image/png"); w.Code != http.StatusBadRequest {
+		t.Errorf("oversize PUT = %d, want 400", w.Code)
+	}
+	if raw, got, err := s.GetUserAvatar(ctx, "dave"); err != nil || got.AvatarContentType != uploadedUserAvatarContentType {
+		t.Errorf("rejected dimensions must not clobber: %+v %v", got, err)
+	} else if ww, hh := decodeUploadSize(t, raw); ww != 4 || hh != 4 {
+		t.Errorf("rejected dimensions changed the bytes: %dx%d", ww, hh)
+	}
+	// A realistic photo-sized image passes the gate and crops square.
+	out, err := cropSquarePNG(encodeUploadJPEG(t, 1600, 1200))
+	if err != nil {
+		t.Fatalf("photo-sized crop: %v", err)
+	}
+	if img, _, err := image.Decode(bytes.NewReader(out)); err != nil {
+		t.Fatal(err)
+	} else if b := img.Bounds(); b.Dx() != 1200 || b.Dy() != 1200 {
+		t.Errorf("photo crop = %dx%d, want 1200x1200", b.Dx(), b.Dy())
 	}
 }

@@ -423,7 +423,7 @@ RouteProvider (Seam 1).
 | `GET /api/v1/users/{principal}` | any (public read) | → `{profile}` (carries `avatar_content_type`/`avatar_updated_at` when the user holds an avatar, `avatar_disabled` when opted out); 404 unknown |
 | `PUT /api/v1/users/{principal}` | self or admin | body = profile → 200 profile; 400 invalid |
 | `GET /api/v1/users/{principal}/avatar` | any (public read) | avatar bytes (generated SVG `image/svg+xml` or #601 uploaded square PNG `image/png`, immutable max-age + version ETag, `?v=` busting); 404 when none |
-| `PUT /api/v1/users/{principal}/avatar` | self or admin | upload raw bytes → server-side center-crop to square PNG → 200 profile (clears opt-out, bumps `avatar_updated_at`); 413 over 2 MiB; 415 outside PNG/JPEG/GIF (SVG rejected — same-origin script risk; WebP rejected — stdlib cannot crop it, the deliberate #359 divergence); 404 unknown |
+| `PUT /api/v1/users/{principal}/avatar` | self or admin | upload raw bytes → server-side center-crop to square PNG → 200 profile (clears opt-out, bumps `avatar_updated_at`); 413 over 2 MiB; 400 over 4096px/16M decoded px (bomb guard); 415 outside PNG/JPEG/GIF (SVG rejected — same-origin script risk; WebP rejected — stdlib cannot crop it, the deliberate #359 divergence); 404 unknown |
 | `POST /api/v1/users/{principal}/avatar` | self or admin | regenerate (clears opt-out, installs fresh deterministic render, REPLACES an upload when one exists — #601) → 200 profile; 404 without a verified email |
 | `DELETE /api/v1/users/{principal}/avatar` | self or admin | remove (either kind) + opt out of auto-generation → 200 profile; 404 unknown |
 | `GET /api/v1/users/{principal}/orgs` | any (mutable-collab, content ETag) | → sorted `["acme", …]` over `MemberOrgsFor` (any roster role, #370 alias matching); `[]` when none, 200 for unknown principals (never 404); GET-only |
@@ -615,6 +615,10 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   (self-or-admin, the org-twin verb on its avatar path — both avatar families
   share one convention; PUT was free on the user path since POST owns
   regenerate) installs a custom avatar: 2 MiB cap (413, the org number),
+  decoded-dimension bound 4096px/16M px (400 — the input cap alone does
+  not bound pixels, a solid-color 8000×8000 PNG is ~424 KiB on the wire;
+  the gate reads the header via DecodeConfig before any pixel buffer is
+  allocated),
   magic-sniff allowlist PNG/JPEG/GIF (415 otherwise, SVG rejected — same-origin
   script risk), server-side center-crop to the largest centered square with PNG
   re-encoding (lossless + transparency — ONE canonical raster type, so the
