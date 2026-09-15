@@ -38,25 +38,33 @@ const FILES = () => read("../../src/pages/PullFiles.jsx");
 const CSS = () => read("../../src/ui.css");
 const DOC = () => read("../../../docs/go/12_web_ui.md");
 
-// --- 1. visible Cancel affordance: small secondary .btn, both surfaces ---
+// --- 1. visible Cancel affordance: .btn Cancel at the LEFT of the
+// composer bottom row, both surfaces (#587-scoped update: #587 moved
+// Cancel out of the header <p> into CommentComposer's onCancel bottom-row
+// slot — the pins below now assert the handler wiring + button-free
+// header instead of the old header-button markup) ---
 
-test("conversation draft Cancel wears the small secondary btn treatment (not .link)", () => {
+test("conversation draft Cancel lives in the composer bottom row (not the header)", () => {
   const s = PULL();
   assert.ok(
-    s.includes('<button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => closeDraft(draftKey(hi(), ri()))}>'),
-    "draft Cancel is a small secondary .btn closing only its own key",
+    s.includes('onCancel={() => closeDraft(draftKey(hi(), ri()))}'),
+    "draft composer takes onCancel closing only its own key",
   );
   const panel = s.slice(s.indexOf("Dismissable draft composer"), s.indexOf("CommentComposer", s.indexOf("Dismissable draft composer")));
+  assert.ok(!panel.includes("<button"), "no <button> anywhere in the draft header block — the header <p> keeps only the anchor label");
   assert.ok(!panel.includes('class="link'), "no .link class anywhere in the draft composer block");
+  const composer = read("../../src/components/CommentComposer.jsx");
+  assert.ok(composer.includes('onClick={() => props.onCancel()}'), "the bottom-row Cancel invokes the caller's onCancel");
 });
 
-test("Files-tab staged Cancel wears the small secondary btn treatment (not .link)", () => {
+test("Files-tab staged Cancel lives in the composer bottom row (not the header)", () => {
   const s = FILES();
   assert.ok(
-    s.includes('<button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => dismissStaged(false)}>'),
-    "staged Cancel is a small secondary .btn dismissing without refocus",
+    s.includes('onCancel={() => dismissStaged(false)}'),
+    "staged composer takes onCancel dismissing without refocus",
   );
   const panel = s.slice(s.indexOf("Dismissable staged composer"), s.indexOf("CommentComposer", s.indexOf("Dismissable staged composer")));
+  assert.ok(!panel.includes("<button"), "no <button> anywhere in the staged header block — the header <p> keeps only the anchor label");
   assert.ok(!panel.includes('class="link'), "no .link class anywhere in the staged composer block");
 });
 
@@ -135,13 +143,18 @@ test("Files-tab dismissal clears only the staged selection", () => {
 
 test("conversation dismiss paths stage nothing and post nothing", () => {
   const s = PULL();
-  for (const needle of ["closeDraft(key);", "onClick={() => closeDraft(draftKey(hi(), ri()))}"]) {
-    const i = s.indexOf(needle);
-    assert.ok(i > 0, `dismiss call site present: ${needle}`);
-    const ctx = s.slice(Math.max(0, i - 400), i + 120);
-    assert.ok(!ctx.includes("onStage"), "no onStage near a dismiss call");
-    assert.ok(!ctx.includes("threads.create") && !ctx.includes("fetch("), "no POST near a dismiss call");
-  }
+  // #587-scoped update: the Cancel call moved from a header onClick into
+  // the composer's onCancel prop — adjacent to the onSubmit prop that
+  // legitimately mentions onStage, so the old character-window check
+  // would false-positive. Pin the handler expression itself instead:
+  // it must be exactly the keyed closeDraft call.
+  assert.ok(s.includes("onCancel={() => closeDraft(draftKey(hi(), ri()))}"), "Cancel handler is exactly the keyed drop — no onStage, no POST in the expression");
+  const needle = "closeDraft(key);";
+  const i = s.indexOf(needle);
+  assert.ok(i > 0, "Escape dismiss call site present");
+  const ctx = s.slice(Math.max(0, i - 400), i + 120);
+  assert.ok(!ctx.includes("onStage"), "no onStage near the Escape dismiss call");
+  assert.ok(!ctx.includes("threads.create") && !ctx.includes("fetch("), "no POST near the Escape dismiss call");
 });
 
 test("Files-tab dismiss helper stages nothing and posts nothing", () => {

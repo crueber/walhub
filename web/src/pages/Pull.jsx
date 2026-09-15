@@ -569,13 +569,15 @@ function DiffFile(props) {
                         #502 gate: no composers for anonymous viewers. */}
                     <Show when={props.canComment !== false && draftAt(hi(), ri())}>
                       {(d) => (
-                        // Dismissable draft composer (Forgejo #566): Cancel
-                        // wears the small secondary .btn treatment (the
-                        // canonical button idiom, guideline §2 Controls —
-                        // readable in both themes, unlike the unstyled
-                        // .link); Escape anywhere inside the panel (the
-                        // CommentComposer textarea bubbles its keydown up
-                        // here — no document listener, so no onCleanup)
+                        // Dismissable draft composer (Forgejo #566, Cancel
+                        // moved to the bottom row by #587): the composer
+                        // takes an onCancel prop rendering Cancel at the
+                        // LEFT of its bottom action row (opposite the
+                        // right-aligned submit cluster — the canonical
+                        // .btn treatment, guideline §2 Controls, readable
+                        // in both themes). Escape anywhere inside the panel
+                        // (the CommentComposer textarea bubbles its keydown
+                        // up here — no document listener, so no onCleanup)
                         // drops ONLY this keyed draft and refocuses the
                         // gutter "+" that staged it. Dismissal calls
                         // nothing: no onStage, no POST.
@@ -593,9 +595,6 @@ function DiffFile(props) {
                         >
                           <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
                             commenting on <span class="font-mono">{anchorLabel(d().anchor)}</span>
-                            <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => closeDraft(draftKey(hi(), ri()))}>
-                              Cancel
-                            </button>
                           </p>
                           <CommentComposer
                             onSubmit={async (body) => {
@@ -605,6 +604,7 @@ function DiffFile(props) {
                               closeDraft(draftKey(hi(), ri()));
                             }}
                             submitLabel={d().editIndex != null ? "Save" : "Stage comment"}
+                            onCancel={() => closeDraft(draftKey(hi(), ri()))}
                             initialValue={d().initialBody}
                             placeholder={`Comment on ${anchorLabel(d().anchor)}… (staged into the finish-review modal)`}
                             errorKey="line-comment-stage"

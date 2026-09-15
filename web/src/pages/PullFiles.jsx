@@ -91,12 +91,14 @@ function PullDiffFile(props) {
         />
       </div>
       <Show when={getStaged() && stagedAnchor()}>
-        {/* Dismissable staged composer (Forgejo #566): Cancel wears the
-            small secondary .btn treatment (the canonical button idiom,
-            guideline §2 Controls — readable in both themes, unlike the
-            unstyled .link); Escape anywhere inside the panel dismisses via
-            dismissStaged above. Re-stage mounts a fresh empty
-            CommentComposer (the Show unmounts it with its text). */}
+        {/* Dismissable staged composer (Forgejo #566, Cancel moved to
+            the bottom row by #587): the composer takes an onCancel prop
+            rendering Cancel at the LEFT of its bottom action row
+            (opposite the right-aligned submit — the canonical .btn
+            idiom, guideline §2 Controls, readable in both themes);
+            Escape anywhere inside the panel dismisses via dismissStaged
+            above. Re-stage mounts a fresh empty CommentComposer (the
+            Show unmounts it with its text). */}
         <div
           class="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800"
           onKeyDown={(e) => {
@@ -108,13 +110,11 @@ function PullDiffFile(props) {
         >
           <p class="text-xs text-zinc-500 dark:text-zinc-400">
             commenting on <span class="font-mono">{anchorLabel(stagedAnchor())}</span>
-            <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => dismissStaged(false)}>
-              Cancel
-            </button>
           </p>
           <CommentComposer
             onSubmit={submitThread}
             submitLabel="Start thread"
+            onCancel={() => dismissStaged(false)}
             placeholder={`Comment on ${anchorLabel(stagedAnchor())}…`}
             errorKey="thread-create"
             label={`Comment on ${anchorLabel(stagedAnchor())}`}
