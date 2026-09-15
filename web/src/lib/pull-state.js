@@ -6,7 +6,8 @@
 // The server contract (internal/pulls/service.go UpdatePR): state flips are
 // `PUT …/pulls/{num}` `{state: "open"|"closed"}` (no reason — PR state is
 // open|closed only), auth is **author or triage** (hierarchical P6 ladder,
-// so write ⊇ triage), and closing a merged PR is refused (409). Client
+// so write ⊇ triage), and closing OR reopening a merged PR is refused
+// (409 — Forgejo #594 closed the reopen gap). Client
 // gating is cosmetic per perms.jsx — the server is authoritative; 403/409
 // surface in the error tray via the composer's reportError path.
 //
@@ -207,6 +208,21 @@ export function mergeabilityDisplay(state, detail = {}) {
   }
   if (state == null || state === "") return { text: "Unknown", cls: MERGEABILITY_MUTED_CLS, sub: null };
   return { text: String(state), cls: MERGEABILITY_MUTED_CLS, sub: null };
+}
+
+/**
+ * pullCommentLock(thread, pr) → {locked, reason}: the Forgejo #594 client
+ * mirror of the server threadLocked gate (internal/pulls + internal/review
+ * service.go). Merged wins (merge stamps StateClosed too, so thread.state
+ * alone cannot tell merged from plain-closed); the lock keys on CURRENT
+ * state — a reopen flips a plain-closed PR back, so the composer reacts
+ * to pull stream frames with no reload. Loading (no thread yet) reads
+ * unlocked, like the badge default.
+ */
+export function pullCommentLock(thread, pr) {
+  if (pr?.merged) return { locked: true, reason: "Merged — commenting is locked" };
+  if ((thread?.state ?? "open") !== "open") return { locked: true, reason: "This conversation is closed" };
+  return { locked: false, reason: null };
 }
 
 /**

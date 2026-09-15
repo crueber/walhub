@@ -96,7 +96,10 @@ test("Finish review follows the #479 form structure", () => {
 
 test("Finish review buttons: one primary idiom, plain cancel, busy swap kept", () => {
   const form = blockOf(PULL, "FinishReview");
-  assert.ok(form.includes('<button type="submit" class="btn primary px-3 py-1"'), "submit is the defined btn primary idiom");
+  // Forgejo #594 appended the canonical disabled treatment (the
+  // milestone-picker idiom) to the submit class — the pin tracks the
+  // full literal, primary idiom intact.
+  assert.ok(form.includes('class="btn primary px-3 py-1 disabled:cursor-not-allowed disabled:opacity-50"'), "submit is the defined btn primary idiom");
   assert.ok(form.includes("{getBusy() ? \"submitting…\" : \"submit review\"}"), "busy label swap kept");
   assert.ok(form.includes('<button type="button" class="btn px-3 py-1" onClick={props.onDone}>'), "cancel stays a plain btn");
 });

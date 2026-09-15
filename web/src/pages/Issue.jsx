@@ -26,7 +26,7 @@ import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { reactionEmoji, summaryEntries, addableReactions, adjustSummary } from "../lib/reactions.js";
 import { appendOlderWindow, olderCursor, anchorScrollTop, reconcilePinnedWindow } from "../lib/thread-order.js";
 import ReactionMenu from "../components/ReactionMenu.jsx";
-import { issueEventText, closePatch, closedStateLabel } from "../lib/issue-events.js";
+import { issueEventText, closePatch, closedStateLabel, issueCommentLock } from "../lib/issue-events.js";
 import { anonWriteTarget, isAnonymousViewer, write401Target } from "../lib/writeGate.js";
 
 // System-row text comes from the shared honest-event lib (null = comment
@@ -498,6 +498,8 @@ export default function Issue() {
                         addable={addable}
                         isBusy={(c) => isBusy(ev.seq, c)}
                         onAdd={(c) => react(ev.seq, c)}
+                        disabled={issueCommentLock(thread()).locked}
+                        disabledReason={issueCommentLock(thread()).reason}
                       />
                     </div>
                   );
@@ -515,6 +517,12 @@ export default function Issue() {
                   </Show>
                 }
               >
+                {/* Forgejo #594: the composer keys off the live thread
+                    (stream frames invalidate the key, so a reopen unlocks
+                    with no reload). Locked renders disabled-with-reason;
+                    the Reopen control stays live — it is the way back.
+                    Summary chips stay live too (removal-only on locked
+                    threads: personal undo, not conversation activity). */}
                 <CommentComposer
                   onSubmit={comment}
                   onCommentAndClose={t().state === "open" ? commentAndClose : undefined}
@@ -522,6 +530,8 @@ export default function Issue() {
                   closeLabel={t().state === "open" ? "Close" : "Reopen"}
                   closeChooser={t().state === "open"}
                   onClose={(reason) => (t().state === "open" ? close(reason) : patch({ state: "open" }))}
+                  disabled={issueCommentLock(t()).locked}
+                  disabledReason={issueCommentLock(t()).reason}
                   errorKey="issue-comment"
                   mentionId="mention-issue-comment"
                   mentionNames={thread()?.participants}

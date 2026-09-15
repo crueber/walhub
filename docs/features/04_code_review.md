@@ -266,6 +266,14 @@ envelope handling; JSDoc `@typedef Review/ThreadAnchor/ThreadHeader` in `types.j
   state, so the UI and the merge gate agree with zero coordination and no background dismisser.
 - **`review_summary` is a pure-function render cache** — recomputed inside the CAS loop from immutable
   events; racing writers converge, and the merge gate never trusts it (re-derives by scan).
+- **Inline-thread writes lock on merged/closed PRs (Forgejo #594, 2026-09-15).** Service-layer gate
+  (`threadLocked(h, side)` on the `prHeadOf`-loaded header + sidecar — zero new store reads, law 6; no new locks,
+  law 3; no schema change, law 5) refusing `OpenThread`, `AddThreadComment`, AND `SubmitReview` with typed
+  `ErrLocked` → `409`. `SubmitReview` is gated deliberately though the ticket names only open/reply: a submit posts
+  conversation activity (body comment + atomically-opened threads) and would otherwise bypass the lock outright.
+  Resolve/unresolve stay ungated (triage curation of existing threads, not new conversation). No
+  maintainer/admin override in v1 (same simplest-contract rationale as 02/03). Client: the finish-review modal
+  submit disables with reason, thread replies disable with reason, and new line-thread staging hides while locked.
 - **`required-reviews` is one policy effect with two honest halves** — push-time denial (enforceable at
   receive-pack) + merge-gate evaluation (where approvals are observable), per 14 §14.5.
 - **No new task kinds; author self-approval is per-repo conditional, enforced server-side;

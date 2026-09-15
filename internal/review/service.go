@@ -105,6 +105,21 @@ func requireAuthenticated(p auth.Principal) error {
 	return nil
 }
 
+// threadLocked reports whether a PR is read-only for inline-thread writes
+// (Forgejo #594): merged or plain-closed. The PR header state carries the
+// merge stamp (merge stamps StateClosed alongside Merged), so the state
+// check alone covers merged — the sidecar arm is belt-and-braces for a
+// header whose merge stamp is still in flight. Keys on CURRENT state:
+// reopening a closed-but-unmerged PR restores threading; merged is
+// terminal. Callers pass the already-loaded header + sidecar from
+// prHeadOf, so the gate adds no store round trip (law 6).
+func threadLocked(h *PRHeader, side *PRSidecar) bool {
+	if h.State != "open" {
+		return true
+	}
+	return side != nil && side.Merged
+}
+
 // --- shared reads -----------------------------------------------------------
 
 // loadPRHeader reads the PR thread header; (nil, "", nil) when absent.
@@ -344,6 +359,14 @@ func (s *Service) SubmitReview(ctx context.Context, owner, repo string, num int,
 	h, side, err := s.prHeadOf(ctx, owner, repo, num)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	// Forgejo #594: a review submit posts conversation activity (a body
+	// comment and, optionally, atomically-opened inline threads), so it
+	// rides the same lock as OpenThread/AddThreadComment — otherwise the
+	// lock would be trivially bypassable. Checked against the
+	// already-loaded header + sidecar: no new store round trip.
+	if threadLocked(h, side) {
+		return nil, nil, nil, fmt.Errorf("%w: pull request #%d", ErrLocked, num)
 	}
 	who := normPrincipal(actor.Name)
 	if normPrincipal(h.Author) == who && in.State != StateCommented {

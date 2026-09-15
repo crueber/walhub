@@ -7,7 +7,7 @@
 // for this seq), a per-content busy predicate, and onAdd. This component
 // never fetches and never filters — it renders what it is given, so the
 // menu always agrees with the chips. Props: { seq, addable: string[],
-// isBusy(content) → bool, onAdd(content) }.
+// isBusy(content) → bool, onAdd(content), disabled?, disabledReason? }.
 //
 // The trigger sits INSIDE the summary row (not in the comment header),
 // so a comment with no reactions shows a lone "+" where its chips will
@@ -88,6 +88,12 @@ export default function ReactionMenu(props) {
   };
 
   const empty = () => !(props.addable?.length > 0);
+  // Forgejo #594 lock: `disabled` (+ `disabledReason`) disables the
+  // add-reaction trigger with a reason (the server 409s adds on locked
+  // threads; removal still works through the summary chips — personal
+  // undo, not conversation activity — so chips stay live).
+  const locked = () => !!props.disabled;
+  const lockReason = () => props.disabledReason ?? "This conversation is closed";
   return (
     <div class="reaction-menu relative inline-flex items-center self-center" ref={root}>
       <button
@@ -97,10 +103,11 @@ export default function ReactionMenu(props) {
         aria-haspopup="menu"
         aria-expanded={getOpen() ? "true" : "false"}
         aria-label={
-          empty() ? `all reactions already on comment ${props.seq}` : `add reaction on comment ${props.seq}`
+          locked() ? lockReason() : empty() ? `all reactions already on comment ${props.seq}` : `add reaction on comment ${props.seq}`
         }
-        title={empty() ? "all reactions already added" : "add reaction"}
-        disabled={empty()}
+        title={locked() ? lockReason() : empty() ? "all reactions already added" : "add reaction"}
+        aria-disabled={locked() || undefined}
+        disabled={locked() || empty()}
         onClick={() => (getOpen() ? close(false) : openInto())}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown" && !getOpen()) {

@@ -192,10 +192,19 @@ func (s *Service) CreateIssue(ctx context.Context, owner, repo string, actor aut
 
 // --- comment -----------------------------------------------------------------
 
+// threadLocked reports whether an issue thread is read-only for
+// conversation writes (Forgejo #594): the lock keys on CURRENT thread
+// state, never a one-way latch — reopening restores commenting. Checked
+// inside the CAS mutator (or against the already-loaded header), so the
+// gate adds no store round trip (law 6).
+func threadLocked(t *Thread) bool {
+	return t.State != StateOpen
+}
+
 // AddComment appends a commented event through the two-step, fans out #N
 // references (§6), maintains participants[] + comment_count in the same
 // CAS, and emits subscribed/mentioned notifications. Auth: read
-// (authenticated).
+// (authenticated). Refused 409 on a closed issue (ErrLocked).
 func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, actor auth.Principal, body string) (*Event, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, err
@@ -211,6 +220,9 @@ func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, a
 	th, ev, err := s.appendEvent(ctx, owner, repo, num, func(t *Thread, seq int) (*Event, error) {
 		if t.Kind != "issue" {
 			return nil, fmt.Errorf("%w: unknown issue", ErrNotFound)
+		}
+		if threadLocked(t) {
+			return nil, fmt.Errorf("%w: issue #%d is closed", ErrLocked, num)
 		}
 		t.NextEventSeq = seq + 1
 		t.UpdatedAt = now
@@ -625,6 +637,9 @@ func (s *Service) AddReaction(ctx context.Context, owner, repo string, num, targ
 	if th == nil || th.Kind != "issue" {
 		return nil, nil, false, fmt.Errorf("%w: unknown issue", ErrNotFound)
 	}
+	if threadLocked(th) {
+		return nil, nil, false, fmt.Errorf("%w: issue #%d is closed", ErrLocked, num)
+	}
 	te, err := s.loadEvent(ctx, owner, repo, num, target)
 	if err != nil {
 		return nil, nil, false, err
@@ -675,6 +690,9 @@ func (s *Service) AddReaction(ctx context.Context, owner, repo string, num, targ
 
 // RemoveReaction appends a reaction_changed remove for the actor's OWN
 // reaction only (unknown → 404); the summary −1 rides the same CAS.
+// Deliberately NOT gated on threadLocked (Forgejo #594 decision):
+// removing one's own pre-lock reaction is a personal undo, not
+// conversation activity, so it stays available on closed issues.
 func (s *Service) RemoveReaction(ctx context.Context, owner, repo string, num, target int, actor auth.Principal, content string) (*Thread, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, err

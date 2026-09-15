@@ -840,6 +840,21 @@ func windowRows(pool []PROut, after, n int) ([]PROut, bool) {
 	return pool[start:end], more
 }
 
+// threadLocked reports whether a PR thread is read-only for conversation
+// writes (Forgejo #594): merged or plain-closed. Merge stamps StateClosed
+// alongside Merged in the same header CAS (merge.go step 6), so the state
+// check alone covers merged — the pr.Merged arm is belt-and-braces for a
+// header whose merge stamp is still in flight. Keys on CURRENT state:
+// reopening a closed-but-unmerged PR restores commenting; merged is
+// terminal. Checked inside the CAS mutator (or against already-loaded
+// docs), so the gate adds no store round trip (law 6).
+func threadLocked(th *Thread, pr *PRDoc) bool {
+	if th.State != StateOpen {
+		return true
+	}
+	return pr != nil && pr.Merged
+}
+
 // --- update + comment ---------------------------------------------------------
 
 // PRPatch carries the PUT fields (§8): title/body/state. Unknown keys are
@@ -904,6 +919,9 @@ func (s *Service) UpdatePR(ctx context.Context, owner, repo string, num int, act
 		}
 		if want != th.State {
 			if want == StateClosed && pr.Merged {
+				return nil, nil, fmt.Errorf("%w: pull request #%d is merged", ErrConflict, num)
+			}
+			if want == StateOpen && pr.Merged {
 				return nil, nil, fmt.Errorf("%w: pull request #%d is merged", ErrConflict, num)
 			}
 			state = &want
@@ -990,7 +1008,9 @@ func prParticipants(th *Thread, actor string) []string {
 }
 
 // AddComment appends a commented event to a PR thread (the conversation
-// box; same P3 two-step as issues). Auth: read (authenticated).
+// box; same P3 two-step as issues). Auth: read (authenticated). Refused
+// 409 on a merged or closed PR (ErrLocked); reopening a
+// closed-but-unmerged PR restores commenting.
 func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, actor auth.Principal, body string) (*Event, error) {
 	if err := requireAuthenticated(actor); err != nil {
 		return nil, err
@@ -1006,9 +1026,19 @@ func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, a
 	}
 	who := normPrincipal(actor.Name)
 	now := s.nowUTC().Format(dateTimeFmt)
+	// The sidecar read is hoisted ahead of the CAS (it already happened
+	// below, result discarded — same read count, law 6 neutral) so the
+	// mutator can consult pr.Merged for a header whose merge stamp is
+	// still in flight. A merge landing between the two reads is still
+	// caught: its header CAS stamps StateClosed, which the mutator sees
+	// on the fresh doc.
+	pr, _, _ := s.loadPR(ctx, owner, repo, num)
 	th, ev, err := s.appendEvent(ctx, owner, repo, num, func(t *Thread, seq int) (*Event, error) {
 		if t.Kind != "pr" {
 			return nil, fmt.Errorf("%w: %d", ErrNotFound, num)
+		}
+		if threadLocked(t, pr) {
+			return nil, fmt.Errorf("%w: pull request #%d", ErrLocked, num)
 		}
 		t.NextEventSeq = seq + 1
 		t.UpdatedAt = now
@@ -1020,8 +1050,6 @@ func (s *Service) AddComment(ctx context.Context, owner, repo string, num int, a
 	if err != nil {
 		return nil, err
 	}
-	pr, _, _ := s.loadPR(ctx, owner, repo, num)
-	_ = pr
 	s.updateIndex(ctx, owner, repo, prCardOf(th))
 	s.emit(ctx, NotifyEvent{Repo: repoName(owner, repo), Class: "subscribed", Actor: who, PullNum: num, Recipients: prParticipants(th, who)})
 	s.emitMentioned(ctx, owner, repo, num, who, body)
