@@ -82,6 +82,23 @@
   .btn.danger { @apply border-red-300 bg-red-50 text-red-700 hover:bg-red-100
           dark:border-red-800 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-900/60; }
   .btn-active { @apply border-emerald-600 font-semibold text-emerald-700 dark:border-emerald-500 dark:text-emerald-400; }
+  /* Inline text-link controls (Forgejo #568, systemic sweep of the #566
+     follow-up): .link is the ONE shared treatment for text-level actions
+     and router links that must read as links, not surrounding text — 25
+     call sites across 10 files (review dismiss/remove, thread
+     resolve/expand toggles, staged remove, member remove, token revoke,
+     webhook ping/deliveries/delete, back-links, check expand toggles,
+     notification actions). Tailwind v4 preflight resets buttons/links to
+     plain muted text and .link shipped zero CSS rules, so every one of
+     them was invisible until this rule. Accent emerald both themes (the
+     markdown-link language), hover underline + pointer affordance. The
+     #405 opaque-popover precedent: one shared rule fixes all sites
+     including future ones — no per-site composition. Deliberately a
+     class, never a bare `a` rule: the scoped link styles (.markdown-body
+     a, .blob-num a, .diff-num a) and the nav treatments keep their
+     contexts, and <A class="link"> composes with this rule instead of
+     fighting it. */
+  .link { @apply cursor-pointer text-emerald-700 hover:text-emerald-600 hover:underline dark:text-emerald-400 dark:hover:text-emerald-300; }
   /* Shared icon utility (Forgejo #465): the one sizing rule for the embedded
      lib/icons.jsx set. The svg already carries width/height 1em, so every
      mixed viewBox (16/24/1024/1200) renders a 1em box at the caller's font

@@ -182,8 +182,14 @@ test("the other .link uses are NOT swept (out of scope for #566)", () => {
   assert.ok(fileLinks >= 2, `PullFiles.jsx keeps its conversation/back .link uses (found ${fileLinks})`);
 });
 
-test("ui.css gains no .link rule here (the systemic fix is the follow-up ticket)", () => {
-  assert.ok(!/\.link(?![\w-])/.test(CSS()), ".link still has zero CSS rules — Cancel readability comes from .btn, not a new rule");
+test("ui.css now carries the #568 shared .link rule — Cancel readability still comes from .btn, not it", () => {
+  // #568-scoped update (was: "gains no .link rule here"): the systemic
+  // follow-up landed option (a) — one shared .link rule for the 25
+  // text-link sites. The composer Cancels deliberately do NOT use it:
+  // dismiss actions are button-shaped (.btn), text links are .link.
+  assert.ok(/\.link(?![\w-])/.test(CSS()), ".link now has its shared rule (Forgejo #568)");
+  const rule = CSS().slice(CSS().indexOf(".link {"), CSS().indexOf("}", CSS().indexOf(".link {")) + 1);
+  assert.ok(rule.includes("dark:"), "the shared rule reads in both themes");
 });
 
 // --- 8. lawfulness: no new deps, docs amended ---

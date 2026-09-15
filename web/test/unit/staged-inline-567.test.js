@@ -110,7 +110,7 @@ test("staged card carries a stable jump id + aria label, flashing like a thread 
 test("staged card controls are visible buttons (no new invisible .link)", () => {
   const s = PULL();
   const card = s.slice(s.indexOf("function StagedCard(props)"), s.indexOf("function ThreadCard(props)"));
-  assert.ok(!card.includes('class="link"'), "no .link in StagedCard — .link ships zero CSS rules (the #566 lesson)");
+  assert.ok(!card.includes('class="link"'), "no .link in StagedCard — staged edit/remove are button actions (the shared .link rule since #568 is for text links)");
   assert.ok(card.includes('class="btn ml-2 px-2 py-0.5 text-xs"'), "edit/remove use the #566 canonical small-btn treatment");
 });
 
