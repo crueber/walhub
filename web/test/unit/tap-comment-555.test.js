@@ -15,6 +15,15 @@
 // handlers decision (a tap arrives as click; code text stays handler-free
 // so text selection is never fought), the untouched range flow, and the
 // law-11/law-12 doc entries.
+//
+// AMENDED by Forgejo #598 (diff gutter rework): the affordances moved —
+// the DiffTable lineTap hover-plus now lives in the leftmost sign cell
+// (signCell: always-visible sign, button when gated) and the conversation
+// gutter "+" is gone entirely (row click is the staging entry point).
+// The anchor shapes below are UNCHANGED (same staging payloads, same
+// #502 gate, same no-touch-handlers contract); the surface pins assert
+// the relocated affordances — see diff-gutter-598.test.js for the full
+// row-anatomy pin.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -90,39 +99,40 @@ test("tap chunk clamping is inherent: one line names its own hunk", () => {
   assert.equal(first.hunk, f.hunks[0]);
 });
 
-// --- Files tab: DiffTable lineTap --------------------------------------------
+// --- Files tab: DiffTable sign-cell staging (relocated by #598) -----------------
 
-test("DiffTable renders a per-line tap target staging a single-line selection", () => {
+test("DiffTable stages single-line selections from the sign cell (same shape)", () => {
   const src = read("../../src/components/DiffTable.jsx");
-  assert.match(src, /lineTap\(/, "lineTap helper");
+  assert.ok(!src.includes("const lineTap"), "lineTap helper is gone");
   assert.match(
     src,
-    /onCommentSelect\(\{ path: path\(\), side, start: no, end: no \}\)/,
-    "tap stages {path, side, start: no, end: no} — the #546 single-line shape",
+    /onClick=\{\(\) => props\.onCommentSelect\(\{ path: path\(\), side, start: no, end: no \}\)\}/,
+    "sign button stages {path, side, start: no, end: no} — the #546 single-line shape",
   );
-  assert.match(src, /lineTap\(side, no,/, "unified rows tap their own side + number");
-  assert.match(src, /lineTap\("old", row\.left\?\.no,/, "split left gutter taps OLD");
-  assert.match(src, /lineTap\("new", row\.right\?\.no,/, "split right gutter taps NEW");
-  assert.match(src, /aria-label=\{label\}/, "tap target is labelled");
+  assert.match(src, /signCell\(l\.t, side, no,/, "unified rows stage their own side + number");
+  assert.match(src, /signCell\(row\.left\?\.t, "old", row\.left\?\.no,/, "split left sign stages OLD");
+  assert.match(src, /signCell\(row\.right\?\.t, "new", row\.right\?\.no,/, "split right sign stages NEW");
+  assert.match(src, /aria-label=\{label\}/, "sign button is labelled");
   assert.match(src, /`Comment on line \$\{no\}/, "unified label names the line");
-  assert.match(src, /title="Comment on this line"/, "tap target carries a title hint");
+  assert.match(src, /title="Comment on this line"/, "sign button carries a title hint");
 });
 
-test("DiffTable tap target honors the #502 gate (same bar as the range flow)", () => {
+test("DiffTable sign target honors the #502 gate (same bar as the range flow)", () => {
   const src = read("../../src/components/DiffTable.jsx");
   assert.match(
     src,
     /props\.onCommentSelect && props\.canComment !== false && no != null/,
-    "tap renders only for gated consumers on real lines",
+    "sign button renders only for gated consumers on real lines",
   );
 });
 
-test("DiffTable tap target is visible without hover (coarse pointers + keyboard)", () => {
+test("DiffTable sign is always visible (no hover/coarse/focus reveal)", () => {
   const src = read("../../src/components/DiffTable.jsx");
-  assert.match(src, /group-hover:inline/, "hover reveal on fine pointers");
-  assert.match(src, /pointer-coarse:inline/, "always visible on touch");
-  assert.match(src, /focus-visible:inline/, "keyboard focus reveals (a11y floor)");
-  assert.match(src, /class="diff-row group"/, "rows carry the group anchor");
+  assert.ok(!src.includes("group-hover:inline"), "no hover reveal");
+  assert.ok(!src.includes("pointer-coarse:inline"), "no coarse-pointer-only fallback (always rendered)");
+  assert.ok(!src.includes("focus-visible:inline"), "no focus-only reveal fallback");
+  assert.match(src, /focus-visible:outline/, "keyboard users keep a focus-visible outline");
+  assert.match(src, /fallback=\{signChar\(t\)\}/, "ungated viewers still see the plain sign");
 });
 
 test("DiffTable never fights text selection: no touch handlers, code text handler-free", () => {
@@ -131,8 +141,9 @@ test("DiffTable never fights text selection: no touch handlers, code text handle
   assert.ok(!src.includes("onTouchEnd"), "no touchend (custom handlers would double-stage)");
   assert.equal(
     (src.match(/onMouseDown/g) ?? []).length, 1,
-    "exactly one mousedown — the gutter drag anchor; code cells carry none",
+    "exactly one mousedown — the gutter drag anchor; sign + code cells carry none",
   );
+  assert.ok(!/<tr[^>]*onClick/.test(src), "no row-click handler (would fire after text-selection drags)");
 });
 
 test("DiffTable range flow is untouched (drag/shift + comment-on-selection bar)", () => {
@@ -141,24 +152,23 @@ test("DiffTable range flow is untouched (drag/shift + comment-on-selection bar)"
   assert.match(src, /onClick=\{\(\) => props\.onCommentSelect\(sel\(\)\)\}/, "bar still feeds the same staging path");
 });
 
-// --- Conversation: Pull.jsx DiffFile ------------------------------------------
+// --- Conversation: Pull.jsx DiffFile (gutter + gone by #598) --------------------
 
-test("conversation + lives in the gutter, always visible, gated on canComment (Forgejo #560)", () => {
+test("conversation stages from the row itself — no gutter trigger (Forgejo #598)", () => {
   const src = read("../../src/pages/Pull.jsx");
-  // #560 moved the trigger out of the row body into the left gutter as an
-  // always-visible button (no hover dependency) + row-click staging with
-  // keyed multi-drafts — see inline-composer-560.test.js for the full pin.
-  assert.match(src, /w-6 shrink-0 select-none text-center/, "left gutter cell ahead of the line numbers");
-  assert.ok(!src.includes("ml-2 hidden"), "the old inline-body hover trigger is gone");
-  assert.match(src, /focus-visible:outline/, "keyboard users keep a focus-visible affordance");
-  assert.match(src, /<Show when=\{props\.canComment !== false\}>/, "+ honors the #502 gate");
+  // #598 removed the #560 gutter "+" column: the row leads with its sign
+  // and row click (with closest() isolation) is the staging entry point —
+  // see inline-composer-560.test.js for the full pin.
+  assert.ok(!src.includes('<span class="w-6'), "no left gutter trigger cell");
+  assert.match(src, /onClick=\{\(ev\) => onRowClick\(props\.file, hunk, hi\(\), row, ri\(\), ev\)\}/, "row click stages");
+  assert.match(src, /<Show when=\{props\.canComment !== false\}>/, "composer + staged cards honor the #502 gate");
   assert.match(src, /canComment=\{canComment\(\)\}/, "call site passes the gate");
 });
 
-test("conversation + keeps the theme tokens (Forgejo #560: gutter button)", () => {
+test("conversation sign keeps no plus-button tokens (themed with the row)", () => {
   const src = read("../../src/pages/Pull.jsx");
   assert.ok(!src.includes("link ml-2 hidden"), "no undefined link class on the affordance");
-  assert.match(src, /text-emerald-600.*dark:text-emerald-400/, "explicit F2 token pair, both themes");
+  assert.ok(!src.includes("text-emerald-600 hover:text-emerald-700"), "no plus-button token string survives");
 });
 
 test("conversation adds no touch handlers (tap arrives as click)", () => {

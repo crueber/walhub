@@ -10,7 +10,8 @@
 // Fix: the page-level pending list (the SAME signal feeding the
 // finish-review modal list + button count — one source of truth, no forked
 // state) locates per row into StagedCards below the same anchor line, in
-// the existing inline-card slot (ml-14 mt-1 rounded border, shared with
+// the existing inline-card slot (ml-8 mt-1 rounded border — re-derived by
+// #598 from ml-14, following the removed w-6 gutter — shared with
 // ThreadCard/composer). Edit re-opens the keyed composer in place
 // pre-filled (CommentComposer initialValue); remove unstages through the
 // shared mutation. ThreadIndex lists staged entries marked staged,
@@ -63,7 +64,7 @@ test("staged card shares the inline-card slot (no wider scroll than the composer
   const s = PULL();
   const card = s.slice(s.indexOf("function StagedCard(props)"), s.indexOf("function ThreadCard(props)"));
   assert.ok(
-    card.includes("ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700"),
+    card.includes("ml-8 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700"),
     "StagedCard composes the exact ThreadCard/composer slot classes",
   );
   const overflow = s.indexOf("overflow-x-auto", s.indexOf("function DiffFile(props)"));

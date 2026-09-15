@@ -4,12 +4,15 @@
 // Follow-up to #546/#555: the per-line "+" lived in the diff row BODY
 // (hover-revealed, shifting row content), a row click staged nothing, and
 // drafts were a single per-file `createSignal(null)` — one composer at a
-// time, rendered by one <Show> at the file end. The rework moves the "+"
-// into the left gutter (one discrete, always-visible button per
-// commentable line), stages a composer immediately below the clicked row
-// on ANY row click, and holds drafts in a keyed Map (`${hunkIdx}:${rowIdx}`)
-// so unlimited composers coexist with text preserved, each submitting
-// independently in any order.
+// time, rendered by one <Show> at the file end. The rework stages a
+// composer immediately below the clicked row on ANY row click, and holds
+// drafts in a keyed Map (`${hunkIdx}:${rowIdx}`) so unlimited composers
+// coexist with text preserved, each submitting independently in any
+// order. (#560 first moved the "+" into the left gutter; Forgejo #598
+// then removed the gutter "+" entirely — rows lead with their sign and
+// row click is the only staging entry point. The keyed-draft,
+// stageLine/buildAnchor, isolation, gate, and placement contracts below
+// are unchanged by #598.)
 //
 // Preserved (pinned here): stageLine → buildAnchor
 // (web/src/lib/review-anchor.js) → shared CommentComposer → props.onStage;
@@ -59,46 +62,52 @@ function hunk0() {
 }
 const src = () => read("../../src/pages/Pull.jsx");
 
-// --- 1. gutter "+" per commentable line, always visible -----------------------
+// --- 1. sign-first rows, no gutter trigger (#598) --------------------------------
 
-test("gutter trigger lives in the left gutter, ahead of the line numbers", () => {
+test("row leads with its sign, ahead of the line numbers — no gutter trigger", () => {
   const s = src();
-  const btn = s.indexOf("Comment on line ${row.newNo ?? row.oldNo} in ${props.file.path}");
-  assert.ok(btn > 0, "gutter + button with a line-labelling aria-label");
-  const gutterCell = s.indexOf("w-6 shrink-0 select-none text-center");
-  assert.ok(gutterCell > 0 && gutterCell < btn, "button sits inside a left gutter cell");
+  assert.ok(!s.includes('<span class="w-6'), "the #560 gutter trigger column is gone");
+  const rowDiv = s.indexOf("diff-row flex cursor-pointer font-mono text-xs");
+  assert.ok(rowDiv > 0, "row div carries the diff-row hover-affordance classes");
+  const sign = s.indexOf("{row.line.t}</span>", rowDiv);
+  assert.ok(sign > 0, "row renders its +/-/space sign");
   assert.ok(
-    s.indexOf("w-10 shrink-0 select-none text-right", gutterCell) > btn,
-    "line-number gutter cells follow the trigger cell",
+    s.indexOf("w-10 shrink-0 select-none text-right", rowDiv) > sign,
+    "line-number cells follow the sign",
   );
 });
 
-test("gutter trigger is always visible (no hover dependency)", () => {
+test("sign is always visible and themed with the row (no trigger to reveal)", () => {
   const s = src();
-  const cellIdx = s.indexOf("w-6 shrink-0 select-none text-center");
-  const block = s.slice(cellIdx, s.indexOf("</span>", s.indexOf("</button>", cellIdx)));
-  assert.ok(!block.includes("hidden"), "no hidden class on the trigger");
-  assert.ok(!block.includes("group-hover:"), "no hover-reveal indirection");
-  assert.ok(!block.includes("pointer-coarse:"), "no coarse-pointer-only fallback needed (always rendered)");
-  assert.ok(!block.includes("focus-visible:inline"), "no focus-only reveal fallback needed");
-  assert.match(block, /focus-visible:outline/, "keyboard users keep a focus-visible affordance");
+  assert.match(
+    s,
+    /<span class=\{`w-4 shrink-0 select-none text-center\$\{row\.line\.t === " " \? " text-zinc-400" : ""\}`\}>\{row\.line\.t\}<\/span>/,
+    "sign span: centered; add/del inherit the row text, context muted",
+  );
+  const rowDiv = s.indexOf("diff-row flex cursor-pointer font-mono text-xs");
+  const rowEnd = s.indexOf("</div>", s.indexOf("{row.line.text}</span>", rowDiv));
+  const rowBlock = s.slice(rowDiv, rowEnd);
+  assert.ok(!rowBlock.includes("<button"), "no button in the row — the row itself is the target");
+  assert.ok(!rowBlock.includes("hidden"), "no hidden class on the row");
 });
 
 test("row content is shift-free: no trigger inside the row body", () => {
   const s = src();
   assert.ok(!s.includes("ml-2 hidden"), "the old inline-body trigger (ml-2 hidden…) is gone");
+  assert.ok(!s.includes('<span class="w-6'), "no gutter trigger cell either");
+  const rowDiv = s.indexOf("diff-row flex cursor-pointer font-mono text-xs");
   const bodyAfterNumbers = s.slice(
-    s.indexOf('<span class="w-4 shrink-0 select-none">{row.line.t}</span>'),
-    s.indexOf("</div>", s.indexOf('<span class="w-4 shrink-0 select-none">{row.line.t}</span>')),
+    s.indexOf("{row.line.text}</span>", rowDiv),
+    s.indexOf("</div>", s.indexOf("{row.line.text}</span>", rowDiv)),
   );
   assert.ok(!bodyAfterNumbers.includes("<button"), "no button after the code cell — the body holds text only");
 });
 
-test("gutter trigger mirrors the Files-tab conventions (label + title + tokens)", () => {
+test("sign + row click carry the Files-tab conventions (no forked affordance)", () => {
   const s = src();
-  assert.match(s, /aria-label=\{`Comment on line \$\{row\.newNo \?\? row\.oldNo\} in \$\{props\.file\.path\}`\}/, "gutterLink-style line label incl. path");
-  assert.match(s, /title="Comment on this line \(Shift\+click another \+ for a range\)"/, "range-hint title kept");
-  assert.match(s, /text-emerald-600.*dark:text-emerald-400/, "explicit F2 emerald tokens, both themes");
+  assert.match(s, /tabindex="-1"/, "rows accept Escape refocus without joining tab order");
+  assert.match(s, /cursor-pointer/, "row advertises clickability");
+  assert.match(s, /if \(props\.canComment === false\) return;/, "row-click staging keeps the #502 gate");
 });
 
 // --- 2. row click stages a composer below that line ----------------------------
@@ -142,7 +151,7 @@ test("each draft submits and cancels independently", () => {
   assert.ok(closes >= 2, "both submit and cancel close per-key (independent, any order)");
 });
 
-test("shift+click range extension still works through the gutter buttons", () => {
+test("shift+click range extension still works through row clicks", () => {
   const s = src();
   assert.match(s, /ev\?\.shiftKey && last && last\.file === file\.path && last\.side === side && last\.hunkIdx === hunkIdx/, "same-file+side+hunk clamp");
   assert.match(s, /startNo: Math\.min\(last\.no, no\)/, "range anchors from the last staged line");
@@ -151,11 +160,6 @@ test("shift+click range extension still works through the gutter buttons", () =>
 });
 
 // --- click isolation --------------------------------------------------------------
-
-test("gutter clicks never double-stage through the row handler", () => {
-  const s = src();
-  assert.match(s, /ev\.stopPropagation\(\);/, "gutter button stops propagation");
-});
 
 test("row clicks ignore interactive content (composer/thread-card safe)", () => {
   const s = src();
@@ -170,7 +174,7 @@ test("row clicks ignore interactive content (composer/thread-card safe)", () => 
 
 // --- #502 anon gate on all three entry points --------------------------------------
 
-test("#502 gate covers gutter trigger, row-click handler, and composer", () => {
+test("#502 gate covers row-click handler, composer, and staged cards", () => {
   const s = src();
   const diffFile = s.slice(s.indexOf("function DiffFile(props)"), s.indexOf("function ThreadCard(props)"));
   const gates = (diffFile.match(/props\.canComment (?:!== false|=== false)/g) ?? []).length;

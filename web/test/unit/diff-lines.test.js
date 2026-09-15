@@ -255,7 +255,8 @@ test("DiffTable.jsx carries gutters, drag handlers, hash sync, and highlight", (
   assert.match(src, /scrollIntoView/, "shared URLs scroll to the target");
   assert.match(src, /replaceState/, "drag frames replace, not push");
   assert.match(src, /"line-hl"/, "selection highlight class");
-  assert.match(src, /colspan=\{4\}/, "split hunk headers span both column pairs");
+  assert.match(src, /colspan=\{6\}/, "split hunk headers span both sign/number/code triples (#598)");
+  assert.match(src, /colspan=\{3\}/, "unified hunk headers span sign + number + code (#598)");
   assert.ok(!/anchorContextSha\s*\(/.test(src), "never calls the drift hash (comment mention only)");
 });
 

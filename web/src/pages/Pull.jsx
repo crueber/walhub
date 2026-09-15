@@ -325,19 +325,26 @@ function threadFreshness(thread, files) {
  *  .diff-del tokens DiffBody uses, so the conversation diff matches the
  *  Files tab and commit diffs in both themes). */
 function DiffFile(props) {
-  // Inline review composers (Forgejo #560, refining #546/#555): the "+"
-  // affordance lives in the left gutter (one discrete, always-visible
-  // button per commentable line — no hover dependency, so the target is
-  // stable and never shifts row content), and clicking anywhere on a diff
-  // row stages a composer immediately below THAT line (never one <Show>
-  // at the file end). Drafts are a keyed Map (`${hunkIdx}:${rowIdx}`) so
+  // Inline review composers (Forgejo #560, reworked by #598): the row
+  // itself is the staging surface — clicking anywhere on a diff row
+  // stages a composer immediately below THAT line (never one <Show>
+  // at the file end). The #560 left-gutter "+" button is gone (#598):
+  // every row leads with its +/-/space sign (ahead of the line numbers,
+  // themed with the row — add/del inherit the row text, context muted),
+  // and the row hover tint (ui.css .diff-row rules, the same amber +
+  // emerald tokens as selection) is the interactivity affordance, so no
+  // per-line trigger needs to exist. Inline cards (composer, staged,
+  // threads) share the ml-8 mt-1 slot — re-derived from the row layout:
+  // the removed w-6 gutter (1.5rem) shifts row content left by 6 spacing
+  // units, so the old ml-14 slot follows by the same 6 (ml-8), keeping
+  // cards aligned under their row. Drafts are a keyed Map (`${hunkIdx}:${rowIdx}`) so
   // unlimited composers coexist per file with text preserved — each
   // CommentComposer instance stays mounted under its own row and submits
   // independently (staging into onStage, closing only its own key) in any
   // order. Anchor construction is unchanged: stageLine builds via
   // lib/review-anchor.js and submit hands {anchor, body} to onStage (the
   // finish-review modal); cancel drops only that draft. Plain click stages
-  // one line; Shift+click on another "+" (or row) in the same file + side
+  // one line; Shift+click on another row in the same file + side
   // + hunk extends a range (the DiffTable clamp convention), staged as
   // new_lines/old_lines > 1. Staged entries stay visible in-thread
   // (Forgejo #567): the page-level pending list locates per row into
@@ -345,14 +352,16 @@ function DiffFile(props) {
   // composer pre-filled, remove unstages through the shared mutation),
   // and the ThreadIndex lists them marked staged. The #502 gate covers
   // all three entry points
-  // (gutter button, row click, composer render — canComment !== false).
-  // Row clicks never fight interactive content: the gutter button stops
-  // propagation (no double-stage with the row handler) and the row handler
+  // (row click, composer render, staged cards — canComment !== false;
+  // commentLocked additionally blocks staging while merged/closed).
+  // Row clicks never fight interactive content: the row handler
   // ignores clicks landing on buttons/links/inputs (closest() check), so
   // clicks inside an open composer or thread card — siblings BELOW the
-  // row, never inside it — spawn nothing. No touch handlers: a tap
-  // arrives as click and the permanent gutter buttons are touch-visible
-  // by construction, with focus-visible affordances for keyboard users.
+  // row, never inside it — spawn nothing. Rows are tabindex="-1" (never
+  // in tab order) so Escape dismissal can return focus to the staging
+  // row. No touch handlers: a tap
+  // arrives as click and rows are full-width targets by construction,
+  // with the row hover tint as the visible affordance.
   const [getDrafts, setDrafts] = createSignal(new Map());
   const [getLast, setLast] = createSignal(null);
 
@@ -368,10 +377,11 @@ function DiffFile(props) {
   };
   // Dismissal refocus (Forgejo #566, the SplitCloseMenu convention in
   // CommentComposer.jsx:38-43): Escape closes the composer and returns
-  // focus to the gutter "+" that staged it. Gutter buttons register here
-  // by draft key; focus() never fires click, so refocus cannot re-stage
-  // (no toggle-fight). A stale entry is harmless — focus() on a detached
-  // node is a no-op.
+  // focus to the row that staged it (rows carry tabindex="-1" + ref, so
+  // they accept programmatic focus without joining tab order). Rows
+  // register here by draft key; focus() never fires click, so refocus
+  // cannot re-stage (no toggle-fight). A stale entry is harmless —
+  // focus() on a detached node is a no-op.
   const triggerRefs = new Map();
   const refocusTrigger = (key) => triggerRefs.get(key)?.focus?.();
 
@@ -467,9 +477,8 @@ function DiffFile(props) {
   // Row click stages a composer below that line. Guards: the #502 gate,
   // the #594 lock (no new threads while merged/closed — the composer
   // below renders the reason on already-staged drafts), plus the
-  // isolation check — clicks on interactive content (the gutter
-  // "+" stops propagation before reaching here; links/buttons/inputs any
-  // other way) never stage.
+  // isolation check — clicks on interactive content (links/buttons/inputs
+  // any other way) never stage.
   const onRowClick = (file, hunk, hunkIdx, row, rowIdx, ev) => {
     if (props.canComment === false) return;
     if (props.commentLocked) return;
@@ -528,37 +537,21 @@ function DiffFile(props) {
                 {(row, ri) => (
                   <div>
                     <div
-                      class={`group flex font-mono text-xs ${lineClass(row.line.t)}`}
+                      class={`diff-row flex cursor-pointer font-mono text-xs ${lineClass(row.line.t)}`}
+                      tabindex="-1"
+                      ref={(el) => el && triggerRefs.set(draftKey(hi(), ri()), el)}
                       onClick={(ev) => onRowClick(props.file, hunk, hi(), row, ri(), ev)}
                     >
-                      {/* Gutter comment trigger (Forgejo #560): one discrete
-                          "+" per commentable line in the left gutter, always
-                          rendered (no hover dependency — no hidden /
-                          group-hover indirection), mirroring the Files-tab
-                          DiffTable gutter conventions (gutter cell +
-                          line-labelling a11y). #502 gate: anonymous viewers
-                          get no trigger. stopPropagation so the gutter click
-                          never double-stages through the row handler. */}
-                      <span class="w-6 shrink-0 select-none text-center">
-                        <Show when={props.canComment !== false && !props.commentLocked}>
-                          <button
-                            type="button"
-                            class="shrink-0 px-1 text-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"
-                            ref={(el) => el && triggerRefs.set(draftKey(hi(), ri()), el)}
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              stageLine(props.file, hunk, hi(), row, ri(), ev);
-                            }}
-                            aria-label={`Comment on line ${row.newNo ?? row.oldNo} in ${props.file.path}`}
-                            title="Comment on this line (Shift+click another + for a range)"
-                          >
-                            +
-                          </button>
-                        </Show>
-                      </span>
+                      {/* Sign column (Forgejo #598): the +/-/space sign FIRST
+                          on every row, ahead of the line numbers, themed
+                          with the row (add/del inherit the row text, context
+                          muted) — replacing the removed left-gutter "+"
+                          button. Row click (with the closest() isolation in
+                          onRowClick) is the staging entry point; the
+                          .diff-row hover tint is the affordance. */}
+                      <span class={`w-4 shrink-0 select-none text-center${row.line.t === " " ? " text-zinc-400" : ""}`}>{row.line.t}</span>
                       <span class="w-10 shrink-0 select-none text-right text-zinc-400">{row.oldNo ?? ""}</span>
                       <span class="w-10 shrink-0 select-none text-right text-zinc-400">{row.newNo ?? ""}</span>
-                      <span class="w-4 shrink-0 select-none">{row.line.t}</span>
                       <span class="whitespace-pre">{row.line.text}</span>
                     </div>
                     {/* Inline staged draft (#560): the shared
@@ -578,10 +571,10 @@ function DiffFile(props) {
                         // (the CommentComposer textarea bubbles its keydown
                         // up here — no document listener, so no onCleanup)
                         // drops ONLY this keyed draft and refocuses the
-                        // gutter "+" that staged it. Dismissal calls
+                        // row that staged it. Dismissal calls
                         // nothing: no onStage, no POST.
                         <div
-                          class="ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700"
+                          class="ml-8 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700"
                           aria-label={`Draft comment on ${anchorLabel(d().anchor)}`}
                           onKeyDown={(e) => {
                             if (e.key !== "Escape") return;
@@ -614,13 +607,14 @@ function DiffFile(props) {
                         </div>
                       )}
                     </Show>
-                    {/* Staged inline comments (Forgejo #567): every staged
-                        pending entry for this line renders in-thread below
-                        it (the same ml-14 mt-1 card slot the composer +
-                        ThreadCard share, so the scroll width never exceeds
-                        what the composer already takes) — no invisible
-                        moment between staging and Finish review. #502
-                        gate: anonymous viewers (empty pending by
+                    {/* Staged inline comments (Forgejo #567, slot re-derived
+                        by #598): every staged pending entry for this line
+                        renders in-thread below it (the same ml-8 mt-1 card
+                        slot the composer + ThreadCard share, so the scroll
+                        width never exceeds what the composer already
+                        takes) — no invisible moment between staging and
+                        Finish review. #502 gate: anonymous viewers (empty
+                        pending by
                         construction) see nothing new. */}
                     <Show when={props.canComment !== false}>
                       <For each={stagedAt(hi(), ri())}>
@@ -693,9 +687,10 @@ const cardFlashClick = (e, fire) => {
   fire();
 };
 
-/** One staged inline comment card (Forgejo #567, the ThreadCard idiom):
+/** One staged inline comment card (Forgejo #567, the ThreadCard idiom;
+ *  slot re-derived by #598 — ml-8, following the removed w-6 gutter):
  *  the staged pending entry rendered in-thread below its anchor line
- *  until review submit — same ml-14 mt-1 card slot as the composer +
+ *  until review submit — same ml-8 mt-1 card slot as the composer +
  *  ThreadCard, author + plain-text body (the FinishReview list renders
  *  p.body plain, kept consistent — staged text is a draft, never
  *  markdown), and the canonical amber chip-draft pill (both themes via
@@ -718,7 +713,7 @@ function StagedCard(props) {
   return (
     <div
       id={`staged-${props.index}`}
-      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${props.flashed ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
+      class={`ml-8 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${props.flashed ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
       aria-label={`Staged comment on ${label()}`}
       onClick={(e) => cardFlashClick(e, () => props.onFlash?.(props.index))}
     >
@@ -796,7 +791,7 @@ function ThreadCard(props) {
   return (
     <div
       id={`thread-${t().tid}`}
-      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${flashed() ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
+      class={`ml-8 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${flashed() ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
       aria-label={`Thread ${t().tid}`}
       onClick={(e) => cardFlashClick(e, () => props.onFlash?.(t().tid))}
     >
