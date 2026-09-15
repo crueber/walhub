@@ -47,7 +47,7 @@ test("no undefined component classes remain in the review surface", () => {
 
 test("ReviewsList is one panel with a flat unstyled list, never card-in-card", () => {
   const list = blockOf(PULL, "ReviewsList");
-  assert.match(list, /<div class="card" aria-label="Reviews">/, "the ONE outer panel stays");
+  assert.match(list, /<div class="card p-3" aria-label="Reviews">/, "the ONE outer panel stays (padded, #554)");
   assert.ok(list.includes('<h2 class="card-header">Reviews</h2>'), "card-header title stays (#521)");
   assert.match(list, /<ul class="divide-y divide-zinc-200 dark:divide-zinc-800">/, "flat divider list, no wrapper class");
   assert.ok(!list.includes('<li class="card">'), "no per-review boxes — the double chrome is gone");
