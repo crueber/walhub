@@ -33,7 +33,16 @@ import { roleAtLeast } from "./perms.jsx";
 /**
  * Derive the machine state from object state + local task state.
  * props: { full, pr, mergeable, checksBlockers[], reviewDecision, role,
- *   merging, task }
+ *   merging, task, requiresReviews }
+ *
+ * Forgejo #612: CHANGES_REQUESTED blocks ONLY when a required-reviews
+ * policy rule applies to the base ref (requiresReviews !== false). The
+ * server merges a changes-requested PR when no such rule exists
+ * (GitHub-like, #586 Decision-1b), so the client must not claim blocked.
+ * requiresReviews === false means "known: no applicable rule" (the page
+ * derives it from the fetched policy via requiredReviewsApplies); any
+ * other value (true, undefined — an older caller passing nothing) keeps
+ * the old fail-closed block.
  */
 export function mergeState(props) {
   if (props.pr?.merged) return "merged";
@@ -41,7 +50,7 @@ export function mergeState(props) {
   if (props.merging || props.task?.state === "running") return "merging";
   if (props.pr?.draft) return "draft";
   if ((props.checksBlockers ?? []).length > 0) return "blocked";
-  if (props.reviewDecision === "CHANGES_REQUESTED") return "blocked";
+  if (props.reviewDecision === "CHANGES_REQUESTED" && props.requiresReviews !== false) return "blocked";
   if (props.mergeable?.state === "dirty") return "blocked";
   if (props.mergeable?.state === "clean" || props.mergeable?.state === "behind") return "mergeable";
   return "ready";
@@ -64,14 +73,24 @@ export default function MergeBox(props) {
     mergeable: props.mergeable,
     checksBlockers: props.checksBlockers?.(),
     reviewDecision: props.reviewDecision?.(),
+    requiresReviews: typeof props.requiresReviews === "function" ? props.requiresReviews() : props.requiresReviews,
     role: props.role?.(),
     merging: getMerging(),
     task: getTask(),
   });
   const canMerge = () => roleAtLeast(props.role?.(), "maintain");
+  // Forgejo #612: the "changes requested" amber entry renders ONLY when
+  // it actually blocks (requiresReviews !== false, the mergeState rule).
+  // Without an applicable rule the #588 sidebar headline ("Changes
+  // requested") already carries the information, and listing it here
+  // would feed the tooltip a "blocked:" claim the server contradicts.
+  const requiresReviews = () => {
+    const v = typeof props.requiresReviews === "function" ? props.requiresReviews() : props.requiresReviews;
+    return v !== false;
+  };
   const blockers = () => {
     const out = [...(props.checksBlockers?.() ?? [])];
-    if (props.reviewDecision?.() === "CHANGES_REQUESTED") out.push("changes requested");
+    if (props.reviewDecision?.() === "CHANGES_REQUESTED" && requiresReviews()) out.push("changes requested");
     if (props.mergeable?.state === "dirty") {
       out.push(`conflicts: ${(props.mergeable?.conflicts ?? []).join(", ")}`);
     }
