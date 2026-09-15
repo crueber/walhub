@@ -19,6 +19,14 @@
     outline: 2px solid var(--color-emerald-500);
     outline-offset: 1px;
   }
+  /* System select idiom (Forgejo #547): the native dropdown panel and
+     option highlight follow the app theme instead of OS chrome (white
+     panel + blue highlight in dark mode). Light is the base; .dark
+     carries the default dark theme (F1). Deliberately NOT
+     appearance-none anywhere: the native arrow and keyboard behavior
+     stay (the OwnerNameRow precedent). */
+  :root { color-scheme: light; }
+  .dark { color-scheme: dark; }
 }
 
 @layer components {
