@@ -343,7 +343,12 @@ function DiffFile(props) {
   // finish-review modal); cancel drops only that draft. Plain click stages
   // one line; Shift+click on another "+" (or row) in the same file + side
   // + hunk extends a range (the DiffTable clamp convention), staged as
-  // new_lines/old_lines > 1. The #502 gate covers all three entry points
+  // new_lines/old_lines > 1. Staged entries stay visible in-thread
+  // (Forgejo #567): the page-level pending list locates per row into
+  // StagedCards below the same anchor line (edit re-opens the keyed
+  // composer pre-filled, remove unstages through the shared mutation),
+  // and the ThreadIndex lists them marked staged. The #502 gate covers
+  // all three entry points
   // (gutter button, row click, composer render — canComment !== false).
   // Row clicks never fight interactive content: the gutter button stops
   // propagation (no double-stage with the row handler) and the row handler
@@ -373,6 +378,68 @@ function DiffFile(props) {
   // node is a no-op.
   const triggerRefs = new Map();
   const refocusTrigger = (key) => triggerRefs.get(key)?.focus?.();
+
+  // Staged inline comments (Forgejo #567): the page-level pending list
+  // (the SAME signal feeding the finish-review modal list + button count
+  // — one source of truth, no forked state) located per row, exactly like
+  // posted threads: entries whose anchor names this file + a current line
+  // render below that line; entries whose anchor no longer locates render
+  // once at the file end. Each entry carries its page-level pending index
+  // ({p, i}) so the card's edit/remove hit the same positions the
+  // finish-review modal lists.
+  const stagedByKey = () => {
+    const byKey = new Map();
+    const unplaced = [];
+    (props.pending ?? []).forEach((p, i) => {
+      if ((p.anchor?.path ?? "") !== props.file.path) return;
+      const a = p.anchor ?? {};
+      const no = a.side === "NEW" ? a.new_start : a.old_start;
+      let found = null;
+      (props.file.hunks ?? []).forEach((hunk, hi) => {
+        if (found) return;
+        numberedLines(hunk).forEach((row, ri) => {
+          if (found) return;
+          if ((row.newNo === no && a.side === "NEW") || (row.oldNo === no && a.side === "OLD")) {
+            found = `${hi}:${ri}`;
+          }
+        });
+      });
+      if (found) {
+        if (!byKey.has(found)) byKey.set(found, []);
+        byKey.get(found).push({ p, i });
+      } else {
+        unplaced.push({ p, i });
+      }
+    });
+    return { byKey, unplaced };
+  };
+
+  const stagedAt = (hi, ri) => stagedByKey().byKey.get(`${hi}:${ri}`) ?? [];
+
+  // Edit round-trip (Forgejo #567): the card's edit control stages a keyed
+  // draft over the same anchor pre-filled with the staged body (the
+  // composer mounts with initialValue). Submitting resolves the pending
+  // position fresh (resolveStagedEdit) so a removal that shifted indices
+  // mid-edit still updates the right entry; a vanished entry falls back
+  // to staging anew instead of clobbering a stranger. Cancelling the
+  // composer drops only the draft (closeDraft) — the staged entry stays.
+  const editStaged = (hunkIdx, rowIdx, s) => {
+    setDrafts((prev) =>
+      new Map(prev).set(draftKey(hunkIdx, rowIdx), {
+        anchor: s.p.anchor,
+        editIndex: s.i,
+        initialBody: s.p.body,
+      }),
+    );
+  };
+
+  const resolveStagedEdit = (dd) => {
+    if (dd?.editIndex == null) return -1;
+    const list = props.pending ?? [];
+    const cur = list[dd.editIndex];
+    if (cur && anchorLabel(cur.anchor) === anchorLabel(dd.anchor)) return dd.editIndex;
+    return list.findIndex((p) => anchorLabel(p.anchor) === anchorLabel(dd.anchor) && p.body === dd.initialBody);
+  };
 
   const stageLine = (file, hunk, hunkIdx, row, rowIdx, ev) => {
     const isNew = row.line.t !== "-";
@@ -532,16 +599,41 @@ function DiffFile(props) {
                           </p>
                           <CommentComposer
                             onSubmit={async (body) => {
-                              props.onStage({ anchor: d().anchor, body });
+                              const idx = resolveStagedEdit(d());
+                              if (idx >= 0) props.onUpdate(idx, body);
+                              else props.onStage({ anchor: d().anchor, body });
                               closeDraft(draftKey(hi(), ri()));
                             }}
-                            submitLabel="Stage comment"
+                            submitLabel={d().editIndex != null ? "Save" : "Stage comment"}
+                            initialValue={d().initialBody}
                             placeholder={`Comment on ${anchorLabel(d().anchor)}… (staged into the finish-review modal)`}
                             errorKey="line-comment-stage"
                             label={`Comment on ${anchorLabel(d().anchor)}`}
                           />
                         </div>
                       )}
+                    </Show>
+                    {/* Staged inline comments (Forgejo #567): every staged
+                        pending entry for this line renders in-thread below
+                        it (the same ml-14 mt-1 card slot the composer +
+                        ThreadCard share, so the scroll width never exceeds
+                        what the composer already takes) — no invisible
+                        moment between staging and Finish review. #502
+                        gate: anonymous viewers (empty pending by
+                        construction) see nothing new. */}
+                    <Show when={props.canComment !== false}>
+                      <For each={stagedAt(hi(), ri())}>
+                        {(s) => (
+                          <StagedCard
+                            entry={s.p}
+                            index={s.i}
+                            stagedBy={props.stagedBy}
+                            flashed={props.flashStaged?.() === s.i}
+                            onEdit={() => editStaged(hi(), ri(), s)}
+                            onUnstage={() => props.onUnstage(s.i)}
+                          />
+                        )}
+                      </For>
                     </Show>
                     <For each={threadsAt(hi(), ri())}>
                       {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
@@ -554,10 +646,71 @@ function DiffFile(props) {
         }}
       </For>
       {/* Anchors that no longer locate (drifted head, deleted lines)
-          render once, collapsed, at the file end — never relocated. */}
+          render once, collapsed, at the file end — never relocated.
+          Staged entries whose anchor no longer locates join them (same
+          slot, marked staged) so a staged comment is never silently
+          homeless before submit. */}
+      <Show when={props.canComment !== false}>
+        <For each={stagedByKey().unplaced}>
+          {(s) => (
+            <StagedCard
+              entry={s.p}
+              index={s.i}
+              stagedBy={props.stagedBy}
+              flashed={props.flashStaged?.() === s.i}
+              onEdit={null}
+              onUnstage={() => props.onUnstage(s.i)}
+            />
+          )}
+        </For>
+      </Show>
       <For each={placement().unplaced}>
         {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
       </For>
+    </div>
+  );
+}
+
+/** One staged inline comment card (Forgejo #567, the ThreadCard idiom):
+ *  the staged pending entry rendered in-thread below its anchor line
+ *  until review submit — same ml-14 mt-1 card slot as the composer +
+ *  ThreadCard, author + plain-text body (the FinishReview list renders
+ *  p.body plain, kept consistent — staged text is a draft, never
+ *  markdown), and the canonical amber chip-draft pill (both themes via
+ *  ui.css, no per-callsite bg override per the #545 F2 rule —
+ *  visually distinct from the resolved/outdated pills). The card carries id `staged-<i>`
+ *  (page-level pending index) so the ThreadIndex jumps + flashes it like
+ *  a thread card. Edit re-opens the keyed composer in place pre-filled;
+ *  remove unstages through the same pending-list mutation the
+ *  finish-review modal uses. Unplaced cards (anchor no longer locates)
+ *  render at the file end with no edit control — there is no row to
+ *  reopen under. */
+function StagedCard(props) {
+  const label = () => anchorLabel(props.entry?.anchor);
+  return (
+    <div
+      id={`staged-${props.index}`}
+      class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${props.flashed ? " outline outline-2 outline-emerald-500" : ""}`}
+      aria-label={`Staged comment on ${label()}`}
+    >
+      <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
+        <Show when={props.stagedBy}>
+          <span class="font-semibold">{props.stagedBy}</span>
+        </Show>
+        <span class="chip chip-draft" title="staged in your review — submits with Finish review">
+          staged
+        </span>
+        <span class="font-mono text-zinc-500 dark:text-zinc-400">{label()}</span>
+        <Show when={props.onEdit}>
+          <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={props.onEdit}>
+            edit
+          </button>
+        </Show>
+        <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={props.onUnstage}>
+          remove
+        </button>
+      </div>
+      <p class="whitespace-pre-wrap text-sm">{props.entry?.body}</p>
     </div>
   );
 }
@@ -633,18 +786,20 @@ function ThreadCard(props) {
   );
 }
 
-/** Jump-to-comments index (Forgejo #546, padded Forgejo #557): one entry
- *  per anchored thread — path:line (or path:start-end for ranges) +
- *  resolved/outdated state — atop the conversation. Clicking scrolls to
- *  the inline ThreadCard and flashes it. The panel composes the sibling
- *  card padding (card p-3, the ReviewsList #554 / CommentComposer idiom)
- *  so the pill entries sit inside the border instead of touching its
- *  edges; the mb-4 conversation spacing stays. Entries reflect the same
- *  placement truth the cards render: drifted/outdated anchors are marked
- *  and jump to their collapsed card at the file end (never to a line
- *  that no longer exists); threads whose file left the current diff
- *  render marked with no jump target. Order is unresolved-first,
- *  matching the inline cards. */
+/** Jump-to-comments index (Forgejo #546, padded Forgejo #557, staged
+ *  Forgejo #567): one entry per anchored thread — path:line (or
+ *  path:start-end for ranges) + resolved/outdated state — plus one entry
+ *  per staged pending comment, marked staged, atop the conversation.
+ *  Clicking scrolls to the inline ThreadCard / staged card and flashes
+ *  it. The panel composes the sibling card padding (card p-3, the
+ *  ReviewsList #554 / CommentComposer idiom) so the pill entries sit
+ *  inside the border instead of touching its edges; the mb-4
+ *  conversation spacing stays. Entries reflect the same placement truth
+ *  the cards render: drifted/outdated anchors are marked and jump to
+ *  their collapsed card at the file end (never to a line that no longer
+ *  exists); threads whose file left the current diff render marked with
+ *  no jump target. Order is unresolved-first, matching the inline cards;
+ *  staged entries follow the posted threads in pending order. */
 function ThreadIndex(props) {
   const entries = () =>
     sortThreadsForIndex(props.threads ?? []).map((t) => {
@@ -654,10 +809,10 @@ function ThreadIndex(props) {
     });
 
   return (
-    <Show when={(props.threads ?? []).length > 0}>
+    <Show when={(props.threads ?? []).length > 0 || (props.pending ?? []).length > 0}>
       <nav class="card mb-4 p-3" aria-label="Comments index">
         <h2 class="card-header">
-          Comments ({(props.threads ?? []).length})
+          Comments ({(props.threads ?? []).length}{(props.pending ?? []).length > 0 ? ` + ${(props.pending ?? []).length} staged` : ""})
         </h2>
         <ul class="flex flex-wrap gap-1.5">
           <For each={entries()}>
@@ -689,6 +844,26 @@ function ThreadIndex(props) {
                     </Show>
                   </button>
                 </Show>
+              </li>
+            )}
+          </For>
+          {/* Staged pending comments (Forgejo #567): one pill per staged
+              entry in pending order, marked staged, jumping to the inline
+              staged card (the staged-<i> / flashStaged idiom mirroring the
+              thread-<tid> / flashTid one). Anonymous viewers hold an empty
+              pending list, so they see nothing new (#502). */}
+          <For each={props.pending ?? []}>
+            {(p, i) => (
+              <li>
+                <button
+                  type="button"
+                  class="pill cursor-pointer"
+                  onClick={() => props.onJumpStaged(i())}
+                  title={`${anchorLabel(p.anchor)} · staged (submits with Finish review)`}
+                >
+                  <span class="font-mono">{anchorLabel(p.anchor)}</span>
+                  <span> · staged</span>
+                </button>
               </li>
             )}
           </For>
@@ -853,10 +1028,17 @@ export default function Pull() {
   const [getFinishing, setFinishing] = createSignal(false);
   // Jump-to-comments target (Forgejo #546): the index sets this tid and
   // scrolls to `thread-<tid>`; the matching card flashes + expands.
+  // Staged twin (Forgejo #567): the index sets this pending position and
+  // scrolls to `staged-<i>`; the matching staged card flashes.
   const [getFlashTid, setFlashTid] = createSignal(null);
+  const [getFlashStaged, setFlashStaged] = createSignal(null);
   const jumpToThread = (tid) => {
     setFlashTid(tid);
     document.getElementById(`thread-${tid}`)?.scrollIntoView({ block: "center" });
+  };
+  const jumpToStaged = (i) => {
+    setFlashStaged(i);
+    document.getElementById(`staged-${i}`)?.scrollIntoView({ block: "center" });
   };
 
   // Cross-page reconcile (issue #319, the #318 pattern for PRs): a merge
@@ -914,6 +1096,10 @@ export default function Pull() {
 
   const stage = (draft) => setPending((list) => [...list, draft]);
   const unstage = (i) => setPending((list) => list.filter((_, j) => j !== i));
+  // Staged edit round-trip (Forgejo #567): replace the body of pending
+  // entry i — the same pending-list signal the inline staged cards, the
+  // finish-review modal list, and the review button count all read.
+  const updatePending = (i, body) => setPending((list) => list.map((p, j) => (j === i ? { ...p, body } : p)));
 
   const comment = async (body) => {
     await ctx.repoClient.pulls.comment(num(), body, { noPopupAuth: true });
@@ -1019,7 +1205,7 @@ export default function Pull() {
         {/* #340: thread bodies have no file coordinates (relative URLs stay
             verbatim) but carry the repo — owner/repo feeds the #N/PRN autolinker. */}
         <ThreadTimeline events={getView()?.events ?? []} textFor={pullEventText} mdCtx={mdCtx} />
-        <ThreadIndex threads={threads()} files={getDiff()?.files ?? []} onJump={jumpToThread} />
+        <ThreadIndex threads={threads()} files={getDiff()?.files ?? []} onJump={jumpToThread} pending={getPending()} onJumpStaged={jumpToStaged} />
         <Show
           when={canComment()}
           fallback={
@@ -1096,6 +1282,11 @@ export default function Pull() {
                       client={ctx.repoClient}
                       head={head()}
                       onStage={stage}
+                      pending={getPending()}
+                      onUnstage={unstage}
+                      onUpdate={updatePending}
+                      stagedBy={getMe()?.principal}
+                      flashStaged={getFlashStaged}
                       reload={reloadReview}
                       canResolve={canResolve()}
                       canComment={canComment()}

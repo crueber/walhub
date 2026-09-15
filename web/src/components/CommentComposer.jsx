@@ -19,7 +19,7 @@
 // actions share one right-aligned row; the composer clears only when the
 // handler resolves, so a failed post keeps its text for retry.
 
-import { createSignal, For, Show, onCleanup } from "solid-js";
+import { createSignal, createEffect, For, Show, onCleanup } from "solid-js";
 import { reportError } from "../lib/data.js";
 import { MentionDatalist } from "../pages/Mentions.jsx";
 import { CLOSE_COMPLETED, CLOSE_NOT_PLANNED } from "../lib/issue-events.js";
@@ -146,6 +146,19 @@ function SplitCloseMenu(props) {
 
 export default function CommentComposer(props) {
   const [getBody, setBody] = createSignal("");
+  // Edit-prefill (Forgejo #567): reopening a staged inline comment mounts
+  // its composer with the staged body — fresh mounts pass no initialValue
+  // and stay empty (the #566 fresh-empty pin holds: the signal still
+  // starts "" and the effect below only fires on a real initialValue).
+  // The effect also re-prefills when the edit target switches under an
+  // already-mounted composer (two staged entries sharing one line key
+  // overwrite the same draft key); typing never touches
+  // props.initialValue, so user text is never clobbered by unrelated
+  // re-renders.
+  createEffect(() => {
+    const v = props.initialValue;
+    if (v) setBody(v);
+  });
   const [getBusy, setBusy] = createSignal(false);
   // Paste/drop image upload (02 §12): Issue.jsx passes `uploader` (the
   // repo attachments surface); surfaces without it (PRs, until #120's
