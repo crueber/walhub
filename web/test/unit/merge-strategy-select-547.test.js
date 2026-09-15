@@ -36,7 +36,7 @@ const MERGE = srcOf("../../src/components/MergeBox.jsx");
 const CSS = srcOf("../../src/ui.css");
 const PULL = srcOf("../../src/pages/Pull.jsx");
 const BASE = srcOf("../../css/base.css");
-const SRC_DIR = path.dirname(fileURLToPath(new URL("../../src/components/MergeBox.jsx", import.meta.url)));
+const SRC_DIR = fileURLToPath(new URL("../../src", import.meta.url));
 
 test("strategy select uses the .input idiom with an explicit width", () => {
   assert.ok(
