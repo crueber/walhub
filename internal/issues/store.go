@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -220,26 +221,44 @@ func (s *Service) loadIndex(ctx context.Context, owner, repo string) (*Index, st
 
 // updateIndex upserts one card by its own CAS loop (P4). Bounded at 10
 // attempts, then it PROCEEDS WITHOUT the index update — the repair path
-// (next mutation re-reads, diffs, repairs; LIST fallback covers reads)
-// makes staleness a performance gap, never a correctness gap. When the
-// written bytes exceed IndexSizeLimit the compaction runs inline (§9
-// opportunistic trigger: size-checked on every write, no sampling timer).
+// (RepairIndex; the LIST fallback covers reads) makes staleness a
+// performance gap, never a correctness gap. Every card written here is
+// stamped with the current CardProjectionVersion (Forgejo #564) so
+// indexComplete can tell fresh cards from pre-projection ones. Lost
+// writes are logged and counted (Service.IndexDrops), never swallowed
+// silently. When the written bytes exceed IndexSizeLimit the compaction
+// runs inline (§9 opportunistic trigger: size-checked on every write, no
+// sampling timer).
+//
+// ### Concurrency: CAS loop only (13 §3/§5), no in-process lock; no lock
+// spans the header CAS and this index CAS (separate objects,
+// header-then-index order).
 func (s *Service) updateIndex(ctx context.Context, owner, repo string, card Card) {
 	key := IndexKey(owner, repo)
 	var written []byte
+	committed := false
 	for attempt := 0; attempt < 10; attempt++ {
 		raw, ver, err := s.getJSON(ctx, key)
 		if err != nil {
+			s.logIndexDrop("update", owner, repo, "index read", err)
 			return
 		}
 		var ix *Index
 		if raw == nil {
-			ix = &Index{Open: []Card{}, ClosedRecent: []Card{}}
+			// New index: the single upserted card carries the current
+			// projection by construction, so stamp it fresh.
+			ix = &Index{Open: []Card{}, ClosedRecent: []Card{}, CardVersion: CardProjectionVersion}
 		} else if ix, err = parseIndex(raw); err != nil {
+			s.logIndexDrop("update", owner, repo, "index parse", err)
 			return
 		}
 		upsertCard(ix, card)
 		ix.Version++
+		// NOTE (Forgejo #564): an existing index keeps its CardVersion —
+		// one fresh card cannot vouch for the rest. Only RepairIndex
+		// (which diffs every card against its header) may stamp the
+		// current version onto an existing index; creation above is the
+		// other stamp point (all cards fresh by construction).
 		written, _ = json.Marshal(ix)
 		opts := store.PutOptions{Mode: store.PutUpdate, IfVersion: ver, ContentType: "application/json"}
 		if ver == "" {
@@ -249,13 +268,111 @@ func (s *Service) updateIndex(ctx context.Context, owner, repo string, card Card
 			if store.IsPreconditionFailed(perr) {
 				continue
 			}
+			s.logIndexDrop("update", owner, repo, "index write", perr)
 			return
 		}
+		committed = true
 		break
+	}
+	if !committed {
+		// CAS contention exhausted without a commit: the next mutation
+		// or RepairIndex re-reads, diffs, and repairs.
+		s.logIndexDrop("update", owner, repo, "CAS contention", nil)
+		return
 	}
 	if len(written) > IndexSizeLimit {
 		_, _ = s.CompactIndex(ctx, owner, repo)
 	}
+}
+
+// RepairIndex is the one-shot backfill for stale list cards (Forgejo
+// #564): it diffs every index card against its thread header (the truth)
+// and CAS-rewrites the index with corrected cards, stamping the current
+// CardProjectionVersion so the fast path trusts the healed window.
+// Non-issue cards (03 PR threads share the numbering space and the index)
+// ride through untouched; compacted threads (num at or below
+// compacted_through, served by paginated LIST) are not re-added.
+// Returns the number of cards that disagreed with their header (0 with a
+// persisted stamp when only the version was stale).
+//
+// ### Concurrency: one bounded CAS loop (10 attempts, then ErrConflict —
+// the caller retries); no lock is held across the header scan and the
+// index write (separate objects; a concurrent mutation wins the CAS and
+// the repair retries against its result).
+func (s *Service) RepairIndex(ctx context.Context, owner, repo string) (int, error) {
+	scanned, err := s.scanHeaders(ctx, owner, repo)
+	if err != nil {
+		return 0, err
+	}
+	truth := make(map[int]Card, len(scanned))
+	for _, c := range scanned {
+		truth[c.Num] = c
+	}
+	repaired := 0
+	_, err = s.casUpdate(ctx, IndexKey(owner, repo), 10, func(cur []byte, ver store.Version) ([]byte, bool, error) {
+		var ix *Index
+		if cur == nil {
+			ix = &Index{Open: []Card{}, ClosedRecent: []Card{}}
+		} else {
+			var perr error
+			ix, perr = parseIndex(cur)
+			if perr != nil {
+				return nil, false, perr
+			}
+		}
+		have := map[int]Card{}
+		for _, c := range ix.Open {
+			have[c.Num] = c
+		}
+		for _, c := range ix.ClosedRecent {
+			have[c.Num] = c
+		}
+		n := 0
+		for num, want := range truth {
+			if k := fmt.Sprintf("%06x", num); ix.CompactedThrough != "" && k <= ix.CompactedThrough {
+				continue // compacted: served by LIST, not the index
+			}
+			if got, ok := have[num]; !ok || !cardsEqual(got, want) {
+				n++
+			}
+		}
+		repaired = n
+		if n == 0 && ix.CardVersion >= CardProjectionVersion {
+			return nil, false, nil // already healed and fresh
+		}
+		nix := &Index{
+			Version:          ix.Version + 1,
+			CompactedThrough: ix.CompactedThrough,
+			Open:             []Card{},
+			ClosedRecent:     []Card{},
+			CardVersion:      CardProjectionVersion,
+		}
+		for _, c := range have {
+			if c.Kind != "issue" {
+				upsertCard(nix, c) // 03 PR cards ride through untouched
+			}
+		}
+		for num, want := range truth {
+			if k := fmt.Sprintf("%06x", num); ix.CompactedThrough != "" && k <= ix.CompactedThrough {
+				continue
+			}
+			upsertCard(nix, want)
+		}
+		out, _ := json.Marshal(nix)
+		return out, true, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return repaired, nil
+}
+
+// cardsEqual reports whether two cards carry the same projection (pointer
+// fields compared by value; normalized slices compare literally — both
+// sides come from cardOf/parseIndex, which never leave nil Labels or
+// Assignees).
+func cardsEqual(a, b Card) bool {
+	return reflect.DeepEqual(a, b)
 }
 
 // upsertCard inserts or replaces a card, keeping open newest-first by
@@ -341,7 +458,10 @@ func (s *Service) CompactIndex(ctx context.Context, owner, repo string) (bool, e
 		}
 		maxEvicted := ix.CompactedThrough
 		for _, c := range ordered {
-			trial := &Index{Version: ix.Version + 1, CompactedThrough: ix.CompactedThrough, Open: ix.Open}
+			// CardVersion rides along for size fidelity; compaction
+			// never stamps freshness (Forgejo #564 — eviction cannot
+			// vouch for the surviving cards).
+			trial := &Index{Version: ix.Version + 1, CompactedThrough: ix.CompactedThrough, Open: ix.Open, CardVersion: ix.CardVersion}
 			var kept []Card
 			for _, k := range ix.ClosedRecent {
 				if keep[k.Num] {
@@ -483,11 +603,13 @@ func (s *Service) saveMilestone(ctx context.Context, owner, repo string, m *Mile
 // bumpMilestone adjusts a milestone's denormalized counters by delta
 // (best-effort display state: thread headers are the truth; a lost update
 // is repaired by the next issue event touching the milestone, §3).
+// Failures are logged and counted (Service.MilestoneDrops, Forgejo #564),
+// never swallowed silently.
 func (s *Service) bumpMilestone(ctx context.Context, owner, repo, id string, dOpen, dClosed int) {
 	if id == "" {
 		return
 	}
-	_, _ = s.casUpdate(ctx, MilestoneKey(owner, repo, id), 5, func(cur []byte, ver store.Version) ([]byte, bool, error) {
+	_, err := s.casUpdate(ctx, MilestoneKey(owner, repo, id), 5, func(cur []byte, ver store.Version) ([]byte, bool, error) {
 		if cur == nil {
 			return nil, false, nil
 		}
@@ -507,6 +629,9 @@ func (s *Service) bumpMilestone(ctx context.Context, owner, repo, id string, dOp
 		out, _ := json.Marshal(&m)
 		return out, true, nil
 	})
+	if err != nil {
+		s.logMilestoneDrop(owner, repo, id, err)
+	}
 }
 
 // listMilestones enumerates milestones via delimiter listing (P5:

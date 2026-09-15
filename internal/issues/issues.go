@@ -41,8 +41,10 @@ package issues
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/identity"
@@ -148,6 +150,21 @@ type Service struct {
 	Notify Emitter
 	// Stream receives issue/issue_event live updates (nil = no-op).
 	Stream Streamer
+
+	// Log receives best-effort-path diagnostics (Forgejo #564): dropped
+	// index updates and dropped milestone-counter updates are logged here
+	// instead of swallowed silently. Nil = no-op (tests and composition
+	// without a logger stay quiet).
+	Log *slog.Logger
+
+	// indexDrops counts updateIndex writes lost after the bounded CAS
+	// loop (read/parse/write failures and give-ups). milestoneDrops
+	// counts bumpMilestone CAS failures the same way. Both are monotonic
+	// repair signals — a nonzero count means RepairIndex (headers are the
+	// truth) has work to do. Accessed atomically; no lock (13 §3: CAS
+	// loops are the only coordination, no in-process mutex).
+	indexDrops     atomic.Int64
+	milestoneDrops atomic.Int64
 }
 
 // New builds a Service over st.
@@ -285,6 +302,30 @@ func (s *Service) putCreate(ctx context.Context, key string, body []byte) error 
 	_, err := store.PutBytes(ctx, s.Store, key, body, store.PutOptions{Mode: store.PutCreate, ContentType: "application/json"})
 	return err
 }
+
+// logIndexDrop records one lost best-effort write (nil-logger-safe) and
+// bumps its counter. Never blocks, never errors — the repair path
+// (RepairIndex + the LIST fallback) owns recovery.
+func (s *Service) logIndexDrop(op, owner, repo, why string, err error) {
+	s.indexDrops.Add(1)
+	if s.Log != nil {
+		s.Log.Warn("issues: dropped index update", "op", op, "repo", repoName(owner, repo), "why", why, "err", err)
+	}
+}
+
+// logMilestoneDrop records one lost milestone-counter bump (nil-safe).
+func (s *Service) logMilestoneDrop(owner, repo, id string, err error) {
+	s.milestoneDrops.Add(1)
+	if s.Log != nil {
+		s.Log.Warn("issues: dropped milestone counter bump", "repo", repoName(owner, repo), "milestone", id, "err", err)
+	}
+}
+
+// IndexDrops returns the count of lost updateIndex writes.
+func (s *Service) IndexDrops() int64 { return s.indexDrops.Load() }
+
+// MilestoneDrops returns the count of lost bumpMilestone writes.
+func (s *Service) MilestoneDrops() int64 { return s.milestoneDrops.Load() }
 
 // emit fans out one NotifyEvent synchronously (P8), nil-safe, with the
 // recipients normalized (sorted, unique, non-empty, actor excluded for

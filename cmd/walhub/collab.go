@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,10 @@ func newIdentityService(st store.ObjectStore, cfg *config.Config) (*identity.Ser
 func newIssuesService(st store.ObjectStore, ident *identity.Service, cfg *config.Config) (*issues.Service, *issues.Handler) {
 	api.RegisterExposed(issues.ExposedTemplates...)
 	svc := issues.New(st, ident)
+	// Forgejo #564: dropped best-effort writes (index cards, milestone
+	// counters) log instead of vanishing — same precedent as
+	// wireNotifyFanout's svc.Logger = slog.Default() (notify.go).
+	svc.Log = slog.Default()
 	svc.MaxImageBytes = int64(cfg.Attachments.MaxImageBytes)
 	if svc.MaxImageBytes <= 0 {
 		svc.MaxImageBytes = issues.DefaultMaxImageBytes

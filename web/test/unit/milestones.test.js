@@ -74,10 +74,10 @@ test("splitMilestones is null-safe and keeps unknown states visible", () => {
   assert.equal(closed.length, 0);
 });
 
-test("milestoneFilterHref builds the shared issue-filter URL (issue #314)", () => {
-  assert.equal(milestoneFilterHref("o/r", "000001"), "/o/r/issues?milestone=000001");
+test("milestoneFilterHref builds the shared issue-filter URL (issue #314, state pinned by #564)", () => {
+  assert.equal(milestoneFilterHref("o/r", "000001"), "/o/r/issues?milestone=000001&state=all");
   // Same helper feeds the View button and the closed-row title link.
-  assert.equal(milestoneFilterHref("o/r", "ab cd"), "/o/r/issues?milestone=ab%20cd");
+  assert.equal(milestoneFilterHref("o/r", "ab cd"), "/o/r/issues?milestone=ab%20cd&state=all");
 });
 
 test("milestoneTotal sums open + closed for the View label (issue #314)", () => {
