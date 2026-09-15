@@ -84,11 +84,11 @@
   .btn-active { @apply border-emerald-600 font-semibold text-emerald-700 dark:border-emerald-500 dark:text-emerald-400; }
   /* Inline text-link controls (Forgejo #568, systemic sweep of the #566
      follow-up): .link is the ONE shared treatment for text-level actions
-     and router links that must read as links, not surrounding text — 25
+     and router links that must read as links, not surrounding text — 26
      call sites across 10 files (review dismiss/remove, thread
      resolve/expand toggles, staged remove, member remove, token revoke,
      webhook ping/deliveries/delete, back-links, check expand toggles,
-     notification actions). Tailwind v4 preflight resets buttons/links to
+     notification actions, the #602 terminal-Status merge SHA link). Tailwind v4 preflight resets buttons/links to
      plain muted text and .link shipped zero CSS rules, so every one of
      them was invisible until this rule. Accent emerald both themes (the
      markdown-link language), hover underline + pointer affordance. The
