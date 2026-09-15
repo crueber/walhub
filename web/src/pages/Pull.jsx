@@ -629,6 +629,7 @@ function DiffFile(props) {
                             index={s.i}
                             stagedBy={props.stagedBy}
                             flashed={props.flashStaged?.() === s.i}
+                            onFlash={props.onFlashStaged}
                             onEdit={() => editStaged(hi(), ri(), s)}
                             onUnstage={() => props.onUnstage(s.i)}
                           />
@@ -636,7 +637,7 @@ function DiffFile(props) {
                       </For>
                     </Show>
                     <For each={threadsAt(hi(), ri())}>
-                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} />}
+                      {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} onFlash={props.onFlashTid} />}
                     </For>
                   </div>
                 )}
@@ -658,6 +659,7 @@ function DiffFile(props) {
               index={s.i}
               stagedBy={props.stagedBy}
               flashed={props.flashStaged?.() === s.i}
+              onFlash={props.onFlashStaged}
               onEdit={null}
               onUnstage={() => props.onUnstage(s.i)}
             />
@@ -665,11 +667,30 @@ function DiffFile(props) {
         </For>
       </Show>
       <For each={placement().unplaced}>
-        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} />}
+        {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} onCollapse={props.onCollapse} onFlash={props.onFlashTid} />}
       </For>
     </div>
   );
 }
+
+/** Card-root click-to-flash guard (Forgejo #575): a click anywhere on a
+ *  ThreadCard/StagedCard body highlights the card through the SAME
+ *  page-level flash signals the ThreadIndex pill jump uses (no second
+ *  highlight mechanism — the #573 flashTid/flashStaged lifecycle is
+ *  consumed, not forked). Two ignores keep the gesture unsurprising:
+ *  clicks originating from interactive controls (buttons/links/inputs —
+ *  the closest() check, the same convention the DiffFile row handler
+ *  uses) never flash, so the #573 collapse click still ends collapsed +
+ *  unhighlighted (the collapse control additionally stopPropagations —
+ *  belt and braces on the clear-before-toggle ordering); and a click
+ *  that leaves selected text (window.getSelection — a selection drag
+ *  ending on the card) never re-flashes, so selecting comment text to
+ *  copy it does not jarringly highlight the card. */
+const cardFlashClick = (e, fire) => {
+  if (e.target.closest?.("button, a, input, textarea, select, form")) return;
+  if (window.getSelection?.()?.toString()) return;
+  fire();
+};
 
 /** One staged inline comment card (Forgejo #567, the ThreadCard idiom):
  *  the staged pending entry rendered in-thread below its anchor line
@@ -687,7 +708,10 @@ function DiffFile(props) {
   *  reopen under. Flashed geometry (Forgejo #574): the emerald outline is
   *  INSET (`outline-offset-[-2px]`, shared byte-identically with ThreadCard
   *  below — pinned by flash-ring-574.test.js) so the ring paints inside the
-  *  border box and the hunk scroll wrapper never clips it. */
+  *  border box and the hunk scroll wrapper never clips it. Forgejo #575:
+ *  a click on the card body sets the same page-level staged flash (new
+ *  `onFlash` prop — the page passes setFlashStaged directly, same
+ *  overwrite-no-scroll terms as the thread card). */
 function StagedCard(props) {
   const label = () => anchorLabel(props.entry?.anchor);
   return (
@@ -695,6 +719,7 @@ function StagedCard(props) {
       id={`staged-${props.index}`}
       class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${props.flashed ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
       aria-label={`Staged comment on ${label()}`}
+      onClick={(e) => cardFlashClick(e, () => props.onFlash?.(props.index))}
     >
       <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
         <Show when={props.stagedBy}>
@@ -725,10 +750,14 @@ function StagedCard(props) {
   *  border box, hugging the rounded corners, so the hunk scroll wrapper
   *  never clips it; byte-identical with the StagedCard fragment)
   *  and expands, so the target reads in both themes. Forgejo #573: the
- *  collapse/expand toggle clears the page-level flash for this tid first
+  *  collapse/expand toggle clears the page-level flash for this tid first
  *  (the shared clearFlash(tid) lifecycle — the same mechanics #575's
  *  collapse-click case reuses), so open() and the outline return to
- *  tracking getOpen() and collapse never looks dead. */
+ *  tracking getOpen() and collapse never looks dead. Forgejo #575: a
+ *  click on the card body sets the same page-level flash (new `onFlash`
+ *  prop — the page passes setFlashTid directly, so card click overwrites
+ *  exactly like a pill jump and never scrolls; the cardFlashClick guard
+ *  above keeps control clicks and selection drags from flashing). */
 function ThreadCard(props) {
   const t = () => props.thread;
   const [getBody, setBody] = createSignal("");
@@ -763,6 +792,7 @@ function ThreadCard(props) {
       id={`thread-${t().tid}`}
       class={`ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700${flashed() ? " outline outline-2 outline-emerald-500 outline-offset-[-2px]" : ""}`}
       aria-label={`Thread ${t().tid}`}
+      onClick={(e) => cardFlashClick(e, () => props.onFlash?.(t().tid))}
     >
       <div class="mb-1 flex flex-wrap items-center gap-2 text-xs">
         <span class="font-mono text-zinc-500 dark:text-zinc-400">{t().tid}</span>
@@ -779,7 +809,7 @@ function ThreadCard(props) {
             {t().resolved ? "unresolve" : "resolve"}
           </button>
         </Show>
-        <button type="button" class="link" onClick={() => { props.onCollapse?.(t().tid); setOpen(!getOpen()); }}>
+        <button type="button" class="link" onClick={(e) => { e.stopPropagation(); props.onCollapse?.(t().tid); setOpen(!getOpen()); }}>
           {getOpen() ? "collapse" : "expand"}
         </button>
       </div>
@@ -1056,7 +1086,11 @@ export default function Pull() {
   // clear (minimal bar is collapse — a resolve-triggered reload keeps the
   // highlight on the acted card). StagedCard has no collapse control, so it
   // takes no clear wiring — the same clearFlash pattern applies when one
-  // lands.
+  // lands. Forgejo #575 reuses the SAME signals for card-root click-to-flash:
+  // the page passes the raw setters (onFlashTid/onFlashStaged) into DiffFile,
+  // so a body click overwrites exactly like a pill jump (single-flash model)
+  // but never scrolls — pill jumps keep their set + scrollIntoView idiom
+  // byte-identical.
   const clearFlashTid = (tid) => setFlashTid((cur) => (cur === tid ? null : cur));
   const jumpToStaged = (i) => {
     setFlashStaged(i);
@@ -1315,6 +1349,8 @@ export default function Pull() {
                       mdCtx={mdCtx}
                       flashTid={getFlashTid}
                       onCollapse={clearFlashTid}
+                      onFlashTid={setFlashTid}
+                      onFlashStaged={setFlashStaged}
                     />
                   </div>
                 )}
