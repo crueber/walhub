@@ -365,6 +365,14 @@ function DiffFile(props) {
       return next;
     });
   };
+  // Dismissal refocus (Forgejo #566, the SplitCloseMenu convention in
+  // CommentComposer.jsx:38-43): Escape closes the composer and returns
+  // focus to the gutter "+" that staged it. Gutter buttons register here
+  // by draft key; focus() never fires click, so refocus cannot re-stage
+  // (no toggle-fight). A stale entry is harmless — focus() on a detached
+  // node is a no-op.
+  const triggerRefs = new Map();
+  const refocusTrigger = (key) => triggerRefs.get(key)?.focus?.();
 
   const stageLine = (file, hunk, hunkIdx, row, rowIdx, ev) => {
     const isNew = row.line.t !== "-";
@@ -470,6 +478,7 @@ function DiffFile(props) {
                           <button
                             type="button"
                             class="shrink-0 px-1 text-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"
+                            ref={(el) => el && triggerRefs.set(draftKey(hi(), ri()), el)}
                             onClick={(ev) => {
                               ev.stopPropagation();
                               stageLine(props.file, hunk, hi(), row, ri(), ev);
@@ -493,11 +502,32 @@ function DiffFile(props) {
                         #502 gate: no composers for anonymous viewers. */}
                     <Show when={props.canComment !== false && draftAt(hi(), ri())}>
                       {(d) => (
-                        <div class="ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700" aria-label={`Draft comment on ${anchorLabel(d().anchor)}`}>
+                        // Dismissable draft composer (Forgejo #566): Cancel
+                        // wears the small secondary .btn treatment (the
+                        // canonical button idiom, guideline §2 Controls —
+                        // readable in both themes, unlike the unstyled
+                        // .link); Escape anywhere inside the panel (the
+                        // CommentComposer textarea bubbles its keydown up
+                        // here — no document listener, so no onCleanup)
+                        // drops ONLY this keyed draft and refocuses the
+                        // gutter "+" that staged it. Dismissal calls
+                        // nothing: no onStage, no POST.
+                        <div
+                          class="ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700"
+                          aria-label={`Draft comment on ${anchorLabel(d().anchor)}`}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Escape") return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const key = draftKey(hi(), ri());
+                            closeDraft(key);
+                            refocusTrigger(key);
+                          }}
+                        >
                           <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
                             commenting on <span class="font-mono">{anchorLabel(d().anchor)}</span>
-                            <button type="button" class="link ml-2" onClick={() => closeDraft(draftKey(hi(), ri()))}>
-                              cancel
+                            <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => closeDraft(draftKey(hi(), ri()))}>
+                              Cancel
                             </button>
                           </p>
                           <CommentComposer

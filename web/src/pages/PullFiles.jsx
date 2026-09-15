@@ -53,6 +53,19 @@ function PullDiffFile(props) {
     invalidate(props.threadsKey);
   };
 
+  // Dismissal (Forgejo #566, the SplitCloseMenu convention in
+  // CommentComposer.jsx:38-43): Cancel + Escape drop only the staged
+  // selection composer — no onCommentSelect replay, no POST — and return
+  // focus to the "comment on selection" trigger that staged it. focus()
+  // never fires click, so refocus cannot re-stage (no toggle-fight).
+  // getCreated is untouched: a posted thread is history, not a draft.
+  // No document listener (the panel onKeyDown below catches the bubbled
+  // Escape from the textarea), so no onCleanup.
+  const dismissStaged = (refocus) => {
+    setStaged(null);
+    if (refocus) document.querySelector('[aria-label^="Comment on selected lines"]')?.focus?.();
+  };
+
   return (
     <div class="card mb-4 overflow-hidden" aria-label={`Diff ${props.file.path}`}>
       <div class="flex flex-wrap items-baseline gap-2">
@@ -78,11 +91,25 @@ function PullDiffFile(props) {
         />
       </div>
       <Show when={getStaged() && stagedAnchor()}>
-        <div class="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+        {/* Dismissable staged composer (Forgejo #566): Cancel wears the
+            small secondary .btn treatment (the canonical button idiom,
+            guideline §2 Controls — readable in both themes, unlike the
+            unstyled .link); Escape anywhere inside the panel dismisses via
+            dismissStaged above. Re-stage mounts a fresh empty
+            CommentComposer (the Show unmounts it with its text). */}
+        <div
+          class="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800"
+          onKeyDown={(e) => {
+            if (e.key !== "Escape") return;
+            e.preventDefault();
+            e.stopPropagation();
+            dismissStaged(true);
+          }}
+        >
           <p class="text-xs text-zinc-500 dark:text-zinc-400">
             commenting on <span class="font-mono">{anchorLabel(stagedAnchor())}</span>
-            <button type="button" class="link ml-2" onClick={() => setStaged(null)}>
-              cancel
+            <button type="button" class="btn ml-2 px-2 py-0.5 text-xs" onClick={() => dismissStaged(false)}>
+              Cancel
             </button>
           </p>
           <CommentComposer
