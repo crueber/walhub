@@ -41,13 +41,14 @@ object, it lives in the ref snapshot/manifest like any branch.
 { "num": 42, "kind": "pr",
   "base": { "ref": "refs/heads/main", "sha": "<40hex at open>", "repo": "o/r" },
   "head": { "ref": "refs/heads/topic", "sha": "<40hex at open>", "repo": "o/r" },
-  "fork": null,
+  "fork": null, "body": "",
+  "draft": false,
   "merged": false, "merged_at": null, "merged_by": null,
   "merge_commit_sha": null, "head_force_pushed_at": null }
 ```
 
 Written in the open handler (Create) and updated by CAS on: head sha change (force-push or the `pulls`
-sink observing head-branch movement), merge outcome, base rename. `thread.json` stays the P3 header
+sink observing head-branch movement), merge outcome, base rename, draft flips. `thread.json` stays the P3 header
 exactly (02 owns its shape); PR-specific fields MUST NOT leak into it — 02's list/card rendering reads
 the header alone.
 
@@ -74,7 +75,7 @@ concurrent mechanism below is a CAS loop or the canonical single-flight (`13_con
 
 `pr.json` writers own disjoint field sets and re-apply only their delta onto
 the fresh doc (read-modify-write touches owned fields, never a wholesale
-struct copy): `UpdatePR` owns `body`, `refreshHead` owns `head.sha` /
+struct copy): `UpdatePR` owns `body` + `draft`, `refreshHead` owns `head.sha` /
 `head_force_pushed_at`, the merge task owns the outcome fields
 (`merged`, `merged_at`, `merged_by`, `merge_commit_sha`, `merge_strategy`).
 The outcome is write-once/monotonic — once `merged:true`, no writer unsets
@@ -84,7 +85,7 @@ editorial/head fields). See the Decisions entry for issue #64.
 
 ## 3. Opening a PR
 
-`POST …/pulls` with `{title, base_ref, head_ref, fork?}`. The handler MUST:
+`POST …/pulls` with `{title, base_ref, head_ref, body?, fork?, draft?}`. The handler MUST:
 
 1. **Resolve + verify.** Resolve `base_ref` (must be an existing ref in the base repo) and `head_ref`
    (any branch, tag, or `refs/pull/N/head` in the base repo or — for cross-fork PRs — in
@@ -122,6 +123,21 @@ the thread CAS committed (crash, WAL publish failure): the PR exists with `refs/
 absent. Recovery is a named repair: `GET …/pulls/{num}` re-verifies reachability and re-publishes
 idempotently (ref create is a no-op when the ref already matches); the UI shows `head_ref: null` until
 then. No cross-feature lock is introduced anywhere in this flow.
+
+### 3.1 Draft PRs (issue #613, option a)
+
+`draft: true` on open records a draft PR (`pr.json` `draft`, additive — omitted reads `false`,
+ready for review). `PUT …/pulls/{num}` `{draft: bool}` flips ready↔draft thereafter. Auth for
+both is author-or-triage — the same rule as title/state flips. Draft is orthogonal to
+open/closed (a closed-but-unmerged PR may flip either way); merged is terminal (a flip on a
+merged PR is `409`, mirroring the state flips).
+
+A flip appends a `draft_changed` P3 event (`from`/`to` are the `"draft"`/`"ready"` labels) plus
+the P8 fan-out: notify classes `ready_for_review` / `converted_to_draft` (unknown to older
+notify maps, which fall through to the subscribed/activity default) and the `pull` stream
+actions of the same names. A no-op flip (same value) writes nothing. The merge task refuses
+drafts (see §5 step 1); the list/detail payloads already carry `draft` (`PROut.draft`, always
+present per the law-5 discipline), and the UI gates the merge box on it.
 
 ## 4. Mergeability
 
@@ -169,7 +185,8 @@ Steps (git is always the subprocess with exact argv, `docs/go/04_git.md`):
 
 1. **Re-verify under the task:** re-resolve base/head SHAs from the live refs; if either moved since
    `pr.json`, refresh the mergeability stamp first (the stamp check of §4); refuse `dirty`/`up_to_date`
-   with a narrated reason.
+   with a narrated reason. Refuse drafts the same way (narrated `409 pull request #<num> is a draft` —
+   mark-ready first, then merge).
 2. **Strategy argv** (stock git only; all plumbing — no worktree is created):
 
 | Strategy | Git argv (exact) | Result |
@@ -319,11 +336,11 @@ starts. Auth levels are P6 roles resolved per P6 §1–4.
 | METHOD + path (repo-scoped `/{o}/{r}/api/…`) | Auth | Request → response | Seam |
 |---|---|---|---|
 | `GET …/pulls?state=&base=&head=&sort=&n=&after=` | read | → `{pulls:[{num, title, state, author, base_ref, head_ref, head_sha, draft, merged, updated_at}], more}` (index-first per P4; `merged` always present — Forgejo #530) | RouteProvider |
-| `POST …/pulls` | write | `{title, base_ref, head_ref, body?, fork?}` → `201` PR header (`409` if an OPEN pr already pairs base+head; `422` unresolvable refs) | RouteProvider |
+| `POST …/pulls` | write | `{title, base_ref, head_ref, body?, fork?, draft?}` → `201` PR header (`409` if an OPEN pr already pairs base+head; `422` unresolvable refs; omitted `draft` = ready) | RouteProvider |
 | `GET …/pulls/{num}` | read | → header + `pr.json` + live `mergeable` (stamped; §4) — mutable-collab class (issue #280: `private, no-cache`) + folded ETag (live head/base shas + thread/pr versions + mergeable stamp) | RouteProvider |
 | `GET …/pulls/{num}/diff` | read | → `text/plain` unified diff `base…head` (one well-formed `git diff` patch per spec §9.5; the 12_web_ui.md parser's exact input; ref-dependent SWR, no ETag) | RouteProvider |
 | `GET …/pulls/{num}/commits` | read | → `{commits:[Commit], more}` (doc 07 `Commit` shape; skip/n pagination) | RouteProvider |
-| `PUT …/pulls/{num}` | write | `{title, body?, state?}` — title/state edits; close/reopen append events; triage may close others'. `state:"open"` on a merged PR → `409` (merged is terminal — Forgejo #594); `state:"closed"` on merged stays `409` as before | RouteProvider |
+| `PUT …/pulls/{num}` | write | `{title, body?, state?, draft?}` — title/state/draft edits; close/reopen append state events, draft flips (§3.1) append `draft_changed` events; triage may close others' or flip others' draft. `state:"open"` on a merged PR → `409` (merged is terminal — Forgejo #594); `state:"closed"` on merged stays `409` as before; any `draft` flip on merged → `409` (Forgejo #613) | RouteProvider |
 | `POST …/pulls/{num}/merge` | maintain | `{strategy, commit_title?, commit_message?, delete_head?}` → SSE task attach (`pull-merge`) | RouteProvider + task kind `pull-merge` |
 | `POST …/pulls/{num}/update-branch` | write | `{expected_head_sha?}` → task `pull-update-branch` (merge base→head; 409 if dirty or sha mismatch) | task kind |
 | `DELETE …/pulls/{num}/head` | maintain | delete the head branch post-merge (policy-checked like any ref delete) | RouteProvider |
@@ -332,7 +349,7 @@ starts. Auth levels are P6 roles resolved per P6 §1–4.
 
 SSE: long work (`pull-merge`, `pull-fork`, `pull-mergeable` cold recompute) is a task with the §9.3
 envelope; live PR events ride the repo collaboration SSE stream (the single stream endpoint named by
-06/08) with event name `pull` — data `{action:"opened"|"closed"|"reopened"|"merged"|"head_force_pushed",
+06/08) with event name `pull` — data `{action:"opened"|"closed"|"reopened"|"merged"|"head_force_pushed"|"ready_for_review"|"converted_to_draft",
 num, title, state, author, base_ref, head_ref, head_sha}`; comment events arrive as 02's `comment`
 event; check results as 05's `check` event. Errors map per 07 §2 (unknown PR → `404`, unmet protection
 → `409` with the rule-named reason).
@@ -571,11 +588,36 @@ every call goes through the SDK).
   fork-unique head, merge verified by ancestry in the base copy plus a
   pack-carrying publish). Residual, unchanged: update-branch trials the
   reverse merge in the fork copy and needs no bridge (out of scope).
+- **Draft PRs, option a (issue #613, 2026-09-15).** The binding user
+  decision implements open-as-draft / mark-ready transitions (not the
+  do-nothing or wontfix halves): `POST …/pulls` accepts `draft` (omitted =
+  ready), `PUT …/pulls/{num}` `{draft: bool}` flips either way for
+  author-or-triage (the state-transition roles), `409` on merged (terminal,
+  like state). Flips are thread activity — a `draft_changed` P3 event
+  (`from`/`to` = `"draft"`/`"ready"`) mirroring the `state_changed`
+  convention, not silent pr.json writes (a flip is a lifecycle transition
+  like close/reopen, unlike body edits which append no event), with P8
+  fan-out (`ready_for_review` / `converted_to_draft` notify classes +
+  stream actions). The merge task refuses drafts alongside the other §5
+  step-1 gates (narrated `409`, no publish — the previously dead
+  `mergeState` draft arm / `mergeabilityDisplay` draft headline / "draft
+  PRs cannot merge" tooltip it wires live). Concurrency is the §2.3
+  CAS discipline (`UpdatePR` owns body + draft; the flip re-reads the
+  fresh doc, so a concurrently landed merge still refuses and an already-
+  reached value is a no-op); law 5 holds (the `Draft` field already
+  existed — no schema change); law 6 holds (the flip reuses the body's
+  fresh-load, zero new trips). UI: `PullNew` open-as-draft checkbox (the
+  `ReleaseNew` idiom; the key rides only when true so plain opens stay
+  byte-identical for old servers, which 400 unknown keys), header badge
+  `Draft` on open drafts, mark-ready / convert-to-draft toggle beside the
+  badge gated by `pullDraftVisibility` (the `pullCloseVisibility`
+  precedent). SDK `pulls.open` takes `draft` (undefined omits it),
+  `pulls.update` passes it through.
 
 ## Explicitly out of scope
 
 - Merge queues, batch/auto-merge, mergeability of stacked PRs beyond simple ancestry.
-- Draft PRs beyond a `draft` flag (no review gating semantics — doc 04 owns review requirements).
+- Draft PRs beyond the `draft` flag itself (no review-gating semantics on draft — doc 04 owns review requirements).
 - Cross-server PRs (heads on unrelated hosts); fork networks are same-store by construction.
 - PR templates, milestone/assignee merge gates, project boards (P9).
 - Automatic conflict resolution, mergeability of secrets/large-file rewrites, rebase-with-merge

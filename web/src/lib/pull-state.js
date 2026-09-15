@@ -3,11 +3,13 @@
 // PR header state badge, the Close/Reopen visibility rule, and the
 // conversation textFor.
 //
-// The server contract (internal/pulls/service.go UpdatePR): state flips are
-// `PUT …/pulls/{num}` `{state: "open"|"closed"}` (no reason — PR state is
-// open|closed only), auth is **author or triage** (hierarchical P6 ladder,
-// so write ⊇ triage), and closing OR reopening a merged PR is refused
-// (409 — Forgejo #594 closed the reopen gap). Client
+// The server contract (internal/pulls/service.go UpdatePR): state AND draft
+// flips are `PUT …/pulls/{num}` (`{state: "open"|"closed"}`, `{draft: bool}`;
+// no reason — PR state is open|closed only), auth is **author or triage**
+// (hierarchical P6 ladder, so write ⊇ triage), and closing, reopening, OR
+// flipping draft on a merged PR is refused (409 — Forgejo #594 closed the
+// reopen gap; #613 extends terminality to draft). Draft is orthogonal to
+// open/closed (a closed-but-unmerged PR may flip either way). Client
 // gating is cosmetic per perms.jsx — the server is authoritative; 403/409
 // surface in the error tray via the composer's reportError path.
 //
@@ -15,7 +17,10 @@
 // state badge right, `chip chip-open` / `chip chip-closed`): open and
 // plain-closed reuse those exact classes. Merged wins over closed (merge
 // closes the thread too — merge.go stamps StateClosed alongside Merged),
-// rendered as "Merged" on the new `chip-merged` class (ui.css).
+// rendered as "Merged" on the new `chip-merged` class (ui.css). An open
+// draft reads "Draft" on `chip-draft` (ui.css, the #545 review-chip class);
+// a closed draft reads Closed (terminal state wins — the ready button
+// beside the badge still signals the draft flag).
 
 /** P6 ladder mirror (perms.jsx owns the canonical copy; order frozen by 08 §5). */
 const LADDER = ["read", "triage", "write", "maintain", "admin"];
@@ -48,12 +53,14 @@ export function canModifyPullState({ author, mePrincipal, role } = {}) {
 /**
  * pullBadgeView(thread, pr) → {text, cls}: the header state badge.
  * Merged wins (merge stamps StateClosed too, so thread.state alone cannot
- * tell merged from plain-closed); loading (no thread yet) reads open.
+ * tell merged from plain-closed); an open draft reads Draft; a closed
+ * draft reads Closed (terminal wins). Loading (no thread yet) reads open.
  */
 export function pullBadgeView(thread, pr) {
   if (pr?.merged) return { text: "Merged", cls: "chip chip-merged" };
-  if ((thread?.state ?? "open") === "open") return { text: "Open", cls: "chip chip-open" };
-  return { text: "Closed", cls: "chip chip-closed" };
+  if ((thread?.state ?? "open") !== "open") return { text: "Closed", cls: "chip chip-closed" };
+  if (pr?.draft) return { text: "Draft", cls: "chip chip-draft" };
+  return { text: "Open", cls: "chip chip-open" };
 }
 
 /**
@@ -80,6 +87,8 @@ export function pullEventText(ev) {
       return `retitled “${ev.from}” → “${ev.to}”`;
     case "state_changed":
       return ev.to === "closed" ? "closed" : "reopened";
+    case "draft_changed":
+      return ev.to === "ready" ? "marked as ready for review" : "converted to draft";
     case "merged":
       return `merged as ${(ev.merge_commit_sha ?? "").slice(0, 12)} (${ev.strategy ?? "merge"})`;
     case "head_force_pushed":
@@ -93,12 +102,17 @@ export function pullEventText(ev) {
  * pullListChip(row) → {text, cls}: the Pulls.jsx list-row state chip.
  * Merged wins (merge stamps StateClosed too, so row.state alone cannot
  * tell merged from plain-closed — the row needs the PROut.merged flag,
- * Forgejo #530). Text follows the list lowercase convention ("merged"
- * alongside "open"/"closed"); the class reuses the #517 `chip-merged`.
+ * Forgejo #530); an open draft reads "draft" (the PROut.draft flag,
+ * Forgejo #613); a closed draft reads closed (terminal wins, the badge
+ * precedent). Text follows the list lowercase convention ("merged"
+ * alongside "open"/"closed"); the class reuses the #517 `chip-merged`
+ * and the #545 `chip-draft`.
  */
 export function pullListChip(row) {
   if (row?.merged) return { text: "merged", cls: "chip chip-merged" };
-  return { text: row?.state ?? "open", cls: `chip chip-${row?.state ?? "open"}` };
+  if ((row?.state ?? "open") !== "open") return { text: "closed", cls: "chip chip-closed" };
+  if (row?.draft) return { text: "draft", cls: "chip chip-draft" };
+  return { text: "open", cls: "chip chip-open" };
 }
 
 /**
@@ -280,6 +294,23 @@ export function pullCloseVisibility({ thread, pr, mePrincipal, role } = {}) {
   }
   if ((thread?.state ?? "open") === "open") return { showClose: true, showReopen: false };
   return { showClose: false, showReopen: true };
+}
+
+/**
+ * pullDraftVisibility({thread, pr, mePrincipal, role}) → {showReady, showDraft}:
+ * the Forgejo #613 mark-ready / convert-to-draft toggle beside the header
+ * badge. Unmerged only (merged PRs expose no lifecycle control — a merged
+ * draft flip is a server 409, the pullCloseVisibility precedent), same
+ * author-or-triage rule both ways, driven by the live pr.draft flag (draft
+ * is orthogonal to open/closed, so the thread state is not consulted).
+ */
+export function pullDraftVisibility({ thread, pr, mePrincipal, role } = {}) {
+  if (pr?.merged) return { showReady: false, showDraft: false };
+  if (!canModifyPullState({ author: thread?.author, mePrincipal, role })) {
+    return { showReady: false, showDraft: false };
+  }
+  if (pr?.draft) return { showReady: true, showDraft: false };
+  return { showReady: false, showDraft: true };
 }
 
 /**

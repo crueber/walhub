@@ -480,14 +480,15 @@ func (h *Handler) openPull(w http.ResponseWriter, r *http.Request, owner, repo s
 		BaseRef string `json:"base_ref"`
 		HeadRef string `json:"head_ref"`
 		Body    string `json:"body"`
+		Draft   bool   `json:"draft"`
 		Fork    *struct {
 			Repo string `json:"repo"`
 		} `json:"fork"`
 	}
-	if !decodeStrict(w, r, 1<<20, map[string]bool{"title": true, "base_ref": true, "head_ref": true, "body": true, "fork": true}, &body) {
+	if !decodeStrict(w, r, 1<<20, map[string]bool{"title": true, "base_ref": true, "head_ref": true, "body": true, "draft": true, "fork": true}, &body) {
 		return
 	}
-	in := OpenInput{Title: body.Title, BaseRef: body.BaseRef, HeadRef: body.HeadRef, Body: body.Body}
+	in := OpenInput{Title: body.Title, BaseRef: body.BaseRef, HeadRef: body.HeadRef, Body: body.Body, Draft: body.Draft}
 	if body.Fork != nil {
 		in.Fork = &ForkInfo{Repo: body.Fork.Repo}
 	}
@@ -631,11 +632,12 @@ func (h *Handler) updatePull(w http.ResponseWriter, r *http.Request, owner, repo
 		Title *string `json:"title"`
 		Body  *string `json:"body"`
 		State *string `json:"state"`
+		Draft *bool   `json:"draft"`
 	}
-	if !decodeStrict(w, r, 1<<20, map[string]bool{"title": true, "body": true, "state": true}, &body) {
+	if !decodeStrict(w, r, 1<<20, map[string]bool{"title": true, "body": true, "state": true, "draft": true}, &body) {
 		return
 	}
-	th, pr, err := h.Svc.UpdatePR(r.Context(), owner, repo, num, p, PRPatch{Title: body.Title, Body: body.Body, State: body.State})
+	th, pr, err := h.Svc.UpdatePR(r.Context(), owner, repo, num, p, PRPatch{Title: body.Title, Body: body.Body, State: body.State, Draft: body.Draft})
 	if err != nil {
 		writeErr(w, err)
 		return

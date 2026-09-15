@@ -31,7 +31,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullEventText, reviewRequestsEditable, reviewVerdictLabel, mergeabilityDisplay, requiredReviewsApplies, isTerminalPull, terminalMergeDetail } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullCommentLock, pullDraftVisibility, pullEventText, reviewRequestsEditable, reviewVerdictLabel, mergeabilityDisplay, requiredReviewsApplies, isTerminalPull, terminalMergeDetail } from "../lib/pull-state.js";
 import { chronological } from "../lib/thread-order.js";
 import { renderBody } from "../lib/render-md.js";
 
@@ -1276,6 +1276,33 @@ export default function Pull() {
   // repo-level summary (ref/state-blind by design). No closeChooser: PR
   // closes carry no reason, so both controls stay plain buttons.
   const badge = () => pullBadgeView(thread(), pr());
+  // Draft toggle (Forgejo #613): mark-ready / convert-to-draft via
+  // repo.pulls.update(num, {draft}) — the pullDraftVisibility gate mirrors
+  // close/reopen (author or triage, unmerged only; draft is orthogonal to
+  // open/closed so the thread state is not consulted), and the reconcile
+  // is the same #318 pattern. Errors toast via reportError, never silent.
+  const draftVis = () =>
+    pullDraftVisibility({ thread: thread(), pr: pr(), mePrincipal: getMe()?.principal, role: role() });
+  const markReady = async () => {
+    const n = num();
+    const ck = key();
+    try {
+      await ctx.repoClient.pulls.update(n, { draft: false }, { noPopupAuth: true });
+      afterPRMutation(n, ck);
+    } catch (err) {
+      reportError(err, "pull-draft");
+    }
+  };
+  const convertDraft = async () => {
+    const n = num();
+    const ck = key();
+    try {
+      await ctx.repoClient.pulls.update(n, { draft: true }, { noPopupAuth: true });
+      afterPRMutation(n, ck);
+    } catch (err) {
+      reportError(err, "pull-draft");
+    }
+  };
   // Repo mdCtx for every renderBody call site on this page (the #340
   // contract: thread bodies carry no file coordinates, so relative URLs
   // stay verbatim; owner/repo feeds the #N/PRN autolinker). One object —
@@ -1318,7 +1345,22 @@ export default function Pull() {
               <span class="text-zinc-500 dark:text-zinc-400">#{num()}</span> {thread()?.title}
             </h1>
             <Show when={thread()}>
-              <span class={`${badge().cls} mt-1 shrink-0`}>{badge().text}</span>
+              {/* Forgejo #613: the draft toggle sits beside the badge (the
+                  row wraps at 390px — flex-wrap on the parent, shrink-0
+                  here — so the buttons drop below the title, never clip). */}
+              <span class="mt-1 flex shrink-0 items-center gap-2">
+                <span class={badge().cls}>{badge().text}</span>
+                <Show when={draftVis().showReady}>
+                  <button type="button" class="btn px-2 py-0.5 text-xs" onClick={markReady}>
+                    Mark ready
+                  </button>
+                </Show>
+                <Show when={draftVis().showDraft}>
+                  <button type="button" class="btn px-2 py-0.5 text-xs" onClick={convertDraft}>
+                    Convert to draft
+                  </button>
+                </Show>
+              </span>
             </Show>
           </div>
           <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">

@@ -102,7 +102,9 @@ type Authenticator func(r *http.Request) (auth.Principal, *auth.AuthError)
 // NotifyEvent is the §8/P8 emission contract with 06 (internal/notify): per
 // P8 the mutating handler emits synchronously after the CAS commits.
 // Classes: "opened" (pull_opened), "closed", "reopened", "merged",
-// "head_force_pushed", "assigned", "mentioned", "subscribed".
+// "head_force_pushed", "assigned", "mentioned", "subscribed",
+// "ready_for_review" / "converted_to_draft" (draft flips — unknown to older
+// notify maps, which fall through to the subscribed/activity default).
 type NotifyEvent struct {
 	Repo       string   `json:"repo"` // "owner/name"
 	Class      string   `json:"class"`
@@ -118,7 +120,7 @@ type NotifyEvent struct {
 type StreamEvent struct {
 	Name    string `json:"name"` // always "pull"
 	Repo    string `json:"repo"`
-	Action  string `json:"action"` // opened|closed|reopened|merged|head_force_pushed
+	Action  string `json:"action"` // opened|closed|reopened|merged|head_force_pushed|ready_for_review|converted_to_draft
 	Num     int    `json:"num"`
 	Title   string `json:"title"`
 	State   string `json:"state"`
