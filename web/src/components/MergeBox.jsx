@@ -26,12 +26,13 @@
 // unmount (onCleanup) or terminal state.
 
 import { createSignal, For, Show, onCleanup } from "solid-js";
+import { A } from "@solidjs/router";
 import { reportError } from "../lib/data.js";
 import { roleAtLeast } from "./perms.jsx";
 
 /**
  * Derive the machine state from object state + local task state.
- * props: { pr, mergeable, checksBlockers[], reviewDecision, role,
+ * props: { full, pr, mergeable, checksBlockers[], reviewDecision, role,
  *   merging, task }
  */
 export function mergeState(props) {
@@ -202,7 +203,15 @@ export default function MergeBox(props) {
       </Show>
       <Show when={props.pr?.merged}>
         <p class="text-sm">
-          merged as {(props.pr?.merge_commit_sha ?? "").slice(0, 12)} by {props.pr?.merged_by}
+          merged as{" "}
+          {/* Forgejo #595: the merge SHA links to the commit page — the
+              merge commit is a child of base, so it never appears in the
+              PR commits tab (base…head by documented design); without the
+              link the SHA is a dead end. Full SHA in href, 12-char text. */}
+          <A class="link font-mono" href={`/${props.full}/commit/${props.pr?.merge_commit_sha ?? ""}`}>
+            {(props.pr?.merge_commit_sha ?? "").slice(0, 12)}
+          </A>{" "}
+          by {props.pr?.merged_by}
         </p>
       </Show>
     </>

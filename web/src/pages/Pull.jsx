@@ -1444,6 +1444,7 @@ export default function Pull() {
               <MergeBox
                 client={ctx.repoClient}
                 num={num()}
+                full={ctx.full}
                 pr={pr()}
                 mergeable={mergeable()}
                 checksBlockers={checksBlockers}
