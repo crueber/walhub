@@ -259,9 +259,11 @@ export function pullCloseVisibility({ thread, pr, mePrincipal, role } = {}) {
  * isTerminalPull(thread, pr) → bool: the Forgejo #602 sidebar gate.
  * Merged wins (merge stamps StateClosed too, so state alone cannot tell
  * merged from plain-closed — the merged check comes first, the badge
- * precedent). `pr.state` is read first per the page's payload spelling,
- * falling back to the thread header state (the page's state source of
- * truth); loading (neither yet) reads open.
+ * precedent). Closed reads the live thread state (the page's state source
+ * of truth — PRDoc carries no `state` field, cf. pullCloseVisibility);
+ * `pr.state` is accepted first defensively (list-row PROut shapes carry
+ * one) but is always undefined in the page payload, so the thread decides
+ * in practice; loading (neither yet) reads open.
  */
 export function isTerminalPull(thread, pr) {
   if (pr?.merged) return true;
