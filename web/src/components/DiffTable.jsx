@@ -26,22 +26,23 @@
 // consumer's shared CommentComposer. Anchor construction lives in
 // lib/review-anchor.js — this component never hashes, never prompts.
 //
-// Per-line tap affordance (Forgejo #555): the gutter drag needs a SELECTION,
-// so a tap (touch) or a plain click (mouse) on code text staged nothing —
-// no affordance ever appeared. Every code line now ends with a "+" target
-// that stages a single-line draft directly ({path, side, start: no,
-// end: no} — the exact #546 single-line shape the consumer resolves and
-// hashes via lib/review-anchor.js; chunk clamping is inherent, one line
-// names its own hunk). The range flow is untouched: drag/shift still select,
-// and the "comment on selection" bar below still stages ranges. Tap-vs-drag
-// needs no movement threshold: the button is a discrete target (a press
-// starting on it never starts a drag) and the code text itself stays
-// handler-free, so text selection is never fought — there are deliberately
-// no touch handlers (a tap arrives as click; a custom touchstart would
-// double-stage against the synthesized click). Visibility without hover:
-// revealed on row hover (fine pointers), always visible on coarse pointers,
-// and on keyboard focus (the a11y floor). Gated exactly like the bar below
-// (onCommentSelect + canComment) — anonymous viewers get neither.
+// Per-line staging target (Forgejo #598 — replaces the #555 lineTap):
+// the sign column (see signCell below) doubles as the tap target staging
+// a single-line draft directly ({path, side, start: no, end: no} — the
+// exact #546 single-line shape the consumer resolves and hashes via
+// lib/review-anchor.js; chunk clamping is inherent, one line names its
+// own hunk). The range flow is untouched: drag/shift still select, and
+// the "comment on selection" bar below still stages ranges. Tap-vs-drag
+// needs no movement threshold: the sign button is a discrete target (a
+// press starting on it never starts a drag) and the code text itself
+// stays handler-free, so text selection is never fought — there are
+// deliberately no touch handlers (a tap arrives as click; a custom
+// touchstart would double-stage against the synthesized click).
+// Visibility without hover: the sign is always rendered (the row hover
+// tint in ui.css is the affordance, not a reveal), with a focus-visible
+// outline as the a11y floor. Gated exactly like the bar below
+// (onCommentSelect + canComment) — anonymous viewers get a plain sign,
+// never a button.
 //
 // Row backgrounds (issue #544): lineClass() applies per CELL, not per row
 // — unified rows color both cells (gutter + code, full-row background),
@@ -209,22 +210,30 @@ export function DiffBody(props) {
     </Show>
   );
 
-  // Per-line tap target (Forgejo #555 — see the header note): an inline "+"
-  // at the end of the code cell staging a single-line selection straight
-  // into onCommentSelect. Same gate as the bar below; code text itself
-  // carries no handlers.
-  const lineTap = (side, no, label) => (
-    <Show when={props.onCommentSelect && props.canComment !== false && no != null}>
-      <button
-        type="button"
-        class="ml-2 hidden shrink-0 px-1 text-emerald-600 group-hover:inline hover:text-emerald-700 focus-visible:inline pointer-coarse:inline dark:text-emerald-400 dark:hover:text-emerald-300"
-        onClick={() => props.onCommentSelect({ path: path(), side, start: no, end: no })}
-        aria-label={label}
-        title="Comment on this line"
-      >
-        +
-      </button>
-    </Show>
+  // Sign column (Forgejo #598 — the leftmost cell on every row, ahead of
+  // the line numbers): a visible +/-/space sign themed with the row via
+  // lineClass (add green / del red; context muted), select-none so it
+  // never joins text selection. Unified rows carry their visible sign
+  // here (previously color-only via lineClass()). Split rows pair one
+  // sign per side, so a paired change row stays red-left/green-right.
+  // The sign doubles as the single-line staging target (the #555 lineTap
+  // role, relocated — see the header note): when gated it is a button
+  // staging the #546 single-line shape; otherwise plain sign text.
+  const signChar = (t) => (t === "+" ? "+" : t === "-" ? "-" : " ");
+  const signCell = (t, side, no, label) => (
+    <td class={`w-6 select-none px-1 text-center align-top ${lineClass(t)}${t !== "+" && t !== "-" ? " muted" : ""}`}>
+      <Show when={props.onCommentSelect && props.canComment !== false && no != null} fallback={signChar(t)}>
+        <button
+          type="button"
+          class="block w-full cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500"
+          onClick={() => props.onCommentSelect({ path: path(), side, start: no, end: no })}
+          aria-label={label}
+          title="Comment on this line"
+        >
+          {signChar(t)}
+        </button>
+      </Show>
+    </td>
   );
 
   const inSel = (side, no) => {
@@ -240,7 +249,7 @@ export function DiffBody(props) {
         <table class="diff w-full font-mono text-xs">
           <tbody>
             <tr>
-              <td class="muted p-3" colspan={mode() === "split" ? 4 : 2}>
+              <td class="muted p-3" colspan={mode() === "split" ? 6 : 3}>
                 Binary file not shown
               </td>
             </tr>
@@ -257,7 +266,7 @@ export function DiffBody(props) {
                 {(h, hi) => (
                   <>
                     <tr>
-                      <td class="diff-hunk px-3" colspan={2}>
+                      <td class="diff-hunk px-3" colspan={3}>
                         {hunkHead(h)}
                       </td>
                     </tr>
@@ -266,11 +275,12 @@ export function DiffBody(props) {
                         const no = unifiedNo(l);
                         const side = unifiedSide(l);
                         return (
-                          <tr id={uniId(hi(), li())} class="diff-row group" classList={{ "line-hl": inSel(side, no) }}>
+                          <tr id={uniId(hi(), li())} class="diff-row" classList={{ "line-hl": inSel(side, no) }}>
+                            {signCell(l.t, side, no, `Comment on line ${no}${side === "old" ? " (old side)" : ""} in ${path()}`)}
                             <td class={`diff-num ${lineClass(l.t)}`}>
                               {gutterLink(hi(), side, no, `Diff line ${no}${side === "old" ? " (old side)" : ""} in ${path()}`)}
                             </td>
-                            <td class={lineClass(l.t)}>{l.text || " "}{lineTap(side, no, `Comment on line ${no}${side === "old" ? " (old side)" : ""} in ${path()}`)}</td>
+                            <td class={lineClass(l.t)}>{l.text || " "}</td>
                           </tr>
                         );
                       }}
@@ -284,21 +294,23 @@ export function DiffBody(props) {
               {(h, hi) => (
                 <>
                   <tr>
-                    <td class="diff-hunk px-3" colspan={4}>
+                    <td class="diff-hunk px-3" colspan={6}>
                       {hunkHead(h)}
                     </td>
                   </tr>
                   <For each={annotateSplitRows(h)}>
                     {(row, ri) => (
-                      <tr id={splitId(hi(), ri())} class="diff-row group" classList={{ "line-hl": inSel("old", row.left?.no) || inSel("new", row.right?.no) }}>
+                      <tr id={splitId(hi(), ri())} class="diff-row" classList={{ "line-hl": inSel("old", row.left?.no) || inSel("new", row.right?.no) }}>
+                        {signCell(row.left?.t, "old", row.left?.no, `Comment on line ${row.left?.no} (old side) in ${path()}`)}
                         <td class={`diff-num ${row.left ? lineClass(row.left.t) : ""}`}>
                           {gutterLink(hi(), "old", row.left?.no, `Diff line ${row.left?.no} (old side) in ${path()}`)}
                         </td>
-                        <td class={row.left ? lineClass(row.left.t) : ""}>{row.left ? row.left.text || " " : ""}{lineTap("old", row.left?.no, `Comment on line ${row.left?.no} (old side) in ${path()}`)}</td>
+                        <td class={row.left ? lineClass(row.left.t) : ""}>{row.left ? row.left.text || " " : ""}</td>
+                        {signCell(row.right?.t, "new", row.right?.no, `Comment on line ${row.right?.no} in ${path()}`)}
                         <td class={`diff-num ${row.right ? lineClass(row.right.t) : ""}`}>
-                          {gutterLink(hi(), "new", row.right?.no, `Diff line ${row.right?.no} (new side) in ${path()}`)}
+                          {gutterLink(hi(), "new", row.right?.no, `Diff line ${row.right?.no} in ${path()}`)}
                         </td>
-                        <td class={row.right ? lineClass(row.right.t) : ""}>{row.right ? row.right.text || " " : ""}{lineTap("new", row.right?.no, `Comment on line ${row.right?.no} in ${path()}`)}</td>
+                        <td class={row.right ? lineClass(row.right.t) : ""}>{row.right ? row.right.text || " " : ""}</td>
                       </tr>
                     )}
                   </For>

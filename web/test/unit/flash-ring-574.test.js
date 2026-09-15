@@ -101,7 +101,7 @@ test("draft composer card shares the slot with no outline/ring of its own", () =
   const divStart = s.lastIndexOf("<div", s.indexOf("aria-label={`Draft comment on"));
   const divTag = s.slice(divStart, s.indexOf(">", divStart) + 1);
   assert.ok(
-    divTag.includes("ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700"),
+    divTag.includes("ml-8 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700"),
     "composer keeps the exact shared slot classes",
   );
   assert.ok(!divTag.includes("outline") && !divTag.includes("ring-"), "composer carries no outline/ring — no divergent flash treatment");
@@ -119,10 +119,16 @@ test("ui.css :focus-visible rule byte-identical (the #574 do-not-touch)", () => 
   );
 });
 
-test("gutter trigger focus-visible classes unchanged", () => {
+test("sign-button focus-visible classes carry the keyboard ring (#598 relocation)", () => {
+  // The #560 keyboard ring lived on the conversation gutter "+"; #598
+  // removes that button, and the ring relocates to the DiffTable sign
+  // button (same classes — the a11y floor for the single-line staging
+  // target). Conversation rows take programmatic focus only
+  // (tabindex="-1" for Escape refocus), so they carry no ring.
+  const dt = read("../../src/components/DiffTable.jsx");
   assert.ok(
-    PULL().includes("focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500"),
-    "the #560 keyboard ring on the gutter + stays as-is",
+    dt.includes("focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500"),
+    "the keyboard ring stays as-is on the sign button",
   );
 });
 

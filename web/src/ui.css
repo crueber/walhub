@@ -362,6 +362,20 @@
 .diff-row.line-hl > .diff-num { box-shadow: inset 2px 0 0 #10b981; }
 .dark .diff-row.line-hl > td { background-color: rgba(245, 158, 11, 0.16); }
 
+/* Diff row hover (Forgejo #598): the per-line "+" triggers are gone on
+   both renderers, so row hover IS the interactivity affordance — reusing
+   the selection tokens above (same amber tint + emerald edge, both
+   themes, no new colors), deliberately UNLAYERED for the same cascade
+   reason. The td rules cover the DiffTable tables (unified + split,
+   sign + number + code cells alike); the div rule covers the
+   conversation DiffFile rows (Pull.jsx), whose row divs carry diff-row
+   for exactly this. */
+.diff-row:hover > td { background-color: #fef3c7; }
+.diff-row:hover > .diff-num { box-shadow: inset 2px 0 0 #10b981; }
+.dark .diff-row:hover > td { background-color: rgba(245, 158, 11, 0.16); }
+div.diff-row:hover { background-color: #fef3c7; box-shadow: inset 2px 0 0 #10b981; }
+.dark div.diff-row:hover { background-color: rgba(245, 158, 11, 0.16); }
+
 /* Commit graph (Forgejo #506): deliberately UNLAYERED so the graph-on grid
    template wins over the .commit-row Tailwind grid-cols utility above
    regardless of cascade-layer order (the .blob-row.line-hl precedent).
