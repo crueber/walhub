@@ -31,7 +31,7 @@ import { useCollabStream } from "../components/collab.jsx";
 import { useRole, roleAtLeast } from "../components/perms.jsx";
 import { onSubmitKeys } from "../lib/submitKeys.js";
 import { anonWriteTarget, isAnonymousViewer } from "../lib/writeGate.js";
-import { pullBadgeView, pullCloseVisibility, pullEventText } from "../lib/pull-state.js";
+import { pullBadgeView, pullCloseVisibility, pullEventText, reviewVerdictLabel } from "../lib/pull-state.js";
 import { renderBody } from "../lib/render-md.js";
 
 /** PR description block (Forgejo #521, the issue-page first-comment
@@ -104,7 +104,7 @@ function ReviewSummaryBar(props) {
     <>
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <span class={reviewVerdictChip(summary()?.decision ?? "REVIEW_REQUIRED")}>
-          {summary()?.decision ?? "REVIEW_REQUIRED"}
+          {reviewVerdictLabel(summary()?.decision ?? "REVIEW_REQUIRED")}
         </span>
         <span class="text-xs text-zinc-500 dark:text-zinc-400">
           {summary()?.approvals ?? 0} approvals · {summary()?.threads_unresolved ?? 0} unresolved threads
@@ -114,7 +114,7 @@ function ReviewSummaryBar(props) {
         <For each={latest()} fallback={<span class="text-xs text-zinc-500 dark:text-zinc-400">no reviews yet</span>}>
           {([who, r]) => (
             <span class={reviewVerdictChip(r.state)} title={`${r.state} @ ${String(r.commit_sha ?? "").slice(0, 12)}`}>
-              {who} · {r.state}
+              {who} · {reviewVerdictLabel(r.state)}
               <Show when={r.state === "APPROVED" && r.commit_sha !== props.head}>
                 <span class="ml-1 font-semibold text-amber-600 dark:text-amber-400">(stale)</span>
               </Show>
@@ -160,7 +160,7 @@ function ReviewsList(props) {
               <div class="card-meta">
                 <span>{rv.by}</span>
                 {" · "}
-                <span class={rv.kind === "review_dismissed" ? "chip chip-neutral" : reviewVerdictChip(rv.state ?? rv.kind)}>{rv.kind === "review_dismissed" ? `dismissed #${rv.dismisses}` : rv.state}</span>
+                <span class={rv.kind === "review_dismissed" ? "chip chip-neutral" : reviewVerdictChip(rv.state ?? rv.kind)}>{rv.kind === "review_dismissed" ? `dismissed #${rv.dismisses}` : reviewVerdictLabel(rv.state)}</span>
                 {" · "}
                 <span><DateTime value={rv.at} /></span>
               </div>
