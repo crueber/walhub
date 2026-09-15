@@ -644,12 +644,29 @@ bootstrap's Create. Avoidance: edits to a repo with no `access.json` synthesize 
   precedent. Background stays emerald-600; seed contract + sanitize
   gate unchanged; existing holders keep their avatars (no migration —
   POST regen and next-login generation produce the new look). The
-  palette deliberately keeps emerald-600, so a tone-on-tone figure
-  (invisible against the background) is a possible deterministic
-  outcome — still on-brand, still the issue's stated scale. No new
-  dependencies (same dicebear modules, law 1 exception already covers
-  this). Rationale: the figure is the visual majority of the avatar,
-  so a rainbow figure undoes the #525 brand treatment.
+   palette deliberately keeps emerald-600, so a tone-on-tone figure
+   (invisible against the background) is a possible deterministic
+   outcome — still on-brand, still the issue's stated scale. No new
+   dependencies (same dicebear modules, law 1 exception already covers
+   this). Rationale: the figure is the visual majority of the avatar,
+   so a rainbow figure undoes the #525 brand treatment.
+- **Wider greens rings palette (issue #550, §8):** `userAvatarRingColors`
+  grows from 9 to 25 entries — the Tailwind emerald, green, and teal
+  runs 300→950 (8 each) plus black, ordered so the lightness ramp
+  interleaves by step (all 300s, then 400s, …) down to the dark
+  terminus. Every hex is a real Tailwind shade (emerald run unchanged;
+  green `86efac 4ade80 22c55e 16a34a 15803d 166534 14532d 052e16`,
+  teal `5eead4 2dd4bf 14b8a6 0d9488 0f766e 115e59 134e4a 042f2e`).
+  Greens-family only — no blue-adjacent hues (cyan reads as blue at
+  avatar size), no rainbow colors; `TestGenerateGreensOnlyFigures`
+  keeps pinning the boundary unchanged. Background stays emerald-600;
+  the green-600/teal-600 steps sit near the background hue and read
+  via the ring gaps like the existing emerald-600 entry. Seed
+  contract + sanitize gate unchanged; existing holders keep their
+  avatars (no migration — POST regen and next-login generation
+  produce the new look). No new dependencies. Rationale: one hue
+  family rendered many seeds distinguishable only by lightness steps;
+  three green families keep the brand while telling avatars apart.
 
 ## Explicitly out of scope
 
