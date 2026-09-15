@@ -48,8 +48,8 @@ test("collapse/expand toggle clears the flash for its tid before toggling", () =
   const card = threadCard();
   assert.match(
     card,
-    /onClick=\{\(\) => \{ props\.onCollapse\?\.\(t\(\)\.tid\); setOpen\(!getOpen\(\)\); \}\}/,
-    "toggle calls onCollapse(tid) alongside the existing setOpen toggle",
+    /onClick=\{\(e\) => \{ e\.stopPropagation\(\); props\.onCollapse\?\.\(t\(\)\.tid\); setOpen\(!getOpen\(\)\); \}\}/,
+    "toggle stopPropagations (no card-root re-flash, #575) then calls onCollapse(tid) alongside the existing setOpen toggle",
   );
 });
 
