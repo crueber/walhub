@@ -63,12 +63,17 @@ export function splitMilestones(milestones) {
 
 /**
  * milestoneFilterHref(full, id) → string: the issue-list URL filtered
- * to one milestone (`?milestone=<id>`). Shared by the open-card "View
- * N issues" button and the closed-row title link so both affordances
- * land on the same server-side filter.
+ * to one milestone (`?milestone=<id>&state=all`). Shared by the open-card
+ * "View N issues" button and the closed-row title link so both affordances
+ * land on the same server-side filter. The `state=all` carries the state
+ * the button label counts (Forgejo #564: the label sums open + closed via
+ * milestoneTotal, while a bare Issues visit defaults to open-only per
+ * #323 — without the explicit param the landing would show only the open
+ * subset of the promised N). `all` never reaches the wire (issueListState
+ * maps it to an omitted param, which the list endpoint reads as both).
  */
 export function milestoneFilterHref(full, id) {
-  return `/${full}/issues?milestone=${encodeURIComponent(id)}`;
+  return `/${full}/issues?milestone=${encodeURIComponent(id)}&state=all`;
 }
 
 /**

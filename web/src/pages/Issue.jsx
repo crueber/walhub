@@ -15,7 +15,7 @@ import { useData, invalidate, invalidateIssueLists, patchCached, reportError } f
 import { isFeatureDisabled } from "../lib/repoFeatures.js";
 import { TTL } from "../lib/collab.js";
 import { toggleLabel, labelColorMap } from "../lib/labels.js";
-import { milestoneDisplay, milestonePatch } from "../lib/milestones.js";
+import { milestoneDisplay, milestoneFilterHref, milestonePatch } from "../lib/milestones.js";
 import LabelPicker, { LabelChip } from "../components/LabelPicker.jsx";
 import MilestonePicker from "../components/MilestonePicker.jsx";
 import ThreadTimeline from "../components/ThreadTimeline.jsx";
@@ -611,7 +611,7 @@ export default function Issue() {
                         <Show when={!d().pending} fallback={<span class="muted text-xs">…</span>}>
                           <A
                             class="font-medium text-emerald-700 hover:underline dark:text-emerald-400"
-                            href={`/${ctx.full}/issues?milestone=${encodeURIComponent(m())}`}
+                            href={milestoneFilterHref(ctx.full, m())}
                             title={`issues on milestone ${d().text}`}
                           >
                             {d().text}

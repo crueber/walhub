@@ -811,14 +811,16 @@ type ListResult struct {
 }
 
 // ListIssues serves the list index-first (P4): when the CAS'd index is
-// provably complete — every number below the P2 counter has a card —
-// the requested window is filled from the index alone (2 GETs: index +
-// counter, O(1) requests, no LIST). Otherwise (absent index, lost index
-// update, crash between the header CAS and the index CAS, compacted
-// history) the page falls through to the paginated LIST scan and merges
-// union-by-num with the header winning over a stale card — LIST fallback
-// makes staleness a performance gap, never a correctness gap. A LIST
-// failure degrades to the index window instead of erroring.
+// provably complete — every number below the P2 counter has a card AND
+// the cards carry the current Card projection (Forgejo #564 version
+// gate) — the requested window is filled from the index alone (2 GETs:
+// index + counter, O(1) requests, no LIST). Otherwise (absent index,
+// pre-projection cards, lost index update, crash between the header CAS
+// and the index CAS, compacted history) the page falls through to the
+// paginated LIST scan and merges union-by-num with the header winning
+// over a stale card — LIST fallback makes staleness a performance gap,
+// never a correctness gap. A LIST failure degrades to the index window
+// instead of erroring.
 //
 // Render order is ALWAYS number-descending (newest issue first),
 // regardless of the state filter: the merged open + closed_recent pool is
@@ -935,10 +937,17 @@ func (s *Service) loadCounter(ctx context.Context, owner, repo string) int {
 
 // indexComplete reports whether every allocated number below next has a
 // card in the index (either page, either kind — 03 shares the numbering
-// space and cards pr threads here). next <= 0 (no counter yet) is never
-// complete: pre-issues repos read through the LIST scan.
+// space and cards pr threads here) AND the cards carry the current Card
+// projection (Forgejo #564). next <= 0 (no counter yet) is never
+// complete: pre-issues repos read through the LIST scan. An absent or
+// older CardVersion is never complete either: pre-projection cards (or
+// cards whose update was lost before RepairIndex ran) must not win the
+// fast path — the LIST fallback heals the window with the header truth.
 func indexComplete(ix *Index, next int) bool {
 	if next <= 0 {
+		return false
+	}
+	if ix == nil || ix.CardVersion < CardProjectionVersion {
 		return false
 	}
 	have := make(map[int]bool, len(ix.Open)+len(ix.ClosedRecent))

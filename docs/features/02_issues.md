@@ -675,6 +675,36 @@ handler holds no repo locks across store calls (13 §2 rule 4).
   readable at their URLs and no issue API is refused. Rationale: Forgejo's
   semantics; the tab-disable and the write-guards (star/watch/fork) are
   different failure modes (07_api.md Decisions).
+- **FIXED (Forgejo #564) — stale index cards can no longer suppress the
+  milestone-filtered list forever.** Symptom: milestone cards showed correct
+  denormalized counts but "no issues on this milestone", because the
+  milestone-filtered list is served index-first and `indexComplete` checked
+  coverage only (every num < counter has a card), never freshness — a card
+  written before the `Milestone` field existed in the Card projection, or
+  one whose update was lost, won the fast path indefinitely while the
+  thread-header truth (sidebar) stayed right. Fix: (1) the persisted
+  `issues/index.json` carries `card_version` (additive `omitempty` JSON
+  field — unknown-field-tolerant readers round-trip older fixtures
+  unchanged, law 5); `indexComplete` returns false when it is absent or
+  older than `CardProjectionVersion`, so the LIST fallback heals the window
+  (header wins). Only `RepairIndex` (which diffs every card against its
+  header) and fresh-index creation may stamp the current version — a single
+  `updateIndex` upsert preserves the existing stamp (one fresh card cannot
+  vouch for the rest), and `CompactIndex` preserves it (eviction cannot
+  vouch for survivors). (2) `updateIndex`/`bumpMilestone` failures are
+  logged (optional `Service.Log`, nil-safe) and counted
+  (`IndexDrops()`/`MilestoneDrops()`), never swallowed silently. (3) New
+  one-shot backfill `RepairIndex`: rebuilds every card disagreeing with its
+  header (PR-kind cards ride through untouched — one numbering space, one
+  index; threads at/below `compacted_through` stay evicted for LIST),
+  stamps the current version, returns the repaired count (0 + stamp when
+  only the version was stale; second run is a no-op). Concurrency per the
+  package contract (13 §3/§5): bounded CAS loops only, no in-process lock,
+  no lock spans the header scan and the index write. Tests:
+  `internal/issues/indexfresh_test.go` (gate matrix, fallback heals,
+  repair + stamp + no-op rerun, PR preservation, watermark, drop
+  counters/logging, fresh-index stamp, diff predicate); `go test
+  ./internal/issues/ -race` green.
 
 ## Explicitly out of scope
 

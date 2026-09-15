@@ -133,6 +133,13 @@ type Event struct {
 	Keyword        *string `json:"keyword,omitempty"`
 }
 
+// CardProjectionVersion is the current Card-projection version stamped on
+// every persisted Index (Forgejo #564). indexComplete treats an Index with
+// a missing or older version as incomplete so the LIST fallback heals the
+// window (header wins) instead of serving stale cards forever. Bump this
+// whenever the Card shape gains a field the list filters match on.
+const CardProjectionVersion = 1
+
 // Index is the CAS'd list object (§2, P4). Open holds every kind:"issue"
 // open thread newest-activity-first; ClosedRecent holds closed threads
 // newer than CompactedThrough. CompactedThrough is a <num:06x> watermark
@@ -143,6 +150,13 @@ type Index struct {
 	CompactedThrough string `json:"compacted_through"`
 	Open             []Card `json:"open"`
 	ClosedRecent     []Card `json:"closed_recent"`
+	// CardVersion stamps the Card projection the cards were written with
+	// (Forgejo #564; see CardProjectionVersion). Absent (pre-#564
+	// indexes) or older-than-current means the cards may predate a
+	// filter-matched field — readers must fall back to the header scan.
+	// Additive JSON field: unknown-field-tolerant readers round-trip
+	// older fixtures unchanged (law 5).
+	CardVersion int `json:"card_version,omitempty"`
 }
 
 // Label is one entry of the repo label set (§3.1). Names are immutable

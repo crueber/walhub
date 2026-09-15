@@ -199,8 +199,10 @@ export default function Issues() {
   // "open"; the explicit both-choice is ?state=all (URL-honest,
   // shareable), sent on the wire as an omitted param (the list endpoint
   // accepts open|closed|absent only). The select binds the RESOLVED value
-  // so a bare visit visibly reads "open". Milestone-filtered landings
-  // (?milestone=, no state) inherit the open default — deliberate (#323).
+  // so a bare visit visibly reads "open". Shared milestone landings carry
+  // their own ?state=all (milestoneFilterHref, #564 — the View-N promise
+  // counts open + closed); only a hand-typed bare ?milestone= URL inherits
+  // the open default here.
   const query = () => ({
     state: issueListState(resolveIssueState(search.state)),
     labels: search.labels || "",
