@@ -329,27 +329,49 @@ function threadFreshness(thread, files) {
  *  .diff-del tokens DiffBody uses, so the conversation diff matches the
  *  Files tab and commit diffs in both themes). */
 function DiffFile(props) {
-  // Staged line-comment draft (Forgejo #546): the "+" affordance builds the
-  // anchor via lib/review-anchor.js and opens the shared CommentComposer —
-  // never window.prompt. Plain click stages one line; Shift+click on another
-  // "+" in the same file + side + hunk extends a range (the DiffTable clamp
-  // convention), staged as new_lines/old_lines > 1. Submit hands
-  // {anchor, body} to onStage (the finish-review modal); cancel drops it.
-  // Forgejo #555: the "+" was hover-only (hidden group-hover:inline), so
-  // touch users never saw it — it now stays visible on coarse pointers and
-  // on keyboard focus (the same treatment as the Files-tab lineTap target),
-  // and it honors the #502 gate (hidden for anonymous viewers — the Files
-  // tab hides its affordances the same way). A tap arrives as click, so no
-  // touch handlers: the button is a discrete target and row text stays
-  // handler-free.
-  const [getDraft, setDraft] = createSignal(null);
+  // Inline review composers (Forgejo #560, refining #546/#555): the "+"
+  // affordance lives in the left gutter (one discrete, always-visible
+  // button per commentable line — no hover dependency, so the target is
+  // stable and never shifts row content), and clicking anywhere on a diff
+  // row stages a composer immediately below THAT line (never one <Show>
+  // at the file end). Drafts are a keyed Map (`${hunkIdx}:${rowIdx}`) so
+  // unlimited composers coexist per file with text preserved — each
+  // CommentComposer instance stays mounted under its own row and submits
+  // independently (staging into onStage, closing only its own key) in any
+  // order. Anchor construction is unchanged: stageLine builds via
+  // lib/review-anchor.js and submit hands {anchor, body} to onStage (the
+  // finish-review modal); cancel drops only that draft. Plain click stages
+  // one line; Shift+click on another "+" (or row) in the same file + side
+  // + hunk extends a range (the DiffTable clamp convention), staged as
+  // new_lines/old_lines > 1. The #502 gate covers all three entry points
+  // (gutter button, row click, composer render — canComment !== false).
+  // Row clicks never fight interactive content: the gutter button stops
+  // propagation (no double-stage with the row handler) and the row handler
+  // ignores clicks landing on buttons/links/inputs (closest() check), so
+  // clicks inside an open composer or thread card — siblings BELOW the
+  // row, never inside it — spawn nothing. No touch handlers: a tap
+  // arrives as click and the permanent gutter buttons are touch-visible
+  // by construction, with focus-visible affordances for keyboard users.
+  const [getDrafts, setDrafts] = createSignal(new Map());
   const [getLast, setLast] = createSignal(null);
 
-  const stageLine = (file, hunk, hunkIdx, row, ev) => {
+  const draftKey = (hunkIdx, rowIdx) => `${hunkIdx}:${rowIdx}`;
+  const draftAt = (hunkIdx, rowIdx) => getDrafts().get(draftKey(hunkIdx, rowIdx)) ?? null;
+  const closeDraft = (key) => {
+    setDrafts((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  const stageLine = (file, hunk, hunkIdx, row, rowIdx, ev) => {
     const isNew = row.line.t !== "-";
     const side = isNew ? "NEW" : "OLD";
     const no = isNew ? row.newNo : row.oldNo;
     if (no == null) return;
+    const key = draftKey(hunkIdx, rowIdx);
     const last = getLast();
     if (ev?.shiftKey && last && last.file === file.path && last.side === side && last.hunkIdx === hunkIdx) {
       const anchor = buildAnchor({
@@ -361,14 +383,24 @@ function DiffFile(props) {
         head: props.head,
       });
       if (anchor) {
-        setDraft({ anchor });
+        setDrafts((prev) => new Map(prev).set(key, { anchor }));
         return;
       }
     }
     const anchor = buildAnchor({ file, hunk, side, startNo: no, endNo: no, head: props.head });
     if (!anchor) return;
     setLast({ file: file.path, side, no, hunkIdx });
-    setDraft({ anchor });
+    setDrafts((prev) => new Map(prev).set(key, { anchor }));
+  };
+
+  // Row click stages a composer below that line. Guards: the #502 gate,
+  // plus the isolation check — clicks on interactive content (the gutter
+  // "+" stops propagation before reaching here; links/buttons/inputs any
+  // other way) never stage.
+  const onRowClick = (file, hunk, hunkIdx, row, rowIdx, ev) => {
+    if (props.canComment === false) return;
+    if (ev?.target?.closest?.("button, a, input, textarea, select, [data-no-row-comment]")) return;
+    stageLine(file, hunk, hunkIdx, row, rowIdx, ev);
   };
 
   // Placement is derived fresh every render: locate each thread's anchor
@@ -421,23 +453,66 @@ function DiffFile(props) {
               <For each={rows}>
                 {(row, ri) => (
                   <div>
-                    <div class={`group flex font-mono text-xs ${lineClass(row.line.t)}`}>
+                    <div
+                      class={`group flex font-mono text-xs ${lineClass(row.line.t)}`}
+                      onClick={(ev) => onRowClick(props.file, hunk, hi(), row, ri(), ev)}
+                    >
+                      {/* Gutter comment trigger (Forgejo #560): one discrete
+                          "+" per commentable line in the left gutter, always
+                          rendered (no hover dependency — no hidden /
+                          group-hover indirection), mirroring the Files-tab
+                          DiffTable gutter conventions (gutter cell +
+                          line-labelling a11y). #502 gate: anonymous viewers
+                          get no trigger. stopPropagation so the gutter click
+                          never double-stages through the row handler. */}
+                      <span class="w-6 shrink-0 select-none text-center">
+                        <Show when={props.canComment !== false}>
+                          <button
+                            type="button"
+                            class="shrink-0 px-1 text-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              stageLine(props.file, hunk, hi(), row, ri(), ev);
+                            }}
+                            aria-label={`Comment on line ${row.newNo ?? row.oldNo} in ${props.file.path}`}
+                            title="Comment on this line (Shift+click another + for a range)"
+                          >
+                            +
+                          </button>
+                        </Show>
+                      </span>
                       <span class="w-10 shrink-0 select-none text-right text-zinc-400">{row.oldNo ?? ""}</span>
                       <span class="w-10 shrink-0 select-none text-right text-zinc-400">{row.newNo ?? ""}</span>
                       <span class="w-4 shrink-0 select-none">{row.line.t}</span>
                       <span class="whitespace-pre">{row.line.text}</span>
-                      <Show when={props.canComment !== false}>
-                        <button
-                          type="button"
-                          class="ml-2 hidden shrink-0 px-1 text-emerald-600 group-hover:inline hover:text-emerald-700 focus-visible:inline pointer-coarse:inline dark:text-emerald-400 dark:hover:text-emerald-300"
-                          onClick={(ev) => stageLine(props.file, hunk, hi(), row, ev)}
-                          aria-label={`Comment on line ${row.newNo ?? row.oldNo}`}
-                          title="Comment on this line (Shift+click another + for a range)"
-                        >
-                          +
-                        </button>
-                      </Show>
                     </div>
+                    {/* Inline staged draft (#560): the shared
+                        CommentComposer rendered immediately below its row
+                        (never one <Show> at the file end); each keyed draft
+                        submits independently into the finish-review modal.
+                        #502 gate: no composers for anonymous viewers. */}
+                    <Show when={props.canComment !== false && draftAt(hi(), ri())}>
+                      {(d) => (
+                        <div class="ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700" aria-label={`Draft comment on ${anchorLabel(d().anchor)}`}>
+                          <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
+                            commenting on <span class="font-mono">{anchorLabel(d().anchor)}</span>
+                            <button type="button" class="link ml-2" onClick={() => closeDraft(draftKey(hi(), ri()))}>
+                              cancel
+                            </button>
+                          </p>
+                          <CommentComposer
+                            onSubmit={async (body) => {
+                              props.onStage({ anchor: d().anchor, body });
+                              closeDraft(draftKey(hi(), ri()));
+                            }}
+                            submitLabel="Stage comment"
+                            placeholder={`Comment on ${anchorLabel(d().anchor)}… (staged into the finish-review modal)`}
+                            errorKey="line-comment-stage"
+                            label={`Comment on ${anchorLabel(d().anchor)}`}
+                          />
+                        </div>
+                      )}
+                    </Show>
                     <For each={threadsAt(hi(), ri())}>
                       {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
                     </For>
@@ -453,30 +528,6 @@ function DiffFile(props) {
       <For each={placement().unplaced}>
         {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
       </For>
-      {/* Staged line-comment draft: the shared CommentComposer (never a
-          prompt); submit stages into the finish-review modal. */}
-      <Show when={getDraft()}>
-        {(d) => (
-          <div class="ml-14 mt-1 rounded border border-zinc-200 p-2 dark:border-zinc-700" aria-label={`Draft comment on ${anchorLabel(d().anchor)}`}>
-            <p class="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
-              commenting on <span class="font-mono">{anchorLabel(d().anchor)}</span>
-              <button type="button" class="link ml-2" onClick={() => setDraft(null)}>
-                cancel
-              </button>
-            </p>
-            <CommentComposer
-              onSubmit={async (body) => {
-                props.onStage({ anchor: d().anchor, body });
-                setDraft(null);
-              }}
-              submitLabel="Stage comment"
-              placeholder={`Comment on ${anchorLabel(d().anchor)}… (staged into the finish-review modal)`}
-              errorKey="line-comment-stage"
-              label={`Comment on ${anchorLabel(d().anchor)}`}
-            />
-          </div>
-        )}
-      </Show>
     </div>
   );
 }

@@ -74,8 +74,8 @@ test("Pull.jsx DiffFile reuses the shared lineClass on the row div", () => {
   );
   assert.match(
     src,
-    /<div class=\{`group flex font-mono text-xs \$\{lineClass\(row\.line\.t\)\}`\}>/,
-    "the div row carries the add/del background",
+    /<div\s+class=\{`group flex font-mono text-xs \$\{lineClass\(row\.line\.t\)\}`\}\s+onClick=/,
+    "the div row carries the add/del background (Forgejo #560 adds the row-click staging handler on the same div)",
   );
 });
 

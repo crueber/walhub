@@ -143,16 +143,19 @@ test("DiffTable range flow is untouched (drag/shift + comment-on-selection bar)"
 
 // --- Conversation: Pull.jsx DiffFile ------------------------------------------
 
-test("conversation + is visible without hover and gated on canComment", () => {
+test("conversation + lives in the gutter, always visible, gated on canComment (Forgejo #560)", () => {
   const src = read("../../src/pages/Pull.jsx");
-  assert.match(src, /pointer-coarse:inline/, "always visible on touch");
-  assert.match(src, /focus-visible:inline/, "keyboard focus reveals");
-  assert.match(src, /group-hover:inline/, "hover reveal kept");
+  // #560 moved the trigger out of the row body into the left gutter as an
+  // always-visible button (no hover dependency) + row-click staging with
+  // keyed multi-drafts — see inline-composer-560.test.js for the full pin.
+  assert.match(src, /w-6 shrink-0 select-none text-center/, "left gutter cell ahead of the line numbers");
+  assert.ok(!src.includes("ml-2 hidden"), "the old inline-body hover trigger is gone");
+  assert.match(src, /focus-visible:outline/, "keyboard users keep a focus-visible affordance");
   assert.match(src, /<Show when=\{props\.canComment !== false\}>/, "+ honors the #502 gate");
   assert.match(src, /canComment=\{canComment\(\)\}/, "call site passes the gate");
 });
 
-test("conversation + drops the undefined link class for theme tokens", () => {
+test("conversation + keeps the theme tokens (Forgejo #560: gutter button)", () => {
   const src = read("../../src/pages/Pull.jsx");
   assert.ok(!src.includes("link ml-2 hidden"), "no undefined link class on the affordance");
   assert.match(src, /text-emerald-600.*dark:text-emerald-400/, "explicit F2 token pair, both themes");
