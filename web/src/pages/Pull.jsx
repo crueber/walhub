@@ -335,6 +335,13 @@ function DiffFile(props) {
   // "+" in the same file + side + hunk extends a range (the DiffTable clamp
   // convention), staged as new_lines/old_lines > 1. Submit hands
   // {anchor, body} to onStage (the finish-review modal); cancel drops it.
+  // Forgejo #555: the "+" was hover-only (hidden group-hover:inline), so
+  // touch users never saw it — it now stays visible on coarse pointers and
+  // on keyboard focus (the same treatment as the Files-tab lineTap target),
+  // and it honors the #502 gate (hidden for anonymous viewers — the Files
+  // tab hides its affordances the same way). A tap arrives as click, so no
+  // touch handlers: the button is a discrete target and row text stays
+  // handler-free.
   const [getDraft, setDraft] = createSignal(null);
   const [getLast, setLast] = createSignal(null);
 
@@ -419,15 +426,17 @@ function DiffFile(props) {
                       <span class="w-10 shrink-0 select-none text-right text-zinc-400">{row.newNo ?? ""}</span>
                       <span class="w-4 shrink-0 select-none">{row.line.t}</span>
                       <span class="whitespace-pre">{row.line.text}</span>
-                      <button
-                        type="button"
-                        class="link ml-2 hidden shrink-0 group-hover:inline"
-                        onClick={(ev) => stageLine(props.file, hunk, hi(), row, ev)}
-                        aria-label={`Comment on line ${row.newNo ?? row.oldNo}`}
-                        title="Comment on this line (Shift+click another + for a range)"
-                      >
-                        +
-                      </button>
+                      <Show when={props.canComment !== false}>
+                        <button
+                          type="button"
+                          class="ml-2 hidden shrink-0 px-1 text-emerald-600 group-hover:inline hover:text-emerald-700 focus-visible:inline pointer-coarse:inline dark:text-emerald-400 dark:hover:text-emerald-300"
+                          onClick={(ev) => stageLine(props.file, hunk, hi(), row, ev)}
+                          aria-label={`Comment on line ${row.newNo ?? row.oldNo}`}
+                          title="Comment on this line (Shift+click another + for a range)"
+                        >
+                          +
+                        </button>
+                      </Show>
                     </div>
                     <For each={threadsAt(hi(), ri())}>
                       {(t) => <ThreadCard thread={t} client={props.client} num={props.num} reload={props.reload} canResolve={props.canResolve} mdCtx={props.mdCtx} flashTid={props.flashTid} />}
@@ -1000,6 +1009,7 @@ export default function Pull() {
                       onStage={stage}
                       reload={reloadReview}
                       canResolve={canResolve()}
+                      canComment={canComment()}
                       mdCtx={mdCtx}
                       flashTid={getFlashTid}
                     />

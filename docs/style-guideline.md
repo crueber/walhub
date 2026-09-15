@@ -298,6 +298,20 @@ the family; inline colors are never used for state.
   `.diff-row.line-hl` stays deliberately unlayered (unlayered beats
   layered at any specificity), same precedent as blob. No color
   literals in JSX — colors live in `ui.css` token composition (F2).
+- **Per-line tap-to-comment affordance** (Forgejo #555, shared
+  `lineTap()` in `web/src/components/DiffTable.jsx` + the conversation
+  `DiffFile` "+" in `web/src/pages/Pull.jsx`): every diff code line ends
+  with an inline "+" staging a single-line draft through
+  `web/src/lib/review-anchor.js` (the existing single-line shape, side
+  convention, and chunk clamping — never a fork). One visibility idiom on
+  both surfaces: revealed on row hover (fine pointers, `group` on the
+  row), always visible on coarse pointers (`pointer-coarse:inline`), on
+  keyboard focus (`focus-visible:inline`, F3); hidden for anonymous
+  viewers (the §10 write gate). Code text itself carries no handlers —
+  taps on text select text, taps on "+" stage. The affordance wears
+  explicit emerald F2 tokens (both themes), never the undefined `link`
+  class. The drag/shift range flow and its "comment on selection" bar are
+  untouched.
 - **`.markdown-body`** (issue #182, `ui.css:234-274`): designed prose
   covering everything marked emits (headings, code, tables, blockquotes,
   nested/task lists, hr, images, links); relative URLs resolve against
