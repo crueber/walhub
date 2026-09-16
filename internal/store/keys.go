@@ -128,6 +128,36 @@ func ServeHealthKey(owner, name string) string { return RepoPrefix(owner, name) 
 // (ParseRepoId charset), so the name is one path segment.
 func MirrorLeaseName(owner, name string) string { return "mirror-" + owner + "-" + name }
 
+// PushMirrorKeySuffix is the repo-relative push-mirror sidecar (Forgejo
+// #623): Create-once-then-CAS'd, in the frozen overwritable family
+// (14_extensibility.md §14.11 rule 2 — amended in the same change that
+// adopts it). It carries the upstream pointer, the auth-kind choice,
+// the schedule preset ("" = on-push only, the default), and the sync
+// outcome; next_sync_at is DERIVED at read time, never stored (the
+// pull-mirror R1 (b) discipline). Fully independent of MirrorKeySuffix:
+// either sidecar may exist alone.
+const PushMirrorKeySuffix = "meta/pushmirror.json"
+
+// PushMirrorKey returns "repos/<owner>/<name>/meta/pushmirror.json".
+func PushMirrorKey(owner, name string) string { return RepoPrefix(owner, name) + PushMirrorKeySuffix }
+
+// PushMirrorSecretKeySuffix is the repo-relative push-mirror secret
+// sidecar (Forgejo #623): CAS'd (read-modify-CAS loop, human rate), in
+// the frozen overwritable family (amended in the same change). It holds
+// the auth material the config sidecar only describes (password/token
+// or SSH private key + known_hosts). NEVER echoed back in full — the
+// API renders presence/last-4 only, and every error surface scrubs.
+const PushMirrorSecretKeySuffix = "meta/pushmirror-secret.json"
+
+// PushMirrorSecretKey returns "repos/<owner>/<name>/meta/pushmirror-secret.json".
+func PushMirrorSecretKey(owner, name string) string {
+	return RepoPrefix(owner, name) + PushMirrorSecretKeySuffix
+}
+
+// PushMirrorLeaseName returns the bucket-lease name serializing push-mirror
+// syncs of one repo across instances ("pushmirror-<owner>-<name>").
+func PushMirrorLeaseName(owner, name string) string { return "pushmirror-" + owner + "-" + name }
+
 // OwnerProfileKeySuffix is the owner-scoped profile sidecar (Forgejo #234):
 // owners/<owner>/profile.json, CAS'd (read-modify-CAS loop, human rate),
 // in the frozen overwritable family (14_extensibility.md §14.11 rule 2 —

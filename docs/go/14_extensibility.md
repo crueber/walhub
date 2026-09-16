@@ -38,7 +38,7 @@ Extensions live in their own packages (`internal/issues`, `internal/pulls`, …)
 | Bucket key layout `repos/<o>/<r>/…` and bucket-root keys | §3.1, §5 | Rust/walhub buckets must interoperate |
 | `manifest.pb` protobuf + CAS semantics (the only commit point) | §3.2, P2 | Every correctness proof stands on it |
 | WAL `LogEntry` kinds: PUSH, COMPACT, REF_UPDATE, CHECKPOINT, SETTINGS; append-only proto, field numbers frozen | §21, P2/P10 | Replay, checkpoints, burn, events all parse it |
-| Overwritable-object list: `manifest.pb`, `bundles/list.pb`, `leases/*`, `maintain/<host>.pb`, `events/cursor(s)/…`, `policy.json`, `fsck.pb`, render cache, the identity families (`users/*/profile.json`, `users/*/invitations/index.json`, `orgs/*/org.json`, `orgs/*/members.json`, `orgs/*/teams/*.json`, `repos/<o>/<r>/access.json` — Wave A amendment, see Decisions), the pulls families (`repos/<o>/<r>/pulls/<num>/pr.json`, `repos/<o>/<r>/pulls/<num>/mergeable.json`, `repos/<o>/<r>/meta/forks.json` — Wave C1 amendment, see Decisions; `repos/<o>/<r>/fork.json` is Create-once-then-CAS'd provenance in the same family), the checks families (`repos/<o>/<r>/checks/<sha>/<context>.json` — Create-then-CAS status records, `repos/<o>/<r>/checks/index.json` — CAS'd P4 projection, `repos/<o>/<r>/meta/ci_tokens/<id>.json` — CAS'd token records, revoked retained — Wave 05 amendment, see Decisions), the import provenance (`repos/<o>/<r>/meta/import.json` — Create-once-then-CAS'd, Feature 10 amendment, see Decisions), the mirror sidecar (`repos/<o>/<r>/meta/mirror.json` — Create-once-then-CAS'd pull-only flag + upstream pointer + schedule + outcome, Feature 11 amendment, see Decisions), the size-catalog families (`repos/<o>/<r>/meta/stats.json` — overwrite per-repo size sidecar written by the publish path with sweep backfill, `meta/repos.pb` field-3 entries — CAS'd aggregate rows, Forgejo #248 amendment, see Decisions; shared rails #247 builds on), the owner-profile sidecar (`owners/<owner>/profile.json` — CAS'd display name/location/timezone/bio, Forgejo #234 amendment, see Decisions) | P2 | Everything else is `Create`-only, forever |
+| Overwritable-object list: `manifest.pb`, `bundles/list.pb`, `leases/*`, `maintain/<host>.pb`, `events/cursor(s)/…`, `policy.json`, `fsck.pb`, render cache, the identity families (`users/*/profile.json`, `users/*/invitations/index.json`, `orgs/*/org.json`, `orgs/*/members.json`, `orgs/*/teams/*.json`, `repos/<o>/<r>/access.json` — Wave A amendment, see Decisions), the pulls families (`repos/<o>/<r>/pulls/<num>/pr.json`, `repos/<o>/<r>/pulls/<num>/mergeable.json`, `repos/<o>/<r>/meta/forks.json` — Wave C1 amendment, see Decisions; `repos/<o>/<r>/fork.json` is Create-once-then-CAS'd provenance in the same family), the checks families (`repos/<o>/<r>/checks/<sha>/<context>.json` — Create-then-CAS status records, `repos/<o>/<r>/checks/index.json` — CAS'd P4 projection, `repos/<o>/<r>/meta/ci_tokens/<id>.json` — CAS'd token records, revoked retained — Wave 05 amendment, see Decisions), the import provenance (`repos/<o>/<r>/meta/import.json` — Create-once-then-CAS'd, Feature 10 amendment, see Decisions), the mirror sidecar (`repos/<o>/<r>/meta/mirror.json` — Create-once-then-CAS'd pull-only flag + upstream pointer + schedule + outcome, Feature 11 amendment, see Decisions), the push-mirror sidecars (`repos/<o>/<r>/meta/pushmirror.json` — Create-once-then-CAS'd upstream pointer + auth-kind + schedule + outcome — plus `repos/<o>/<r>/meta/pushmirror-secret.json` — CAS'd auth material, never echoed — Forgejo #623 amendment, see Decisions), the size-catalog families (`repos/<o>/<r>/meta/stats.json` — overwrite per-repo size sidecar written by the publish path with sweep backfill, `meta/repos.pb` field-3 entries — CAS'd aggregate rows, Forgejo #248 amendment, see Decisions; shared rails #247 builds on), the owner-profile sidecar (`owners/<owner>/profile.json` — CAS'd display name/location/timezone/bio, Forgejo #234 amendment, see Decisions) | P2 | Everything else is `Create`-only, forever |
 | Git wire protocol v0/v2, receive-pack behavior, 401 semantics | §7, §8.4 | git is the client; we do not fork it |
 | Principal `{name, write, admin, anonymous}`; admin independent of write; auth modes `none`/`token`/`oidc` decision tree | §8.8 | Every route's authz reasoning assumes it |
 | API conventions: plain-text errors, arrays `[]` never null, RFC 3339, two lanes `/api` + `/api-browser` (same handlers), SSE envelope, cache classes | §9 | SDK and edge depend on them |
@@ -629,3 +629,26 @@ superseded by Forgejo #272, which lists the mirror repo lanes; see the #272 amen
   isolation shape as per-hook/per-sink cursors (a lagging member repo holds back only its
   own cursor); the org log needs the same CAS allocator discipline as the repo activity
   log it mirrors.
+- **Feature 13 push-mirror amendment (2026-09-16, Forgejo #623,
+  docs/features/13_push_mirror.md):** the frozen overwritable-key list
+  gains the push-mirror sidecars — `repos/<o>/<r>/meta/pushmirror.json`
+  (Create-once-then-CAS'd config: upstream pointer + auth-kind +
+  schedule + outcome) and
+  `repos/<o>/<r>/meta/pushmirror-secret.json` (CAS'd auth material,
+  write-only: presence + last-4 hint, never echoed) — in the same
+  revision that adopts the feature (14 §14.11 rule 2). One task kind
+  (`mirror-push-sync`, distinct from pull `mirror-sync` so the
+  (repo,kind) single-flights never join across directions) on the core
+  wal task table (Seam 5). Seam 1 in code is the `server.ExtraRoutes`
+  chain (repo lanes only — post-hoc config, never at create — both lanes;
+  no top-level twins by design); discovery templates register via the
+  #272 `ExposedTemplates` + `api.RegisterExposed` rule in the same
+  change. The summary `push_mirror` projection + `~p` ETag suffix ride
+  the `api.Env.PushMirrorSummary` hook (the MirrorSummary shape — core
+  never imports the feature, law 8). The `Server.OnPush` hook (fired
+  from `pushPipeline` post-report, landed-only, fire-and-forget) is the
+  on-push fan-out seam; server-side publishes never enter the pipeline
+  (sync.go:434), so the exclusion is structural. Rationale: fan-out
+  state must not live in the settings trust domain or on the manifest;
+  secrets need their own CAS record with no manifest churn; a funnel
+  never entered cannot fan out.

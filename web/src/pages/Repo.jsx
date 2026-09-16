@@ -9,6 +9,7 @@ import { useParams, A, useLocation, useNavigate } from "@solidjs/router";
 import { useData, reportError, REPO_TTL, tolerateMissing, isDegradedSummary } from "../lib/data.js";
 import { httpsCloneUrl, httpProtoLabel, sshCloneUrlFrom, cloneCommand, copyText } from "../lib/clone.js";
 import { formatNextSync } from "../lib/mirror.js";
+import { formatPushNextSync } from "../lib/pushmirror.js";
 import { visibilityBadge } from "../lib/visibility.js";
 import { activeTab, tabBadge, showChecksTab, showFeatureTab } from "../lib/tabs.js";
 import { isFeatureDisabled } from "../lib/repoFeatures.js";
@@ -762,6 +763,21 @@ export default function Repo(props) {
                     </Show>
                     <Show when={s().mirror.due}>
                       <span class="muted text-xs">sync due</span>
+                    </Show>
+                  </Show>
+                  {/* Forgejo #623: push-mirror badge. The summary
+                      `push_mirror` view is the single source (same shape
+                      the settings Push mirror tab polls); nothing here
+                      fetches. Independent of the pull badge above. */}
+                  <Show when={s().push_mirror}>
+                    <span
+                      class="pill mirror-badge"
+                      title={`${s().push_mirror.upstream_url ?? ""} · ${formatPushNextSync(s().push_mirror)}`}
+                    >
+                      mirror · push
+                    </span>
+                    <Show when={s().push_mirror.next_sync_at && !s().push_mirror.due}>
+                      <span class="muted text-xs">next sync {formatPushNextSync(s().push_mirror).replace(/^next sync /, "")}</span>
                     </Show>
                   </Show>
                 </div>

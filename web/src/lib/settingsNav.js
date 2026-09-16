@@ -13,6 +13,7 @@ export const SETTINGS_GROUP = [
   { id: "general", label: "General" },
   { id: "scheduled", label: "Scheduled tasks" },
   { id: "mirror", label: "Mirror" },
+  { id: "pushmirror", label: "Push mirror" },
   { id: "policy", label: "Push policy" },
   { id: "config", label: "Effective config & history" },
   { id: "access", label: "Access" },

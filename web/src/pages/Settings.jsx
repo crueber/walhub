@@ -44,6 +44,13 @@ import {
   formatNextSync,
   formatLastResult,
 } from "../lib/mirror.js";
+import {
+  PUSHMIRROR_PRESETS,
+  PUSHMIRROR_AUTH_KINDS,
+  formatPushNextSync,
+  formatPushLastResult,
+  credentialFieldsFor,
+} from "../lib/pushmirror.js";
 import { useRepo, fmtBytes } from "./Repo.jsx";
 import DateTime from "../components/DateTime.jsx";
 import VisSelect from "../components/VisSelect.jsx";
@@ -774,8 +781,335 @@ function MirrorTab(props) {
   );
 }
 
-// --- tab 2: push policy ------------------------------------------------------------
+// --- push-mirror tab (Forgejo #623) ------------------------------------------------
+// Push-mirror config, post-hoc only: upstream URL + auth method (none /
+// password / token / SSH deploy key, user-provided or walhub-generated
+// with the public key shown for upstream install) + schedule (default
+// off — on-push only). Secrets are write-only (presence + last-4 hint,
+// never the value); every mutation is admin-gated server-side. Status
+// (upstream, next fire, last outcome) mirrors the pull-mirror surface;
+// Sync-now and removal stop/start fan-out without touching pull mirrors.
+function PushMirrorTab(props) {
+  const full = props.ctx.full;
+  const repo = props.repo;
+  const [getDoc] = useData(`pushmirror:${full}`, () => tolerateMissing(repo.pushmirror.get(), null), 5000);
+  const [getUpstream, setUpstream] = createSignal("");
+  const [getAuthKind, setAuthKind] = createSignal("none");
+  const [getUsername, setUsername] = createSignal("");
+  const [getPassword, setPassword] = createSignal("");
+  const [getToken, setToken] = createSignal("");
+  const [getPrivateKey, setPrivateKey] = createSignal("");
+  const [getPublicKey, setPublicKey] = createSignal("");
+  const [getKnownHosts, setKnownHosts] = createSignal("");
+  const [getSchedule, setSchedule] = createSignal("");
+  const [getForce, setForce] = createSignal(false);
+  const [getSyncId, setSyncId] = createSignal("");
+  const [getSyncState, setSyncState] = createSignal(""); // "" | running | done | error
+  const [getGenerated, setGenerated] = createSignal(null); // {public_key, key_fingerprint}
+  const [getNote, setNote] = createSignal("");
+  const [getBusy, setBusy] = createSignal(false);
+  let poller = 0;
+  onCleanup(() => clearInterval(poller));
 
+  const refresh = () => {
+    invalidate(`pushmirror:${full}`);
+    invalidate(`repo:${full}`);
+  };
+
+  const pollSync = (id) => {
+    clearInterval(poller);
+    setSyncState("running");
+    poller = setInterval(async () => {
+      try {
+        const st = await repo.pushmirror.syncStatus(id);
+        if (st?.done) {
+          clearInterval(poller);
+          if (st.error) {
+            setSyncState("error");
+            setNote(String(st.error));
+          } else {
+            setSyncState("done");
+            setNote("sync finished — upstream received the push");
+          }
+          refresh();
+        }
+      } catch (e) {
+        clearInterval(poller);
+        setSyncState("error");
+        setNote(String(e.message ?? e));
+      }
+    }, 2000);
+  };
+
+  const save = async (e) => {
+    e?.preventDefault?.();
+    if (getBusy()) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const doc = getDoc();
+      const payload = { schedule: getSchedule() };
+      if (!doc) {
+        payload.upstream_url = getUpstream().trim();
+        payload.auth_kind = getAuthKind();
+        if (getUsername().trim()) payload.username = getUsername().trim();
+      } else if (getUsername().trim()) {
+        payload.username = getUsername().trim();
+      }
+      // Write-only secrets: send only filled fields (omitted = keep).
+      if (getPassword()) payload.password = getPassword();
+      if (getToken()) payload.token = getToken();
+      if (getPrivateKey()) payload.ssh_private_key = getPrivateKey();
+      if (getPublicKey()) payload.ssh_public_key = getPublicKey();
+      if (getKnownHosts()) payload.ssh_known_hosts = getKnownHosts();
+      await repo.pushmirror.put(payload);
+      // Memory-only: drop secrets from the fields once sent.
+      setPassword("");
+      setToken("");
+      setPrivateKey("");
+      setNote(doc ? "push mirror updated" : "push mirror configured — the next push fans out");
+      refresh();
+    } catch (err) {
+      setNote(String(err?.message ?? err ?? "save failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const keygen = async () => {
+    if (getBusy()) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const res = await repo.pushmirror.keygen(getKnownHosts() ? { known_hosts: getKnownHosts() } : {});
+      setGenerated({ public_key: res?.public_key ?? "", key_fingerprint: res?.key_fingerprint ?? "" });
+      setNote("keypair generated — install the public key on the upstream, then push");
+      refresh();
+    } catch (err) {
+      setNote(String(err?.message ?? err ?? "keygen failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncNow = async () => {
+    if (getBusy()) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const res = await repo.pushmirror.syncNow({ force: getForce() || undefined });
+      const id = res?.task?.id;
+      if (!id) throw new Error("sync did not return a task");
+      setSyncId(id);
+      pollSync(id);
+    } catch (err) {
+      setNote(String(err?.message ?? err ?? "sync failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (getBusy()) return;
+    setBusy(true);
+    setNote("");
+    try {
+      await repo.pushmirror.remove();
+      setGenerated(null);
+      setNote("push mirror removed — pushes no longer fan out");
+      refresh();
+    } catch (err) {
+      setNote(String(err?.message ?? err ?? "remove failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Prefill the picker + kind from the loaded doc (once per doc).
+  createEffect(() => {
+    const doc = getDoc();
+    if (doc) {
+      setSchedule(doc.schedule ?? "");
+      if (doc.auth_kind) setAuthKind(doc.auth_kind);
+      if (doc.username) setUsername(doc.username);
+    }
+  });
+
+  const fields = () => credentialFieldsFor(getAuthKind());
+
+  return (
+    <Show when={getDoc() !== undefined} fallback={<p class="muted">loading…</p>}>
+      <section class="card p-4">
+        <h3 class="mb-2 font-semibold">Push mirror</h3>
+        <Show when={getDoc()} fallback={
+          <form class="grid gap-3" onSubmit={save} aria-label="Configure push mirror">
+            <p class="muted text-sm">
+              This repository has no push mirror. Point it at an upstream to fan out
+              every push there — refs and objects, after the push lands here.
+              Scheduled re-sync is optional (default: on push only).
+            </p>
+            <label class="grid gap-1">
+              <span class="text-sm font-medium">Upstream URL</span>
+              <input
+                class="input font-mono"
+                value={getUpstream()}
+                onInput={(e) => setUpstream(e.currentTarget.value)}
+                placeholder="https://example.com/backup/repo.git or file:///backup/repo.git"
+                autocomplete="off"
+                spellcheck={false}
+              />
+            </label>
+            <label class="grid gap-1">
+              <span class="text-sm font-medium">Auth method</span>
+              <select class="input w-auto" value={getAuthKind()} onChange={(e) => setAuthKind(e.currentTarget.value)} aria-label="Auth method">
+                <For each={PUSHMIRROR_AUTH_KINDS}>{(k) => <option value={k.id}>{k.label}</option>}</For>
+              </select>
+            </label>
+            <Show when={fields().includes("username")}>
+              <label class="grid gap-1">
+                <span class="text-sm font-medium">Username</span>
+                <input class="input" value={getUsername()} onInput={(e) => setUsername(e.currentTarget.value)} autocomplete="off" />
+              </label>
+            </Show>
+            <Show when={fields().includes("password")}>
+              <label class="grid gap-1">
+                <span class="text-sm font-medium">Password <span class="muted">(write-only — never shown again)</span></span>
+                <input class="input font-mono" type="password" value={getPassword()} onInput={(e) => setPassword(e.currentTarget.value)} autocomplete="new-password" />
+              </label>
+            </Show>
+            <Show when={fields().includes("token")}>
+              <label class="grid gap-1">
+                <span class="text-sm font-medium">Token <span class="muted">(write-only — never shown again)</span></span>
+                <input class="input font-mono" type="password" value={getToken()} onInput={(e) => setToken(e.currentTarget.value)} autocomplete="off" />
+              </label>
+            </Show>
+            <Show when={fields().includes("ssh_private_key")}>
+              <label class="grid gap-1">
+                <span class="text-sm font-medium">Private key <span class="muted">(paste, or generate below after creating with no auth)</span></span>
+                <textarea class="input font-mono" rows="4" value={getPrivateKey()} onInput={(e) => setPrivateKey(e.currentTarget.value)} autocomplete="off" spellcheck={false} />
+              </label>
+              <label class="grid gap-1">
+                <span class="text-sm font-medium">Known hosts <span class="muted">(optional — without it the first connection is trusted on use)</span></span>
+                <textarea class="input font-mono" rows="2" value={getKnownHosts()} onInput={(e) => setKnownHosts(e.currentTarget.value)} autocomplete="off" spellcheck={false} />
+              </label>
+            </Show>
+            <label class="grid gap-1">
+              <span class="text-sm font-medium">Schedule</span>
+              <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Schedule">
+                <For each={PUSHMIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
+              </select>
+            </label>
+            <div>
+              <button type="submit" class="btn primary px-3 py-1" disabled={getBusy() || !getUpstream().trim()}>
+                {getBusy() ? "saving…" : "configure push mirror"}
+              </button>
+            </div>
+          </form>
+        }>
+          {(doc) => (
+            <div class="grid gap-3">
+              <table class="data-table kv">
+                <tbody>
+                  <tr><th class="w-48 align-top">upstream</th><td class="break-all font-mono text-xs">{doc().upstream_url}</td></tr>
+                  <tr><th class="w-48 align-top">status</th><td><span class="chip">mirror · push</span></td></tr>
+                  <tr><th class="w-48 align-top">auth</th><td>{doc().auth_kind}{doc().username ? ` · ${doc().username}` : ""}{doc().has_secret ? ` · stored ${doc().secret_hint ?? ""}` : " · no secret stored"}</td></tr>
+                  <Show when={doc().key_fingerprint}>
+                    <tr><th class="w-48 align-top">deploy key</th><td class="break-all font-mono text-xs">{doc().key_fingerprint}</td></tr>
+                  </Show>
+                  <tr><th class="w-48 align-top">sync</th><td>{formatPushNextSync(doc())}{doc().next_sync_at ? ` (${doc().next_sync_at})` : ""}</td></tr>
+                  <tr><th class="w-48 align-top">last synced</th><td>{doc().last_synced_at ? <DateTime value={doc().last_synced_at} /> : "never"}</td></tr>
+                  <tr><th class="w-48 align-top">last result</th><td class="break-words">{formatPushLastResult(doc())}</td></tr>
+                </tbody>
+              </table>
+              <form class="flex flex-wrap items-end gap-3" onSubmit={save} aria-label="Push mirror schedule and secrets">
+                <label class="grid gap-1">
+                  <span class="text-sm font-medium">Schedule</span>
+                  <select class="input w-auto" value={getSchedule()} onChange={(e) => setSchedule(e.currentTarget.value)} aria-label="Schedule">
+                    <For each={PUSHMIRROR_PRESETS}>{(p) => <option value={p.id}>{p.label}</option>}</For>
+                  </select>
+                </label>
+                <label class="grid gap-1">
+                  <span class="text-sm font-medium">Username</span>
+                  <input class="input" value={getUsername()} onInput={(e) => setUsername(e.currentTarget.value)} autocomplete="off" />
+                </label>
+                <Show when={getAuthKind() === "password"}>
+                  <label class="grid gap-1">
+                    <span class="text-sm font-medium">New password <span class="muted">(blank = keep)</span></span>
+                    <input class="input font-mono" type="password" value={getPassword()} onInput={(e) => setPassword(e.currentTarget.value)} autocomplete="new-password" />
+                  </label>
+                </Show>
+                <Show when={getAuthKind() === "token"}>
+                  <label class="grid gap-1">
+                    <span class="text-sm font-medium">New token <span class="muted">(blank = keep)</span></span>
+                    <input class="input font-mono" type="password" value={getToken()} onInput={(e) => setToken(e.currentTarget.value)} autocomplete="off" />
+                  </label>
+                </Show>
+                <button type="submit" class="btn px-3 py-1" disabled={getBusy()}>
+                  {getBusy() ? "saving…" : "save"}
+                </button>
+              </form>
+              <Show when={getAuthKind() === "ssh"}>
+                <div class="grid gap-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                  <div class="text-sm font-medium">Deploy key</div>
+                  <p class="muted text-xs">Generate a keypair here, install the public key on the upstream, then push. The private key never leaves the server.</p>
+                  <label class="grid gap-1">
+                    <span class="text-sm">Known hosts <span class="muted">(optional — blank trusts on first use)</span></span>
+                    <textarea class="input font-mono" rows="2" value={getKnownHosts()} onInput={(e) => setKnownHosts(e.currentTarget.value)} autocomplete="off" spellcheck={false} />
+                  </label>
+                  <div>
+                    <button type="button" class="btn px-3 py-1" onClick={keygen} disabled={getBusy()}>
+                      {getBusy() ? "generating…" : "generate keypair"}
+                    </button>
+                  </div>
+                  <Show when={getGenerated()}>
+                    <label class="grid gap-1">
+                      <span class="text-sm font-medium">Public key <span class="muted">({getGenerated().key_fingerprint}) — install this upstream</span></span>
+                      <textarea class="input font-mono" rows="3" readonly value={getGenerated().public_key} spellcheck={false} />
+                    </label>
+                  </Show>
+                  <Show when={!getGenerated() && doc().public_key}>
+                    <label class="grid gap-1">
+                      <span class="text-sm font-medium">Installed public key <span class="muted">({doc().key_fingerprint})</span></span>
+                      <textarea class="input font-mono" rows="3" readonly value={doc().public_key} spellcheck={false} />
+                    </label>
+                  </Show>
+                </div>
+              </Show>
+              <div class="grid gap-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                <div class="text-sm font-medium">Sync now</div>
+                <label class="flex items-center gap-1 text-sm">
+                  <input type="checkbox" checked={getForce()} onChange={(e) => setForce(e.currentTarget.checked)} />
+                  force (retry outside the failure backoff)
+                </label>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button type="button" class="btn px-3 py-1" onClick={syncNow} disabled={getBusy() || getSyncState() === "running"}>
+                    {getSyncState() === "running" ? "syncing…" : "sync now"}
+                  </button>
+                  <Show when={getSyncId()}>
+                    <span class="muted font-mono text-xs">
+                      {getSyncId()} · {getSyncState() || "started"}
+                    </span>
+                  </Show>
+                </div>
+              </div>
+              <div>
+                <button type="button" class="btn danger px-3 py-1" onClick={remove} disabled={getBusy()}>
+                  remove push mirror
+                </button>
+                <p class="muted mt-1 text-xs">Removing stops on-push fan-out and scheduled syncs. The pull mirror (if any) is untouched.</p>
+              </div>
+            </div>
+          )}
+        </Show>
+        <Show when={getNote()}>
+          <p class="mt-2 text-sm">{getNote()}</p>
+        </Show>
+      </section>
+    </Show>
+  );
+}
+
+// --- tab 2: push policy ------------------------------------------------------------
 function PolicyTab(props) {
   const [getText, setText] = createSignal("");
   const [getSaved, setSaved] = createSignal("");
@@ -1537,6 +1871,7 @@ export default function Settings() {
           <Show when={getTab() === "general"}><GeneralTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "scheduled"}><ScheduledTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "mirror"}><MirrorTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "pushmirror"}><PushMirrorTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "config"}><ConfigTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "access"}><AccessTab ctx={ctx} repo={repo} /></Show>

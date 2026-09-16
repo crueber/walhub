@@ -330,6 +330,22 @@ func (s *Server) pushPipeline(ctx context.Context, id git.RepoId, p auth.Princip
 	if landed {
 		s.adoptPlaceholder(id)
 	}
+	// Push-mirror fan-out (Forgejo #623): after a successful client
+	// push lands and the report is on the wire, notify the hook
+	// fire-and-forget (never gating the response, +0 hot-path round
+	// trips — law 6: the callee probes on its own goroutine). Only
+	// landed pushes (≥1 ok ref) fan out; refusals/failures never do.
+	// Server-side publishes never enter this pipeline (sync.go:434
+	// bypass), so they cannot fan out by construction.
+	//
+	// ### Concurrency
+	// Hazard: blocking the push response on a sync probe. Avoidance:
+	// the hook spawns its own goroutine and returns; the callee owns
+	// its probe/task lifetime (drain cancels via its own ctx).
+	if landed && s.onPush != nil {
+		notify := s.onPush
+		go notify(id)
+	}
 	return nil
 }
 

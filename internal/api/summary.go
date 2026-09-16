@@ -28,6 +28,10 @@ type summaryBody struct {
 	// Mirror is the pull-only mirror projection (Forgejo #240): nil on
 	// non-mirrors (omitempty — never null).
 	Mirror *MirrorView `json:"mirror,omitempty"`
+	// PushMirror is the push-mirror projection (Forgejo #623): nil on
+	// repos without one (omitempty — never null). Independent of
+	// Mirror: either, both, or neither may be present.
+	PushMirror *PushMirrorView `json:"push_mirror,omitempty"`
 	// OpenIssues/OpenPulls are the tab-badge numerators (issue #319):
 	// open kind:"issue" / kind:"pr" cards from the shared P4 index, always
 	// present (0 = none — the badge hides at 0 client-side). Old clients
@@ -110,6 +114,17 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 			mirrorView = &v
 		}
 	}
+	// The push-mirror projection (Forgejo #623): one exact-key probe
+	// behind the Env hook (nil → no probe, +0 round trips — the hook IS
+	// the feature; 404s are free per law 4). Independent of the pull
+	// projection above.
+	var pushMirrorView *PushMirrorView
+	if h.env.PushMirrorSummary != nil {
+		if v, ok := h.env.PushMirrorSummary(r.Context(), id.Owner, id.Name); ok {
+			v := v
+			pushMirrorView = &v
+		}
+	}
 	if health != RepoHealthEmpty && health != RepoHealthDegraded {
 		// Degraded override from the serve-health sidecar (issue #320):
 		// the serve path's own sticky failure record. Mirrors ride the
@@ -187,6 +202,7 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		MissingTotal: missingTotal,
 		Placeholder:  placeholder,
 		Mirror:       mirrorView,
+		PushMirror:   pushMirrorView,
 		OpenIssues:   counts.OpenIssues,
 		OpenPulls:    counts.OpenPulls,
 		Visibility:   visibility,
@@ -223,6 +239,13 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		// the mirror projection or the badge/next-sync display goes
 		// stale behind a 304.
 		etag += "~m" + mirrorHash(*mirrorView)
+	}
+	if pushMirrorView != nil {
+		// Same trap once more (Forgejo #623): a push-mirror outcome
+		// changes neither the head sha nor the description, so the
+		// ETag covers the projection or the status display goes stale
+		// behind a 304.
+		etag += "~p" + pushMirrorHash(*pushMirrorView)
 	}
 	if countsOK {
 		// Same trap once more (issue #319): a close/reopen moves no ref,
@@ -300,6 +323,16 @@ func descriptionHash(d string) string {
 func mirrorHash(v MirrorView) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" + v.LastSyncedAt + "\x00" + v.LastResult + "\x00" + v.DegradedReason))
+	return strconv.FormatUint(uint64(h.Sum32()), 16)
+}
+
+// pushMirrorHash is the short ETag suffix covering the push-mirror
+// projection (Forgejo #623): same FNV-1a discipline as mirrorHash. It
+// covers only display fields (never secret material — secrets never
+// reach the projection).
+func pushMirrorHash(v PushMirrorView) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.AuthKind + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" + v.LastSyncedAt + "\x00" + v.LastResult))
 	return strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 

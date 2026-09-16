@@ -560,6 +560,15 @@ type Env struct {
 	// imports the feature (law 8).
 	MirrorSummary func(ctx context.Context, owner, repo string) (MirrorView, bool)
 
+	// PushMirrorSummary is the push-mirror projection (Forgejo #623):
+	// non-nil + true → the summary carries the push-mirror view
+	// (upstream URL, auth-kind presence, computed next fire, last
+	// outcome). Nil → no push_mirror field (instances without the
+	// push-mirror surface wired). Fully independent of MirrorSummary:
+	// either hook may be set alone. Wired by composition (cmd/walhub)
+	// so this package never imports the feature (law 8).
+	PushMirrorSummary func(ctx context.Context, owner, repo string) (PushMirrorView, bool)
+
 	// CollabCounts is the repo-level open-count projection (Forgejo #319):
 	// open issues + open PRs from the shared issues/index.json, read
 	// index-first (one exact-key GET; absent index → ok=false). Nil → the
@@ -676,8 +685,27 @@ type MirrorView struct {
 	DegradedReason      string `json:"degraded_reason,omitempty"`
 }
 
-// CollabCounts is the repo-level open-count projection on the repo summary
-// (Forgejo #319): the tab-badge numerators. Version is the shared P4 index
+// PushMirrorView is the push-mirror projection on the repo summary
+// (Forgejo #623): the stored config sidecar fields plus the
+// feature-computed next_sync_at ("" when due now or scheduled off) and
+// the due flag. Absent (nil) on repos without a push mirror
+// (omitempty — never null). Secrets NEVER appear here: AuthKind names
+// the mechanism, HasSecret reports stored material, Username shows the
+// configured login, SecretHint carries the last-4 confirmation.
+type PushMirrorView struct {
+	UpstreamURL  string `json:"upstream_url"`
+	AuthKind     string `json:"auth_kind"`
+	Username     string `json:"username,omitempty"`
+	HasSecret    bool   `json:"has_secret"`
+	SecretHint   string `json:"secret_hint,omitempty"`
+	Schedule     string `json:"schedule,omitempty"`
+	NextSyncAt   string `json:"next_sync_at,omitempty"`
+	LastSyncedAt string `json:"last_synced_at,omitempty"`
+	LastResult   string `json:"last_result,omitempty"`
+	Due          bool   `json:"due"`
+}
+
+// CollabCounts is the repo-level open-count projection on the repo summary// (Forgejo #319): the tab-badge numerators. Version is the shared P4 index
 // version (bumped on every card upsert by either collab writer) — the
 // summary ETag suffix that busts the SWR cache on a close/reopen with no
 // ref move (the #235/#240 suffix precedent). The wire carries the counts

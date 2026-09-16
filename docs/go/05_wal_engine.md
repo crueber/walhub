@@ -477,6 +477,15 @@ Background prefetch (from §6.2): after a refs-only sync, if `wal.prefetch_packs
   was added (closed enum); syncs ride the ordinary publish path, and no core
   file names mirrors (law 8: the guard/hook injection points live in
   `internal/server` and `internal/api`).
+- **Push-mirror task kind (Forgejo #623, Seam 5).** `mirror-push-sync`
+  runs on the `TaskTable` under `(repo, kind)` single-flight — a
+  DISTINCT kind from pull `mirror-sync` so the directions never join
+  each other — registered once from composition
+  (`pushmirror.RegisterKind`, same panic-on-duplicate contract). No WAL
+  kind was added (closed enum); the fire reads (Sync) and shells out
+  (`git push --mirror`, bulk lane), and no core file names push mirrors
+  (law 8: the `Server.OnPush` fan-out and `api.Env.PushMirrorSummary`
+  injection points live in `internal/server` and `internal/api`).
 - **Activity hint on the publish funnel (Forgejo #247, R1 B3).** `PublishRequest`
   gains an optional `Activity{TipSHA, CommitTime}` hint, set by callers that
   hold the commit objects locally (server `WalEngine` after ingest); every

@@ -771,6 +771,30 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   (exit 0 = servable) joins §12's argv for the mirror sync/heal loop. Rationale: law 2 pins exact
   argv — a new spawn needs its doc line in the same change; `-e` (existence only, no output) is
   the cheapest object proof.
+- **Push-mirror transfer argv (Forgejo #623, 2026-09-16,
+  `internal/pushmirror` Runner + `ListRefs`).** One pinned transfer argv,
+  run in the serving copy (`GIT_DIR` unset — `cmd.Dir=<repo>`, pool + ctx
+  timeout, 8 KiB scrubbed stderr discipline per §2):
+  `git [-c credential.<scheme>://<host>.helper= -c credential.<scheme>://<host>.helper=!<helper>] push --mirror -- <url>`
+  (the credential `-c` pairs are present only for password/token pushes,
+  built dynamically per fire with a per-fire env name — the §11
+  clear-then-set order and host pinning apply; the helper echoes
+  `username=<user>` + `password=$ENV` so neither argv nor logs carry
+  secrets). SSH pushes set `GIT_SSH_COMMAND="ssh -i <keyfile> -o
+  IdentitiesOnly=yes -o BatchMode=yes [-o UserKnownHostsFile=<kh> -o
+  StrictHostKeyChecking=yes | -o StrictHostKeyChecking=accept-new]"`
+  with the private key materialized 0600 into per-fire scratch (swept on
+  every exit path — no feature state on disk, law 1); unpinned hosts
+  trust on first use (`accept-new`, never the silent-insecure `no`).
+  `x/crypto/ssh` is server-transport-only and is never used as a client
+  (law 1 sub-point). Keypairs are generated dep-free (stdlib
+  `crypto/ed25519` + hand-rolled OpenSSH wire format — no `ssh-keygen`
+  subprocess, no new runtime dependency). Ref enumeration for narration
+  reuses the §12 `for-each-ref` argv. Rationale: law 2 pins exact argv —
+  a new spawn needs its doc line in the same change; `--mirror` ships
+  refs+objects (incl. deletions — walhub is the primary) in one
+   transfer over the refs the manifest store already published
+   (`Sync(LevelServe)` materializes them first).
 - **Merge-tip pack argv (issue #424, 2026-09-13, `internal/pulls` PackTip +
   the `RefPack` publish seam):** server-made merge/update-branch commits
   must reach the bucket atomically with their ref update (a merged ref
