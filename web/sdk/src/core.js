@@ -31,6 +31,7 @@ import { attachTransfer } from "./transfer.js";
 import { attachUsers } from "./users.js";
 import { attachImports } from "./import.js";
 import { attachMirrors, attachMirror } from "./mirror.js";
+import { attachPushMirror } from "./pushmirror.js";
 import { attachCreate } from "./create.js";
 import { openAuthPopup, canAuthenticate } from "./auth.js";
 
@@ -219,6 +220,7 @@ export class ReposClient {
     attachTags(r);
     attachSocial(r);
     attachMirror(r);
+    attachPushMirror(r);
     return r;
   }
 

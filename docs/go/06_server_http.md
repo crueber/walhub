@@ -806,3 +806,16 @@ Hazard: keepalive ticker and event writer racing on the same `http.ResponseWrite
   refuses before writing its v0 advertisement (client stderr, else the client
   hangs). In-pipeline refusal stays git-wire (per-ref `ng`), since the HTTP
   body is a git stream by then — the plan's "403" covers discovery only.
+- **On-push push-mirror fan-out (Forgejo #623).** `Server.OnPush`
+  (`Options.OnPush`, nil → no fan-out) fires from `pushPipeline` — the
+  ONE function HTTP `receivePackLocal` and SSH both land in — AFTER the
+  report is on the wire, only for landed pushes (≥1 ok ref),
+  fire-and-forget on its own goroutine (never gating the response, +0
+  hot-path round trips — law 6: the callee probes the config sidecar on
+  its own goroutine). Server-side publishes (mirror syncs, merge tasks)
+  never enter `pushPipeline` (the sync.go:434 bypass), so the exclusion
+  is structural, not a flag. Wired by composition (`pushMirrorOnPushOf`
+  over the service); the server never imports the feature (law 8).
+  ### Concurrency: hazard is blocking the push response on a sync probe;
+  avoidance is the hook's own goroutine + callee-owned probe/task
+  lifetime (drain cancels via its own ctx).

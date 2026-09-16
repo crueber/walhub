@@ -1409,3 +1409,12 @@ listings (§8), never from the status code. Nil `Access` → legacy flag-only ga
   existing threads/releases stay readable at their URLs and no issue/PR/release API is
   refused. Rationale: the UI pill is an affordance, the API check is the rule — and one
   shared summary fetch gates everything client-side with zero new requests (law 6).
+- **Push-mirror summary projection + `~p` ETag (Forgejo #623).**
+  `summaryBody` gains `push_mirror` (upstream URL, auth kind, username,
+  secret presence + last-4 hint, schedule, computed next fire, last
+  outcome, due — secrets never reach the wire) behind the
+  `api.Env.PushMirrorSummary` hook (the MirrorSummary shape: nil → no
+  field, no probe; core never imports the feature, law 8), with a `~p`
+  FNV suffix (the `~m` precedent) so outcome-only changes bust the
+  mutable-collab revalidation. Independent of the pull projection:
+  either, both, or neither may render.

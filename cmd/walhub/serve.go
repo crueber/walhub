@@ -176,6 +176,10 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 		// generation for users without one; nil in setup-only —
 		// no logins happen there).
 		AvatarHook: avatarHookOf(ident),
+		// Forgejo #623: the on-push push-mirror fan-out (nil in
+		// setup-only — no push paths exist there; nil without the
+		// collab surface — no fan-out).
+		OnPush: pushMirrorHookOf(collab),
 	})
 	// Features 01–08 mount here (collab.go chainCollab, 09 §4 touch
 	// point 3: one block per package + the per-user SSE mounts that
@@ -236,6 +240,13 @@ func serveHTTP(ctx context.Context, cfg *config.Config, boot server.BootState, d
 				// runs on every maintain host; enumeration is the
 				// in-memory registry + mirror.json probes (no LIST).
 				go collab.mirrorSvc.RunLoop(drainCtx, mirrorLoopInterval, nil)
+			}
+			if collab != nil && collab.pushMirrorSvc != nil {
+				// Forgejo #623 scheduled-sync loop (same shape:
+				// its own cadence, never a maintenance unit).
+				// Repos with scheduling OFF never fire here —
+				// on-push is their only trigger.
+				go collab.pushMirrorSvc.RunLoop(drainCtx, pushMirrorLoopInterval, nil)
 			}
 		}
 		prewarmAsync(ctx, engine, cfg.Cache.Prewarm, cfg.Cache.PrewarmParallelism, log)

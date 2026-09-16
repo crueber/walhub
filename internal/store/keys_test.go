@@ -39,6 +39,12 @@ func TestKeyLayout(t *testing.T) {
 		{MirrorKeySuffix, "meta/mirror.json"},
 		{MirrorLeaseName("o", "r"), "mirror-o-r"},
 		{LeaseKey(MirrorLeaseName("o", "r")), "leases/mirror-o-r.pb"},
+		{PushMirrorKey("o", "r"), "repos/o/r/meta/pushmirror.json"},
+		{PushMirrorKeySuffix, "meta/pushmirror.json"},
+		{PushMirrorSecretKey("o", "r"), "repos/o/r/meta/pushmirror-secret.json"},
+		{PushMirrorSecretKeySuffix, "meta/pushmirror-secret.json"},
+		{PushMirrorLeaseName("o", "r"), "pushmirror-o-r"},
+		{LeaseKey(PushMirrorLeaseName("o", "r")), "leases/pushmirror-o-r.pb"},
 		{EventsCursorKey, "events/cursor.json"},
 	}
 	for _, c := range cases {

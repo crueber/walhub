@@ -22,6 +22,7 @@ import (
 	"git.packden.us/crueber/walhub/internal/mirror"
 	"git.packden.us/crueber/walhub/internal/notify"
 	"git.packden.us/crueber/walhub/internal/pulls"
+	"git.packden.us/crueber/walhub/internal/pushmirror"
 	"git.packden.us/crueber/walhub/internal/releases"
 	"git.packden.us/crueber/walhub/internal/repoimport"
 	"git.packden.us/crueber/walhub/internal/review"
@@ -36,29 +37,31 @@ import (
 // collabWiring holds every collaboration service + handler (never built in
 // setup-only mode, where there is no store).
 type collabWiring struct {
-	ident           *identity.Service
-	identHandler    *identity.Handler
-	createHandler   *api.CreateHandler // #210 POST /api/v1/repos twin (Seam 1)
-	issuesSvc       *issues.Service
-	issuesHandler   *issues.Handler
-	pullsSvc        *pulls.Service
-	pullsHandler    *pulls.Handler
-	reviewSvc       *review.Service
-	reviewHandler   *review.Handler
-	checksSvc       *checks.Service
-	checksHandler   *checks.Handler
-	releasesSvc     *releases.Service
-	releasesHandler *releases.Handler
-	tagsSvc         *tags.Service
-	tagsHandler     *tags.Handler
-	socialSvc       *social.Service
-	socialHandler   *social.Handler
-	notifySvc       *notify.Service
-	notifyHandler   *notify.Handler
-	importSvc       *repoimport.Service
-	importHandler   *repoimport.Handler
-	mirrorSvc       *mirror.Service
-	mirrorHandler   *mirror.Handler
+	ident             *identity.Service
+	identHandler      *identity.Handler
+	createHandler     *api.CreateHandler // #210 POST /api/v1/repos twin (Seam 1)
+	issuesSvc         *issues.Service
+	issuesHandler     *issues.Handler
+	pullsSvc          *pulls.Service
+	pullsHandler      *pulls.Handler
+	reviewSvc         *review.Service
+	reviewHandler     *review.Handler
+	checksSvc         *checks.Service
+	checksHandler     *checks.Handler
+	releasesSvc       *releases.Service
+	releasesHandler   *releases.Handler
+	tagsSvc           *tags.Service
+	tagsHandler       *tags.Handler
+	socialSvc         *social.Service
+	socialHandler     *social.Handler
+	notifySvc         *notify.Service
+	notifyHandler     *notify.Handler
+	importSvc         *repoimport.Service
+	importHandler     *repoimport.Handler
+	mirrorSvc         *mirror.Service
+	mirrorHandler     *mirror.Handler
+	pushMirrorSvc     *pushmirror.Service
+	pushMirrorHandler *pushmirror.Handler
 }
 
 // newIdentityService builds the Wave A identity surface (docs/features/01:
@@ -287,6 +290,12 @@ func buildCollab(st store.ObjectStore, cfg *config.Config, reg *wal.Registry, ap
 	// create-from-URL top-level twin) over the same store/registry;
 	// the mirror-sync task runs on the core wal task table (Seam 5).
 	c.mirrorSvc, c.mirrorHandler = newMirrorService(st, reg, cfg, apiEnv)
+	// Forgejo #623 push mirrors (docs/features/13_push_mirror.md): the
+	// config + secret sidecars + on-push/scheduled sync surface (Seam 1,
+	// repo lanes only — post-hoc config, never at create) over the same
+	// store/registry; the mirror-push-sync task runs on the core wal
+	// task table (Seam 5), fully independent of pull mirror-sync.
+	c.pushMirrorSvc, c.pushMirrorHandler = newPushMirrorService(st, reg, cfg, apiEnv)
 	// Forgejo #346: the mirror create-from-URL twin enforces the same
 	// creation owner-admission rule (self, member org, or host admin)
 	// before creating anything.
@@ -403,6 +412,9 @@ func chainCollab(srv *server.Server, c *collabWiring) {
 	}
 	if c.mirrorHandler != nil {
 		chainMirror(srv, c.mirrorHandler)
+	}
+	if c.pushMirrorHandler != nil {
+		chainPushMirror(srv, c.pushMirrorHandler)
 	}
 	if c.createHandler != nil {
 		// #210 create twin: authentication resolves through the server

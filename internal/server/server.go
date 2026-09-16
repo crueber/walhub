@@ -75,6 +75,16 @@ type Server struct {
 	// (Forgejo #376 — set from Options.AvatarHook); nil → no-op.
 	avatarHook func(username, email string)
 
+	// onPush fires after a successful client push lands (Forgejo #623):
+	// non-nil → called fire-and-forget with the repo id AFTER the
+	// report is on the wire, on both transports (pushPipeline is the
+	// ONE function both land in). Server-side publishes (mirror sync,
+	// merge tasks) never enter pushPipeline, so they never fan out.
+	// Nil → no notification. The hook MUST NOT block — enqueue only
+	// (the callee probes state on its own goroutine). Wired by
+	// composition; server never imports the pushmirror package (law 8).
+	onPush func(id git.RepoId)
+
 	// repoExtras fronts repoDispatch with feature repo-subpath surfaces
 	// (repo_extra.go: the 14.3 routing note for non-lane families like
 	// release asset bytes); nil → core switch only.
@@ -134,6 +144,10 @@ type Options struct {
 	// answered. Wired by composition (cmd/walhub); server never
 	// imports the identity package (law 8).
 	AvatarHook func(username, email string)
+	// OnPush fires after a successful client push lands (Forgejo #623);
+	// nil → no notification. Wired by composition (cmd/walhub); server
+	// never imports the pushmirror package (law 8).
+	OnPush func(id git.RepoId)
 }
 
 // BootState is the §3.4 boot decision tree outcome.
@@ -190,6 +204,7 @@ func New(o Options) *Server {
 	s.readGate = o.ReadGate
 	s.pushGate = o.PushGate
 	s.mirrorGuard = o.MirrorGuard
+	s.onPush = o.OnPush
 	s.placeholderHints = o.PlaceholderHints
 	s.avatarHook = o.AvatarHook
 	return s
