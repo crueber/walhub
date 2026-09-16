@@ -336,14 +336,24 @@ export default function Release() {
                   getDrag() ? " rounded-md ring-2 ring-emerald-500" : ""
                 }`}
               >
-                <label class={`btn primary cursor-pointer${getBusy() ? " pointer-events-none opacity-50" : ""}`}>
-                  {getUpload() ? uploadLabel() : "Upload asset"}
+                {/* Forgejo #621: the #619 hidden-input idiom — the input is
+                    peer sr-only (never display:none) so Tab still reaches
+                    it, and the visible .btn span carries the #533
+                    peer-focus-visible ring so keyboard focus is visible.
+                    uploadLabel/onFile/disabled semantics byte-identical. */}
+                <label class="inline-flex">
                   <input
                     type="file"
-                    class="hidden"
+                    class="peer sr-only"
                     disabled={getBusy()}
                     onChange={onFile}
                   />
+                  <span
+                    class={`btn primary cursor-pointer peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-zinc-900${getBusy() ? " pointer-events-none opacity-50" : ""}`}
+                    role="button"
+                  >
+                    {getUpload() ? uploadLabel() : "Upload asset"}
+                  </span>
                 </label>
                 <span class="muted text-xs">or drop a file here — hashed locally, then streamed.</span>
               </div>
