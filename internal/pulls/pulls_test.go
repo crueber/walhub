@@ -314,6 +314,12 @@ func TestGetPRHeadDrift(t *testing.T) {
 	if view.PR.HeadForcePushedAt != nil {
 		t.Fatal("fast-forward must not record force-push")
 	}
+	// Drain the pull-mergeable pass GetPR enqueued above before rewriting
+	// refs: a still-running pass could otherwise observe the post-mutation
+	// head and perform the force-push stamp + stream on its own goroutine,
+	// while the GetPR below early-returns as "already recorded" without
+	// streaming — stamp present, stream missing (Forgejo #617).
+	waitMergeableDrained(t, e, "o/r")
 	// Force-push: evidence event + stamp.
 	e.seedRefs("o/r", map[string]string{
 		"refs/heads/main": hexSHA(1), "refs/heads/topic": hexSHA(4),
