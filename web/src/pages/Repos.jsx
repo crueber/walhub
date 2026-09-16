@@ -763,17 +763,24 @@ function OwnerPage(props) {
                     </button>
                   </Show>
                   <Show when={isSelf()}>
-                    <label class="flex w-full flex-col items-center gap-1 text-center text-xs">
-                      <span class="muted block">upload avatar (PNG/JPEG/GIF, ≤ 2 MiB — cropped square)</span>
+                    {/* Forgejo #619: the upload rides a hidden-input label —
+                        the visible affordance is the canonical .btn (the
+                        sibling-stack idiom), the helper copy stays muted +
+                        centered below; accept + onChange byte-identical. */}
+                    <label class="w-full">
                       <input
                         type="file"
                         accept="image/png,image/jpeg,image/gif"
-                        class="w-full text-xs"
+                        class="hidden"
                         onChange={(e) => {
                           uploadAvatar(e.currentTarget.files?.[0]);
                           e.currentTarget.value = "";
                         }}
                       />
+                      <span class="btn w-full justify-center px-3 py-1 cursor-pointer" role="button">
+                        Upload profile image
+                      </span>
+                      <span class="muted mt-1 block text-center text-xs">PNG/JPEG/GIF, ≤ 2 MiB — cropped square</span>
                     </label>
                     <button class="btn w-full justify-center px-3 py-1" type="button" onClick={regenerateAvatar}>
                       Regenerate avatar
