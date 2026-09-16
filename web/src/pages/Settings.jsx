@@ -1874,8 +1874,7 @@ export default function Settings() {
         <div class="min-w-0 flex-1">
           <Show when={getTab() === "general"}><GeneralTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "scheduled"}><ScheduledTab ctx={ctx} repo={repo} /></Show>
-          <Show when={getTab() === "mirror"}><MirrorTab ctx={ctx} repo={repo} /></Show>
-          <Show when={getTab() === "pushmirror"}><PushMirrorTab ctx={ctx} repo={repo} /></Show>
+          <Show when={getTab() === "mirror"}><MirrorTab ctx={ctx} repo={repo} /><PushMirrorTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "policy"}><PolicyTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "config"}><ConfigTab ctx={ctx} repo={repo} /></Show>
           <Show when={getTab() === "access"}><AccessTab ctx={ctx} repo={repo} /></Show>

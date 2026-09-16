@@ -4,6 +4,11 @@
 // hash helpers. All DOM (nav, buttons, aria-current) lives in Settings.jsx;
 // this module is the headless-testable rule so `node --test` covers it
 // without a DOM, the same split danger.js uses for the typed-confirm gate.
+//
+// Forgejo #627: Mirror + Push mirror are ONE sidebar entry rendering TWO
+// containers (pull MirrorTab, then push PushMirrorTab). `pushmirror`
+// survives only as a resolve alias so old #pushmirror deep links land on
+// the merged entry instead of falling back to General.
 
 /** Standard settings entries, in sidebar order. WAL moved here from the
  *  main repo tab bar (issue #123): it renders inline as a settings section
@@ -13,7 +18,6 @@ export const SETTINGS_GROUP = [
   { id: "general", label: "General" },
   { id: "scheduled", label: "Scheduled tasks" },
   { id: "mirror", label: "Mirror" },
-  { id: "pushmirror", label: "Push mirror" },
   { id: "policy", label: "Push policy" },
   { id: "config", label: "Effective config & history" },
   { id: "access", label: "Access" },
@@ -36,9 +40,12 @@ export const DEFAULT_SETTINGS_TAB = "general";
  * Map a tab id to itself when it names a sidebar entry, else null.
  * Non-strings and unknown ids never resolve — the shell falls back to
  * DEFAULT_SETTINGS_TAB so a stale #hash can never blank the page.
+ * Forgejo #627: "pushmirror" is an alias for "mirror" (merged entry) so
+ * old #pushmirror deep links land on the merged Mirror entry.
  */
 export function resolveSettingsTab(id) {
   if (typeof id !== "string" || id === "") return null;
+  if (id === "pushmirror") return "mirror";
   return SETTINGS_TABS.some((t) => t.id === id) ? id : null;
 }
 
