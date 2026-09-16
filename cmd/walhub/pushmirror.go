@@ -83,6 +83,8 @@ func pushMirrorViewOf(v pushmirror.View) api.PushMirrorView {
 		HasSecret:           v.HasSecret,
 		SecretHint:          v.SecretHint,
 		Schedule:            v.Schedule,
+		HostKeyFingerprint:  v.HostKeyFingerprint,
+		HostKeyAcceptedAt:   v.HostKeyAcceptedAt,
 		NextSyncAt:          v.NextSyncAt,
 		LastSyncedAt:        v.LastSyncedAt,
 		LastResult:          v.LastResult,

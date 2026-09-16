@@ -52,7 +52,8 @@ same change):
 ```
 
 (password → `password`; ssh → `ssh_private_key` OpenSSH PEM +
-`ssh_known_hosts` trust lines.) The secret sidecar is **never echoed
+`ssh_known_hosts` trust lines + `ssh_known_hosts_accepted_at`
+first-learn stamp, Forgejo #625.) The secret sidecar is **never echoed
 back in full** — the API renders presence + last-4 hint only
 (`has_secret`, `secret_hint: "••••1234"`), and every error/`last_result`
 surface is scrubbed (the pull-mirror scrub contract: `password=`/
@@ -78,10 +79,37 @@ Deleting both sidecars stops on-push fan-out and scheduled syncs
      subprocess would add a runtime dependency for every deployment)
      and returns the **public key + fingerprint** for upstream install.
      The private key is never returned (write-only).
-   - Without pinned `known_hosts` the push uses
-     `StrictHostKeyChecking=accept-new` (first-use trust, recorded —
-     never the silent-insecure `no`); `BatchMode=yes` never prompts.
-     Key files are 0600 per-fire scratch, swept on every exit path.
+    - Without pinned `known_hosts` the push uses
+      `StrictHostKeyChecking=accept-new` (first-use trust, recorded —
+      never the silent-insecure `no`); `BatchMode=yes` never prompts.
+      Key files are 0600 per-fire scratch, swept on every exit path.
+      The known_hosts file is ALWAYS a per-fire path passed via
+      `UserKnownHostsFile` (never the ambient `~/.ssh/known_hosts` —
+      daemon HOME is not a trust store), so the accept-new learn lands
+      where the runner can read it back. `HashKnownHosts=no` pins stable
+      plaintext hostnames in the scratch file (distro ssh_config often
+      ships `HashKnownHosts=yes`; salted `|1|` tokens would defeat the
+      host+keytype dedupe with a fresh token per fire — review #626).
+    - **Host-key trust harvest (Forgejo #625).** After a successful SSH
+      push the runner returns the post-push known_hosts content and the
+      sync harvests it — one shared point in the task body (scheduled,
+      on-push, and sync-now funnel through it, no per-trigger forks):
+      learned lines MERGE into `ssh_known_hosts` (dedupe by
+      host+keytype; stored lines never dropped; on a host+keytype
+      conflict the operator-pinned line wins and the learned line is
+      dropped — explicit pins stay authoritative, decision (k)), the
+      first learn stamps `ssh_known_hosts_accepted_at` (preserved
+      after; empty for pinned-only trust; reset when the operator
+      clears `known_hosts` back to accept-new), and the fingerprint narrates
+      (SHA256 display only). The write is a read-merge-CAS loop: on a
+      412 the harvest re-loads and re-merges, so a concurrent operator
+      edit folds in instead of being clobbered (review #626 — the blind
+      single-version write would last-writer-win it away). A harvest miss never fails the sync
+      (outcome stays ok, the miss narrates, the next accept-new fire
+      re-learns and retries). Stored trust automatically pins the next
+      fire (`StrictHostKeyChecking=yes` once the sidecar is non-empty).
+      Learned lines live ONLY in the secret sidecar — logs, errors, and
+      views carry the fingerprint at most.
 
 Transport matrix (`ValidateTarget`, fail closed): `file://` → none
 only; `https://` → none|password|token; `http://` → none only;
@@ -150,9 +178,11 @@ POST   /{o}/{r}/api/pushmirror/keygen   → {known_hosts?} → 200 {public_key, 
 
 - The summary (`summaryBody`) gains `push_mirror: {upstream_url,
   auth_kind, username?, has_secret, secret_hint?, schedule?,
-  next_sync_at?, last_synced_at?, last_result?, due}` behind an
+  host_key_fingerprint?, host_key_accepted_at?, next_sync_at?,
+  last_synced_at?, last_result?, due}` behind an
   `api.Env.PushMirrorSummary` hook (nil → no field, no probe). The
-  ETag covers it (`~p` suffix, the `~m` precedent).
+  ETag covers it (`~p` suffix, the `~m` precedent) — including the
+  host-key fields, since learning trust changes no outcome field.
 - Discovery lists the three repo lanes (`api.RegisterExposed` from
   composition, the #272 rule; pinned both ways).
 - Strict JSON (unknown fields 400, fail closed); plain-text errors;
@@ -164,7 +194,8 @@ POST   /{o}/{r}/api/pushmirror/keygen   → {known_hosts?} → 200 {public_key, 
   phrasing) rendered from the shared summary, no extra fetch —
   independent of the pull-only badge.
 - Settings → Push mirror tab (after Mirror): status table (upstream,
-  auth + stored-hint, deploy-key fingerprint, sync phrasing, last
+  auth + stored-hint, deploy-key fingerprint, host-key trust
+  (fingerprint(s) + first-accepted-at, SSH only), sync phrasing, last
   synced/result), upstream + auth-method + credential fields
   (write-only, per-kind), schedule picker (Off default), keygen panel
   (SSH only: known_hosts + generate → readonly public key for upstream
@@ -192,17 +223,20 @@ pack/manifest/log writes.
 `internal/pushmirror` ≥ 95% (`-race` mandatory): auth matrix,
 schedule/off/next-fire/backoff, sidecar/secret CRUD/CAS + redaction
 (presence/hint/scrub), keygen shape + public-line validation, file://
-push of refs+objects (real git: `git push --mirror` lands tips AND
-clone works), missing-material verdict, lease contention + steal,
-backoff skip + force escape, scheduled loop (due fires, OFF never
-fires, gated skips), on-push enqueue (configured fires, unconfigured
-silent, nil-safe), HTTP routing/authz/validation on every route +
-both lanes, discovery templates both ways. Plus: on-push hook tests in
-`internal/server` (landed fires, refused/failure silent, nil-safe),
-summary wire + `~p` ETag + pull/push independence in `internal/api`,
-composition mapping + hook wiring in `cmd/walhub`, `node --test` for
-the lib + SDK surface, live-server proof (push → upstream bare
-receives refs+objects; scheduled fire; server-publish exclusion).
+  push of refs+objects (real git: `git push --mirror` lands tips AND
+  clone works), missing-material verdict, lease contention + steal,
+  backoff skip + force escape, host-key harvest (parse/merge/dedupe,
+  fingerprint, operator-pin precedence, view fields, `~p` ETag input
+  change, harvest-miss-keeps-ok, stub-ssh learn→persist→surface→repin
+  end to end), scheduled loop (due fires, OFF never
+  fires, gated skips), on-push enqueue (configured fires, unconfigured
+  silent, nil-safe), HTTP routing/authz/validation on every route +
+  both lanes, discovery templates both ways. Plus: on-push hook tests in
+  `internal/server` (landed fires, refused/failure silent, nil-safe),
+  summary wire + `~p` ETag + pull/push independence in `internal/api`,
+  composition mapping + hook wiring in `cmd/walhub`, `node --test` for
+  the lib + SDK surface, live-server proof (push → upstream bare
+  receives refs+objects; scheduled fire; server-publish exclusion).
 
 ## Decisions & deviations from the Rust design
 
@@ -282,3 +316,28 @@ receives refs+objects; scheduled fire; server-publish exclusion).
   via child env, never interpolated — the `!` helper runs through a
   shell and the username is user-controlled) closes a command-injection
   surface the password/token shape introduced.
+- **(k) Accept-new harvest with operator-pin precedence (2026-09-16,
+  #625).** The first sync learns + records (merge into
+  `ssh_known_hosts` under the secret CAS, stamp
+  `ssh_known_hosts_accepted_at` once); later syncs pin against stored
+  trust (`StrictHostKeyChecking=yes` as soon as the sidecar is
+  non-empty). On conflict the operator pin wins (merge, never
+  overwrite): a pin is an explicit trust decision, and silent
+  replacement would let a MITM-shaped rotation downgrade it — the
+  conflict drops, the sync still succeeds, and the UI keeps showing
+  the pinned fingerprint. Fingerprints are derived at read from the
+  merged lines (single source of truth, no second copy to skew; also
+  covers pre-#625 pinned sidecars, which surface a fingerprint with no
+  stamp). The harvest rides the existing post-push path (no new hot
+  trips — law 6) and never fails the sync (record ok + narrate the
+  miss + retry next fire). Rationale: until this landed the prod
+  guidance was "pin known_hosts"; now the first sync bootstraps the
+  pin itself, with the verification surface (fingerprint +
+  first-accepted-at in the view, Settings row, and summary) the
+  original shape lacked. Amended on #626 review: `HashKnownHosts=no`
+  on the per-fire command (stable plaintext hostnames — distro
+  `HashKnownHosts=yes` would salt a fresh token per fire and defeat
+  the dedupe); the harvest write is a read-merge-CAS loop (a 412
+  re-loads and re-merges, so a concurrent operator edit folds in
+  instead of being clobbered); clearing `known_hosts` back to
+  accept-new resets the stamp with the trust it names.

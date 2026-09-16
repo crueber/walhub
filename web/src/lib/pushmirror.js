@@ -79,6 +79,22 @@ export function formatPushLastResult(mirror) {
 }
 
 /**
+ * Phrase the SSH host-key trust status for the settings row.
+ * Never throws. Untrusted renders as the accept-new pending state;
+ * trusted renders the fingerprint(s) plus the first-accepted date.
+ * Presence-style only — the view never carries key material.
+ */
+export function formatPushHostKey(mirror) {
+  if (!mirror || mirror.auth_kind !== "ssh") return "";
+  const fp = mirror.host_key_fingerprint;
+  if (!fp) return "not yet observed — first sync trusts on use";
+  const at = mirror.host_key_accepted_at;
+  if (!at) return `${fp} · pinned by operator`;
+  const day = String(at).slice(0, 10);
+  return `${fp} · first trusted ${day}`;
+}
+
+/**
  * Validate the create form. Returns {} when valid, else {error}.
  * Never throws.
  */

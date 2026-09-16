@@ -368,7 +368,7 @@ func TestRunnerRunCanceled(t *testing.T) {
 	}
 	r2 := NewRunner("git", f, time.Minute, time.Minute)
 	k, _ := GenerateKeypair("")
-	if _, _, err := r2.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM}); err == nil {
+	if _, _, _, err := r2.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM}); err == nil {
 		t.Error("sshCommand with file cache dir ok")
 	}
 }

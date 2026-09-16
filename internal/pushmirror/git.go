@@ -108,9 +108,18 @@ func (r *Runner) run(ctx context.Context, fn func() error) error {
 // and anonymous https push bare.) refs/heads + refs/tags ride every
 // fire (even when locally empty, so a fully-deleted namespace prunes
 // upstream); other surviving namespaces ride only when populated. The
-// ctx carries PushTimeout; cancel SIGKILLs git. Stderr is bounded
+//
+//	ctx carries PushTimeout; cancel SIGKILLs git. Stderr is bounded
+//
 // (8 KiB) and scrubbed — secrets never land in task logs.
-func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error {
+//
+// On a successful SSH push the returned string is the post-push content
+// of the per-fire known_hosts file ("" for non-SSH pushes): with
+// accept-new the file holds the learned host lines, which the service
+// harvests into the secret sidecar (Forgejo #625). The read is
+// best-effort — an unreadable scratch file just yields "" (no trust to
+// record); the push itself already succeeded.
+func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, r.PushTimeout)
 	defer cancel()
 
@@ -122,6 +131,7 @@ func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error
 			fn()
 		}
 	}()
+	var knownHostsPath string
 
 	switch auth.Kind {
 	case AuthPassword, AuthToken:
@@ -142,25 +152,26 @@ func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error
 		// injection (metachar newlines, `;`, `$()` all execute).
 		extraEnv = append(extraEnv, userEnv+"="+user, secretEnv+"="+secret)
 	case AuthSSH:
-		sshCmd, clean, err := r.sshCommand(auth)
+		sshCmd, khPath, clean, err := r.sshCommand(auth)
 		if err != nil {
-			return err
+			return "", err
 		}
 		cleanup = append(cleanup, clean)
 		extraEnv = append(extraEnv, "GIT_SSH_COMMAND="+sshCmd)
+		knownHostsPath = khPath
 	case AuthNone:
 		// bare push — file:// e2e and public upstreams.
 	default:
-		return fmt.Errorf("pushmirror: unknown auth kind %q", scrubText(auth.Kind))
+		return "", fmt.Errorf("pushmirror: unknown auth kind %q", scrubText(auth.Kind))
 	}
 
 	specs, err := r.pushRefspecs(cctx, dir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	argv = append(argv, "push", "--prune", "--", url)
 	argv = append(argv, specs...)
-	return r.run(cctx, func() error {
+	if err := r.run(cctx, func() error {
 		cmd := exec.CommandContext(cctx, r.Binary, argv...)
 		cmd.Dir = dir
 		cmd.Env = []string{"PATH=" + pathEnv(), "GIT_TERMINAL_PROMPT=0"}
@@ -172,7 +183,15 @@ func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error
 			return fmt.Errorf("pushmirror push: %v: %s", err, scrubText(errBuf.String()))
 		}
 		return nil
-	})
+	}); err != nil {
+		return "", err
+	}
+	if knownHostsPath != "" {
+		if raw, rerr := os.ReadFile(knownHostsPath); rerr == nil {
+			return string(raw), nil
+		}
+	}
+	return "", nil
 }
 
 // pushRefspecs enumerates the serving copy's refs and renders the forced
@@ -251,45 +270,56 @@ func credentialArgv(scheme, host, secretEnv, userEnv string) []string {
 	return []string{"-c", pin + "=", "-c", pin + "=" + helper}
 }
 
-// sshCommand materializes the private key (0600) and optional known_hosts
-// into a per-fire scratch dir and returns the GIT_SSH_COMMAND value plus
-// its cleanup. Without pinned known_hosts the command uses
-// StrictHostKeyChecking=accept-new (first-use trust, recorded — never the
-// silent-insecure `no`); BatchMode=yes never prompts. The key file is
-// removed by the caller-deferred cleanup on every exit path.
-func (r *Runner) sshCommand(auth PushAuth) (string, func(), error) {
+// sshCommand materializes the private key (0600) and the known_hosts
+// file (0600, pinned content or empty) into a per-fire scratch dir and
+// returns the GIT_SSH_COMMAND value, the known_hosts path (for the
+// post-push harvest — Forgejo #625), plus its cleanup. The known_hosts
+// file is ALWAYS pinned via UserKnownHostsFile (never the ambient
+// ~/.ssh/known_hosts — daemon HOME is not a trust store); without
+// operator-pinned content the command uses StrictHostKeyChecking=
+// accept-new (first-use trust, recorded — never the silent-insecure
+// `no`); BatchMode=yes never prompts. HashKnownHosts=no pins stable
+// plaintext hostnames in the scratch file: several distros ship
+// HashKnownHosts=yes in ssh_config, and salted |1| tokens would make
+// the harvest merge (host+keytype dedupe, Forgejo #625) accumulate a
+// fresh token per fire instead of deduping. Matching is unaffected —
+// ssh still honors pre-existing hashed operator pins on read. The
+// scratch dir is removed by the caller-deferred cleanup on every exit
+// path.
+func (r *Runner) sshCommand(auth PushAuth) (sshCmd, knownHostsPath string, cleanup func(), err error) {
 	if strings.TrimSpace(auth.PrivateKey) == "" {
-		return "", func() {}, fmt.Errorf("pushmirror: ssh auth needs a private key")
+		return "", "", func() {}, fmt.Errorf("pushmirror: ssh auth needs a private key")
 	}
 	dir, err := os.MkdirTemp(filepath.Join(r.CacheDir, "pushmirror"), "ssh-*")
 	if err != nil {
 		// First fire on a fresh cache dir: the parent may not exist yet.
 		if merr := os.MkdirAll(filepath.Join(r.CacheDir, "pushmirror"), 0o755); merr != nil {
-			return "", func() {}, fmt.Errorf("pushmirror: ssh scratch: %v", scrubText(merr.Error()))
+			return "", "", func() {}, fmt.Errorf("pushmirror: ssh scratch: %v", scrubText(merr.Error()))
 		}
 		dir, err = os.MkdirTemp(filepath.Join(r.CacheDir, "pushmirror"), "ssh-*")
 	}
 	if err != nil {
-		return "", func() {}, fmt.Errorf("pushmirror: ssh scratch: %v", scrubText(err.Error()))
+		return "", "", func() {}, fmt.Errorf("pushmirror: ssh scratch: %v", scrubText(err.Error()))
 	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
+	cleanup = func() { _ = os.RemoveAll(dir) }
 	keyPath := filepath.Join(dir, "id_ed25519")
 	if err := os.WriteFile(keyPath, []byte(auth.PrivateKey), 0o600); err != nil {
 		cleanup()
-		return "", func() {}, fmt.Errorf("pushmirror: ssh key file: %v", scrubText(err.Error()))
+		return "", "", func() {}, fmt.Errorf("pushmirror: ssh key file: %v", scrubText(err.Error()))
 	}
-	parts := []string{"ssh", "-i", keyPath, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes"}
+	khPath := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(khPath, []byte(auth.KnownHosts), 0o600); err != nil {
+		cleanup()
+		return "", "", func() {}, fmt.Errorf("pushmirror: known_hosts file: %v", scrubText(err.Error()))
+	}
+	parts := []string{"ssh", "-i", keyPath, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+		"-o", "UserKnownHostsFile=" + khPath, "-o", "HashKnownHosts=no"}
 	if strings.TrimSpace(auth.KnownHosts) != "" {
-		khPath := filepath.Join(dir, "known_hosts")
-		if err := os.WriteFile(khPath, []byte(auth.KnownHosts), 0o600); err != nil {
-			cleanup()
-			return "", func() {}, fmt.Errorf("pushmirror: known_hosts file: %v", scrubText(err.Error()))
-		}
-		parts = append(parts, "-o", "UserKnownHostsFile="+khPath, "-o", "StrictHostKeyChecking=yes")
+		parts = append(parts, "-o", "StrictHostKeyChecking=yes")
 	} else {
 		parts = append(parts, "-o", "StrictHostKeyChecking=accept-new")
 	}
-	return strings.Join(parts, " "), cleanup, nil
+	return strings.Join(parts, " "), khPath, cleanup, nil
 }
 
 // ListRefs runs the pinned ref enumeration in dir (post-push narration

@@ -17,12 +17,14 @@ func TestPushMirrorViewOf(t *testing.T) {
 	v := pushMirrorViewOf(pushmirror.View{
 		UpstreamURL: "file:///x", AuthKind: "token", Username: "u",
 		HasSecret: true, SecretHint: "••••1", Schedule: "daily",
+		HostKeyFingerprint: "SHA256:abc", HostKeyAcceptedAt: "2026-09-16T12:00:00Z",
 		NextSyncAt: "2026-09-16T00:00:00Z", LastSyncedAt: "2026-09-15T00:00:00Z",
 		LastResult: "ok", Due: false,
 	})
 	wire := api.PushMirrorView{
 		UpstreamURL: "file:///x", AuthKind: "token", Username: "u",
 		HasSecret: true, SecretHint: "••••1", Schedule: "daily",
+		HostKeyFingerprint: "SHA256:abc", HostKeyAcceptedAt: "2026-09-16T12:00:00Z",
 		NextSyncAt: "2026-09-16T00:00:00Z", LastSyncedAt: "2026-09-15T00:00:00Z",
 		LastResult: "ok", Due: false,
 	}

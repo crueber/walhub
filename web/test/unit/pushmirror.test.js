@@ -16,6 +16,7 @@ import {
   pushMirrorAuthLabel,
   formatPushNextSync,
   formatPushLastResult,
+  formatPushHostKey,
   validatePushMirrorCreate,
   credentialFieldsFor,
 } from "../../src/lib/pushmirror.js";
@@ -89,4 +90,28 @@ test("Push mirror tab is registered in the settings sidebar", () => {
   const ids = SETTINGS_GROUP.map((t) => t.id);
   assert.ok(ids.includes("pushmirror"), "push mirror is a settings sidebar entry");
   assert.equal(resolveSettingsTab("pushmirror"), "pushmirror");
+});
+
+test("formatPushHostKey phrases the SSH trust status without throwing", () => {
+  assert.equal(formatPushHostKey(null), "");
+  assert.equal(formatPushHostKey({ auth_kind: "token" }), "");
+  // SSH with no trust yet: accept-new pending state.
+  assert.equal(
+    formatPushHostKey({ auth_kind: "ssh" }),
+    "not yet observed — first sync trusts on use",
+  );
+  // Learned trust: fingerprint + first-trusted day.
+  assert.equal(
+    formatPushHostKey({
+      auth_kind: "ssh",
+      host_key_fingerprint: "SHA256:abc",
+      host_key_accepted_at: "2026-09-16T12:00:00Z",
+    }),
+    "SHA256:abc · first trusted 2026-09-16",
+  );
+  // Operator-pinned trust (no learn stamp).
+  assert.equal(
+    formatPushHostKey({ auth_kind: "ssh", host_key_fingerprint: "SHA256:abc" }),
+    "SHA256:abc · pinned by operator",
+  );
 });

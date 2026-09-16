@@ -164,7 +164,7 @@ func TestSSHPushShape(t *testing.T) {
 	// the transfer proves the shape without a network.
 	r := NewRunner("git", t.TempDir(), 60*time.Second, 30*time.Second)
 	auth := PushAuth{Kind: AuthSSH, Scheme: "file", PrivateKey: k.PrivatePEM, Fingerprint: k.Fingerprint}
-	if err := r.Push(ctx, src, "file://"+upstream, auth); err != nil {
+	if _, err := r.Push(ctx, src, "file://"+upstream, auth); err != nil {
 		t.Fatalf("ssh-shape push: %v", err)
 	}
 }

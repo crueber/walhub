@@ -693,15 +693,21 @@ type MirrorView struct {
 // the mechanism, HasSecret reports stored material, Username shows the
 // configured login, SecretHint carries the last-4 confirmation.
 type PushMirrorView struct {
-	UpstreamURL  string `json:"upstream_url"`
-	AuthKind     string `json:"auth_kind"`
-	Username     string `json:"username,omitempty"`
-	HasSecret    bool   `json:"has_secret"`
-	SecretHint   string `json:"secret_hint,omitempty"`
-	Schedule     string `json:"schedule,omitempty"`
-	NextSyncAt   string `json:"next_sync_at,omitempty"`
-	LastSyncedAt string `json:"last_synced_at,omitempty"`
-	LastResult   string `json:"last_result,omitempty"`
+	UpstreamURL string `json:"upstream_url"`
+	AuthKind    string `json:"auth_kind"`
+	Username    string `json:"username,omitempty"`
+	HasSecret   bool   `json:"has_secret"`
+	SecretHint  string `json:"secret_hint,omitempty"`
+	Schedule    string `json:"schedule,omitempty"`
+	// HostKeyFingerprint + HostKeyAcceptedAt are the SSH host-key
+	// trust status (Forgejo #625): presence-style (SHA256 display +
+	// first-accepted-at stamp, never key material). Covered by the ~p
+	// ETag suffix — learning trust must bust the cache.
+	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
+	HostKeyAcceptedAt  string `json:"host_key_accepted_at,omitempty"`
+	NextSyncAt         string `json:"next_sync_at,omitempty"`
+	LastSyncedAt       string `json:"last_synced_at,omitempty"`
+	LastResult         string `json:"last_result,omitempty"`
 	// ConsecutiveFailures is the backoff input (the pull-mirror field):
 	// identical repeated failure reasons keep LastResult byte-equal, so
 	// the ETag must cover the counter or the status display goes stale
