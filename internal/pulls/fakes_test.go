@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"git.packden.us/crueber/walhub/internal/identity"
@@ -666,6 +667,27 @@ func (e *testEnv) delGitRef(repo, ref string) {
 
 // hexSHA renders a deterministic 40-hex sha from a small int.
 func hexSHA(n int) string { return fmt.Sprintf("%040x", n) }
+
+// waitMergeableDrained polls the (repo, pull-mergeable) task until a pass
+// has completed (the Finished stamp is set under the table mutex in end(),
+// so observing it orders every effect of that pass — ref resolves, stamps,
+// streams — before the caller proceeds). Tests that mutate fake refs between
+// reads must drain first: otherwise a still-running pass can observe the
+// post-mutation refs and perform the drift stamp + stream itself on its own
+// goroutine, while the next synchronous read early-returns as "already
+// recorded" without streaming — a stamp-without-stream flake under -race
+// (Forgejo #617).
+func waitMergeableDrained(t *testing.T, e *testEnv, repo string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if rec := e.svc.tasks.get(repo, TaskKindMergeable); rec != nil && rec.Finished != "" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("mergeable pass never finished")
+}
 
 // waitTask polls fn until it reports done or the timeout fires.
 func waitTask(timeout time.Duration, fn func() *TaskRecord) *TaskRecord {
