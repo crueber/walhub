@@ -92,7 +92,9 @@ test("users SDK #601: upload/regenerate/remove share the avatar path", () => {
 test("Repos #601: no one-off CSS, no layout breakage at 390px", () => {
   // Tailwind-only (AGENTS.md): the control composes btn/muted/flex
   // utilities like its siblings — no <style> block, no new CSS file.
-  const block = REPOS.slice(REPOS.indexOf("upload avatar (PNG/JPEG/GIF"), REPOS.indexOf("Regenerate avatar"));
+  // Forgejo #619 restyled the affordance (hidden input + .btn span +
+  // muted helper below) — behavior (accept/onChange/gate) unchanged.
+  const block = REPOS.slice(REPOS.indexOf("Upload profile image"), REPOS.indexOf("Regenerate avatar"));
   assert.ok(block.includes('class="'), "upload label composes utility classes");
   assert.ok(!block.includes("<style"), "no one-off CSS for the upload control");
   assert.ok(block.includes("w-full"), "input constrains to the sidebar column (no 390px overflow)");
