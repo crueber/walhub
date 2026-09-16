@@ -2,11 +2,14 @@
 // profile sidebar upload (web/src/pages/Repos.jsx, isSelf-gated action
 // stack) renders a styled "Upload profile image" button via the
 // hidden-input pattern — no raw "Choose File" control — with the
-// constraint text as muted helper copy below. Behavior byte-for-byte:
-// same accept list, same onChange (upload + reset), same isSelf gate,
-// same placement above Regenerate. Tailwind-only, canonical .btn
-// (guideline §2 by reference). JSX pinned as source text, mirroring
-// user-avatar-upload-601.test.js / profile-sidebar-421.test.js.
+// constraint text as muted helper copy below. The input is peer sr-only
+// (visually hidden but Tab-reachable — never display:none, which would
+// drop keyboard users) with the #533 peer-focus-visible ring on the
+// button. Behavior byte-for-byte: same accept list, same onChange
+// (upload + reset), same isSelf gate, same placement above Regenerate.
+// Tailwind-only, canonical .btn (guideline §2 by reference). JSX pinned
+// as source text, mirroring user-avatar-upload-601.test.js /
+// profile-sidebar-421.test.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -32,7 +35,8 @@ test("#619: upload renders as a hidden input + full-width .btn span in a label w
   assert.ok(labelAt !== -1, "upload label wrapper is full-width");
   const label = selfBlock.slice(labelAt, selfBlock.indexOf("</label>", labelAt));
   assert.ok(label.includes('type="file"'), "label carries the file input");
-  assert.ok(label.includes('class="hidden"'), "file input is hidden (no visible Choose File)");
+  assert.ok(!label.includes('class="hidden"'), "input is never display:none (keyboard users keep Tab access)");
+  assert.ok(label.includes("peer sr-only"), "file input is visually hidden but Tab-reachable (the #533 ToggleSwitch idiom)");
   assert.ok(!label.includes("w-full text-xs"), "raw-input text-xs treatment is gone");
   assert.ok(label.includes("Upload profile image"), "styled button text present");
   const spanAt = label.indexOf("Upload profile image");
@@ -43,6 +47,9 @@ test("#619: upload renders as a hidden input + full-width .btn span in a label w
   assert.ok(spanTag.includes("justify-center"), "button centers like its siblings");
   assert.ok(spanTag.includes("cursor-pointer"), "label affordance reads clickable");
   assert.ok(spanTag.includes('role="button"'), "span keeps the button role");
+  assert.ok(spanTag.includes("peer-focus-visible:ring-2"), "keyboard focus lands visibly on the button (not display:none input)");
+  assert.ok(spanTag.includes("peer-focus-visible:ring-emerald-500"), "focus ring uses the app accent");
+  assert.ok(spanTag.includes("dark:peer-focus-visible:ring-offset-zinc-900"), "focus ring offsets in dark mode (the #533 ring language)");
 });
 
 test("#619: helper copy is centered muted text below the button", () => {

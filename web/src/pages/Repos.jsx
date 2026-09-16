@@ -766,18 +766,21 @@ function OwnerPage(props) {
                     {/* Forgejo #619: the upload rides a hidden-input label —
                         the visible affordance is the canonical .btn (the
                         sibling-stack idiom), the helper copy stays muted +
-                        centered below; accept + onChange byte-identical. */}
+                        centered below; accept + onChange byte-identical.
+                        The input is peer sr-only (never display:none) so Tab
+                        still reaches it, and the button carries the #533
+                        peer-focus-visible ring so keyboard focus is visible. */}
                     <label class="w-full">
                       <input
                         type="file"
                         accept="image/png,image/jpeg,image/gif"
-                        class="hidden"
+                        class="peer sr-only"
                         onChange={(e) => {
                           uploadAvatar(e.currentTarget.files?.[0]);
                           e.currentTarget.value = "";
                         }}
                       />
-                      <span class="btn w-full justify-center px-3 py-1 cursor-pointer" role="button">
+                      <span class="btn w-full justify-center px-3 py-1 cursor-pointer peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-white dark:peer-focus-visible:ring-offset-zinc-900" role="button">
                         Upload profile image
                       </span>
                       <span class="muted mt-1 block text-center text-xs">PNG/JPEG/GIF, ≤ 2 MiB — cropped square</span>
