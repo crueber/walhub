@@ -68,3 +68,19 @@ test("hash helper reads #id entries and ignores the rest", () => {
     assert.equal(settingsTabIdFromHash(bad), null, `ignored: ${String(bad)}`);
   }
 });
+
+test("Mirror + Push mirror are one sidebar entry (Forgejo #627)", () => {
+  const ids = SETTINGS_GROUP.map((t) => t.id);
+  assert.equal(ids.filter((id) => id === "mirror").length, 1, "exactly one Mirror row");
+  assert.ok(!ids.includes("pushmirror"), "no separate Push mirror entry");
+});
+
+test("pushmirror resolves as a mirror alias, unknown still falls back (Forgejo #627)", () => {
+  assert.equal(resolveSettingsTab("pushmirror"), "mirror");
+  assert.equal(settingsTabIdFromHash("#pushmirror"), "mirror");
+  assert.equal(settingsTabIdFromHash("#mirror"), "mirror");
+  for (const bad of ["pushmirrors", "mirrorpush", "Mirror"]) {
+    assert.equal(resolveSettingsTab(bad), null, `rejected: ${bad}`);
+    assert.equal(settingsTabIdFromHash(`#${bad}`), null, `ignored: #${bad}`);
+  }
+});

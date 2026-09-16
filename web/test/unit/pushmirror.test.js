@@ -86,10 +86,11 @@ test("credentialFieldsFor shows only the kind's fields (write-only: never prefil
   assert.deepEqual(credentialFieldsFor("bogus"), []);
 });
 
-test("Push mirror tab is registered in the settings sidebar", () => {
+test("Push mirror renders inside the merged Mirror entry (Forgejo #627)", () => {
   const ids = SETTINGS_GROUP.map((t) => t.id);
-  assert.ok(ids.includes("pushmirror"), "push mirror is a settings sidebar entry");
-  assert.equal(resolveSettingsTab("pushmirror"), "pushmirror");
+  assert.ok(!ids.includes("pushmirror"), "no separate Push mirror sidebar entry");
+  assert.ok(ids.includes("mirror"), "merged Mirror entry exists");
+  assert.equal(resolveSettingsTab("pushmirror"), "mirror", "old #pushmirror deep links land on Mirror");
 });
 
 test("formatPushHostKey phrases the SSH trust status without throwing", () => {
