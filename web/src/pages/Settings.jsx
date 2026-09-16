@@ -49,6 +49,7 @@ import {
   PUSHMIRROR_AUTH_KINDS,
   formatPushNextSync,
   formatPushLastResult,
+  formatPushHostKey,
   credentialFieldsFor,
 } from "../lib/pushmirror.js";
 import { useRepo, fmtBytes } from "./Repo.jsx";
@@ -1015,6 +1016,9 @@ function PushMirrorTab(props) {
                   <tr><th class="w-48 align-top">auth</th><td>{doc().auth_kind}{doc().username ? ` · ${doc().username}` : ""}{doc().has_secret ? ` · stored ${doc().secret_hint ?? ""}` : " · no secret stored"}</td></tr>
                   <Show when={doc().key_fingerprint}>
                     <tr><th class="w-48 align-top">deploy key</th><td class="break-all font-mono text-xs">{doc().key_fingerprint}</td></tr>
+                  </Show>
+                  <Show when={doc().auth_kind === "ssh"}>
+                    <tr><th class="w-48 align-top">host key</th><td class="break-all font-mono text-xs">{formatPushHostKey(doc())}</td></tr>
                   </Show>
                   <tr><th class="w-48 align-top">sync</th><td>{formatPushNextSync(doc())}{doc().next_sync_at ? ` (${doc().next_sync_at})` : ""}</td></tr>
                   <tr><th class="w-48 align-top">last synced</th><td>{doc().last_synced_at ? <DateTime value={doc().last_synced_at} /> : "never"}</td></tr>

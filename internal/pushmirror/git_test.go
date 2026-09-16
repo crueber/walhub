@@ -51,7 +51,7 @@ func TestPushFileBare(t *testing.T) {
 	upstream := t.TempDir()
 	gitTest(t, upstream, "init", "-q", "--bare", ".")
 	r := NewRunner("git", t.TempDir(), 60*time.Second, 30*time.Second)
-	if err := r.Push(ctx, src, "file://"+upstream, PushAuth{Kind: AuthNone, Scheme: "file"}); err != nil {
+	if _, err := r.Push(ctx, src, "file://"+upstream, PushAuth{Kind: AuthNone, Scheme: "file"}); err != nil {
 		t.Fatalf("push file:// : %v", err)
 	}
 	tip := strings.TrimSpace(gitTest(t, src, "rev-parse", "refs/heads/main"))
@@ -85,7 +85,7 @@ func TestPushSkipsInternalRefsAndPrunes(t *testing.T) {
 	upstream := t.TempDir()
 	gitTest(t, upstream, "init", "-q", "--bare", ".")
 	r := NewRunner("git", t.TempDir(), 60*time.Second, 30*time.Second)
-	if err := r.Push(ctx, src, "file://"+upstream, PushAuth{Kind: AuthNone, Scheme: "file"}); err != nil {
+	if _, err := r.Push(ctx, src, "file://"+upstream, PushAuth{Kind: AuthNone, Scheme: "file"}); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 	refs, err := r.ListRefs(ctx, upstream)
@@ -104,7 +104,7 @@ func TestPushSkipsInternalRefsAndPrunes(t *testing.T) {
 	}
 	// Delete the branch locally: the next fire prunes it upstream.
 	gitTest(t, src, "update-ref", "-d", "refs/heads/main")
-	if err := r.Push(ctx, src, "file://"+upstream, PushAuth{Kind: AuthNone, Scheme: "file"}); err != nil {
+	if _, err := r.Push(ctx, src, "file://"+upstream, PushAuth{Kind: AuthNone, Scheme: "file"}); err != nil {
 		t.Fatalf("prune push: %v", err)
 	}
 	refs, err = r.ListRefs(ctx, upstream)
@@ -118,7 +118,7 @@ func TestPushSkipsInternalRefsAndPrunes(t *testing.T) {
 
 func TestPushUnknownAuthKind(t *testing.T) {
 	r := NewRunner("git", t.TempDir(), time.Minute, time.Minute)
-	err := r.Push(context.Background(), t.TempDir(), "file:///x", PushAuth{Kind: "keys"})
+	_, err := r.Push(context.Background(), t.TempDir(), "file:///x", PushAuth{Kind: "keys"})
 	if err == nil || !strings.Contains(err.Error(), "unknown auth kind") {
 		t.Errorf("want unknown-auth-kind error, got %v", err)
 	}
@@ -130,7 +130,7 @@ func TestSSHCommandMaterialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, cleanup, err := r.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM})
+	cmd, khPath, cleanup, err := r.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM})
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -138,8 +138,16 @@ func TestSSHCommandMaterialization(t *testing.T) {
 	if !strings.Contains(cmd, "-i ") || !strings.Contains(cmd, "BatchMode=yes") || !strings.Contains(cmd, "accept-new") {
 		t.Errorf("ssh command = %q", cmd)
 	}
+	// Unpinned accept-new still pins a per-fire known_hosts file (never
+	// the ambient ~/.ssh/known_hosts); the harvest reads it back.
+	if !strings.Contains(cmd, "UserKnownHostsFile=") || khPath == "" {
+		t.Errorf("unpinned ssh command must pin a per-fire known_hosts file: %q", cmd)
+	}
+	if raw, rerr := os.ReadFile(khPath); rerr != nil || len(raw) != 0 {
+		t.Errorf("unpinned known_hosts file = %q,%v, want empty", raw, rerr)
+	}
 	// Pinned known_hosts → strict checking with the pinned file.
-	cmd, cleanup, err = r.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM, KnownHosts: "example.com ssh-ed25519 AAAA\n"})
+	cmd, _, cleanup, err = r.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM, KnownHosts: "example.com ssh-ed25519 AAAA\n"})
 	defer cleanup()
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +156,7 @@ func TestSSHCommandMaterialization(t *testing.T) {
 		t.Errorf("pinned ssh command = %q", cmd)
 	}
 	// The key file is 0600 and swept by cleanup.
-	if _, _, err := r.sshCommand(PushAuth{Kind: AuthSSH}); err == nil {
+	if _, _, _, err := r.sshCommand(PushAuth{Kind: AuthSSH}); err == nil {
 		t.Error("empty private key accepted")
 	}
 }
@@ -187,7 +195,7 @@ func TestPushHostileUsernameRidesEnvOnly(t *testing.T) {
 	}
 	evil := "x;touch " + filepath.Join(dir, "pwned") + " $(touch " + filepath.Join(dir, "pwned2") + ")"
 	r := NewRunner(fake, t.TempDir(), 60*time.Second, 30*time.Second)
-	err := r.Push(ctx, dir, "https://example.com/r.git", PushAuth{
+	_, err := r.Push(ctx, dir, "https://example.com/r.git", PushAuth{
 		Kind: AuthPassword, Scheme: "https", Host: "example.com",
 		Username: evil, Password: "s3cret",
 	})

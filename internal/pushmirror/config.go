@@ -111,7 +111,12 @@ type Secret struct {
 	Token         string `json:"token,omitempty"`           // token kind: the bearer-style token
 	SSHPrivateKey string `json:"ssh_private_key,omitempty"` // ssh kind: OpenSSH private key PEM
 	SSHKnownHosts string `json:"ssh_known_hosts,omitempty"` // ssh kind: known_hosts lines ("" = accept-new)
-	UpdatedAt     string `json:"updated_at,omitempty"`      // RFC3339 of the last write
+	// SSHKnownHostsAcceptedAt is the RFC3339 stamp of the first
+	// accept-new learn (Forgejo #625, additive — older sidecars simply
+	// lack it). Stamped once, preserved after; empty for
+	// pinned-only trust (the stamp names learning, not explicit pins).
+	SSHKnownHostsAcceptedAt string `json:"ssh_known_hosts_accepted_at,omitempty"`
+	UpdatedAt               string `json:"updated_at,omitempty"` // RFC3339 of the last write
 }
 
 // HasMaterial reports whether the secret sidecar carries usable auth
@@ -430,14 +435,22 @@ func SaveSecretCAS(ctx context.Context, st store.ObjectStore, owner, name string
 // broken-schedule) and the due flag, plus the write-only secret
 // confirmation. Secrets NEVER appear here.
 type View struct {
-	UpstreamURL         string `json:"upstream_url"`
-	AuthKind            string `json:"auth_kind"`
-	Username            string `json:"username,omitempty"`
-	HasSecret           bool   `json:"has_secret"`
-	SecretHint          string `json:"secret_hint,omitempty"`
-	Schedule            string `json:"schedule,omitempty"`
-	PublicKey           string `json:"public_key,omitempty"`
-	KeyFingerprint      string `json:"key_fingerprint,omitempty"`
+	UpstreamURL    string `json:"upstream_url"`
+	AuthKind       string `json:"auth_kind"`
+	Username       string `json:"username,omitempty"`
+	HasSecret      bool   `json:"has_secret"`
+	SecretHint     string `json:"secret_hint,omitempty"`
+	Schedule       string `json:"schedule,omitempty"`
+	PublicKey      string `json:"public_key,omitempty"`
+	KeyFingerprint string `json:"key_fingerprint,omitempty"`
+	// HostKeyFingerprint is the presence-style SSH host-key status
+	// (Forgejo #625): SHA256 fingerprint(s) of the trusted
+	// known_hosts lines, comma-joined ("" = nothing trusted yet).
+	// HostKeyAcceptedAt is the RFC3339 first-accepted-at stamp ("" for
+	// pinned-only trust). Neither carries key material — safe for the
+	// open-read view and the summary projection.
+	HostKeyFingerprint  string `json:"host_key_fingerprint,omitempty"`
+	HostKeyAcceptedAt   string `json:"host_key_accepted_at,omitempty"`
 	NextSyncAt          string `json:"next_sync_at,omitempty"`
 	LastSyncedAt        string `json:"last_synced_at,omitempty"`
 	LastResult          string `json:"last_result,omitempty"`
@@ -462,6 +475,11 @@ func ViewOf(doc *Doc, sec *Secret, now time.Time) View {
 	if sec != nil {
 		v.HasSecret = sec.HasMaterial()
 		v.SecretHint = sec.SecretHint()
+		// Derived at read from the merged trust (single source of
+		// truth — no second copy to skew): pre-#625 pinned sidecars
+		// surface their fingerprint with no accepted-at stamp.
+		v.HostKeyFingerprint = KnownHostsFingerprints(sec.SSHKnownHosts)
+		v.HostKeyAcceptedAt = sec.SSHKnownHostsAcceptedAt
 	}
 	if fire, due, err := NextFire(doc, now); err == nil {
 		v.Due = due && !BackedOff(doc, now)

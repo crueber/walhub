@@ -789,15 +789,20 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   bare two-segment names as exact forced refspecs). Dropped before
   rendering (the S4 refmap, pull-direction FilterRefs discipline
   reversed): `refs/replace/*`, `refs/meta/*`, `refs/keep-around/*`
-  always; `refs/pull/*`, `refs/changes/*`, `refs/review/*` (walhub's
+  always;   `refs/pull/*`, `refs/changes/*`, `refs/review/*` (walhub's
   own PR heads live in `refs/pull/` — shipping them would leak forge
   state, and hosts like GitHub refuse writes there), `refs/notes/*`
   by default. SSH pushes set `GIT_SSH_COMMAND="ssh -i <keyfile> -o
-  IdentitiesOnly=yes -o BatchMode=yes [-o UserKnownHostsFile=<kh> -o
+  IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=<kh> [-o
   StrictHostKeyChecking=yes | -o StrictHostKeyChecking=accept-new]"`
   with the private key materialized 0600 into per-fire scratch (swept on
-  every exit path — no feature state on disk, law 1); unpinned hosts
+  every exit path — no feature state on disk, law 1); the known_hosts
+  file is ALWAYS a per-fire path (pinned content, or empty when
+  unpinned — never the ambient `~/.ssh/known_hosts`); unpinned hosts
   trust on first use (`accept-new`, never the silent-insecure `no`).
+  After a successful SSH push the runner returns the post-push
+  known_hosts content for the trust harvest (features/13 §2 — merge
+  into the secret sidecar, fingerprint surface).
   `x/crypto/ssh` is server-transport-only and is never used as a client
   (law 1 sub-point). Keypairs are generated dep-free (stdlib
   `crypto/ed25519` + hand-rolled OpenSSH wire format — no `ssh-keygen`

@@ -333,7 +333,9 @@ func mirrorHash(v MirrorView) string {
 // material, which never reaches the projection). A credential rotation
 // changes the hint, and repeated identical failures change only the
 // counter, so both are covered or the status display goes stale behind
-// a 304.
+// a 304. Forgejo #625 adds the host-key trust fields: learning trust
+// changes neither the head sha nor any outcome field, so without them
+// a revalidating client would 304 and keep showing "not yet observed".
 func pushMirrorHash(v PushMirrorView) string {
 	h := fnv.New32a()
 	secretBit := "0"
@@ -342,7 +344,8 @@ func pushMirrorHash(v PushMirrorView) string {
 	}
 	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.AuthKind + "\x00" + v.Username + "\x00" +
 		secretBit + "\x00" + v.SecretHint + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" +
-		v.LastSyncedAt + "\x00" + v.LastResult + "\x00" + strconv.Itoa(v.ConsecutiveFailures)))
+		v.LastSyncedAt + "\x00" + v.LastResult + "\x00" + strconv.Itoa(v.ConsecutiveFailures) + "\x00" +
+		v.HostKeyFingerprint + "\x00" + v.HostKeyAcceptedAt))
 	return strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 

@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -372,11 +373,48 @@ func (s *Service) runPush(ctx context.Context, task *wal.Task, owner, name strin
 	defer g.Release()
 
 	task.Notice(fmt.Sprintf("push-mirror sync %s: pushing to %s", target, n.URL))
-	if perr := s.git.Push(ctx, h.Dir(), n.URL, auth); perr != nil {
+	learned, perr := s.git.Push(ctx, h.Dir(), n.URL, auth)
+	if perr != nil {
 		return s.fail(ctx, owner, name, now, task, classifyPushError(ctx, perr))
 	}
 	task.Notice(fmt.Sprintf("push-mirror sync %s: pushed", target))
+	if auth.Kind == AuthSSH {
+		s.harvestHostKey(ctx, task, target, owner, name, learned, now)
+	}
 	return s.succeed(ctx, owner, name, now)
+}
+
+// harvestHostKey is the single post-push harvest point (Forgejo #625):
+// the scheduled loop, on-push fan-out, and sync-now all funnel through
+// runPush, so all three harvest identically here — no per-trigger
+// forks. After a successful SSH push the learned accept-new lines merge
+// into the secret sidecar (operator pins stay authoritative) and the
+// fingerprint narrates (presence-style, never key material).
+//
+// Failure semantics: a harvest miss never fails the sync — the outcome
+// stays ok, the miss narrates, and the next accept-new fire re-learns
+// and retries.
+//
+// ### Concurrency
+//
+// Hazard: the serving-copy read guard (g, released by defer) is still
+// held here, and harvest takes store round trips.
+// Avoidance: the guard only fences pack removal (TryLock-or-defer
+// around it) — the secret-sidecar CAS never contends with it, and the
+// push itself already held the guard across network I/O (the
+// upload-pack reader shape). No new lock, no new ordering.
+func (s *Service) harvestHostKey(ctx context.Context, task *wal.Task, target, owner, name, learned string, now time.Time) {
+	if strings.TrimSpace(learned) == "" {
+		return
+	}
+	fp, added, herr := RecordHostKeyTrust(ctx, s.store, owner, name, learned, now)
+	if herr != nil {
+		task.Notice(fmt.Sprintf("push-mirror sync %s: pushed, but host-key trust was not recorded (%s; will retry next sync)", target, scrubText(herr.Error())))
+		return
+	}
+	if added && fp != "" {
+		task.Notice(fmt.Sprintf("push-mirror sync %s: learned host key %s (pinned for future syncs)", target, fp))
+	}
 }
 
 // resolveAuth builds the memory-only push credential from the config +

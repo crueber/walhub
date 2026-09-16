@@ -158,12 +158,12 @@ func TestPushPasswordAndTokenShapes(t *testing.T) {
 		{Kind: AuthPassword, Username: "u", Password: "p", Scheme: "file"},
 		{Kind: AuthToken, Token: "tok", Scheme: "file"},
 	} {
-		if err := r.Push(ctx, src, "file://"+upstream, a); err != nil {
+		if _, err := r.Push(ctx, src, "file://"+upstream, a); err != nil {
 			t.Fatalf("push %+v: %v", a.Kind, err)
 		}
 	}
 	// Failing push scrubs.
-	err := r.Push(ctx, src, "file:///tmp/does-not-exist-623-xyz.git", PushAuth{Kind: AuthNone, Scheme: "file"})
+	_, err := r.Push(ctx, src, "file:///tmp/does-not-exist-623-xyz.git", PushAuth{Kind: AuthNone, Scheme: "file"})
 	if err == nil {
 		t.Fatal("push to nowhere succeeded")
 	}
@@ -187,7 +187,7 @@ func TestRunnerEdges(t *testing.T) {
 	// Nested-nonexistent cache dir: MkdirAll fallback.
 	r2 := NewRunner("git", "/tmp/does-not-exist-623-parent/sub", time.Minute, time.Minute)
 	k, _ := GenerateKeypair("")
-	if _, cleanup, err := r2.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM}); err != nil {
+	if _, _, cleanup, err := r2.sshCommand(PushAuth{Kind: AuthSSH, PrivateKey: k.PrivatePEM}); err != nil {
 		t.Fatalf("sshCommand nested cache: %v", err)
 	} else {
 		cleanup()
