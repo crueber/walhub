@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"git.packden.us/crueber/walhub/internal/store"
 )
 
 // fixtureHostLine builds a known_hosts line for host from a fresh
@@ -224,5 +226,88 @@ func TestScrubIgnoresHostKeySurfaces(t *testing.T) {
 	msg := "learned host key " + fp + " (pinned for future syncs)"
 	if scrubText(msg) != msg {
 		t.Errorf("scrub mangled the fingerprint narration: %q", scrubText(msg))
+	}
+}
+
+// casRaceStore simulates an operator PUT winning the secret CAS between
+// the harvest's load and write: the first secret write injects the
+// operator's content directly, then reports a 412. The harvest must
+// re-load and re-merge (both lines survive), never last-writer-win the
+// operator's change away (Forgejo #625 review).
+type casRaceStore struct {
+	store.ObjectStore
+	secretKey string
+	operator  []byte
+	raced     bool
+}
+
+func (f *casRaceStore) Put(ctx context.Context, key string, body store.PutBody, opts store.PutOptions) (store.ObjectMeta, error) {
+	if key == f.secretKey && !f.raced {
+		f.raced = true
+		if _, err := store.PutBytes(ctx, f.ObjectStore, key, f.operator,
+			store.PutOptions{Mode: store.PutOverwrite, ContentType: "application/json"}); err != nil {
+			return store.ObjectMeta{}, err
+		}
+		return store.ObjectMeta{}, store.NewPrecondition(key, "raced")
+	}
+	return f.ObjectStore.Put(ctx, key, body, opts)
+}
+
+func TestRecordHostKeyTrustMergesOverConcurrentEdit(t *testing.T) {
+	ctx := context.Background()
+	inner := testStore()
+	learned, _ := fixtureHostLine(t, "example.com")
+	opLine, _ := fixtureHostLine(t, "operator.example")
+	opRaw, err := json.Marshal(&Secret{AuthKind: AuthSSH, SSHPrivateKey: "k", SSHKnownHosts: opLine + "\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSecret(ctx, inner, "o", "r", &Secret{AuthKind: AuthSSH, SSHPrivateKey: "k"}); err != nil {
+		t.Fatal(err)
+	}
+	st := &casRaceStore{ObjectStore: inner, secretKey: store.PushMirrorSecretKey("o", "r"), operator: opRaw}
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	fp, added, err := RecordHostKeyTrust(ctx, st, "o", "r", learned+"\n", now)
+	if err != nil || !added {
+		t.Fatalf("record over race = %q,%v,%v", fp, added, err)
+	}
+	if !st.raced {
+		t.Fatal("race wrapper never fired")
+	}
+	sec, _, err := LoadSecret(ctx, inner, "o", "r")
+	if err != nil || sec == nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sec.SSHKnownHosts, strings.TrimSpace(learned)) {
+		t.Errorf("learned line lost: %q", sec.SSHKnownHosts)
+	}
+	if !strings.Contains(sec.SSHKnownHosts, strings.TrimSpace(opLine)) {
+		t.Errorf("concurrent operator line clobbered: %q", sec.SSHKnownHosts)
+	}
+	if sec.SSHKnownHostsAcceptedAt != now.Format(time.RFC3339) {
+		t.Errorf("accepted_at = %q", sec.SSHKnownHostsAcceptedAt)
+	}
+}
+
+func TestMergeSecretInputClearKnownHostsResetsStamp(t *testing.T) {
+	// Clearing back to accept-new resets the learn stamp with the trust
+	// it names — otherwise the view would carry first-accepted-at with
+	// no fingerprint (Forgejo #625 review).
+	stored := &Secret{AuthKind: AuthSSH, SSHPrivateKey: "k",
+		SSHKnownHosts: "example.com ssh-ed25519 AAAA\n", SSHKnownHostsAcceptedAt: "2026-09-16T12:00:00Z"}
+	m, err := mergeSecretInput(stored, AuthSSH, "u", &putBody{SSHKnownHosts: ""}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.SSHKnownHosts != "" || m.SSHKnownHostsAcceptedAt != "" {
+		t.Errorf("clear must reset trust + stamp: %+v", m)
+	}
+	// Omitted known_hosts keeps both (the keep discipline).
+	m2, err := mergeSecretInput(stored, AuthSSH, "u", &putBody{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.SSHKnownHosts != stored.SSHKnownHosts || m2.SSHKnownHostsAcceptedAt != stored.SSHKnownHostsAcceptedAt {
+		t.Errorf("omitted must keep trust + stamp: %+v", m2)
 	}
 }

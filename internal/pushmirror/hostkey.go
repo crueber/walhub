@@ -33,6 +33,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -178,11 +179,19 @@ func MergeKnownHosts(stored, learned string) (merged string, added bool) {
 }
 
 // RecordHostKeyTrust merges post-push known_hosts content into the
-// secret sidecar under the usual secret CAS discipline and returns the
-// display fingerprints plus whether new trust landed. It skips the
-// write when nothing is new (no extra store trips on the steady-state
-// path — law 6); a nil/absent secret is a no-op (non-SSH configs never
-// reach here — resolveAuth guarantees material for ssh pushes).
+// secret sidecar and returns the display fingerprints plus whether new
+// trust landed. It skips the write when nothing is new (no extra store
+// trips on the steady-state path — law 6); a nil/absent secret is a
+// no-op (non-SSH configs never reach here — resolveAuth guarantees
+// material for ssh pushes).
+//
+// The write is a read-merge-CAS loop (one retry): on a 412 the secret
+// is re-loaded and the learned lines re-merged over the fresh trust,
+// so a concurrent operator edit (key rotation, pin change) is folded
+// in, never clobbered — the blind single-version write would
+// last-writer-win the operator's change away. The harvest runs at
+// machine rate (every sync), so the race it widens against human-rate
+// operator PUTs gets a real merge, not just a version bump.
 //
 // first-accepted-at is stamped only on the first learn and preserved
 // after (operator-pinned-only trust keeps it empty — the stamp names
@@ -191,27 +200,44 @@ func RecordHostKeyTrust(ctx context.Context, st store.ObjectStore, owner, name, 
 	if strings.TrimSpace(learned) == "" {
 		return "", false, nil
 	}
-	sec, _, err := LoadSecret(ctx, st, owner, name)
-	if err != nil {
-		return "", false, err
+	key := store.PushMirrorSecretKey(owner, name)
+	for attempt := 0; attempt < 2; attempt++ {
+		sec, ver, err := LoadSecret(ctx, st, owner, name)
+		if err != nil {
+			return "", false, err
+		}
+		if sec == nil {
+			return "", false, nil
+		}
+		merged, isNew := MergeKnownHosts(sec.SSHKnownHosts, learned)
+		fingerprints = KnownHostsFingerprints(merged)
+		if !isNew {
+			// Steady state: no write (no extra store trips — law 6). The
+			// stamp stays empty for pinned-only trust — it names
+			// accept-new learning, not explicit operator pins.
+			return fingerprints, false, nil
+		}
+		updated := *sec
+		updated.SSHKnownHosts = merged
+		if updated.SSHKnownHostsAcceptedAt == "" {
+			updated.SSHKnownHostsAcceptedAt = now.UTC().Format(time.RFC3339)
+		}
+		raw, err := json.Marshal(&updated)
+		if err != nil {
+			return "", false, err
+		}
+		mode := store.PutUpdate
+		if ver == "" {
+			mode = store.PutCreate
+		}
+		if _, err := store.PutBytes(ctx, st, key, raw,
+			store.PutOptions{Mode: mode, IfVersion: ver, ContentType: "application/json"}); err != nil {
+			if store.IsPreconditionFailed(err) {
+				continue
+			}
+			return "", false, fmt.Errorf("pushmirror: record host-key trust: %w", err)
+		}
+		return fingerprints, true, nil
 	}
-	if sec == nil {
-		return "", false, nil
-	}
-	merged, isNew := MergeKnownHosts(sec.SSHKnownHosts, learned)
-	fingerprints = KnownHostsFingerprints(merged)
-	if !isNew {
-		// Steady state: no write (no extra store trips — law 6). The
-		// stamp stays empty for pinned-only trust — it names
-		// accept-new learning, not explicit operator pins.
-		return fingerprints, false, nil
-	}
-	sec.SSHKnownHosts = merged
-	if sec.SSHKnownHostsAcceptedAt == "" {
-		sec.SSHKnownHostsAcceptedAt = now.UTC().Format(time.RFC3339)
-	}
-	if serr := SaveSecretCAS(ctx, st, owner, name, sec); serr != nil {
-		return "", false, fmt.Errorf("pushmirror: record host-key trust: %w", serr)
-	}
-	return fingerprints, true, nil
+	return "", false, fmt.Errorf("pushmirror: record host-key trust: secret CAS lost twice for %s/%s", owner, name)
 }

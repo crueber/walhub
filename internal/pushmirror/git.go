@@ -278,8 +278,14 @@ func credentialArgv(scheme, host, secretEnv, userEnv string) []string {
 // ~/.ssh/known_hosts — daemon HOME is not a trust store); without
 // operator-pinned content the command uses StrictHostKeyChecking=
 // accept-new (first-use trust, recorded — never the silent-insecure
-// `no`); BatchMode=yes never prompts. The scratch dir is removed by
-// the caller-deferred cleanup on every exit path.
+// `no`); BatchMode=yes never prompts. HashKnownHosts=no pins stable
+// plaintext hostnames in the scratch file: several distros ship
+// HashKnownHosts=yes in ssh_config, and salted |1| tokens would make
+// the harvest merge (host+keytype dedupe, Forgejo #625) accumulate a
+// fresh token per fire instead of deduping. Matching is unaffected —
+// ssh still honors pre-existing hashed operator pins on read. The
+// scratch dir is removed by the caller-deferred cleanup on every exit
+// path.
 func (r *Runner) sshCommand(auth PushAuth) (sshCmd, knownHostsPath string, cleanup func(), err error) {
 	if strings.TrimSpace(auth.PrivateKey) == "" {
 		return "", "", func() {}, fmt.Errorf("pushmirror: ssh auth needs a private key")
@@ -307,7 +313,7 @@ func (r *Runner) sshCommand(auth PushAuth) (sshCmd, knownHostsPath string, clean
 		return "", "", func() {}, fmt.Errorf("pushmirror: known_hosts file: %v", scrubText(err.Error()))
 	}
 	parts := []string{"ssh", "-i", keyPath, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-		"-o", "UserKnownHostsFile=" + khPath}
+		"-o", "UserKnownHostsFile=" + khPath, "-o", "HashKnownHosts=no"}
 	if strings.TrimSpace(auth.KnownHosts) != "" {
 		parts = append(parts, "-o", "StrictHostKeyChecking=yes")
 	} else {

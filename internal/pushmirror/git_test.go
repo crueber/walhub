@@ -155,6 +155,13 @@ func TestSSHCommandMaterialization(t *testing.T) {
 	if !strings.Contains(cmd, "StrictHostKeyChecking=yes") || !strings.Contains(cmd, "UserKnownHostsFile=") {
 		t.Errorf("pinned ssh command = %q", cmd)
 	}
+	// Stable plaintext hostnames for the harvest merge (Forgejo #625):
+	// distro ssh_config often ships HashKnownHosts=yes, and salted |1|
+	// tokens would defeat the host+keytype dedupe with a fresh token
+	// per fire.
+	if !strings.Contains(cmd, "HashKnownHosts=no") {
+		t.Errorf("ssh command must pin HashKnownHosts=no: %q", cmd)
+	}
 	// The key file is 0600 and swept by cleanup.
 	if _, _, _, err := r.sshCommand(PushAuth{Kind: AuthSSH}); err == nil {
 		t.Error("empty private key accepted")

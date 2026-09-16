@@ -715,6 +715,13 @@ func mergeSecretInput(stored *Secret, kind, username string, in *putBody, hasKno
 		}
 		if hasKnownHosts {
 			sec.SSHKnownHosts = in.SSHKnownHosts
+			if strings.TrimSpace(in.SSHKnownHosts) == "" {
+				// Clearing back to accept-new resets the learn stamp
+				// with the trust it names (Forgejo #625) — otherwise
+				// the view would carry first-accepted-at with no
+				// fingerprint.
+				sec.SSHKnownHostsAcceptedAt = ""
+			}
 		}
 		if sec.SSHPrivateKey == "" {
 			return nil, fmt.Errorf("pushmirror: ssh auth needs ssh_private_key (paste a key) or POST pushmirror/keygen (we generate one)")

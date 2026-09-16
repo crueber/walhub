@@ -86,7 +86,10 @@ Deleting both sidecars stops on-push fan-out and scheduled syncs
       The known_hosts file is ALWAYS a per-fire path passed via
       `UserKnownHostsFile` (never the ambient `~/.ssh/known_hosts` —
       daemon HOME is not a trust store), so the accept-new learn lands
-      where the runner can read it back.
+      where the runner can read it back. `HashKnownHosts=no` pins stable
+      plaintext hostnames in the scratch file (distro ssh_config often
+      ships `HashKnownHosts=yes`; salted `|1|` tokens would defeat the
+      host+keytype dedupe with a fresh token per fire — review #626).
     - **Host-key trust harvest (Forgejo #625).** After a successful SSH
       push the runner returns the post-push known_hosts content and the
       sync harvests it — one shared point in the task body (scheduled,
@@ -96,8 +99,12 @@ Deleting both sidecars stops on-push fan-out and scheduled syncs
       conflict the operator-pinned line wins and the learned line is
       dropped — explicit pins stay authoritative, decision (k)), the
       first learn stamps `ssh_known_hosts_accepted_at` (preserved
-      after; empty for pinned-only trust), and the fingerprint narrates
-      (SHA256 display only). A harvest miss never fails the sync
+      after; empty for pinned-only trust; reset when the operator
+      clears `known_hosts` back to accept-new), and the fingerprint narrates
+      (SHA256 display only). The write is a read-merge-CAS loop: on a
+      412 the harvest re-loads and re-merges, so a concurrent operator
+      edit folds in instead of being clobbered (review #626 — the blind
+      single-version write would last-writer-win it away). A harvest miss never fails the sync
       (outcome stays ok, the miss narrates, the next accept-new fire
       re-learns and retries). Stored trust automatically pins the next
       fire (`StrictHostKeyChecking=yes` once the sidecar is non-empty).
@@ -327,4 +334,10 @@ schedule/off/next-fire/backoff, sidecar/secret CRUD/CAS + redaction
   guidance was "pin known_hosts"; now the first sync bootstraps the
   pin itself, with the verification surface (fingerprint +
   first-accepted-at in the view, Settings row, and summary) the
-  original shape lacked.
+  original shape lacked. Amended on #626 review: `HashKnownHosts=no`
+  on the per-fire command (stable plaintext hostnames — distro
+  `HashKnownHosts=yes` would salt a fresh token per fire and defeat
+  the dedupe); the harvest write is a read-merge-CAS loop (a 412
+  re-loads and re-merges, so a concurrent operator edit folds in
+  instead of being clobbered); clearing `known_hosts` back to
+  accept-new resets the stamp with the trust it names.
