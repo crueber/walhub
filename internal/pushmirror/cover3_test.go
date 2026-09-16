@@ -267,12 +267,20 @@ func TestHandlerFaultBranches(t *testing.T) {
 	if w := doReq(h2, "PUT", "/o/r2/api/pushmirror", `{"token":"tok-1111"}`); w.Code != http.StatusInternalServerError {
 		t.Errorf("put dead secret store = %d (%q)", w.Code, w.Body.String())
 	}
-	// Keygen Load error + UpdateCAS error + SaveSecret error.
-	if w := doReq(h, "POST", "/o/r/api/pushmirror/keygen", `{}`); w.Code != http.StatusInternalServerError {
+	// Keygen Load error + UpdateCAS error + SaveSecret error. The
+	// fixture config is SSH-schemed so the keygen scheme gate passes
+	// and the faults (not the gate) answer.
+	if _, err := Create(ctx, inner, "o", "rk", "ssh://example.com/o/rk.git", AuthSSH, "", ScheduleOff); err != nil {
+		t.Fatal(err)
+	}
+	hk := mkH(mkSvc(&faultStore2{ObjectStore: inner, failGet: boom}))
+	if w := doReq(hk, "POST", "/o/rk/api/pushmirror/keygen", `{}`); w.Code != http.StatusInternalServerError {
 		t.Errorf("keygen dead store = %d", w.Code)
 	}
 	h3 := mkH(mkSvc(&faultStore{ObjectStore: inner, failLeft: 100}))
-	if w := doReq(h3, "POST", "/o/r/api/pushmirror/keygen", `{}`); w.Code != http.StatusInternalServerError {
+	// NOTE: h3's fault store fails the FIRST 100 ops — point it at the
+	// SSH fixture so UpdateCAS (not the scheme gate) trips.
+	if w := doReq(h3, "POST", "/o/rk/api/pushmirror/keygen", `{}`); w.Code != http.StatusInternalServerError {
 		t.Errorf("keygen dead CAS = %d (%q)", w.Code, w.Body.String())
 	}
 	// syncNow Load error.

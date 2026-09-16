@@ -702,7 +702,12 @@ type PushMirrorView struct {
 	NextSyncAt   string `json:"next_sync_at,omitempty"`
 	LastSyncedAt string `json:"last_synced_at,omitempty"`
 	LastResult   string `json:"last_result,omitempty"`
-	Due          bool   `json:"due"`
+	// ConsecutiveFailures is the backoff input (the pull-mirror field):
+	// identical repeated failure reasons keep LastResult byte-equal, so
+	// the ETag must cover the counter or the status display goes stale
+	// behind a 304 while failures accumulate.
+	ConsecutiveFailures int  `json:"consecutive_failures,omitempty"`
+	Due                 bool `json:"due"`
 }
 
 // CollabCounts is the repo-level open-count projection on the repo summary// (Forgejo #319): the tab-badge numerators. Version is the shared P4 index

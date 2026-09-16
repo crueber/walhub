@@ -77,16 +77,17 @@ func newPushMirrorService(st store.ObjectStore, reg *wal.Registry, cfg *config.C
 // duplicates and belongs to buildCollab alone in this binary).
 func pushMirrorViewOf(v pushmirror.View) api.PushMirrorView {
 	return api.PushMirrorView{
-		UpstreamURL:  v.UpstreamURL,
-		AuthKind:     v.AuthKind,
-		Username:     v.Username,
-		HasSecret:    v.HasSecret,
-		SecretHint:   v.SecretHint,
-		Schedule:     v.Schedule,
-		NextSyncAt:   v.NextSyncAt,
-		LastSyncedAt: v.LastSyncedAt,
-		LastResult:   v.LastResult,
-		Due:          v.Due,
+		UpstreamURL:         v.UpstreamURL,
+		AuthKind:            v.AuthKind,
+		Username:            v.Username,
+		HasSecret:           v.HasSecret,
+		SecretHint:          v.SecretHint,
+		Schedule:            v.Schedule,
+		NextSyncAt:          v.NextSyncAt,
+		LastSyncedAt:        v.LastSyncedAt,
+		LastResult:          v.LastResult,
+		ConsecutiveFailures: v.ConsecutiveFailures,
+		Due:                 v.Due,
 	}
 }
 

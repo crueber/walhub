@@ -269,7 +269,7 @@ func TestKeygenSecretFault(t *testing.T) {
 	if _, err := reg.Create(ctx, "o/k", git.Sha1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(ctx, inner, "o", "k", "file:///x", AuthNone, "", ScheduleOff); err != nil {
+	if _, err := Create(ctx, inner, "o", "k", "ssh://example.com/o/k.git", AuthSSH, "", ScheduleOff); err != nil {
 		t.Fatal(err)
 	}
 	// UpdateCAS succeeds, secret save fails (key-scoped fault).

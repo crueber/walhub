@@ -150,6 +150,9 @@ func TestSSHPushShape(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	work := fixtureWorkRepo(t)
+	src := t.TempDir()
+	gitTest(t, src, "init", "-q", "--bare", ".")
+	gitTest(t, work, "push", "-q", "--mirror", src)
 	upstream := t.TempDir()
 	gitTest(t, upstream, "init", "-q", "--bare", ".")
 	k, err := GenerateKeypair("")
@@ -161,7 +164,7 @@ func TestSSHPushShape(t *testing.T) {
 	// the transfer proves the shape without a network.
 	r := NewRunner("git", t.TempDir(), 60*time.Second, 30*time.Second)
 	auth := PushAuth{Kind: AuthSSH, Scheme: "file", PrivateKey: k.PrivatePEM, Fingerprint: k.Fingerprint}
-	if err := r.Push(ctx, work, "file://"+upstream, auth); err != nil {
+	if err := r.Push(ctx, src, "file://"+upstream, auth); err != nil {
 		t.Fatalf("ssh-shape push: %v", err)
 	}
 }

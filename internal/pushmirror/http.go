@@ -340,6 +340,17 @@ func (h *Handler) update(ctx context.Context, w http.ResponseWriter, body []byte
 	if hasSchedule {
 		doc.Schedule = in.Schedule
 	}
+	// Re-validate the destination against the final kind BEFORE writing
+	// any secret: the kind-change branch below SaveSecrets, and a late
+	// 400 there would leave secret material for a kind the config no
+	// longer names (bricked until repaired by hand).
+	if n, nerr := repoimport.NormalizeSource(doc.UpstreamURL); nerr != nil {
+		writePlain(w, http.StatusInternalServerError, "pushmirror: "+scrubText(nerr.Error()))
+		return
+	} else if verr := ValidateTarget(n, kind, true); verr != nil {
+		writePlain(w, http.StatusBadRequest, scrubText(verr.Error()))
+		return
+	}
 	if in.AuthKind != "" && in.AuthKind != doc.AuthKind {
 		doc.AuthKind = kind
 		doc.Username = strings.TrimSpace(in.Username)
@@ -373,14 +384,7 @@ func (h *Handler) update(ctx context.Context, w http.ResponseWriter, body []byte
 			}
 		}
 	}
-	// Re-validate the (unchanged) destination against the final kind.
-	if n, nerr := repoimport.NormalizeSource(doc.UpstreamURL); nerr != nil {
-		writePlain(w, http.StatusInternalServerError, "pushmirror: "+scrubText(nerr.Error()))
-		return
-	} else if verr := ValidateTarget(n, doc.AuthKind, true); verr != nil {
-		writePlain(w, http.StatusBadRequest, scrubText(verr.Error()))
-		return
-	}
+	// kind is already validated above (validate-before-write).
 	if err := UpdateCAS(ctx, h.Svc.store, owner, repo, doc, ver); err != nil {
 		writePlain(w, http.StatusInternalServerError, "pushmirror: "+scrubText(err.Error()))
 		return
@@ -538,7 +542,8 @@ func (h *Handler) syncStatus(w http.ResponseWriter, r *http.Request, owner, repo
 // private key in the secret sidecar (auth_kind becomes ssh), and returns
 // the PUBLIC key + fingerprint for upstream install. The private key is
 // NEVER returned (write-only). Requires an existing push-mirror config
-// (404 otherwise — keygen is config on a repo, never repo creation).
+// (404 otherwise — keygen is config on a repo, never repo creation) on
+// an SSH upstream (400 otherwise — keygen would brick an https config).
 func (h *Handler) keygen(w http.ResponseWriter, r *http.Request, owner, repo string) {
 	p, aerr := h.principal(r)
 	if aerr != nil {
@@ -579,6 +584,17 @@ func (h *Handler) keygen(w http.ResponseWriter, r *http.Request, owner, repo str
 	}
 	if doc == nil {
 		writePlain(w, http.StatusNotFound, "no push mirror configured")
+		return
+	}
+	// Keygen mints an SSH deploy key: refuse unless the destination is
+	// an SSH upstream (otherwise the config would flip to a kind the
+	// stored URL rejects — https+ssh fails ValidateTarget at sync
+	// time, leaving a bricked config behind a 200).
+	if n, nerr := repoimport.NormalizeSource(doc.UpstreamURL); nerr != nil {
+		writePlain(w, http.StatusInternalServerError, "pushmirror: "+scrubText(nerr.Error()))
+		return
+	} else if n.Scheme != "ssh" && n.Scheme != "scp" {
+		writePlain(w, http.StatusBadRequest, "pushmirror keygen needs an ssh upstream (this mirror points at "+n.Scheme+")")
 		return
 	}
 	key, gerr := GenerateKeypair("")

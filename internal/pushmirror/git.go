@@ -5,10 +5,10 @@
 // (never argv, never the bucket, never logs).
 //
 // Transfer shape: the serving copy (manifest refs already applied by
-// Sync) pushes via `git push --mirror` — refs+objects to the upstream
-// in one transfer, mirroring the pull direction's ref reconstruction
-// (refs live in the manifest store, not forge git refs — the Sync
-// materializes what the store publishes, and the push ships it).
+// Sync) pushes via forced namespace refspecs with --prune — the
+// user-namespace refs the store publishes, never forge-internal ones
+// (refs/pull/** stays out, the pull direction's FilterRefs discipline
+// reversed).
 package pushmirror
 
 import (
@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -86,15 +87,29 @@ func (r *Runner) run(ctx context.Context, fn func() error) error {
 	}
 }
 
-// Push transfers the serving copy's refs+objects to the upstream:
+// Push transfers the serving copy's refs to the upstream, minus
+// forge-internal namespaces (the pull-mirror FilterRefs discipline,
+// reversed): refs/replace/*, refs/meta/*, refs/keep-around/* always;
+// refs/pull/*, refs/changes/*, refs/review/* (walhub's own PR heads live
+// here — shipping them would leak forge state, and hosts like GitHub
+// refuse writes to refs/pull/*); refs/notes/* by default. Everything
+// else ships verbatim ("drop nothing else").
 //
-//	git [-c credential.<scheme>://<host>.helper= -c credential.<scheme>://<host>.helper=!<helper>] push --mirror -- <url>
+// Transfer shape: the local refs are enumerated (ListRefs, the §12
+// for-each-ref argv), filtered, grouped by top-two-segment namespace,
+// and pushed as forced wildcard refspecs with --prune, so deletions
+// propagate within live namespaces (walhub is the primary) without
+// ever naming an internal ref:
+//
+//	git [-c credential.<scheme>://<host>.helper= -c credential.<scheme>://<host>.helper=!<helper>] push --prune -- <url> +refs/heads/*:refs/heads/* [...]
 //
 // (credential pairs present only for password/token pushes, host-pinned;
 // SSH pushes ride GIT_SSH_COMMAND with a materialized key file; file://
-// and anonymous https push bare.) The ctx carries PushTimeout; cancel
-// SIGKILLs git. Stderr is bounded (8 KiB) and scrubbed — secrets never
-// land in task logs.
+// and anonymous https push bare.) refs/heads + refs/tags ride every
+// fire (even when locally empty, so a fully-deleted namespace prunes
+// upstream); other surviving namespaces ride only when populated. The
+// ctx carries PushTimeout; cancel SIGKILLs git. Stderr is bounded
+// (8 KiB) and scrubbed — secrets never land in task logs.
 func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error {
 	cctx, cancel := context.WithTimeout(ctx, r.PushTimeout)
 	defer cancel()
@@ -110,7 +125,8 @@ func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error
 
 	switch auth.Kind {
 	case AuthPassword, AuthToken:
-		envName := "WALHUB_PUSHMIRROR_TOKEN"
+		userEnv := "WALHUB_PUSHMIRROR_USER"
+		secretEnv := "WALHUB_PUSHMIRROR_TOKEN"
 		user := auth.Username
 		secret := auth.Password
 		if auth.Kind == AuthToken {
@@ -119,8 +135,12 @@ func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error
 			}
 			secret = auth.Token
 		}
-		argv = append(argv, credentialArgv(auth.Scheme, auth.Host, envName, user)...)
-		extraEnv = append(extraEnv, envName+"="+secret)
+		argv = append(argv, credentialArgv(auth.Scheme, auth.Host, secretEnv, userEnv)...)
+		// Both halves ride child env, never argv: the username is
+		// user-controlled text and the `!` helper runs through a
+		// shell — interpolating it into the helper would be command
+		// injection (metachar newlines, `;`, `$()` all execute).
+		extraEnv = append(extraEnv, userEnv+"="+user, secretEnv+"="+secret)
 	case AuthSSH:
 		sshCmd, clean, err := r.sshCommand(auth)
 		if err != nil {
@@ -134,7 +154,12 @@ func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error
 		return fmt.Errorf("pushmirror: unknown auth kind %q", scrubText(auth.Kind))
 	}
 
-	argv = append(argv, "push", "--mirror", "--", url)
+	specs, err := r.pushRefspecs(cctx, dir)
+	if err != nil {
+		return err
+	}
+	argv = append(argv, "push", "--prune", "--", url)
+	argv = append(argv, specs...)
 	return r.run(cctx, func() error {
 		cmd := exec.CommandContext(cctx, r.Binary, argv...)
 		cmd.Dir = dir
@@ -150,14 +175,79 @@ func (r *Runner) Push(ctx context.Context, dir, url string, auth PushAuth) error
 	})
 }
 
+// pushRefspecs enumerates the serving copy's refs and renders the forced
+// wildcard refspecs for the push: every surviving namespace (the
+// FilterRefs mirror discipline — internal namespaces dropped) as
+// `+<ns>/*:<ns>/*`, plus refs/heads + refs/tags unconditionally (an
+// emptied namespace must prune upstream, not silently keep it). Bare
+// two-segment names (`refs/<x>`, no slash below) ride as exact forced
+// refspecs. Sorted for stable argv.
+func (r *Runner) pushRefspecs(ctx context.Context, dir string) ([]string, error) {
+	refs, err := r.ListRefs(ctx, dir)
+	if err != nil {
+		return nil, fmt.Errorf("pushmirror enumerate refs: %v", scrubText(err.Error()))
+	}
+	namespaces := map[string]bool{"refs/heads": true, "refs/tags": true}
+	var exact []string
+	for name := range refs {
+		if !keepPushRef(name) {
+			continue
+		}
+		rest, ok := strings.CutPrefix(name, "refs/")
+		if !ok {
+			exact = append(exact, name)
+			continue
+		}
+		head, _, ok := strings.Cut(rest, "/")
+		if !ok {
+			exact = append(exact, name) // bare refs/<x>
+			continue
+		}
+		namespaces["refs/"+head] = true
+	}
+	specs := make([]string, 0, len(namespaces)+len(exact))
+	for ns := range namespaces {
+		specs = append(specs, "+"+ns+"/*:"+ns+"/*")
+	}
+	for _, name := range exact {
+		specs = append(specs, "+"+name+":"+name)
+	}
+	sort.Strings(specs)
+	return specs, nil
+}
+
+// keepPushRef is the push-direction FilterRefs discipline (the S4 refmap,
+// import branches + tags shape): drop rewrites/forge-internal namespaces
+// always, pull/changes/review + notes by default; keep everything else
+// verbatim. Shared shape with repoimport.FilterRefs (which the pull
+// direction calls); duplicated as a predicate here because the push
+// needs namespaces, not a ref list.
+func keepPushRef(name string) bool {
+	switch {
+	case strings.HasPrefix(name, "refs/replace/"),
+		strings.HasPrefix(name, "refs/meta/"),
+		strings.HasPrefix(name, "refs/keep-around/"):
+		return false
+	case strings.HasPrefix(name, "refs/pull/"),
+		strings.HasPrefix(name, "refs/changes/"),
+		strings.HasPrefix(name, "refs/review/"),
+		strings.HasPrefix(name, "refs/notes/"):
+		return false
+	}
+	return true
+}
+
 // credentialArgv builds the inline config-pair helper, host-pinned to
 // scheme://host (the pull-mirror credentialArgv shape: a redirect to
 // another host never harvests the secret — git matches
 // credential.<url>.helper by prefix). Empty helper first clears
-// inherited helpers (argv order significant, 04 §11).
-func credentialArgv(scheme, host, envName, username string) []string {
+// inherited helpers (argv order significant, 04 §11). Both the username
+// and the secret ride child env (named by userEnv/secretEnv) — neither
+// is interpolated into the helper text, because the `!` helper runs
+// through a shell and the username is user-controlled.
+func credentialArgv(scheme, host, secretEnv, userEnv string) []string {
 	pin := "credential." + scheme + "://" + host + ".helper"
-	helper := "!f(){ echo username=" + username + "; echo password=$" + envName + "; };f"
+	helper := "!f(){ echo username=$" + userEnv + "; echo password=$" + secretEnv + "; };f"
 	return []string{"-c", pin + "=", "-c", pin + "=" + helper}
 }
 

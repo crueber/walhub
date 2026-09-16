@@ -302,7 +302,7 @@ func (s *Service) EnqueueOnPush(owner, name string) {
 }
 
 // runPush is the task body: lease → load config+secret → validate →
-// Sync(LevelServe) materialize → git push --mirror → record outcome.
+// Sync(LevelServe) materialize → namespace-refspec push → record outcome.
 // Skips (held lease, removed config) narrate and return nil — a skip is
 // not a failure and never touches the failure counter. Failures record
 // consecutive_failures + the scrubbed reason and return the error

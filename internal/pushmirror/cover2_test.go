@@ -145,6 +145,9 @@ func TestPushPasswordAndTokenShapes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	work := fixtureWorkRepo(t)
+	src := t.TempDir()
+	gitTest(t, src, "init", "-q", "--bare", ".")
+	gitTest(t, work, "push", "-q", "--mirror", src)
 	upstream := t.TempDir()
 	gitTest(t, upstream, "init", "-q", "--bare", ".")
 	r := NewRunner("git", t.TempDir(), 60*time.Second, 30*time.Second)
@@ -155,12 +158,12 @@ func TestPushPasswordAndTokenShapes(t *testing.T) {
 		{Kind: AuthPassword, Username: "u", Password: "p", Scheme: "file"},
 		{Kind: AuthToken, Token: "tok", Scheme: "file"},
 	} {
-		if err := r.Push(ctx, work, "file://"+upstream, a); err != nil {
+		if err := r.Push(ctx, src, "file://"+upstream, a); err != nil {
 			t.Fatalf("push %+v: %v", a.Kind, err)
 		}
 	}
 	// Failing push scrubs.
-	err := r.Push(ctx, work, "file:///tmp/does-not-exist-623-xyz.git", PushAuth{Kind: AuthNone, Scheme: "file"})
+	err := r.Push(ctx, src, "file:///tmp/does-not-exist-623-xyz.git", PushAuth{Kind: AuthNone, Scheme: "file"})
 	if err == nil {
 		t.Fatal("push to nowhere succeeded")
 	}

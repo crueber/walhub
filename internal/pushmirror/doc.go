@@ -21,7 +21,9 @@
 //
 // Transfer shells out to the stock git binary (law 2: git is a subprocess;
 // exact argv in docs/go/04_git.md): the serving copy (manifest refs already
-// applied by Sync) pushes via `git push --mirror`. SSH auth rides
+// applied by Sync) pushes via forced namespace refspecs with --prune —
+// user namespaces only, never forge-internal refs (refs/pull/** stays
+// out). SSH auth rides
 // GIT_SSH_COMMAND with a materialized key file — x/crypto/ssh is
 // server-transport-only and is never used as a client. Keypairs are
 // generated dep-free (stdlib ed25519 + hand-rolled OpenSSH wire format).

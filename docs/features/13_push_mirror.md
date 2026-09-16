@@ -117,10 +117,15 @@ anonymous push.
 - **Body**: open handle → `Sync(LevelServe)` materialize (refs live in
   the manifest store — the Sync applies what the store publishes, and
   the push ships that serving copy; the read guard is held across the
-  transfer, the upload-pack reader shape) → `git push --mirror -- <url>`
-  (pinned argv, 04 §12-adjacent) with the per-kind credential shape →
-  `RecordAttempt` (success clears the counter + stamps the next-fire
-  anchor; failure records the scrubbed reason + backoff).
+  transfer, the upload-pack reader shape) → namespace-scoped forced
+  refspec push with `--prune` (pinned argv, 04 §12-adjacent) with the
+  per-kind credential shape → `RecordAttempt` (success clears the
+  counter + stamps the next-fire anchor; failure records the scrubbed
+  reason + backoff). The push ships user namespaces (heads + tags
+  always, other surviving namespaces when populated) and never
+  forge-internal refs (`refs/pull/**` and friends stay out — decision
+  (j)); deletions propagate within live namespaces (walhub is the
+  primary).
 
 ## 4. Push refusal interaction
 
@@ -231,6 +236,13 @@ receives refs+objects; scheduled fire; server-publish exclusion).
   swept per fire); HTTPS rides the host-pinned credential helper (the
   pull-mirror shape). Rationale: law 2 (git is a subprocess, argv
   pinned in 04); no Go SSH client (law 1 sub-point).
+  **Superseded in shape (not in rationale) by (j) below:** a bare
+  `--mirror` ships the whole serving copy including walhub's own
+  `refs/pull/**` PR heads (ordinary WAL ref state, published server-side
+  through the WAL funnel and materialized by every Serve sync) — a
+  forge-internal leak, and hosts like GitHub refuse writes to
+  `refs/pull/*`, which would wedge every PR-carrying repo in permanent
+  "failed".
 - **(f) On-push via `Server.OnPush`, exclusion structural (2026-09-16,
   #623).** The hook fires from `pushPipeline` (the ONE function both
   transports land in) after the report, landed-only, fire-and-forget;
@@ -251,3 +263,22 @@ receives refs+objects; scheduled fire; server-publish exclusion).
   the choice to the implementer; `no` would silently disable the only
   authentication SSH has, while `accept-new` + `BatchMode=yes` keeps a
   prompt-free daemon without downgrading pinned hosts.
+- **(j) Namespace-scoped forced refspecs instead of bare `--mirror`
+  (2026-09-16, #623 review).** The transfer enumerates the serving
+  copy (`for-each-ref`, one cheap local spawn per fire — no store
+  trip), drops forge-internal namespaces (the S4 refmap reversed:
+  `replace`/`meta`/`keep-around` always, `pull`/`changes`/`review` +
+  `notes` by default — the pull direction's FilterRefs discipline), and
+  pushes the survivors as `+<ns>/*:<ns>/*` with `--prune` (`heads` +
+  `tags` unconditionally so an emptied namespace prunes upstream;
+  other namespaces when populated). Rationale: (e)'s bare `--mirror`
+  cannot exclude — it would ship `refs/pull/**` upstream on every
+  PR-carrying repo (leak + GitHub refusal wedge); per-ref refspecs do
+  not scale to 500k-ref repos (ARG_MAX), while per-namespace wildcards
+  do; `--prune` keeps the walhub-is-primary deletion semantics within
+  live namespaces. A fully-deleted custom namespace leaves stale
+  upstream refs (no refspec names it) — heads/tags are exempt (always
+  ridden). The credential helper change in the same revision (username
+  via child env, never interpolated — the `!` helper runs through a
+  shell and the username is user-controlled) closes a command-injection
+  surface the password/token shape introduced.

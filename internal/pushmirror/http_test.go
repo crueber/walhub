@@ -224,6 +224,56 @@ func TestKeygenRoundTrip(t *testing.T) {
 	_ = ctx
 }
 
+// Keygen mints SSH deploy keys: on a non-SSH upstream it must refuse
+// (400) rather than flip the config to a kind the stored URL rejects.
+func TestKeygenRefusesNonSSHUpstream(t *testing.T) {
+	h, svc, ctx := testHandler(t, adminPrincipal)
+	createRepoForHTTP(t, svc, ctx, "o", "h")
+	w := doReq(h, "PUT", "/o/h/api/pushmirror", `{"upstream_url":"https://example.com/o/h.git","auth_kind":"token","token":"tok-secret-1111","dangerous":true}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("token create = %d %q", w.Code, w.Body.String())
+	}
+	w = doReq(h, "POST", "/o/h/api/pushmirror/keygen", `{}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("keygen on https = %d, want 400", w.Code)
+	}
+	// Config untouched: still token kind with its hint.
+	w = doReq(h, "GET", "/o/h/api/pushmirror", "")
+	var v View
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.AuthKind != AuthToken || !v.HasSecret || v.SecretHint != "••••1111" {
+		t.Errorf("keygen refusal mutated config: %+v", v)
+	}
+	_ = ctx
+}
+
+// A kind change to a kind the stored URL rejects must 400 BEFORE
+// writing the secret: the stored material for the old kind must
+// survive the refused update (no bricked config).
+func TestUpdateKindMismatchKeepsSecret(t *testing.T) {
+	h, svc, ctx := testHandler(t, adminPrincipal)
+	createRepoForHTTP(t, svc, ctx, "o", "u")
+	w := doReq(h, "PUT", "/o/u/api/pushmirror", `{"upstream_url":"https://example.com/o/u.git","auth_kind":"token","token":"tok-secret-2222","dangerous":true}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("token create = %d %q", w.Code, w.Body.String())
+	}
+	w = doReq(h, "PUT", "/o/u/api/pushmirror", `{"auth_kind":"ssh","ssh_private_key":"new-key"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("ssh-kind update on https = %d, want 400", w.Code)
+	}
+	w = doReq(h, "GET", "/o/u/api/pushmirror", "")
+	var v View
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.AuthKind != AuthToken || !v.HasSecret || v.SecretHint != "••••2222" {
+		t.Errorf("refused update clobbered secret: %+v", v)
+	}
+	_ = ctx
+}
+
 func TestSyncNowRequiresConfig(t *testing.T) {
 	h, svc, ctx := testHandler(t, adminPrincipal)
 	createRepoForHTTP(t, svc, ctx, "o", "r")

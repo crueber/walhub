@@ -328,11 +328,21 @@ func mirrorHash(v MirrorView) string {
 
 // pushMirrorHash is the short ETag suffix covering the push-mirror
 // projection (Forgejo #623): same FNV-1a discipline as mirrorHash. It
-// covers only display fields (never secret material — secrets never
-// reach the projection).
+// covers every display field (upstream, kind, login, presence + hint,
+// schedule, next/last fire, last result, failure count — never secret
+// material, which never reaches the projection). A credential rotation
+// changes the hint, and repeated identical failures change only the
+// counter, so both are covered or the status display goes stale behind
+// a 304.
 func pushMirrorHash(v PushMirrorView) string {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.AuthKind + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" + v.LastSyncedAt + "\x00" + v.LastResult))
+	secretBit := "0"
+	if v.HasSecret {
+		secretBit = "1"
+	}
+	_, _ = h.Write([]byte(v.UpstreamURL + "\x00" + v.AuthKind + "\x00" + v.Username + "\x00" +
+		secretBit + "\x00" + v.SecretHint + "\x00" + v.Schedule + "\x00" + v.NextSyncAt + "\x00" +
+		v.LastSyncedAt + "\x00" + v.LastResult + "\x00" + strconv.Itoa(v.ConsecutiveFailures)))
 	return strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 

@@ -772,15 +772,27 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   argv — a new spawn needs its doc line in the same change; `-e` (existence only, no output) is
   the cheapest object proof.
 - **Push-mirror transfer argv (Forgejo #623, 2026-09-16,
-  `internal/pushmirror` Runner + `ListRefs`).** One pinned transfer argv,
-  run in the serving copy (`GIT_DIR` unset — `cmd.Dir=<repo>`, pool + ctx
-  timeout, 8 KiB scrubbed stderr discipline per §2):
-  `git [-c credential.<scheme>://<host>.helper= -c credential.<scheme>://<host>.helper=!<helper>] push --mirror -- <url>`
+  `internal/pushmirror` Runner + `ListRefs`).** One pinned transfer
+  shape, run in the serving copy (`GIT_DIR` unset — `cmd.Dir=<repo>`,
+  pool + ctx timeout, 8 KiB scrubbed stderr discipline per §2):
+  `git [-c credential.<scheme>://<host>.helper= -c credential.<scheme>://<host>.helper=!<helper>] push --prune -- <url> +<ns>/*:<ns>/* [...]`
   (the credential `-c` pairs are present only for password/token pushes,
-  built dynamically per fire with a per-fire env name — the §11
+  built dynamically per fire with per-fire env names — the §11
   clear-then-set order and host pinning apply; the helper echoes
-  `username=<user>` + `password=$ENV` so neither argv nor logs carry
-  secrets). SSH pushes set `GIT_SSH_COMMAND="ssh -i <keyfile> -o
+  `username=$USERENV` + `password=$SECRETENV` so neither argv nor logs
+  carry secrets — the username rides env too because the `!` helper
+  runs through a shell and the username is user-controlled text).
+  The refspecs are rendered per fire from a local enumeration (the §12
+  `for-each-ref` argv): every surviving namespace as a forced wildcard
+  (`refs/heads` + `refs/tags` unconditionally, so an emptied namespace
+  prunes upstream; other surviving namespaces only when populated;
+  bare two-segment names as exact forced refspecs). Dropped before
+  rendering (the S4 refmap, pull-direction FilterRefs discipline
+  reversed): `refs/replace/*`, `refs/meta/*`, `refs/keep-around/*`
+  always; `refs/pull/*`, `refs/changes/*`, `refs/review/*` (walhub's
+  own PR heads live in `refs/pull/` — shipping them would leak forge
+  state, and hosts like GitHub refuse writes there), `refs/notes/*`
+  by default. SSH pushes set `GIT_SSH_COMMAND="ssh -i <keyfile> -o
   IdentitiesOnly=yes -o BatchMode=yes [-o UserKnownHostsFile=<kh> -o
   StrictHostKeyChecking=yes | -o StrictHostKeyChecking=accept-new]"`
   with the private key materialized 0600 into per-fire scratch (swept on
@@ -789,12 +801,15 @@ listed for doc 11; Rust-compat keys keep their names verbatim.
   `x/crypto/ssh` is server-transport-only and is never used as a client
   (law 1 sub-point). Keypairs are generated dep-free (stdlib
   `crypto/ed25519` + hand-rolled OpenSSH wire format — no `ssh-keygen`
-  subprocess, no new runtime dependency). Ref enumeration for narration
-  reuses the §12 `for-each-ref` argv. Rationale: law 2 pins exact argv —
-  a new spawn needs its doc line in the same change; `--mirror` ships
-  refs+objects (incl. deletions — walhub is the primary) in one
-   transfer over the refs the manifest store already published
-   (`Sync(LevelServe)` materializes them first).
+  subprocess, no new runtime dependency). Ref enumeration for the
+  refspec render reuses the §12 `for-each-ref` argv (one cheap local
+  spawn per fire, no store trip). Rationale: law 2 pins exact argv —
+  a new spawn needs its doc line in the same change; forced wildcards
+  with `--prune` carry the `--mirror` deletion semantics (walhub is
+  the primary) over exactly the refs the manifest store publishes
+  minus forge-internal namespaces (`Sync(LevelServe)` materializes
+  them first, `refs/pull/**` included — a bare `--mirror` would ship
+  them).
 - **Merge-tip pack argv (issue #424, 2026-09-13, `internal/pulls` PackTip +
   the `RefPack` publish seam):** server-made merge/update-branch commits
   must reach the bucket atomically with their ref update (a merged ref
