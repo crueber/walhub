@@ -940,7 +940,10 @@ function PushMirrorTab(props) {
 
   return (
     <Show when={getDoc() !== undefined} fallback={<p class="muted">loading…</p>}>
-      <section class="card p-4">
+      {/* Forgejo #629: mt-4 separates this card from the pull-mirror card
+          above it in the merged Mirror tab — the file's stacked-section
+          idiom (card mt-4 p-4), so the two containers read as distinct. */}
+      <section class="card mt-4 p-4">
         <h3 class="mb-2 font-semibold">Push mirror</h3>
         <Show when={getDoc()} fallback={
           <form class="grid gap-3" onSubmit={save} aria-label="Configure push mirror">
