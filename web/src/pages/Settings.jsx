@@ -1833,7 +1833,11 @@ export default function Settings() {
 
   return (
     <div class="settings-page">
-      <h2 class="mb-3 text-lg font-semibold">Settings</h2>
+      {/* Forgejo #631: no visual page heading — the tab bar already reads
+          Settings and the sidebar carries its own SETTINGS micro-heading,
+          so a doc-style h2 here only pushes the nav and content down a
+          row. sr-only keeps the document outline for screen readers. */}
+      <h2 class="sr-only">Settings</h2>
       <div class="flex flex-col gap-4 lg:flex-row lg:gap-6">
         <nav class="min-w-0 shrink-0 lg:w-56" aria-label="Settings sections">
           {/* Issue #276: below sm: the two sections stack full-width, each
