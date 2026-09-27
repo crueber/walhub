@@ -272,13 +272,18 @@ func TestRouterBareRoot405(t *testing.T) {
 // TestOIDCCallbackNonLoopbackCookie covers the direct cookie-set branch.
 func TestOIDCCallbackNonLoopbackCookie(t *testing.T) {
 	s, _, iss := oidcFull(t)
+	state := s.signState("/settings", s.Now())
+	_, nonce, ok := s.verifyLoginState(state)
+	if !ok {
+		t.Fatal("state must verify")
+	}
 	tv := true
 	iss.idTokens <- iss.mint(t, map[string]any{
 		"aud": "walhub", "exp": time.Now().Add(time.Hour).Unix(),
-		"email": "alice@example.com", "email_verified": tv,
+		"email": "alice@example.com", "email_verified": tv, "nonce": nonce,
 	})
-	state := s.signState("/settings", s.Now())
 	req := httptest.NewRequest("GET", "http://wal.example.com/_auth/callback?code=c&state="+state, nil)
+	req.AddCookie(&http.Cookie{Name: "walgit_pkce", Value: "test-verifier"})
 	rec := httptest.NewRecorder()
 	s.authCallback(rec, req)
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/settings" {

@@ -1373,11 +1373,13 @@ Max-Age = `session_ttl` (30 d), sliding re-issue at ttl/4.
 **Browser OIDC flow** (`/_auth/*`; enabled iff mode oidc + session_secret + client id + client secret):
 `GET /_auth/login?next=` → discovery → HMAC-signed state `"{now+600}\n{nonce}\n{next}"` (`next` sanitized:
 must start with a single `/`) → redirect to the issuer's authorization endpoint (`response_type=code`,
-`scope=openid email`, `prompt=select_account`, `&hd=` first allowed domain; **no PKCE**; the nonce is carried
-but not verified — state HMAC is the anti-forgery). Redirect URI: `{public_url}/_auth/callback`; loopback
+`scope=openid email`, `prompt=select_account`, `&hd=` first allowed domain; PKCE S256 (`code_challenge` in
+the request, `code_verifier` via a short-lived `walgit_pkce` HttpOnly cookie, required at the callback); the
+nonce is carried in state, sent as `nonce`, and verified against the ID-token claim — state HMAC is the
+anti-forgery). Redirect URI: `{public_url}/_auth/callback`; loopback
 origins use `http(s)://localhost[:port]/_auth/callback` plus a `/_auth/claimed?ticket=` hop that sets the
 cookie on `walgit.localhost` (60 s signed ticket). `GET /_auth/callback?code&state`: verify state (600 s),
-exchange the code (one retry), verify the ID token (aud = exactly the client id, then domain policy), set the
+exchange the code (one retry on transport errors and 5xx only, 10 s per-attempt timeout), verify the ID token (aud = exactly the client id, nonce bound to the login, then domain policy), set the
 session cookie, redirect to `next`. `/_auth/logout` clears. `/_auth/me` → `{principal, write}`.
 `/_auth/check` (the edge's `auth_request`): 204 + `X-Walgit-Principal` + `X-Walgit-Write: 0|1` +
 `Cache-Control: private, max-age=300` (edges cache one verdict per credential ~5 min); 401/403/503 otherwise.

@@ -206,7 +206,7 @@ func (s *AuthService) authOIDC(r *http.Request) (auth.Principal, *auth.AuthError
 			return auth.Principal{}, &auth.AuthError{Kind: auth.ErrInvalid, Why: "invalid token"}
 		}
 		// else verify as ID token via JWKS.
-		return s.verifyIDToken(r.Context(), tok, false)
+		return s.verifyIDToken(r.Context(), tok, false, "")
 	}
 	// No credential: session cookie → authenticated principal, else anonymous.
 	if c, cerr := r.Cookie("walgit_session"); cerr == nil && c.Value != "" {
@@ -223,9 +223,11 @@ func (s *AuthService) authOIDC(r *http.Request) (auth.Principal, *auth.AuthError
 }
 
 // verifyIDToken verifies a JWT via the hand-rolled JWKS (§8.4). browserFlow
-// pins the audience to exactly the oauth client id.
-func (s *AuthService) verifyIDToken(ctx context.Context, raw string, browserFlow bool) (auth.Principal, *auth.AuthError) {
-	claims, err := s.jwks.Verify(ctx, raw, s.cfg, browserFlow)
+// pins the audience to exactly the oauth client id. A non-empty nonce binds
+// the token to one browser login (F1 — must equal the ID-token nonce claim);
+// direct bearer ID tokens pass "" and skip the check (nothing to bind to).
+func (s *AuthService) verifyIDToken(ctx context.Context, raw string, browserFlow bool, nonce string) (auth.Principal, *auth.AuthError) {
+	claims, err := s.jwks.Verify(ctx, raw, s.cfg, browserFlow, nonce)
 	if err != nil {
 		return auth.Principal{}, err
 	}
@@ -233,11 +235,15 @@ func (s *AuthService) verifyIDToken(ctx context.Context, raw string, browserFlow
 }
 
 // wgtPrincipal verifies a wgt_-prefixed token and derives the principal from
-// the email claim (§8.3 oidc tree).
+// the email claim (§8.3 oidc tree). Only kind-token wires authenticate here —
+// a session-cookie wire with a forged prefix is rejected (F5).
 func (s *AuthService) wgtPrincipal(wire string) (auth.Principal, *auth.AuthError) {
 	st, aerr := s.VerifyToken(wire)
 	if aerr != nil {
 		return auth.Principal{}, aerr
+	}
+	if st.Kind != tokenKind {
+		return auth.Principal{}, &auth.AuthError{Kind: auth.ErrInvalid, Why: "wrong token kind"}
 	}
 	return s.principalFromEmail(st.Email)
 }
@@ -490,8 +496,7 @@ type JWKS struct {
 	client  *http.Client
 
 	sfMu sync.Mutex
-	sfIn bool // singleflight: one refresh leader at a time
-	sfWg sync.WaitGroup
+	sf   *jwksFlight // in-flight refresh; followers share the leader's outcome (F7)
 }
 
 func NewJWKS(issuer string) *JWKS {
@@ -600,27 +605,39 @@ func (j *JWKS) Get(ctx context.Context, kid string) (*jwk, *auth.AuthError) {
 	return nil, &auth.AuthError{Kind: auth.ErrUnavailable, Why: "keys unavailable"}
 }
 
+// jwksFlight is one in-flight JWKS refresh: the leader fetches, followers
+// wait on done and share err (F7 — never queue behind a slow issuer twice:
+// a follower whose own context ends first returns its context error).
+type jwksFlight struct {
+	done chan struct{}
+	err  error
+}
+
 // refresh runs at most one fetch at a time; followers share the outcome.
 func (j *JWKS) refresh(ctx context.Context) error {
-	j.mu.Lock()
-	if j.sfIn {
-		j.mu.Unlock()
-		<-ctx.Done() // follower: never queue behind a slow issuer twice
-		if ctx.Err() != nil {
+	j.sfMu.Lock()
+	if f := j.sf; f != nil {
+		j.sfMu.Unlock()
+		select {
+		case <-f.done:
+			return f.err
+		case <-ctx.Done():
 			return ctx.Err()
 		}
-		return errors.New("refresh in flight")
 	}
-	j.sfIn = true
-	j.mu.Unlock()
-	defer func() {
-		j.mu.Lock()
-		j.sfIn = false
-		j.mu.Unlock()
-	}()
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	return j.fetch(rctx)
+	f := &jwksFlight{done: make(chan struct{})}
+	j.sf = f
+	j.sfMu.Unlock()
+	// fetch detaches from caller cancellation with its own 10 s timeout, so
+	// the leader always terminates and every follower is released.
+	f.err = j.fetch(ctx)
+	j.sfMu.Lock()
+	if j.sf == f {
+		j.sf = nil
+	}
+	j.sfMu.Unlock()
+	close(f.done)
+	return f.err
 }
 
 // discoverDoc returns the parsed discovery document (cached once per
@@ -737,8 +754,9 @@ type idClaims struct {
 
 // Verify checks alg/key/claims per §8.4 (leeway 30 s; iss with trailing slash
 // stripped or its bare host; aud ∈ audiences ∪ {client_id}, pinned to the
-// client id for the browser flow; email + email_verified required).
-func (j *JWKS) Verify(ctx context.Context, raw string, a *config.Auth, browserFlow bool) (idClaims, *auth.AuthError) {
+// client id for the browser flow; email + email_verified required; a non-empty
+// nonce must equal the token's nonce claim — F1 browser-login binding).
+func (j *JWKS) Verify(ctx context.Context, raw string, a *config.Auth, browserFlow bool, nonce string) (idClaims, *auth.AuthError) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
 		return idClaims{}, &auth.AuthError{Kind: auth.ErrInvalid, Why: "malformed id token"}
@@ -805,6 +823,7 @@ func (j *JWKS) Verify(ctx context.Context, raw string, a *config.Auth, browserFl
 		Iat           int64           `json:"iat"`
 		Email         string          `json:"email"`
 		EmailVerified *bool           `json:"email_verified"`
+		Nonce         string          `json:"nonce"`
 	}
 	if err := json.Unmarshal(payload, &c); err != nil {
 		return idClaims{}, &auth.AuthError{Kind: auth.ErrInvalid, Why: "malformed claims"}
@@ -846,6 +865,12 @@ func (j *JWKS) Verify(ctx context.Context, raw string, a *config.Auth, browserFl
 	// 6. email + email_verified required.
 	if c.Email == "" || c.EmailVerified == nil || !*c.EmailVerified {
 		return idClaims{}, &auth.AuthError{Kind: auth.ErrInvalid, Why: "email claim missing or unverified"}
+	}
+	// 7. nonce binding (F1): a login-bound verification requires the token
+	// to carry the state nonce back. Empty expected nonce skips the check
+	// (direct bearer ID tokens have no login to bind to).
+	if nonce != "" && c.Nonce != nonce {
+		return idClaims{}, &auth.AuthError{Kind: auth.ErrInvalid, Why: "nonce mismatch"}
 	}
 	claims := idClaims{Iss: c.Iss, Email: c.Email, Exp: c.Exp, Nbf: c.Nbf, Iat: c.Iat}
 	return claims, nil

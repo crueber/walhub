@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,43 +23,70 @@ type statePayload struct {
 }
 
 // signState produces base64url(payload) + "." + base64url(mac) with the
-// session secret (the state HMAC is the anti-forgery; the nonce is carried
-// but not verified, §8.6).
+// session secret and a 600 s window (the state HMAC is the anti-forgery;
+// the carried nonce binds the browser login to its ID token — F1).
 func (s *Server) signState(next string, now time.Time) string {
+	state, _ := s.signStateTTL(next, now, 600*time.Second)
+	return state
+}
+
+// signStateTTL signs "{now+ttl}\n{nonce}\n{next}" and also returns the carried
+// nonce so the login flow can bind it into the OIDC request (F1) and the
+// claimed-ticket hop can use its own 60 s window (F8).
+func (s *Server) signStateTTL(next string, now time.Time, ttl time.Duration) (string, string) {
 	nonce := randHex(16)
-	payload := fmt.Sprintf("%d\n%s\n%s", now.Add(600*time.Second).Unix(), nonce, next)
+	payload := fmt.Sprintf("%d\n%s\n%s", now.Add(ttl).Unix(), nonce, next)
 	mac := hmacSHA256([]byte(s.cfg.Server.Auth.SessionSecret), []byte(payload))
-	return b64url([]byte(payload)) + "." + b64url(mac)
+	return b64url([]byte(payload)) + "." + b64url(mac), nonce
+}
+
+// parseState verifies the HMAC and the embedded window; returns the carried
+// nonce and the raw next slot.
+func (s *Server) parseState(state string) (nonce, next string, ok bool) {
+	parts := strings.Split(state, ".")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	payload, err := b64urlDecode(parts[0])
+	if err != nil {
+		return "", "", false
+	}
+	mac, err := b64urlDecode(parts[1])
+	if err != nil {
+		return "", "", false
+	}
+	want := hmacSHA256([]byte(s.cfg.Server.Auth.SessionSecret), payload)
+	if !hmac.Equal(mac, want) {
+		return "", "", false
+	}
+	lines := strings.SplitN(string(payload), "\n", 3)
+	if len(lines) != 3 {
+		return "", "", false
+	}
+	exp, err1 := parseUnix(lines[0])
+	if err1 != nil || s.Now().After(exp) {
+		return "", "", false
+	}
+	return lines[1], lines[2], true
 }
 
 // verifyState checks the HMAC and the 600 s window; returns the sanitized next.
 func (s *Server) verifyState(state string) (string, bool) {
-	parts := strings.Split(state, ".")
-	if len(parts) != 2 {
+	_, next, ok := s.parseState(state)
+	if !ok {
 		return "", false
 	}
-	payload, err := b64urlDecode(parts[0])
-	if err != nil {
-		return "", false
+	return sanitizeNext(next), true
+}
+
+// verifyLoginState checks the state like verifyState and additionally returns
+// the carried nonce so the callback can bind the ID token to this login (F1).
+func (s *Server) verifyLoginState(state string) (next, nonce string, ok bool) {
+	nonce, raw, ok := s.parseState(state)
+	if !ok {
+		return "", "", false
 	}
-	mac, err := b64urlDecode(parts[1])
-	if err != nil {
-		return "", false
-	}
-	want := hmacSHA256([]byte(s.cfg.Server.Auth.SessionSecret), payload)
-	if !hmac.Equal(mac, want) {
-		return "", false
-	}
-	lines := strings.SplitN(string(payload), "\n", 3)
-	if len(lines) != 3 {
-		return "", false
-	}
-	exp, err1 := parseUnix(lines[0])
-	if err1 != nil || s.Now().After(exp) {
-		return "", false
-	}
-	next := sanitizeNext(lines[2])
-	return next, true
+	return sanitizeNext(raw), nonce, true
 }
 
 // sanitizeNext requires the redirect target to start with a single "/" (no
@@ -72,8 +100,9 @@ func sanitizeNext(next string) string {
 
 // authLogin answers GET /_auth/login?next= (§8.6): fetch discovery → signed
 // state → 302 to the issuer's authorization endpoint with response_type=code,
-// scope=openid email, prompt=select_account, &hd= = first allowed domain; no
-// PKCE.
+// scope=openid email, prompt=select_account, &hd= = first allowed domain, the
+// state-carried nonce (verified against the ID token at the callback — F1),
+// and PKCE S256 (the verifier rides a short-lived HttpOnly cookie — F1).
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.authSvc.BrowserLoginEnabled() {
 		// #344: the 501 string must not be the end-user experience — a
@@ -95,12 +124,22 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		plainStatus(w, http.StatusServiceUnavailable, "issuer discovery failed")
 		return
 	}
-	state := s.signState(next, s.Now())
+	state, nonce := s.signStateTTL(next, s.Now(), 600*time.Second)
+	verifier := randHex(32)
+	chalSum := sha256.Sum256([]byte(verifier))
+	http.SetCookie(w, &http.Cookie{
+		Name: "walgit_pkce", Value: verifier, Path: "/_auth/callback",
+		MaxAge: 600, HttpOnly: true, Secure: len(s.cfg.Server.CorsOrigins) > 0,
+		SameSite: sameSiteFor(s.cfg.Server.CorsOrigins),
+	})
 	redirect := s.authRedirectURI(r)
 	q := url.Values{}
 	q.Set("response_type", "code")
 	q.Set("scope", "openid email")
 	q.Set("prompt", "select_account")
+	q.Set("nonce", nonce)
+	q.Set("code_challenge", b64url(chalSum[:]))
+	q.Set("code_challenge_method", "S256")
 	q.Set("client_id", s.cfg.Server.Auth.OAuthClientID)
 	q.Set("redirect_uri", redirect)
 	q.Set("state", state)
@@ -167,8 +206,10 @@ type oidcDiscovery struct {
 }
 
 // authCallback answers GET /_auth/callback?code&state (§8.6): verify state,
-// exchange the code (one retry), verify the ID token (aud exactly the client
-// id, then domain policy), set the session cookie, redirect to next.
+// require the PKCE verifier cookie, exchange the code (one retry on transport
+// errors and 5xx only), verify the ID token (aud exactly the client id, nonce
+// bound to this login, then domain policy), set the session cookie, redirect
+// to next.
 func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	if !s.authSvc.BrowserLoginEnabled() {
 		plainStatus(w, http.StatusNotImplemented, "browser login is not enabled")
@@ -176,7 +217,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
-	next, ok := s.verifyState(state)
+	next, nonce, ok := s.verifyLoginState(state)
 	if !ok {
 		plainStatus(w, http.StatusBadRequest, "invalid state")
 		return
@@ -185,17 +226,31 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		plainStatus(w, http.StatusBadRequest, "missing code")
 		return
 	}
+	// The PKCE verifier is one-time: consume and clear it before the
+	// exchange so a replayed callback cannot reuse it.
+	verifier := ""
+	if c, cerr := r.Cookie("walgit_pkce"); cerr != nil || c.Value == "" {
+		plainStatus(w, http.StatusBadRequest, "missing PKCE verifier")
+		return
+	} else {
+		verifier = c.Value
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "walgit_pkce", Value: "", Path: "/_auth/callback",
+		MaxAge: -1, HttpOnly: true, Secure: len(s.cfg.Server.CorsOrigins) > 0,
+		SameSite: sameSiteFor(s.cfg.Server.CorsOrigins),
+	})
 	disc, err := s.authSvc.jwks.discoverDoc(r.Context())
 	if err != nil {
 		plainStatus(w, http.StatusServiceUnavailable, "issuer discovery failed")
 		return
 	}
-	idToken := s.exchangeCode(r.Context(), disc.TokenEndpoint, code, s.authRedirectURI(r))
+	idToken := s.exchangeCode(r.Context(), disc.TokenEndpoint, code, s.authRedirectURI(r), verifier)
 	if idToken == "" {
 		plainStatus(w, http.StatusServiceUnavailable, "token exchange failed")
 		return
 	}
-	p, aerr := s.authSvc.verifyIDToken(r.Context(), idToken, true)
+	p, aerr := s.authSvc.verifyIDToken(r.Context(), idToken, true, nonce)
 	if aerr != nil {
 		s.mapAuthStatus(w, aerr)
 		return
@@ -220,7 +275,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		// the cookie lands on walgit.localhost (different cookie host).
 		// The ticket names the verified email (the cookie itself only
 		// carries the wire, whose payload re-resolves it).
-		ticket := s.signState(emailOf(p)+"|"+sess.Wire, s.Now())
+		ticket, _ := s.signStateTTL(emailOf(p)+"|"+sess.Wire, s.Now(), 60*time.Second)
 		ticket = strings.ReplaceAll(ticket, "\n", "") // wire form is url-safe already
 		target := requestScheme(r) + "://walgit." + hostOnlyPortSuffix(r.Host) + "/_auth/claimed?ticket=" +
 			url.QueryEscape(ticket) + "&next=" + url.QueryEscape(next)
@@ -285,8 +340,10 @@ func hostOnlyPortSuffix(host string) string {
 	return "localhost:" + port
 }
 
-// exchangeCode POSTs the code for tokens (one retry, §8.6).
-func (s *Server) exchangeCode(ctx context.Context, tokenEndpoint, code, redirect string) string {
+// exchangeCode POSTs the code for tokens (§8.6): one retry on transport
+// errors and 5xx only (4xx and malformed bodies fail fast — F6), with a 10 s
+// per-attempt timeout so a hung provider cannot stall callback workers.
+func (s *Server) exchangeCode(ctx context.Context, tokenEndpoint, code, redirect, verifier string) string {
 	a := s.cfg.Server.Auth
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
@@ -294,32 +351,36 @@ func (s *Server) exchangeCode(ctx context.Context, tokenEndpoint, code, redirect
 	form.Set("redirect_uri", redirect)
 	form.Set("client_id", a.OAuthClientID)
 	form.Set("client_secret", a.OAuthClientSecret)
-	try := func() (string, error) {
+	if verifier != "" {
+		form.Set("code_verifier", verifier)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	try := func() (string, bool) { // token, retryable
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint,
 			strings.NewReader(form.Encode()))
 		if err != nil {
-			return "", err
+			return "", false
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
-			return "", err
+			return "", true
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("token endpoint status %d", resp.StatusCode)
+			return "", resp.StatusCode >= 500
 		}
 		var out struct {
 			IDToken string `json:"id_token"`
 		}
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-			return "", err
+			return "", false
 		}
-		return out.IDToken, nil
+		return out.IDToken, false
 	}
-	tok, err := try()
-	if err != nil { // one retry
-		tok, err = try()
+	tok, retryable := try()
+	if tok == "" && retryable { // one retry
+		tok, _ = try()
 	}
 	return tok
 }

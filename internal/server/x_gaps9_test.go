@@ -215,7 +215,7 @@ func TestJWKSVerifyRejects(t *testing.T) {
 	// Unknown kid against a dead issuer → unavailable, never anonymous (§8.4).
 	dead := NewJWKS("http://127.0.0.1:1")
 	tok := mk(b64json(t, map[string]string{"alg": "RS256", "kid": "nope"}), b64url([]byte("{}")), b64url([]byte("x")))
-	if _, aerr := dead.Verify(context.Background(), tok, a, false); aerr == nil ||
+	if _, aerr := dead.Verify(context.Background(), tok, a, false, ""); aerr == nil ||
 		aerr.Kind != auth.ErrUnavailable || !strings.Contains(aerr.Why, "key refresh failed") {
 		t.Fatalf("dead-issuer verify = %v, want ErrUnavailable/refresh-failed", aerr)
 	}
@@ -224,7 +224,7 @@ func TestJWKSVerifyRejects(t *testing.T) {
 	j := NewJWKS("https://issuer.test")
 	j.keys["rsa-mismatch"] = &jwk{Kid: "rsa-mismatch", Alg: "RS256"}
 	tok = mk(b64json(t, map[string]string{"alg": "RS256", "kid": "rsa-mismatch"}), b64url([]byte("{}")), b64url([]byte("x")))
-	if _, aerr := j.Verify(context.Background(), tok, a, false); aerr == nil || aerr.Why != "key type mismatch" {
+	if _, aerr := j.Verify(context.Background(), tok, a, false, ""); aerr == nil || aerr.Why != "key type mismatch" {
 		t.Fatalf("rsa mismatch = %v", aerr)
 	}
 
@@ -239,14 +239,14 @@ func TestJWKSVerifyRejects(t *testing.T) {
 		sig[i] = 0x7f
 	}
 	tok = mk(b64json(t, map[string]string{"alg": "RS256", "kid": "rsa"}), b64url([]byte("{}")), b64url(sig))
-	if _, aerr := j.Verify(context.Background(), tok, a, false); aerr == nil || aerr.Why != "bad signature" {
+	if _, aerr := j.Verify(context.Background(), tok, a, false, ""); aerr == nil || aerr.Why != "bad signature" {
 		t.Fatalf("forged rsa = %v", aerr)
 	}
 
 	// ES256 against a key entry without an EC key → type mismatch.
 	j.keys["ec-mismatch"] = &jwk{Kid: "ec-mismatch", Alg: "ES256"}
 	tok = mk(b64json(t, map[string]string{"alg": "ES256", "kid": "ec-mismatch"}), b64url([]byte("{}")), b64url([]byte("x")))
-	if _, aerr := j.Verify(context.Background(), tok, a, false); aerr == nil || aerr.Why != "key type mismatch" {
+	if _, aerr := j.Verify(context.Background(), tok, a, false, ""); aerr == nil || aerr.Why != "key type mismatch" {
 		t.Fatalf("ec mismatch = %v", aerr)
 	}
 
@@ -257,7 +257,7 @@ func TestJWKSVerifyRejects(t *testing.T) {
 	}
 	j.keys["ec"] = &jwk{Kid: "ec", Alg: "ES256", ecdsa: &ecPriv.PublicKey}
 	tok = mk(b64json(t, map[string]string{"alg": "ES256", "kid": "ec"}), b64url([]byte("{}")), b64url([]byte("short")))
-	if _, aerr := j.Verify(context.Background(), tok, a, false); aerr == nil || aerr.Why != "bad signature" {
+	if _, aerr := j.Verify(context.Background(), tok, a, false, ""); aerr == nil || aerr.Why != "bad signature" {
 		t.Fatalf("short ec sig = %v", aerr)
 	}
 
@@ -270,7 +270,7 @@ func TestJWKSVerifyRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok = signing + "." + b64url(append(pad32(r), pad32(sv)...))
-	if _, aerr := j.Verify(context.Background(), tok, a, false); aerr == nil || aerr.Why != "malformed claims" {
+	if _, aerr := j.Verify(context.Background(), tok, a, false, ""); aerr == nil || aerr.Why != "malformed claims" {
 		t.Fatalf("bad claims = %v", aerr)
 	}
 }
@@ -344,11 +344,11 @@ func TestExchangeCodeNegatives(t *testing.T) {
 	s, _ := newTestServer(t, nil)
 	ctx := context.Background()
 	// Unparseable endpoint → both tries fail → "".
-	if got := s.exchangeCode(ctx, "://bad endpoint", "c", "http://localhost/cb"); got != "" {
+	if got := s.exchangeCode(ctx, "://bad endpoint", "c", "http://localhost/cb", ""); got != "" {
 		t.Fatalf("bad endpoint = %q, want empty", got)
 	}
 	// Refused endpoint → both tries fail → "".
-	if got := s.exchangeCode(ctx, "http://127.0.0.1:1/token", "c", "http://localhost/cb"); got != "" {
+	if got := s.exchangeCode(ctx, "http://127.0.0.1:1/token", "c", "http://localhost/cb", ""); got != "" {
 		t.Fatalf("refused endpoint = %q, want empty", got)
 	}
 	// Non-200 → retry → "".
@@ -356,7 +356,7 @@ func TestExchangeCodeNegatives(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer fail.Close()
-	if got := s.exchangeCode(ctx, fail.URL+"/token", "c", "http://localhost/cb"); got != "" {
+	if got := s.exchangeCode(ctx, fail.URL+"/token", "c", "http://localhost/cb", ""); got != "" {
 		t.Fatalf("500 endpoint = %q, want empty", got)
 	}
 	// Malformed JSON body → "" (no partial token).
@@ -364,7 +364,7 @@ func TestExchangeCodeNegatives(t *testing.T) {
 		_, _ = w.Write([]byte(`{oops`))
 	}))
 	defer junk.Close()
-	if got := s.exchangeCode(ctx, junk.URL+"/token", "c", "http://localhost/cb"); got != "" {
+	if got := s.exchangeCode(ctx, junk.URL+"/token", "c", "http://localhost/cb", ""); got != "" {
 		t.Fatalf("junk body = %q, want empty", got)
 	}
 	// Control: a token endpoint round-trips the id_token.
@@ -377,7 +377,7 @@ func TestExchangeCodeNegatives(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id_token":"tok-abc"}`))
 	}))
 	defer ok.Close()
-	if got := s.exchangeCode(ctx, ok.URL+"/token", "c", "http://localhost/cb"); got != "tok-abc" {
+	if got := s.exchangeCode(ctx, ok.URL+"/token", "c", "http://localhost/cb", ""); got != "tok-abc" {
 		t.Fatalf("healthy exchange = %q, want tok-abc", got)
 	}
 }

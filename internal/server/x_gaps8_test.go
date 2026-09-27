@@ -116,7 +116,7 @@ func TestJWKSVerifyBranches(t *testing.T) {
 	}
 	mustFail := func(name, tok string, want auth.AuthErrorKind) {
 		t.Helper()
-		_, aerr := j.Verify(context.Background(), tok, a, false)
+		_, aerr := j.Verify(context.Background(), tok, a, false, "")
 		if aerr == nil || aerr.Kind != want {
 			t.Fatalf("%s: got %v, want %v", name, aerr, want)
 		}

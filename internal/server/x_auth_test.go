@@ -293,19 +293,35 @@ func TestOIDCCallbackFullFlow(t *testing.T) {
 	}
 	loc, _ := url.Parse(rec.Header().Get("Location"))
 	state := loc.Query().Get("state")
+	_, loginNonce, ok := s.verifyLoginState(state)
+	if !ok || loginNonce == "" {
+		t.Fatalf("login state nonce missing ok=%v", ok)
+	}
+	var pkce *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "walgit_pkce" {
+			c := c
+			pkce = c
+		}
+	}
+	if pkce == nil {
+		t.Fatal("login must set the walgit_pkce cookie (F1)")
+	}
 	// The redirect_uri uses localhost for loopback hosts (§8.6).
 	q := loc.Query()
 	if ru := q.Get("redirect_uri"); !strings.HasPrefix(ru, "http://localhost:8080") {
 		t.Fatalf("redirect_uri = %q", ru)
 	}
-	// The issuer hands out a valid ID token for alice.
+	// The issuer hands out a valid ID token for alice, bound to the login
+	// nonce (F1).
 	tv := true
 	iss.idTokens <- iss.mint(t, map[string]any{
 		"aud": "walhub", "exp": time.Now().Add(time.Hour).Unix(),
-		"email": "alice@example.com", "email_verified": tv,
+		"email": "alice@example.com", "email_verified": tv, "nonce": loginNonce,
 	})
 	// Callback on the loopback host bounces through /_auth/claimed.
 	req = httptest.NewRequest("GET", "http://localhost:8080/_auth/callback?code=good&state="+url.QueryEscape(state), nil)
+	req.AddCookie(pkce)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
@@ -346,9 +362,22 @@ func TestOIDCCallbackFailurePaths(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "missing code") {
 		t.Fatalf("missing code = %d", rec.Code)
 	}
+	// Missing PKCE verifier cookie → 400 (F1 fail-closed).
+	req = httptest.NewRequest("GET", "http://x/_auth/callback?code=c&state="+url.QueryEscape(state), nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "missing PKCE verifier") {
+		t.Fatalf("missing verifier = %d %s", rec.Code, rec.Body.String())
+	}
+	pkce := &http.Cookie{Name: "walgit_pkce", Value: "test-verifier"}
+	withPKCE := func(target string) *http.Request {
+		r := httptest.NewRequest("GET", target, nil)
+		r.AddCookie(pkce)
+		return r
+	}
 	// Token exchange failure → 503.
 	iss.failExpr = true
-	req = httptest.NewRequest("GET", "http://x/_auth/callback?code=c&state="+url.QueryEscape(state), nil)
+	req = withPKCE("http://x/_auth/callback?code=c&state=" + url.QueryEscape(state))
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "token exchange failed") {
@@ -356,7 +385,7 @@ func TestOIDCCallbackFailurePaths(t *testing.T) {
 	}
 	iss.failExpr = false
 	// No id_token handed out → exchange gets a bad status (400 stub) → 503.
-	req = httptest.NewRequest("GET", "http://x/_auth/callback?code=c&state="+url.QueryEscape(state), nil)
+	req = withPKCE("http://x/_auth/callback?code=c&state=" + url.QueryEscape(state))
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -491,16 +520,16 @@ func TestExchangeCodeRetriesOnce(t *testing.T) {
 		"aud": "walhub", "exp": time.Now().Add(time.Hour).Unix(),
 		"email": "alice@example.com", "email_verified": tv,
 	})
-	tok := s.exchangeCode(context.Background(), iss.srvURL()+"/token", "c", "http://localhost/cb")
+	tok := s.exchangeCode(context.Background(), iss.srvURL()+"/token", "c", "http://localhost/cb", "")
 	if tok == "" {
 		t.Fatal("exchange must return the id token")
 	}
-	if _, aerr := s.authSvc.verifyIDToken(context.Background(), tok, true); aerr != nil {
+	if _, aerr := s.authSvc.verifyIDToken(context.Background(), tok, true, ""); aerr != nil {
 		t.Fatalf("verify exchanged token: %v", aerr)
 	}
 	// failExpr breaks both tries → "".
 	iss.failExpr = true
-	if got := s.exchangeCode(context.Background(), iss.srvURL()+"/token", "c", "http://localhost/cb"); got != "" {
+	if got := s.exchangeCode(context.Background(), iss.srvURL()+"/token", "c", "http://localhost/cb", ""); got != "" {
 		t.Fatalf("failed exchange = %q", got)
 	}
 }

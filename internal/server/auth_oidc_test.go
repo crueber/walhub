@@ -45,8 +45,11 @@ func TestOIDCFlowLoginRedirect(t *testing.T) {
 	if q.Get("hd") != "example.com" {
 		t.Fatalf("hd = %q, want first allowed domain", q.Get("hd"))
 	}
-	if q.Get("code_challenge") != "" {
-		t.Fatal("no PKCE (§8.6)")
+	if q.Get("code_challenge") == "" || q.Get("code_challenge_method") != "S256" {
+		t.Fatal("PKCE S256 challenge required (§8.6, F1)")
+	}
+	if q.Get("nonce") == "" {
+		t.Fatal("nonce required (§8.6, F1)")
 	}
 	if !strings.HasSuffix(q.Get("redirect_uri"), "/_auth/callback") {
 		t.Fatalf("redirect_uri = %q", q.Get("redirect_uri"))
@@ -55,6 +58,21 @@ func TestOIDCFlowLoginRedirect(t *testing.T) {
 	next, ok := oidcStateNext(s, rec.Header().Get("Location"))
 	if !ok || next != "/settings" {
 		t.Fatalf("state next = %q ok=%v", next, ok)
+	}
+	// The state nonce matches the request's nonce param (F1 binding).
+	_, nonce, ok := s.verifyLoginState(loc.Query().Get("state"))
+	if !ok || nonce == "" || nonce != q.Get("nonce") {
+		t.Fatalf("state nonce = %q param = %q ok=%v", nonce, q.Get("nonce"), ok)
+	}
+	// The PKCE verifier rides a short-lived HttpOnly cookie for the callback.
+	var pkce bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "walgit_pkce" && c.Value != "" && c.HttpOnly && c.Path == "/_auth/callback" {
+			pkce = true
+		}
+	}
+	if !pkce {
+		t.Fatal("walgit_pkce cookie missing from login response")
 	}
 }
 

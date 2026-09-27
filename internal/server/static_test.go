@@ -408,7 +408,7 @@ func TestJWKSVerify(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
 		"email": "alice@example.com", "email_verified": true,
 	})
-	claims, aerr := s.authSvc.jwks.Verify(context.Background(), tok, &s.cfg.Server.Auth, false)
+	claims, aerr := s.authSvc.jwks.Verify(context.Background(), tok, &s.cfg.Server.Auth, false, "")
 	if aerr != nil {
 		t.Fatalf("verify: %v", aerr)
 	}
@@ -418,25 +418,25 @@ func TestJWKSVerify(t *testing.T) {
 	// Audience mismatch.
 	bad := mint(map[string]any{"iss": "https://issuer.test", "aud": "other",
 		"exp": time.Now().Add(time.Hour).Unix(), "email": "alice@example.com", "email_verified": true})
-	if _, aerr := s.authSvc.jwks.Verify(context.Background(), bad, &s.cfg.Server.Auth, false); aerr == nil {
+	if _, aerr := s.authSvc.jwks.Verify(context.Background(), bad, &s.cfg.Server.Auth, false, ""); aerr == nil {
 		t.Fatal("audience mismatch must fail")
 	}
 	// Unverified email.
 	bad = mint(map[string]any{"iss": "https://issuer.test", "aud": "walhub",
 		"exp": time.Now().Add(time.Hour).Unix(), "email": "alice@example.com", "email_verified": false})
-	if _, aerr := s.authSvc.jwks.Verify(context.Background(), bad, &s.cfg.Server.Auth, false); aerr == nil {
+	if _, aerr := s.authSvc.jwks.Verify(context.Background(), bad, &s.cfg.Server.Auth, false, ""); aerr == nil {
 		t.Fatal("unverified email must fail")
 	}
 	// Wrong issuer.
 	bad = mint(map[string]any{"iss": "https://evil.test", "aud": "walhub",
 		"exp": time.Now().Add(time.Hour).Unix(), "email": "alice@example.com", "email_verified": true})
-	if _, aerr := s.authSvc.jwks.Verify(context.Background(), bad, &s.cfg.Server.Auth, false); aerr == nil {
+	if _, aerr := s.authSvc.jwks.Verify(context.Background(), bad, &s.cfg.Server.Auth, false, ""); aerr == nil {
 		t.Fatal("issuer mismatch must fail")
 	}
 	// Email policy: not-allowed domain → 403.
 	bad = mint(map[string]any{"iss": "https://issuer.test", "aud": "walhub",
 		"exp": time.Now().Add(time.Hour).Unix(), "email": "mallory@evil.test", "email_verified": true})
-	_, aerr = s.authSvc.verifyIDToken(context.Background(), bad, false)
+	_, aerr = s.authSvc.verifyIDToken(context.Background(), bad, false, "")
 	if aerr == nil || aerr.Kind != auth.ErrForbidden {
 		t.Fatalf("want 403 for disallowed domain, got %v", aerr)
 	}

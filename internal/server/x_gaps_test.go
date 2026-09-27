@@ -557,22 +557,52 @@ func TestJWKParseBranches(t *testing.T) {
 }
 
 func TestJWKSRefreshFollower(t *testing.T) {
-	iss := newStubIssuer(t)
-	j := NewJWKS(iss.srvURL())
-	j.mu.Lock()
-	j.sfIn = true // pretend a leader is in flight
-	j.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	// Slow discovery keeps the leader's flight open so followers join it.
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		jsonWrite(w, map[string]string{
+			"jwks_uri":               srv.URL + "/jwks",
+			"authorization_endpoint": srv.URL + "/auth",
+			"token_endpoint":         srv.URL + "/token",
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		jsonWrite(w, map[string]any{"keys": []any{}})
+	})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	j := NewJWKS(srv.URL)
+	// Leader refreshes in the background.
+	leaderErr := make(chan error, 1)
+	go func() { leaderErr <- j.refresh(context.Background()) }()
+	time.Sleep(50 * time.Millisecond) // flight is open
+	// A follower with its own deadline shares the leader's outcome (F7) —
+	// no "refresh in flight" failure.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := j.refresh(ctx); err == nil {
-		t.Fatal("follower must fail while a leader is in flight")
+	if err := j.refresh(ctx); err != nil {
+		t.Fatalf("follower must share the leader outcome: %v", err)
 	}
-	j.mu.Lock()
-	j.sfIn = false
-	j.mu.Unlock()
+	if err := <-leaderErr; err != nil {
+		t.Fatalf("leader = %v", err)
+	}
+	// A follower whose own context ends first returns its context error and
+	// never queues behind a slow issuer twice.
+	go func() { leaderErr <- j.refresh(context.Background()) }()
+	time.Sleep(50 * time.Millisecond) // flight is open again
+	cctx, stop := context.WithCancel(context.Background())
+	stop()
+	if err := j.refresh(cctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled follower = %v, want context.Canceled", err)
+	}
+	if err := <-leaderErr; err != nil {
+		t.Fatalf("leader = %v", err)
+	}
 
 	// nowOf honors the test clock injected via the context.
-	j2 := NewJWKS(iss.srvURL())
+	j2 := NewJWKS(srv.URL)
 	stamp := time.Now().Add(-time.Hour)
 	if got := j2.nowOf(context.WithValue(context.Background(), nowKey{}, stamp)); !got.Equal(stamp) {
 		t.Fatalf("nowOf = %v", got)
@@ -631,7 +661,7 @@ func TestJWKSVerifyES256AndClaims(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
 		"email": "alice@example.com", "email_verified": tv,
 	}
-	if _, aerr := j.Verify(context.Background(), mintES(base), a, false); aerr != nil {
+	if _, aerr := j.Verify(context.Background(), mintES(base), a, false, ""); aerr != nil {
 		t.Fatalf("ES256 verify: %v", aerr)
 	}
 	// Bad signature → invalid.
@@ -643,7 +673,7 @@ func TestJWKSVerifyES256AndClaims(t *testing.T) {
 	parts[1] = b64url(jsonMustMarshal(map[string]any{
 		"iss": iss.srvURL(), "aud": "walhub", "exp": time.Now().Add(time.Hour).Unix(),
 		"iat": time.Now().Unix(), "email": "eve@example.com", "email_verified": tv}))
-	if _, aerr := j.Verify(context.Background(), strings.Join(parts, "."), a, false); aerr == nil {
+	if _, aerr := j.Verify(context.Background(), strings.Join(parts, "."), a, false, ""); aerr == nil {
 		t.Fatal("tampered payload must fail")
 	}
 	// nbf in the future → invalid.
@@ -652,7 +682,7 @@ func TestJWKSVerifyES256AndClaims(t *testing.T) {
 		future[kk] = vv
 	}
 	future["nbf"] = time.Now().Add(time.Hour).Unix()
-	if _, aerr := j.Verify(context.Background(), mintES(future), a, false); aerr == nil {
+	if _, aerr := j.Verify(context.Background(), mintES(future), a, false, ""); aerr == nil {
 		t.Fatal("future nbf must fail")
 	}
 	// aud as array.
@@ -661,7 +691,7 @@ func TestJWKSVerifyES256AndClaims(t *testing.T) {
 		arr[kk] = vv
 	}
 	arr["aud"] = []string{"walhub", "other"}
-	if _, aerr := j.Verify(context.Background(), mintES(arr), a, false); aerr != nil {
+	if _, aerr := j.Verify(context.Background(), mintES(arr), a, false, ""); aerr != nil {
 		t.Fatalf("array aud: %v", aerr)
 	}
 	// iss with trailing slash matches (§8.4 rule 4 slash strip).
@@ -670,18 +700,18 @@ func TestJWKSVerifyES256AndClaims(t *testing.T) {
 		slash[kk] = vv
 	}
 	slash["iss"] = iss.srvURL() + "/"
-	if _, aerr := j.Verify(context.Background(), mintES(slash), a, false); aerr != nil {
+	if _, aerr := j.Verify(context.Background(), mintES(slash), a, false, ""); aerr != nil {
 		t.Fatalf("trailing slash iss: %v", aerr)
 	}
 	// Malformed token → invalid.
-	if _, aerr := j.Verify(context.Background(), "not-a-jwt", a, false); aerr == nil {
+	if _, aerr := j.Verify(context.Background(), "not-a-jwt", a, false, ""); aerr == nil {
 		t.Fatal("malformed token must fail")
 	}
 	// key alg mismatch (RSA key advertised with ES256 alg).
 	j.mu.Lock()
 	j.keys["ec1"].Alg = "RS256"
 	j.mu.Unlock()
-	if _, aerr := j.Verify(context.Background(), mintES(base), a, false); aerr == nil {
+	if _, aerr := j.Verify(context.Background(), mintES(base), a, false, ""); aerr == nil {
 		t.Fatal("key alg mismatch must fail")
 	}
 	j.mu.Lock()

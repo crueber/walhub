@@ -26,6 +26,7 @@ func TestOIDCDiscoveryFailure(t *testing.T) {
 	// callback → 503 issuer discovery failed.
 	state := s.signState("/x", s.Now())
 	req = httptest.NewRequest("GET", "http://x/_auth/callback?code=c&state="+state, nil)
+	req.AddCookie(&http.Cookie{Name: "walgit_pkce", Value: "test-verifier"})
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "issuer discovery failed") {
@@ -49,13 +50,18 @@ func TestOIDCTokenMintInvalidAuth(t *testing.T) {
 // TestOIDCCallbackBadIDToken covers the verifyIDToken-failure branch.
 func TestOIDCCallbackBadIDToken(t *testing.T) {
 	s, _, iss := oidcFull(t)
+	state := s.signState("/x", s.Now())
+	_, nonce, ok := s.verifyLoginState(state)
+	if !ok {
+		t.Fatal("state must verify")
+	}
 	tv := true
 	iss.idTokens <- iss.mint(t, map[string]any{
 		"aud": "other-app", "exp": time.Now().Add(time.Hour).Unix(),
-		"email": "alice@example.com", "email_verified": tv,
+		"email": "alice@example.com", "email_verified": tv, "nonce": nonce,
 	})
-	state := s.signState("/x", s.Now())
 	req := httptest.NewRequest("GET", "http://x/_auth/callback?code=c&state="+state, nil)
+	req.AddCookie(&http.Cookie{Name: "walgit_pkce", Value: "test-verifier"})
 	rec := httptest.NewRecorder()
 	s.authCallback(rec, req)
 	if rec.Code != http.StatusUnauthorized {
